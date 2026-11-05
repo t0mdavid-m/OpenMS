@@ -263,6 +263,36 @@ namespace OpenMS
   {
   }
 
+  const ResidueModification* FLASHHelperClasses::resolveVariableModification(const String& spec_in, bool& protein_n_term)
+  {
+    protein_n_term = false;
+    String spec = spec_in;
+    spec.trim();
+    try
+    {
+      return resolveModification(spec);
+    }
+    catch (const Exception::BaseException&)
+    {
+      // the same modification at any N-terminus, if the database has it there
+      const String tag = "(Protein N-term ";
+      const Size at = spec.find(tag);
+      if (at == std::string::npos) throw;
+      const ResidueModification* mod = nullptr;
+      try
+      {
+        mod = resolveModification(spec.substr(0, at) + "(N-term " + spec.substr(at + tag.size()));
+      }
+      catch (const Exception::BaseException&)
+      {
+        mod = nullptr;
+      }
+      if (mod == nullptr || mod->getTermSpecificity() != ResidueModification::N_TERM) throw;
+      protein_n_term = true;
+      return mod;
+    }
+  }
+
   const ResidueModification* FLASHHelperClasses::resolveModification(const String& spec_in)
   {
     String spec = spec_in;

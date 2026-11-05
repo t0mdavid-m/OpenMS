@@ -700,6 +700,14 @@ namespace OpenMS
        @throw Exception::InvalidValue for a bare accession of several sites (the message lists them) or a malformed accession
     */
     static const ResidueModification* resolveModification(const String& spec);
+
+    /**
+       @brief A variable modification a user names (FLASHTnT var_mod): as resolveModification, and also a modification that the database has
+       at any N-terminus only, restricted to the protein N-terminus by the site "Protein N-term <residue>", e.g. "Gln->pyro-Glu (Protein
+       N-term Q)" for Gln->pyro-Glu (N-term Q); @p protein_n_term tells which.
+       @throw as resolveModification for the name as given
+    */
+    static const ResidueModification* resolveVariableModification(const String& spec, bool& protein_n_term);
   };
 
   // Hot in every peak-group sort and mass computation: defined inline (same arithmetic as before).

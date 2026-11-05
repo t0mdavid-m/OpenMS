@@ -259,7 +259,8 @@ protected:
       if (String(name).trim().empty()) continue;
       try
       {
-        FLASHHelperClasses::resolveModification(name);
+        bool protein_n_term = false;
+        FLASHHelperClasses::resolveVariableModification(name, protein_n_term);
       }
       catch (const Exception::BaseException& e)
       {

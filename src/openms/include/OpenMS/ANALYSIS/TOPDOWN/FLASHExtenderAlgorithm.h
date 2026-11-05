@@ -83,12 +83,27 @@ public:
     for (const auto& vm : var_mod_list_) residues.push_back(vm.residues);
     return residues;
   }
-  /// position of each variable modification: 0 anywhere, 1 proteoform N-terminal residue, 2 proteoform C-terminal residue
+  /// position of each variable modification: 0 anywhere, 1 proteoform N-terminal residue, 2 proteoform C-terminal residue, 3 protein
+  /// N-terminal residue
   std::vector<int> getVariableModificationPositions() const
   {
     std::vector<int> positions;
     for (const auto& vm : var_mod_list_) positions.push_back(vm.position);
     return positions;
+  }
+  /// mass of each variable modification, in the same order
+  std::vector<double> getVariableModificationMasses() const
+  {
+    std::vector<double> masses;
+    for (const auto& vm : var_mod_list_) masses.push_back(vm.mass);
+    return masses;
+  }
+  /// residues each variable modification needs (2 for a residue written twice, e.g. "CC"), in the same order
+  std::vector<int> getVariableModificationSites() const
+  {
+    std::vector<int> sites;
+    for (const auto& vm : var_mod_list_) sites.push_back(vm.sites);
+    return sites;
   }
 
   /// fill the characterized proteoforms in @p hits

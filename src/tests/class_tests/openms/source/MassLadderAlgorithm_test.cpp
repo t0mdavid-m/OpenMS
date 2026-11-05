@@ -107,4 +107,109 @@ START_SECTION(([EXTRA] searchSlidingLadders for many spectra equals the search o
 }
 END_SECTION
 
+START_SECTION(([EXTRA] the ladders read the termini with the terminal modifications of the search))
+{
+  // protein 0 starts with Gln (pyroglutamate), protein 1 with Met-Ser (acetylation after the initiator Met removal); others random
+  std::mt19937 rng(11);
+  const std::string aa = "ACDEFGHIKLMNPSTVWY"; // no Q, so only protein 0 can carry the pyroglutamate
+  std::vector<std::string> proteins;
+  for (int p = 0; p < 40; ++p)
+  {
+    std::string seq = p == 0 ? "Q" : "M";
+    if (p == 1) seq += "S";
+    while (seq.size() < 120) seq += aa[rng() % aa.size()];
+    proteins.push_back(seq);
+  }
+  const double acetyl = 42.010565, pyro = -17.026549;
+  std::vector<MassLadderAlgorithm::TerminalModification> mods(2);
+  mods[0].mass = acetyl;
+  mods[0].position = 3; // protein N-terminus, any residue
+  mods[1].mass = pyro;
+  mods[1].position = 3;
+  mods[1].residues = "Q";
+  MassLadderAlgorithm ladders, plain;
+  ladders.buildIndex(proteins, {"b", "y"}, true, true, nullptr, mods, 1);
+  plain.buildIndex(proteins, {"b", "y"}, true, true);
+
+  const auto* rdb = ResidueDB::getInstance();
+  auto residues = [&](const std::string& seq, Size from, Size to) {
+    double sum = 0;
+    for (Size x = from; x < to; ++x) sum += rdb->getResidue(seq[x])->getMonoWeight(Residue::Internal);
+    return sum;
+  };
+  const double b_offset = Residue::getInternalToBIon().getMonoWeight(), y_offset = Residue::getInternalToYIon().getMonoWeight();
+  const double h2o = Residue::getInternalToFull().getMonoWeight();
+
+  // precursor ladder: protein 1 without its Met, acetylated (residues 1..69), with b ions carrying the acetylation and y ions without
+  {
+    const auto& seq = proteins[1];
+    std::vector<double> masses;
+    for (Size x = 4; x < 30; x += 2) masses.push_back(residues(seq, 1, x) + acetyl + b_offset);
+    for (Size x = 40; x < 66; x += 3) masses.push_back(residues(seq, x, 70) + y_offset);
+    std::sort(masses.begin(), masses.end());
+    const double precursor = residues(seq, 1, 70) + acetyl + h2o;
+    std::vector<MassLadderAlgorithm::PrecursorLadderResult> with_mods, without;
+    ladders.searchPrecursorLadders(masses, {precursor}, 10.0, 10.0, 5, with_mods);
+    plain.searchPrecursorLadders(masses, {precursor}, 10.0, 10.0, 5, without);
+    TEST_EQUAL(with_mods[0].candidates.empty(), false)
+    if (! with_mods[0].candidates.empty())
+    {
+      const auto& best = with_mods[0].candidates[0];
+      TEST_EQUAL(best.protein, 1)
+      TEST_EQUAL(best.window_start, 1)
+      TEST_EQUAL(best.window_end, 70)
+      TEST_EQUAL(best.n_mod, 0)
+      TEST_EQUAL(best.c_mod, -1)
+    }
+    bool plain_found = false; // unmodified, the window of protein 1 does not fit the precursor mass
+    for (const auto& c : without[0].candidates) plain_found |= c.protein == 1 && c.window_start == 1 && c.window_end == 70;
+    TEST_EQUAL(plain_found, false)
+    TEST_EQUAL(with_mods[0].windows > without[0].windows, true) // the acetylated windows are hypotheses too
+  }
+
+  // sliding ladder: b ions of protein 0 from its pyroglutamate N-terminus
+  {
+    const auto& seq = proteins[0];
+    std::vector<double> masses;
+    for (Size x = 3; x < 40; x += 2) masses.push_back(residues(seq, 0, x) + pyro + b_offset);
+    for (int k = 0; k < 10; ++k) masses.push_back(500.0 + (double)(rng() % 500000) / 100.0);
+    std::sort(masses.begin(), masses.end());
+    std::vector<MassLadderAlgorithm::Candidate> with_mods, without;
+    ladders.searchSlidingLadders(masses, 10.0, 5, {}, with_mods);
+    plain.searchSlidingLadders(masses, 10.0, 5, {}, without);
+    TEST_EQUAL(with_mods.empty(), false)
+    if (! with_mods.empty())
+    {
+      TEST_EQUAL(with_mods[0].protein, 0)
+      TEST_EQUAL(with_mods[0].n_mod, 1)
+      TEST_EQUAL(with_mods[0].ladders.empty(), false)
+      if (! with_mods[0].ladders.empty()) TEST_EQUAL(with_mods[0].ladders[0].mass_indices.size() >= 15, true)
+    }
+    bool plain_found = false;
+    for (const auto& c : without) plain_found |= c.protein == 0;
+    TEST_EQUAL(plain_found, false)
+  }
+
+  // terminal ladder: the same masses, read from the pyroglutamate N-terminus
+  {
+    const auto& seq = proteins[0];
+    std::vector<double> masses;
+    for (Size x = 3; x < 40; x += 2) masses.push_back(residues(seq, 0, x) + pyro + b_offset);
+    std::sort(masses.begin(), masses.end());
+    std::vector<MassLadderAlgorithm::Candidate> with_mods, without;
+    ladders.searchTerminalLadders(masses, 10.0, 5, {}, with_mods);
+    plain.searchTerminalLadders(masses, 10.0, 5, {}, without);
+    TEST_EQUAL(with_mods.empty(), false)
+    if (! with_mods.empty())
+    {
+      TEST_EQUAL(with_mods[0].protein, 0)
+      TEST_EQUAL(with_mods[0].n_mod, 1)
+    }
+    bool plain_found = false;
+    for (const auto& c : without) plain_found |= c.protein == 0;
+    TEST_EQUAL(plain_found, false)
+  }
+}
+END_SECTION
+
 END_TEST

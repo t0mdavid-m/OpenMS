@@ -202,15 +202,20 @@ namespace OpenMS
 
     for (const auto& name : param_.getValue("var_mod").toStringVector())
     {
-      if (String(name).trim().empty()) continue;
-      const ResidueModification* mod = FLASHHelperClasses::resolveModification(name); // a name or a Unimod accession, with its site
+      String spec = String(name).trim();
+      if (spec.empty()) continue;
+      // a name or a Unimod accession, with its site; a modification that Unimod has at any N-terminus only (e.g. Gln->pyro-Glu (N-term Q))
+      // restricted to the protein N-terminus by that site, "Gln->pyro-Glu (Protein N-term Q)", as Acetyl (Protein N-term)
+      bool protein_n_term = false;
+      const ResidueModification* mod = FLASHHelperClasses::resolveVariableModification(spec, protein_n_term);
       VariableModification vm;
       vm.name = mod->getId();
       vm.mass = mod->getDiffMonoMass();
       const char origin = mod->getOrigin();
       vm.residues = (origin == 'X' || origin == '\0' || origin == '.') ? String("") : String(1, origin);
       const auto term = mod->getTermSpecificity();
-      vm.position = term == ResidueModification::N_TERM ? 1 : term == ResidueModification::PROTEIN_N_TERM ? 3
+      vm.position = protein_n_term ? 3
+                    : term == ResidueModification::N_TERM ? 1 : term == ResidueModification::PROTEIN_N_TERM ? 3
                     : (term == ResidueModification::C_TERM || term == ResidueModification::PROTEIN_C_TERM) ? 2 : 0;
       vm.unimod = mod->getUniModRecordId();
       var_mod_list_.push_back(vm);

@@ -350,15 +350,19 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValue("ion_type", std::vector<std::string> {"b", "y"}, "Specifies ion types to consider.");
   defaults_.setValidStrings("ion_type", {"b", "c", "a", "y", "z", "x", "zp1", "zp2"});
 
-  defaults_.setValue("var_mod", std::vector<std::string> {"Acetyl (Protein N-term)"},
+  defaults_.setValue("var_mod", std::vector<std::string> {"Acetyl (Protein N-term)", "Gln->pyro-Glu (Protein N-term Q)"},
                      "Variable modifications, by name with the site as in Unimod/PSI-MOD (e.g. "
                      "'Oxidation (M)', 'Acetyl (N-term)', 'Phospho (S)') or by Unimod accession number with the site (e.g. '35 (M)', '1 (N-term)'; "
-                     "'UNIMOD:35 (M)' is the same; a bare number only if it has one site). Searched with their own count (max_var_mod_count), independently of blind "
-                     "modifications; both can occur in one proteoform. More in a file: ex:var_mod_file. Fixed modifications: the FLASHTnT tool's "
-                     "fixed_mod. The default, 'Acetyl (Protein N-term)', is the acetylation of the protein's first residue, or of its second after "
-                     "the initiator Met; it costs no penalty and, with the initiator Met removal (always searched, also without a penalty), gives "
-                     "TopPIC's default N-terminal forms (NONE, NME, NME_ACETYLATION, M_ACETYLATION). 'Acetyl (N-term)' is the acetylation of "
-                     "any proteoform N-terminus, with the variable modification penalty.");
+                     "'UNIMOD:35 (M)' is the same; a bare number only if it has one site). A modification of any N-terminus is restricted to the "
+                     "protein N-terminus by the site 'Protein N-term <residue>' (e.g. 'Gln->pyro-Glu (Protein N-term Q)'). Searched with their own "
+                     "count (max_var_mod_count), independently of blind modifications; both can occur in one proteoform. More in a file: "
+                     "ex:var_mod_file. Fixed modifications: the FLASHTnT tool's fixed_mod. Terminal ones are also read by the mass ladders "
+                     "(terminal_ladders, precursor_ladders, native sliding ladders). The defaults: 'Acetyl (Protein N-term)', the acetylation of the "
+                     "protein's first residue, or of its second after the initiator Met; it costs no penalty and, with the initiator Met removal "
+                     "(always searched, also without a penalty), gives TopPIC's default N-terminal forms (NONE, NME, NME_ACETYLATION, "
+                     "M_ACETYLATION). 'Gln->pyro-Glu (Protein N-term Q)', the pyroglutamate of a protein N-terminal Gln (antibody heavy chains, "
+                     "secreted proteins; in a PEFF database also at the start of a mature form), with the variable modification penalty. "
+                     "'Acetyl (N-term)' is the acetylation of any proteoform N-terminus, with the variable modification penalty.");
 
   defaults_.setValue("max_var_mod_count", 3, "Maximum number of variable modifications per proteoform.");
   defaults_.setValue("max_blind_mod_count", 1,
@@ -402,16 +406,20 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValidStrings("gapped_tags", {"off", "fallback", "both", "only"});
   defaults_.setValue("terminal_ladders", "true",
                      "Candidate proteins from terminal ladders: deconvolved masses that are residue sums from an intact protein terminus (the N-terminus "
-                     "also without the initiator Met and with acetylation), found without a sequence tag. In every spectrum the min_protein_hits best "
-                     "proteins by the chance probability of their ladder are characterized, anchored on the ladder.");
+                     "also without the initiator Met; each terminus also with the terminal variable modifications of var_mod and ex:var_mod_file "
+                     "on the residues the extension places them on, e.g. with the default the protein N-terminal acetylation), found without a "
+                     "sequence tag. In every spectrum the min_protein_hits best proteins by the chance probability of their ladder (corrected for "
+                     "the terminal forms tested on the protein) are characterized, anchored on the ladder.");
   defaults_.setValidStrings("terminal_ladders", {"true", "false"});
   defaults_.setValue("precursor_ladders", "true",
                      "Candidate proteins from precursor-anchored ladders: in each MSn spectrum with a precursor mass, every stretch of a protein (between "
-                     "non-standard residues) whose unmodified mass equals the precursor mass (within the MS1 deconvolution tolerance of the input, or "
+                     "non-standard residues) whose mass equals the precursor mass (within the MS1 deconvolution tolerance of the input, or "
                      "the MS2 one if the input has no MS1 spectra; isotope errors -1 to +1) is scored by the chance probability of the "
-                     "deconvolved masses on its prefix and suffix fragment ladders (a position counts once per side, whatever ion types match it). The "
-                     "stretches are unmodified: N-terminal acetylation and other modifications are not proposed (initiator Met removal is a stretch "
-                     "from residue 2). The min_protein_hits best stretches are characterized from tags on their ladders. Only their PrSMs of "
+                     "deconvolved masses on its prefix and suffix fragment ladders (a position counts once per side, whatever ion types match it). A "
+                     "stretch is unmodified or carries the terminal variable modifications of var_mod and ex:var_mod_file where the extension places "
+                     "them (e.g. with the default the acetylation of a stretch from the protein's first residue, or its second after the initiator "
+                     "Met; the Met removal itself is a stretch from residue 2); every form is a hypothesis of the spectrum. The min_protein_hits best "
+                     "stretches are characterized from tags on their ladders. Only their PrSMs of "
                      "determined mass and termini that are not the same proteoform as a determined PrSM of another source in the spectrum are kept; "
                      "they form their own FDR class (\"precursor ladder\"). Not used with protein_level_only. Without any precursor mass in the input, "
                      "results are unchanged; otherwise the PrSMs of this source can also change the others' results (the pooled protein-level null, "
@@ -1592,7 +1600,33 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   MassLadderAlgorithm mass_ladders;
   // the sliding ladders of native mode read the runs of standard residues of the precursor ladders
   lap();
-  mass_ladders.buildIndex(protein_seqs, param_.getValue("ion_type").toStringVector(), terminal_ladders_, use_precursor_ladders || native_rule, db);
+  // The ladders read the termini with the terminal forms the extension searches: the initiator Met removal (always) and the terminal
+  // variable modifications (var_mod, ex:var_mod_file at an N-terminus, the protein N-terminus or a C-terminus; one residue each), on the
+  // residues the extension places them on. Sequence and gapped tags need none: their shift from the protein terminus is read from the data.
+  std::vector<MassLadderAlgorithm::TerminalModification> terminal_mods;
+  const int max_var_mod_count = (int)param_.getValue("max_var_mod_count");
+  if (max_var_mod_count > 0)
+  {
+    FLASHExtenderAlgorithm extender;
+    extender.setParameters(extender_param_);
+    const auto names = extender.getVariableModificationNames();
+    const auto residues = extender.getVariableModificationResidues();
+    const auto positions = extender.getVariableModificationPositions();
+    const auto mod_masses = extender.getVariableModificationMasses();
+    const auto sites = extender.getVariableModificationSites();
+    String listed;
+    for (Size i = 0; i < names.size(); i++)
+    {
+      if (positions[i] == 0 || sites[i] != 1) continue;
+      terminal_mods.push_back({mod_masses[i], positions[i], residues[i]});
+      listed += String(listed.empty() ? "" : ", ") + names[i] + " " + String::number(mod_masses[i], 4) + " Da ("
+                + (positions[i] == 3 ? "protein N-term" : positions[i] == 1 ? "N-term" : "C-term") + ", "
+                + (residues[i].empty() || residues[i] == "*" ? String("any residue") : residues[i]) + ")";
+    }
+    if (! terminal_mods.empty()) OPENMS_LOG_INFO << "Mass ladders read the termini also with: " << listed << std::endl;
+  }
+  mass_ladders.buildIndex(protein_seqs, param_.getValue("ion_type").toStringVector(), terminal_ladders_, use_precursor_ladders || native_rule, db,
+                          terminal_mods, max_var_mod_count);
   OPENMS_LOG_INFO << "Database indexes (wall s): protein mass sets " << t_mass_sets << ", residue sums " << t_residue_sums << ", gapped tags "
                   << t_gapped << ", mass ladders " << lap() << std::endl;
   // the precursor tolerance of the windows: the MS1 tolerance of the input, else (no MS1 spectra) the fragment tolerance

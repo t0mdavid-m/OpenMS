@@ -25,13 +25,16 @@ class ProteoformDatabase;
 sequence tag. Mass ladders are a candidate source of their own, next to sequence tags (FLASHTaggerAlgorithm) and gapped tags
 (FLASHGappedTaggerAlgorithm).
 
-- Terminal ladders: masses that are residue sums from an intact protein terminus (the N-terminus also without the initiator Met and
-  with acetylation). A protein is scored by the chance probability of the number of masses on its ladder.
-- Precursor-anchored ladders: the windows (stretches) of the proteins whose unmodified mass equals the precursor mass, scored by the
-  chance probability of the masses on their prefix ladder (read from the window start) and their suffix ladder (read from the window
-  end).
+- Terminal ladders: masses that are residue sums from an intact protein terminus (the N-terminus also without the initiator Met). A
+  protein is scored by the chance probability of the number of masses on its ladder.
+- Precursor-anchored ladders: the windows (stretches) of the proteins whose mass equals the precursor mass, scored by the chance
+  probability of the masses on their prefix ladder (read from the window start) and their suffix ladder (read from the window end).
 - Sliding ladders: masses read from any start of a protein (prefix ion types) or to any end (suffix ion types), without a precursor
   mass; a protein is scored by the chance probability of its best ladder, corrected for the starts or ends tested.
+
+All three read a terminus with the terminal forms the extension searches (FLASHExtenderAlgorithm): the initiator Met removal and the
+terminal variable modifications given to buildIndex (each on the residues and at the termini the extension places it), besides the fixed
+modifications of a database entry. Each form at a terminus is a hypothesis of its own, counted in the correction for the tests.
 
 Only the standard residues (ACDEFGHIKLMNPQRSTVWYUO) make up a ladder: a terminal ladder ends at the first other residue, and no window
 crosses one. buildIndex builds the database side once, from the protein sequences and the run's ion types; the searches of a spectrum
@@ -49,6 +52,16 @@ public:
   /// decoy, 2 B. theta and 167 E. coli PrSMs (none of the B. theta or decoy ones at 1%). A short window has few ladder positions, its
   /// masses are where fragment masses are densest, and many windows fit a small precursor mass.
   static constexpr int precursor_ladder_min_length = 10;
+
+  /// a terminal variable modification of the search (FLASHExtenderAlgorithm): the ladders read a terminus also with it, where the
+  /// extension can place it
+  struct TerminalModification
+  {
+    double mass = 0;
+    int position = 3;     ///< 1 any proteoform N-terminus, 2 any proteoform C-terminus, 3 the protein N-terminus (its first residue, or
+                          ///< its second after an initiator Met)
+    std::string residues; ///< the residues it can sit on (empty or "*": any)
+  };
 
   /// the matched masses of one ion type of a candidate, read from one end (a protein terminus or a window end)
   struct Ladder
@@ -71,6 +84,8 @@ public:
     int window_start = -1;       ///< precursor ladders: the window is residues window_start..window_end-1 (0-based); -1 for terminal ladders
     int window_end = -1;
     int isotope = 0;             ///< precursor ladders: the isotope error (-1, 0, 1) at which the window mass equals the precursor mass
+    int n_mod = -1;              ///< the terminal modification (index into those of buildIndex) its N-terminal side was read with; -1 none
+    int c_mod = -1;              ///< the same for its C-terminal side
   };
 
   /// the precursor-ladder candidates of one precursor mass
@@ -139,9 +154,14 @@ public:
     @param precursor_ladders build the segments of searchPrecursorLadders
     @param db the database the sequences are the entries of (their fixed modifications are added to the residue sums, and the searches
     rank one entry per protein); nullptr or an identity database: every sequence is a protein of its own
+    @param terminal_mods the terminal variable modifications of the search (none: the termini are read unmodified, and the N-terminus
+    also without the initiator Met)
+    @param max_var_mod_count the search's maximum number of variable modifications per proteoform: with 2 or more, a precursor-ladder
+    window can carry an N- and a C-terminal one at once; 0 uses none of @p terminal_mods
   */
   void buildIndex(const std::vector<std::string>& protein_seqs, const std::vector<std::string>& ion_types, bool terminal_ladders,
-                  bool precursor_ladders, const ProteoformDatabase* db = nullptr);
+                  bool precursor_ladders, const ProteoformDatabase* db = nullptr, const std::vector<TerminalModification>& terminal_mods = {},
+                  int max_var_mod_count = 1);
 
   /**
     @brief the terminal-ladder candidates of a spectrum. Thread safe once the index is built.
@@ -244,12 +264,44 @@ private:
   /// per protein, the residue sums from its N- and from its C-terminus (up to the first non-standard residue): the terminal ladders
   /// (ladder_suf_ only with terminal ladders); ladder_pre_ is also the window sums of a protein of standard residues only
   std::vector<std::vector<double>> ladder_pre_, ladder_suf_;
-  /// terminal ladders: all of them sorted by mass (a sum of 0 left out)
+  /// terminal ladders: all of them sorted by mass (a sum of 0 left out); the N-terminal index also for the precursor-ladder windows
+  /// that start at the protein N-terminus (WindowForm::protein_start)
   std::vector<LadderEntry> ladder_pre_index_, ladder_suf_index_;
   /// terminal ladders: per Da of mass from 0, the first entry of the index at or above it (empty: not built, e.g. beyond 10 MDa)
   std::vector<std::uint32_t> ladder_pre_first_, ladder_suf_first_;
-  /// terminal ladders: observed mass + shift = residue sum from the terminus
-  std::vector<double> n_ladder_shifts_, c_ladder_shifts_;
+  /// terminal ladders: a form of a terminus read with one ion type: observed mass + shift = residue sum from the terminus. N-terminal
+  /// forms: the initiator Met removed or not, and a terminal modification or none; C-terminal forms: a terminal modification or none.
+  struct LadderForm
+  {
+    double shift = 0;
+    bool met_removed = false;
+    int mod = -1; ///< index into terminal_mods_; -1 none
+  };
+  std::vector<LadderForm> n_ladder_forms_, c_ladder_forms_;
+  /// whether terminal ladder form @p f (N-terminal if @p n_term) applies to protein @p k: its first residue Met for the removal, and its
+  /// modification fits (modFits_)
+  bool ladderFormApplies_(Size k, const LadderForm& f, bool n_term) const;
+  /// the terminal modifications the ladders read the termini with (buildIndex), the protein sequences (their residues), and per entry
+  /// the termini its fixed modifications occupy (ProteoformDatabase::occupancy; empty: none)
+  std::vector<TerminalModification> terminal_mods_;
+  std::vector<std::string> seqs_;
+  std::vector<std::vector<std::pair<int, std::uint8_t>>> occupancy_;
+  /// whether terminal modification @p m can sit on residue @p p of protein @p k, as the extension places it
+  /// (FLASHExtenderAlgorithm::combinationFits_): one of its residues; at the protein N-terminus (residue 0, or 1 after a Met) for position 3;
+  /// no fixed modification of the entry occupying that terminus
+  bool modFits_(Size k, Size p, int m) const;
+  /// precursor ladders: a form of the windows besides the unmodified one, with a terminal modification at the window start (n_mod), at
+  /// its end (c_mod) or both; mass: their summed mass. protein_start: n_mod is at the protein N-terminus only (position 3), so the
+  /// windows start at residue 0, or 1 after an initiator Met, and are looked up in the N-terminal ladder index instead of swept
+  struct WindowForm
+  {
+    int n_mod = -1, c_mod = -1;
+    double mass = 0;
+    bool protein_start = false;
+  };
+  std::vector<WindowForm> window_forms_;
+  /// precursor ladders: per protein, its segment that starts at residue 0 (-1: none, its first residue is not a standard one)
+  std::vector<long> protein_start_segment_;
   /// precursor ladders: the runs of standard residues of the database
   std::vector<Segment> segments_;
   /// precursor ladders: per protein, its residue sums from the N-terminus, in which a non-standard residue adds 0 (no window crosses it)

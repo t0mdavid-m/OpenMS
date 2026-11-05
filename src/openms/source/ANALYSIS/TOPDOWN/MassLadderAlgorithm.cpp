@@ -8,7 +8,6 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/MassLadderAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/ProteoformDatabase.h>
-#include <OpenMS/CHEMISTRY/EmpiricalFormula.h>
 #include <OpenMS/CHEMISTRY/Residue.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
 #include <OpenMS/CONCEPT/Constants.h>
@@ -20,6 +19,7 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <functional>
 #include <numeric>
 #include <map>
 #ifdef _OPENMP
@@ -161,18 +161,23 @@ struct Window
   int k = 0;                  // matched (position, side) pairs: a ladder position counts once per side, whatever ion types match it
   std::uint32_t protein = 0, i = 0, j = 0;
   int isotope = 0;            // the isotope error (-1, 0, 1) at which the window mass equals the precursor mass
+  int form = 0;               // the form of the window (0 unmodified; else 1 + the index of its terminal modification form)
   std::vector<int> counts;    // matched positions per target set (for the tags)
 };
 
-// LogP descending, k descending, then protein, i and j ascending
+// LogP descending, k descending, then protein, i, j and form ascending
 inline bool isBetter(const Window& a, const Window& b)
 {
   if (a.log_p != b.log_p) return a.log_p > b.log_p;
   if (a.k != b.k) return a.k > b.k;
   if (a.protein != b.protein) return a.protein < b.protein;
   if (a.i != b.i) return a.i < b.i;
-  return a.j < b.j;
+  if (a.j != b.j) return a.j < b.j;
+  return a.form < b.form;
 }
+
+// whether the window i..j-1 of a protein can carry a form (its terminal modifications on the residues they need); nullptr: any window
+using WindowFilter = std::function<bool(std::uint32_t protein, std::size_t i, std::size_t j)>;
 
 struct Result
 {
@@ -277,10 +282,10 @@ inline void scoreWindow(const std::vector<TargetSet>& sets, const double* S, std
 // with k >= min_k is scored by the chance probability of k, lambda = (j - i - 1) / V x the tolerance widths of all sets up to
 // V = S(j) - S(i); with several types per side this bounds the chance rate of a position on a side from above. Windows of fewer than
 // min_length residues are not considered (nor counted as hypotheses), nor are those without every fixed modification of their entry
-// (i > i_max or j < j_min of the segment).
+// (i > i_max or j < j_min of the segment), nor those @p filter rejects.
 inline void search(const std::vector<TargetSet>& sets, const std::vector<Segment>& segments, const std::vector<const double*>& sums,
                    double precursor_mass, double precursor_tol_ppm, double h2o, double isotope_mass, int min_k, int min_length, std::size_t top_n,
-                   Result& result, const MassLadderAlgorithm::WindowOwnership* owners)
+                   Result& result, const MassLadderAlgorithm::WindowOwnership* owners, const WindowFilter* filter = nullptr)
 {
   result.hypotheses = 0;
   result.top.clear();
@@ -307,6 +312,7 @@ inline void search(const std::vector<TargetSet>& sets, const std::vector<Segment
         const double mass = S[j] - si;
         const int isotope = isotopeOf(mass, q, h2o, isotope_mass);
         if (isotope == 2) continue;
+        if (filter != nullptr && ! (*filter)(seg.protein, i, j)) continue;
         scoreWindow(sets, S, seg.protein, i, j, mass, isotope, min_k, top_n, counts, result, owners);
       }
     }
@@ -318,7 +324,7 @@ inline void search(const std::vector<TargetSet>& sets, const std::vector<Segment
 inline void searchListed(const std::vector<TargetSet>& sets, const std::vector<Segment>& segments, const std::vector<const double*>& sums,
                          const MassLadderAlgorithm::PreparedWindow* windows, const std::uint32_t* begin, const std::uint32_t* end, std::size_t chunks,
                          double precursor_mass, double precursor_tol_ppm, double h2o, double isotope_mass, int min_k, std::size_t top_n, Result& result,
-                         const MassLadderAlgorithm::WindowOwnership* owners)
+                         const MassLadderAlgorithm::WindowOwnership* owners, const WindowFilter* filter = nullptr)
 {
   result.hypotheses = 0;
   result.top.clear();
@@ -332,6 +338,7 @@ inline void searchListed(const std::vector<TargetSet>& sets, const std::vector<S
       const auto& seg = segments[windows[t].segment];
       const double* S = sums[seg.protein];
       const std::size_t i = (std::size_t)seg.a + windows[t].start, j = i + windows[t].length;
+      if (filter != nullptr && ! (*filter)(seg.protein, i, j)) continue;
       const double mass = S[j] - S[i];
       scoreWindow(sets, S, seg.protein, i, j, mass, isotopeOf(mass, q, h2o, isotope_mass), min_k, top_n, counts, result, owners);
     }
@@ -556,9 +563,46 @@ template<typename Entry> void indexByDalton(const std::vector<Entry>& index, std
 }
 } // namespace
 
-void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seqs, const std::vector<std::string>& ion_types, bool terminal_ladders,
-                                     bool precursor_ladders, const ProteoformDatabase* db)
+bool MassLadderAlgorithm::modFits_(Size k, Size p, int m) const
 {
+  const auto& tm = terminal_mods_[m];
+  const auto& seq = seqs_[k];
+  if (p >= seq.size()) return false;
+  if (tm.position == 3 && ! (p == 0 || (p == 1 && seq[0] == 'M'))) return false;
+  if (! tm.residues.empty() && tm.residues != "*" && tm.residues.find(seq[p]) == std::string::npos) return false;
+  if (! occupancy_.empty())
+  {
+    const std::uint8_t terminus = tm.position == 2 ? 4 : 2;
+    for (const auto& [pos, bits] : occupancy_[k])
+    {
+      if (pos == (int)p && (bits & terminus) != 0) return false; // a fixed modification sits on that terminus
+    }
+  }
+  return true;
+}
+
+bool MassLadderAlgorithm::ladderFormApplies_(Size k, const LadderForm& f, bool n_term) const
+{
+  const auto& seq = seqs_[k];
+  if (n_term)
+  {
+    if (f.met_removed && (seq.size() < 2 || seq[0] != 'M')) return false;
+    return f.mod < 0 || modFits_(k, f.met_removed ? 1 : 0, f.mod);
+  }
+  return f.mod < 0 || (! seq.empty() && modFits_(k, seq.size() - 1, f.mod));
+}
+
+void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seqs, const std::vector<std::string>& ion_types, bool terminal_ladders,
+                                     bool precursor_ladders, const ProteoformDatabase* db, const std::vector<TerminalModification>& terminal_mods,
+                                     int max_var_mod_count)
+{
+  terminal_mods_.clear();
+  seqs_ = protein_seqs;
+  occupancy_.clear();
+  n_ladder_forms_.clear();
+  c_ladder_forms_.clear();
+  window_forms_.clear();
+  protein_start_segment_.clear();
   ion_residue_shifts_.clear();
   protein_lengths_.clear();
   entry_protein_.clear();
@@ -574,8 +618,6 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
   ladder_suf_index_.clear();
   ladder_pre_first_.clear();
   ladder_suf_first_.clear();
-  n_ladder_shifts_.clear();
-  c_ladder_shifts_.clear();
   segments_.clear();
   window_sums_.clear();
   window_own_sums_.clear();
@@ -614,7 +656,19 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
       entry_fixed_count_.push_back(entry.fixed.size());
       entry_offset_.push_back(entry.offset);
     }
-    if (db->hasFixedModifications()) fixed = &db->fixedMasses();
+    if (db->hasFixedModifications())
+    {
+      fixed = &db->fixedMasses();
+      occupancy_ = db->occupancy();
+    }
+  }
+  // the terminal modifications of the search (FLASHExtenderAlgorithm::loadVariableModifications_: none with max_var_mod_count 0)
+  if (max_var_mod_count > 0)
+  {
+    for (const auto& tm : terminal_mods)
+    {
+      if (tm.position == 1 || tm.position == 2 || tm.position == 3) terminal_mods_.push_back(tm);
+    }
   }
   if (! terminal_ladders && ! precursor_ladders) return;
 
@@ -670,13 +724,45 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
       for (Size j = 0; j + 1 < ladder_suf_[k].size(); j++) ladder_suf_fixed_[k] += extra[n - 1 - j];
     }
   }
-  if (terminal_ladders)
+  // Precursor-ladder forms: each terminal modification at the window start (N-terminal ones) or end (C-terminal ones), and with two or
+  // more variable modifications allowed, an N- and a C-terminal one together (the extension places at most one per terminus).
+  if (precursor_ladders)
+  {
+    for (int m = 0; m < (int)terminal_mods_.size(); m++)
+    {
+      const auto& tm = terminal_mods_[m];
+      WindowForm f;
+      (tm.position == 2 ? f.c_mod : f.n_mod) = m;
+      f.mass = tm.mass;
+      f.protein_start = tm.position == 3;
+      window_forms_.push_back(f);
+    }
+    if (max_var_mod_count >= 2)
+    {
+      for (int n = 0; n < (int)terminal_mods_.size(); n++)
+      {
+        if (terminal_mods_[n].position == 2) continue;
+        for (int c = 0; c < (int)terminal_mods_.size(); c++)
+        {
+          if (terminal_mods_[c].position != 2) continue;
+          WindowForm f;
+          f.n_mod = n;
+          f.c_mod = c;
+          f.mass = terminal_mods_[n].mass + terminal_mods_[c].mass;
+          f.protein_start = terminal_mods_[n].position == 3;
+          window_forms_.push_back(f);
+        }
+      }
+    }
+  }
+  const bool start_windows = std::any_of(window_forms_.begin(), window_forms_.end(), [](const WindowForm& f) { return f.protein_start; });
+  if (terminal_ladders || start_windows)
   {
     std::vector<Size> pre_first(protein_seqs.size() + 1, 0), suf_first(protein_seqs.size() + 1, 0);
     for (Size k = 0; k < protein_seqs.size(); k++)
     {
       pre_first[k + 1] = pre_first[k] + ladder_pre_[k].size() - 1;
-      suf_first[k + 1] = suf_first[k] + ladder_suf_[k].size() - 1;
+      if (terminal_ladders) suf_first[k + 1] = suf_first[k] + ladder_suf_[k].size() - 1;
     }
     ladder_pre_index_.resize(pre_first.back());
     ladder_suf_index_.resize(suf_first.back());
@@ -684,6 +770,7 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
     for (long k = 0; k < (long)protein_seqs.size(); k++)
     {
       for (Size j = 1; j < ladder_pre_[k].size(); j++) ladder_pre_index_[pre_first[k] + j - 1] = {ladder_pre_[k][j], (std::uint32_t)k};
+      if (! terminal_ladders) continue;
       for (Size j = 1; j < ladder_suf_[k].size(); j++) ladder_suf_index_[suf_first[k] + j - 1] = {ladder_suf_[k][j], (std::uint32_t)k};
     }
     // the two sorts at the same time, each as before
@@ -695,20 +782,36 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
 #pragma omp section
       std::sort(ladder_suf_index_.begin(), ladder_suf_index_.end(), by_mass);
     }
-
+    // per Da, the first entry of each index: searchTerminalLadders looks a mass up within its Da
+    indexByDalton(ladder_pre_index_, ladder_pre_first_);
+    if (terminal_ladders) indexByDalton(ladder_suf_index_, ladder_suf_first_);
+  }
+  if (terminal_ladders)
+  {
+    // the forms of each terminus per ion type, in this order: N-terminal intact, without the initiator Met, then each N-terminal
+    // modification on the intact terminus and without the Met; C-terminal unmodified, then each C-terminal modification. Whether a form
+    // applies to a protein (its first residue, the modification's residues) is checked per protein (ladderFormApplies_).
     const double met = rdb->getResidue('M')->getMonoWeight(Residue::Internal);
-    const double acetyl = EmpiricalFormula("C2H2O").getMonoWeight();
     for (const auto& [prefix, shift] : ion_residue_shifts_)
     {
       if (prefix)
       {
-        for (double form : {0.0, met, -acetyl, met - acetyl}) n_ladder_shifts_.push_back(form + shift); // form - offset
+        for (int m = -1; m < (int)terminal_mods_.size(); m++)
+        {
+          if (m >= 0 && terminal_mods_[m].position == 2) continue;
+          const double mod_mass = m < 0 ? 0.0 : terminal_mods_[m].mass;
+          for (bool removed : {false, true}) n_ladder_forms_.push_back({(removed ? met : 0.0) - mod_mass + shift, removed, m}); // form - offset
+        }
       }
-      else { c_ladder_shifts_.push_back(shift); }
+      else
+      {
+        for (int m = -1; m < (int)terminal_mods_.size(); m++)
+        {
+          if (m >= 0 && terminal_mods_[m].position != 2) continue;
+          c_ladder_forms_.push_back({(m < 0 ? 0.0 : -terminal_mods_[m].mass) + shift, false, m});
+        }
+      }
     }
-    // per Da, the first entry of each index: searchTerminalLadders looks a mass up within its Da
-    indexByDalton(ladder_pre_index_, ladder_pre_first_);
-    indexByDalton(ladder_suf_index_, ladder_suf_first_);
   }
 
   // Precursor-anchored ladders: the database as runs of standard residues (segments) with their residue sums, for the window search of
@@ -741,6 +844,7 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
       window_sums_[other[n]] = own.data();
     }
     if (fixed != nullptr) window_fixed_sums_.resize(protein_seqs.size());
+    protein_start_segment_.assign(protein_seqs.size(), -1);
     for (Size k = 0; k < protein_seqs.size(); k++)
     {
       if (window_sums_[k] == nullptr) window_sums_[k] = ladder_pre_[k].data(); // standard residues only: the sums of the whole protein
@@ -769,6 +873,7 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
         if (is_standard && a < 0) a = (long)x;
         if (! is_standard && a >= 0)
         {
+          if (a == 0) protein_start_segment_[k] = (long)segments_.size();
           segments_.push_back({(std::uint32_t)k, (std::uint32_t)a, (std::uint32_t)x, i_max, j_min});
           a = -1;
         }
@@ -882,8 +987,11 @@ void MassLadderAlgorithm::searchTerminalLadders(const std::vector<double>& masse
 {
   candidates.clear();
   if (masses.empty()) return;
-  const Size n_proteins = protein_lengths_.size(), n_n = n_ladder_shifts_.size(), n_shifts = n_n + c_ladder_shifts_.size();
-  auto shift_of = [&](Size si) { return si < n_n ? n_ladder_shifts_[si] : c_ladder_shifts_[si - n_n]; };
+  const Size n_proteins = protein_lengths_.size(), n_n = n_ladder_forms_.size(), n_shifts = n_n + c_ladder_forms_.size();
+  auto form_of = [&](Size si) -> const LadderForm& { return si < n_n ? n_ladder_forms_[si] : c_ladder_forms_[si - n_n]; };
+  auto shift_of = [&](Size si) { return form_of(si).shift; };
+  // whether a form applies to a protein (its first residue Met for the removal, the residues of its modification)
+  auto applies = [&](Size p, Size si) { return ladderFormApplies_(p, form_of(si), si < n_n); };
   std::vector<std::uint16_t> counts(n_proteins * n_shifts, 0);
   std::vector<Size> touched;
   for (Size si = 0; si < n_shifts; si++)
@@ -907,6 +1015,7 @@ void MassLadderAlgorithm::searchTerminalLadders(const std::vector<double>& masse
       for (; it != index.end() && it->mass <= t + margin; ++it)
       {
         const Size c = it->protein * n_shifts + si;
+        if (counts[c] == 0 && ! applies(it->protein, si)) continue; // a form the protein cannot have (its count stays 0)
         if (counts[c]++ == 0) touched.push_back(c);
       }
     }
@@ -942,8 +1051,14 @@ void MassLadderAlgorithm::searchTerminalLadders(const std::vector<double>& masse
   for (const auto& [p, sc] : side_scores)
   {
     if (excluded.count(p) > 0) continue;
-    const double n_score = n_n > 0 ? sc.first - std::log10((double)n_n) : 0.0;
-    const double c_score = n_shifts > n_n ? sc.second - std::log10((double)(n_shifts - n_n)) : 0.0;
+    // each side corrected for the forms tested on it: those that apply to the protein
+    Size n_tested = 0, c_tested = 0;
+    for (Size si = 0; si < n_shifts; si++)
+    {
+      if (applies(p, si)) ++(si < n_n ? n_tested : c_tested);
+    }
+    const double n_score = n_tested > 0 ? sc.first - std::log10((double)n_tested) : 0.0;
+    const double c_score = c_tested > 0 ? sc.second - std::log10((double)c_tested) : 0.0;
     const double score = std::max(n_score, c_score);
     if (! (score > 0)) continue;
     ranked.emplace_back(score, p);
@@ -992,6 +1107,7 @@ void MassLadderAlgorithm::searchTerminalLadders(const std::vector<double>& masse
       ladder.start = prefix ? first : (int)length - last;
       ladder.end = prefix ? last : (int)length - first;
       cand.ladders.push_back(std::move(ladder));
+      (prefix ? cand.n_mod : cand.c_mod) = form_of(si).mod;
     }
     if (cand.ladders.empty()) continue;
     candidates.push_back(std::move(cand));
@@ -1007,26 +1123,100 @@ void MassLadderAlgorithm::searchPrecursorLadders(const std::vector<double>& mass
   results.assign(precursor_masses.size(), PrecursorLadderResult());
   if (masses.empty()) return;
   const double h2o = Residue::getInternalToFull().getMonoWeight();
-  std::vector<precursor_ladder::TargetSet> sets;
-  sets.reserve(ion_residue_shifts_.size());
-  for (const auto& [prefix, shift] : ion_residue_shifts_) sets.emplace_back(masses, shift, prefix, fragment_tol_ppm);
-  precursor_ladder::Result found;
-  const WindowOwnership* owners = window_owners_.empty() ? nullptr : &window_owners_;
-  for (Size n = 0; n < precursor_masses.size(); n++)
+  const double isotope_mass = Constants::C13C12_MASSDIFF_U;
+  // the target sets of each form: [0] the unmodified windows, [f + 1] window_forms_[f]: its prefix ion types read from the window start
+  // with its N-terminal modification, its suffix ion types from the window end with its C-terminal one
+  std::vector<std::vector<precursor_ladder::TargetSet>> form_sets(1 + window_forms_.size());
+  for (Size f = 0; f < form_sets.size(); f++)
   {
-    // the windows of a prepared mass are listed (preparePrecursorWindows); any other mass is swept
-    const auto prepared = std::lower_bound(prepared_masses_.begin(), prepared_masses_.end(), precursor_masses[n]);
-    if (prepared != prepared_masses_.end() && *prepared == precursor_masses[n] && precursor_tol_ppm == prepared_tol_ppm_)
+    const WindowForm none;
+    const WindowForm& wf = f == 0 ? none : window_forms_[f - 1];
+    const double n_mass = wf.n_mod < 0 ? 0.0 : terminal_mods_[wf.n_mod].mass, c_mass = wf.c_mod < 0 ? 0.0 : terminal_mods_[wf.c_mod].mass;
+    form_sets[f].reserve(ion_residue_shifts_.size());
+    for (const auto& [prefix, shift] : ion_residue_shifts_) form_sets[f].emplace_back(masses, shift - (prefix ? n_mass : c_mass), prefix, fragment_tol_ppm);
+  }
+  const WindowOwnership* owners = window_owners_.empty() ? nullptr : &window_owners_;
+  // the windows of a mass (the residue sum plus water fits it): a prepared mass reads its listed windows (preparePrecursorWindows), any
+  // other is swept
+  auto sweep = [&](const std::vector<precursor_ladder::TargetSet>& sets, double mass, const precursor_ladder::WindowFilter* filter,
+                   precursor_ladder::Result& out) {
+    const auto prepared = std::lower_bound(prepared_masses_.begin(), prepared_masses_.end(), mass);
+    if (prepared != prepared_masses_.end() && *prepared == mass && precursor_tol_ppm == prepared_tol_ppm_)
     {
       const Size q = (Size)(prepared - prepared_masses_.begin());
       precursor_ladder::searchListed(sets, segments_, window_sums_, prepared_windows_.get(), prepared_offsets_.data() + q * prepared_chunks_,
-                                     prepared_offsets_.data() + (q + 1) * prepared_chunks_, prepared_chunks_, precursor_masses[n], precursor_tol_ppm,
-                                     h2o, Constants::C13C12_MASSDIFF_U, precursor_ladder_min_k, top_n, found, owners);
+                                     prepared_offsets_.data() + (q + 1) * prepared_chunks_, prepared_chunks_, mass, precursor_tol_ppm, h2o,
+                                     isotope_mass, precursor_ladder_min_k, top_n, out, owners, filter);
     }
     else
     {
-      precursor_ladder::search(sets, segments_, window_sums_, precursor_masses[n], precursor_tol_ppm, h2o, Constants::C13C12_MASSDIFF_U,
-                               precursor_ladder_min_k, precursor_ladder_min_length, top_n, found, owners);
+      precursor_ladder::search(sets, segments_, window_sums_, mass, precursor_tol_ppm, h2o, isotope_mass, precursor_ladder_min_k,
+                               precursor_ladder_min_length, top_n, out, owners, filter);
+    }
+  };
+  // The windows of a form whose N-terminal modification sits on the protein N-terminus only: they start at residue 0, or 1 after an
+  // initiator Met, so their residue sums from the N-terminus (S(j), and S(j) - S(1) = S(j) - Met) are looked up in the N-terminal ladder
+  // index instead of sweeping the database; each is tested as the sweep tests a window (its own segment, length, fixed modifications,
+  // isotope error) and must fit the form's modifications.
+  const double met = ResidueDB::getInstance()->getResidue('M')->getMonoWeight(Residue::Internal);
+  auto startWindows = [&](const std::vector<precursor_ladder::TargetSet>& sets, const WindowForm& wf, double mass, precursor_ladder::Result& out) {
+    out.hypotheses = 0;
+    out.top.clear();
+    if (top_n == 0 || mass <= 0 || ladder_pre_index_.empty()) return;
+    const precursor_ladder::Query q = precursor_ladder::makeQuery(mass, precursor_tol_ppm, h2o, isotope_mass);
+    std::vector<int> counts(sets.size(), 0);
+    auto below = [](const LadderEntry& e, double v) { return e.mass < v; };
+    for (std::size_t start = 0; start <= 1; start++)
+    {
+      const double lo = q.low + (start == 1 ? met : 0.0) - 1e-6, hi = q.high + (start == 1 ? met : 0.0) + 1e-6;
+      auto it = std::lower_bound(ladder_pre_index_.begin(), ladder_pre_index_.end(), lo, below);
+      for (; it != ladder_pre_index_.end() && it->mass <= hi; ++it)
+      {
+        const Size k = it->protein;
+        const auto& seq = seqs_[k];
+        if (start == 1 && (seq.size() < 2 || seq[0] != 'M')) continue;
+        const long s = protein_start_segment_.empty() ? -1 : protein_start_segment_[k];
+        if (s < 0) continue;
+        const auto& seg = segments_[(Size)s];
+        if (start > seg.i_max) continue; // the window leaves a fixed modification out
+        const auto& pre = ladder_pre_[k];
+        const Size j = (Size)(std::lower_bound(pre.begin() + 1, pre.end(), it->mass) - pre.begin());
+        if (j >= pre.size() || pre[j] != it->mass) continue;
+        if (j > seg.b || j < seg.j_min || (long)(j - start) < precursor_ladder_min_length) continue;
+        if (! modFits_(k, start, wf.n_mod) || (wf.c_mod >= 0 && ! modFits_(k, j - 1, wf.c_mod))) continue;
+        const double* S = window_sums_[k];
+        const double window_mass = S[j] - S[start];
+        const int isotope = precursor_ladder::isotopeOf(window_mass, q, h2o, isotope_mass);
+        if (isotope == 2) continue;
+        precursor_ladder::scoreWindow(sets, S, (std::uint32_t)k, start, j, window_mass, isotope, precursor_ladder_min_k, top_n, counts, out, owners);
+      }
+    }
+  };
+  precursor_ladder::Result found, part;
+  for (Size n = 0; n < precursor_masses.size(); n++)
+  {
+    sweep(form_sets[0], precursor_masses[n], nullptr, found);
+    // the windows of each form at the precursor mass minus its modifications, all of them hypotheses of this precursor mass
+    for (Size f = 0; f < window_forms_.size(); f++)
+    {
+      const auto& wf = window_forms_[f];
+      const double mass = precursor_masses[n] - wf.mass;
+      if (wf.protein_start) { startWindows(form_sets[f + 1], wf, mass, part); }
+      else
+      {
+        const precursor_ladder::WindowFilter filter = [&](std::uint32_t k, std::size_t i, std::size_t j) {
+          return (wf.n_mod < 0 || modFits_(k, i, wf.n_mod)) && (wf.c_mod < 0 || modFits_(k, j - 1, wf.c_mod));
+        };
+        sweep(form_sets[f + 1], mass, &filter, part);
+      }
+      found.hypotheses += part.hypotheses;
+      for (auto& w : part.top)
+      {
+        w.form = (int)f + 1;
+        if (found.top.size() >= top_n && ! precursor_ladder::isBetter(w, found.top.back())) continue;
+        found.top.insert(std::upper_bound(found.top.begin(), found.top.end(), w, precursor_ladder::isBetter), std::move(w));
+        if (found.top.size() > top_n) found.top.pop_back();
+      }
     }
     auto& result = results[n];
     result.windows = found.hypotheses;
@@ -1034,6 +1224,7 @@ void MassLadderAlgorithm::searchPrecursorLadders(const std::vector<double>& mass
     for (Size r = 0; r < found.top.size(); r++)
     {
       const auto& win = found.top[r];
+      const auto& sets = form_sets[win.form];
       const double* sums = window_sums_[win.protein];
       // per side, the ion type with the most matched positions (the first in ion_type among equal ones)
       int best_prefix = -1, best_suffix = -1;
@@ -1072,6 +1263,11 @@ void MassLadderAlgorithm::searchPrecursorLadders(const std::vector<double>& mass
       cand.window_start = (int)win.i;
       cand.window_end = (int)win.j;
       cand.isotope = win.isotope;
+      if (win.form > 0)
+      {
+        cand.n_mod = window_forms_[win.form - 1].n_mod;
+        cand.c_mod = window_forms_[win.form - 1].c_mod;
+      }
       result.candidates.push_back(std::move(cand));
     }
   }
@@ -1088,6 +1284,11 @@ void MassLadderAlgorithm::preparePrecursorWindows(const std::vector<double>& pre
   for (double m : precursor_masses)
   {
     if (m > 0 && m <= 1e6) masses.push_back(m);
+    // the masses the windows of a swept form must fit (searchPrecursorLadders; those starting at the protein N-terminus are looked up)
+    for (const auto& wf : window_forms_)
+    {
+      if (! wf.protein_start && m - wf.mass > 0 && m - wf.mass <= 1e6) masses.push_back(m - wf.mass);
+    }
   }
   std::sort(masses.begin(), masses.end());
   masses.erase(std::unique(masses.begin(), masses.end()), masses.end());
@@ -1149,12 +1350,16 @@ void MassLadderAlgorithm::searchSlidingLadders(const std::vector<const std::vect
     std::uint32_t a = 0, b = 0; // the run of standard residues of the best anchor
     Size tested = 0;     // the anchors tested on this side of the protein
     int k = 0;           // the best anchor's matched positions
+    double delta = 0;    // the mass of the terminal modification the best anchor was read with (0: none)
+    int mod = -1;        // that modification (index into terminal_mods_); -1 none
   };
   struct SegmentBest
   {
     double log_p = 0;
     long anchor = -1;
     int k = 0;
+    double delta = 0;
+    int mod = -1;
   };
   // the ranking and the ladders of one spectrum from the best anchor per protein and slot
   auto finish = [&](const std::vector<precursor_ladder::TargetSet>& sets, std::vector<std::array<Side, 4>>& best, std::vector<Candidate>& found) {
@@ -1212,8 +1417,9 @@ void MassLadderAlgorithm::searchSlidingLadders(const std::vector<const std::vect
           std::vector<int> pos;
           for (long x = prefix ? b.anchor + 1 : b.anchor - 1; prefix ? x < seg_b : x > seg_a; x += prefix ? 1 : -1)
           {
-            const double v = prefix ? S[x] - S[b.anchor] : S[b.anchor] - S[x];
+            const double v = (prefix ? S[x] - S[b.anchor] : S[b.anchor] - S[x]) + b.delta;
             if (v > set.maxValue()) break;
+            if (! (v > 0)) continue;
             const long mi = set.massIndex(v);
             if (mi < 0) continue;
             pos.push_back((int)x);
@@ -1230,6 +1436,7 @@ void MassLadderAlgorithm::searchSlidingLadders(const std::vector<const std::vect
         ladder.start = prefix ? positions.front() : positions.back();
         ladder.end = prefix ? positions.back() : positions.front();
         cand.ladders.push_back(std::move(ladder));
+        (prefix ? cand.n_mod : cand.c_mod) = b.mod;
       }
       if (cand.ladders.empty()) continue;
       cand.protein = p;
@@ -1300,6 +1507,7 @@ void MassLadderAlgorithm::searchSlidingLadders(const std::vector<const std::vect
       std::vector<int> k(n, 0);
       std::vector<Size> touched;
       touched.reserve(n);
+      std::vector<std::pair<double, int>> forms; // the forms of an anchor: modification mass and index (-1 none)
 #pragma omp for schedule(dynamic, 1)
       for (long oi = 0; oi < (long)n_segments; oi++)
       {
@@ -1315,6 +1523,7 @@ void MassLadderAlgorithm::searchSlidingLadders(const std::vector<const std::vect
         const double* F = window_fixed_sums_.empty() || window_fixed_sums_[seg.protein].empty() ? nullptr : window_fixed_sums_[seg.protein].data();
         // the second residue of an entry counts as its terminus (initiator Met removed) only for a form that starts at residue 1
         const bool met_start = entry_offset_.empty() || entry_offset_[seg.protein] == 0;
+        const auto& seq = seqs_[seg.protein];
         seg_tested[si] = {0, 0, 0, 0};
         for (Size s = 0; s < n; s++)
         {
@@ -1329,58 +1538,74 @@ void MassLadderAlgorithm::searchSlidingLadders(const std::vector<const std::vect
           // prefix: anchors i = a .. b-2, positions x = i+1 .. b-1; suffix: anchors j = a+2 .. b, positions x = j-1 .. a+1
           for (long anchor = prefix ? (long)seg.a : (long)seg.a + 2; prefix ? anchor + 2 <= (long)seg.b : anchor <= (long)seg.b; anchor++)
           {
-            const bool terminus = prefix ? (anchor == 0 || (anchor == 1 && met_start)) : anchor == (long)protein_lengths_[seg.protein];
+            // the protein N-terminus: its first residue, or its second after an initiator Met (FLASHExtenderAlgorithm::isProteinNTerminal_)
+            const bool terminus = prefix ? (anchor == 0 || (anchor == 1 && met_start && seq[0] == 'M')) : anchor == (long)protein_lengths_[seg.protein];
             const int slot = side * 2 + (terminus ? 1 : 0);
-            seg_tested[si][slot]++;
-            for (long x = prefix ? anchor + 1 : anchor - 1; prefix ? x < (long)seg.b : x > (long)seg.a; x += prefix ? 1 : -1)
+            // the forms of the anchor: unmodified, then each terminal modification of this side that can sit on its terminal residue
+            // (the first residue of a prefix ladder, the last of a suffix ladder); each is an anchor tested
+            forms.clear();
+            forms.emplace_back(0.0, -1);
+            for (int m = 0; m < (int)terminal_mods_.size(); m++)
             {
-              const double v = prefix ? S[x] - S[anchor] : S[anchor] - S[x];
-              if (v > batch_max[side]) break;
-              const Size bin = (Size)(v * bin_inverse);
-              if (bin >= mask.size()) continue;
-              for (std::uint64_t m = mask[bin] & active; m != 0; m &= m - 1)
-              {
-                const Size s = (Size)std::countr_zero(m);
-                for (const auto& set : sets[s])
-                {
-                  if (set.isPrefix() != prefix || ! set.matches(v)) continue;
-                  if (k[s]++ == 0) touched.push_back(s);
-                  break;
-                }
-              }
+              if ((terminal_mods_[m].position == 2) == prefix) continue;
+              if (modFits_(seg.protein, prefix ? (Size)anchor : (Size)anchor - 1, m)) forms.emplace_back(terminal_mods_[m].mass, m);
             }
-            for (Size s : touched)
+            for (const auto& [delta, mod] : forms)
             {
-              const int matched = k[s];
-              k[s] = 0;
-              if (matched < precursor_ladder_min_k) continue;
-              // the positions up to the spectrum's largest residue sum of this side, and the farthest of them (residue sums rise along x)
-              long positions = 0;
-              double v_far = 0, f_far = 0;
+              seg_tested[si][slot]++;
               for (long x = prefix ? anchor + 1 : anchor - 1; prefix ? x < (long)seg.b : x > (long)seg.a; x += prefix ? 1 : -1)
               {
-                const double v = prefix ? S[x] - S[anchor] : S[anchor] - S[x];
-                if (v > max_value[s][side]) break;
-                positions++;
-                v_far = v;
-                if (F != nullptr) f_far = prefix ? F[x] - F[anchor] : F[anchor] - F[x];
+                const double v = (prefix ? S[x] - S[anchor] : S[anchor] - S[x]) + delta;
+                if (v > batch_max[side]) break;
+                if (! (v > 0)) continue;
+                const Size bin = (Size)(v * bin_inverse);
+                if (bin >= mask.size()) continue;
+                for (std::uint64_t m = mask[bin] & active; m != 0; m &= m - 1)
+                {
+                  const Size s = (Size)std::countr_zero(m);
+                  for (const auto& set : sets[s])
+                  {
+                    if (set.isPrefix() != prefix || ! set.matches(v)) continue;
+                    if (k[s]++ == 0) touched.push_back(s);
+                    break;
+                  }
+                }
               }
-              double weight = 0;
-              for (const auto& set : sets[s])
+              for (Size s : touched)
               {
-                if (set.isPrefix() == prefix) weight += set.weightUpTo(v_far);
+                const int matched = k[s];
+                k[s] = 0;
+                if (matched < precursor_ladder_min_k) continue;
+                // the positions up to the spectrum's largest residue sum of this side, and the farthest of them (residue sums rise along x)
+                long positions = 0;
+                double v_far = 0, f_far = 0;
+                for (long x = prefix ? anchor + 1 : anchor - 1; prefix ? x < (long)seg.b : x > (long)seg.a; x += prefix ? 1 : -1)
+                {
+                  const double v = prefix ? S[x] - S[anchor] : S[anchor] - S[x];
+                  if (v + delta > max_value[s][side]) break;
+                  positions++;
+                  v_far = v;
+                  if (F != nullptr) f_far = prefix ? F[x] - F[anchor] : F[anchor] - F[x];
+                }
+                double weight = 0;
+                for (const auto& set : sets[s])
+                {
+                  if (set.isPrefix() == prefix) weight += set.weightUpTo(v_far + delta);
+                }
+                const double lambda = (double)positions / (F != nullptr ? v_far - f_far : v_far) * weight;
+                const double log_p = -std::log10(std::max(boost::math::gamma_p((double)matched, std::max(lambda, 1e-12)), 1e-300));
+                auto& b = seg_best[(s * n_segments + (Size)si) * 4 + slot];
+                if (log_p > b.log_p) // the first anchor among equal ones
+                {
+                  b.log_p = log_p;
+                  b.anchor = anchor;
+                  b.k = matched;
+                  b.delta = delta;
+                  b.mod = mod;
+                }
               }
-              const double lambda = (double)positions / (F != nullptr ? v_far - f_far : v_far) * weight;
-              const double log_p = -std::log10(std::max(boost::math::gamma_p((double)matched, std::max(lambda, 1e-12)), 1e-300));
-              auto& b = seg_best[(s * n_segments + (Size)si) * 4 + slot];
-              if (log_p > b.log_p) // the first anchor among equal ones
-              {
-                b.log_p = log_p;
-                b.anchor = anchor;
-                b.k = matched;
-              }
+              touched.clear();
             }
-            touched.clear();
           }
         }
       }
@@ -1408,6 +1633,8 @@ void MassLadderAlgorithm::searchSlidingLadders(const std::vector<const std::vect
             b.a = seg.a;
             b.b = seg.b;
             b.k = sb.k;
+            b.delta = sb.delta;
+            b.mod = sb.mod;
           }
         }
       }
