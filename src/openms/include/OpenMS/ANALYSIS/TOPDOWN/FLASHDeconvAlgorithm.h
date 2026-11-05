@@ -101,8 +101,6 @@ namespace OpenMS
     /// SpectralDeconvolution  instances for spectral deconvolution for target and decoys
     SpectralDeconvolution sd_, sd_noise_decoy_, sd_signal_decoy_;
 
-    /// to merge spectra.
-    int merge_spec_ = 0;
 
     /// forced MS level
     int forced_ms_level_ = 0;
@@ -186,8 +184,6 @@ namespace OpenMS
     /// read dataset to update ms level information
     void updateMSLevels_(MSExperiment& map);
 
-    /// merge spectra
-    void mergeSpectra_(MSExperiment& map, uint ms_level);
 
     /// run spectral deconvolution
     void runSpectralDeconvolution_(MSExperiment& map, std::vector<DeconvolvedSpectrum>& deconvolved_spectra);

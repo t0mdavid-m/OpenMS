@@ -13,7 +13,6 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/Qvalue.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/TopDownIsobaricQuantification.h>
-#include <OpenMS/PROCESSING/SPECTRAMERGING/SpectraMerger.h>
 #include <OpenMS/PROCESSING/FILTERING/ThresholdMower.h>
 #include <OpenMS/METADATA/SpectrumLookup.h>
 #include <algorithm>
@@ -89,17 +88,6 @@ FLASHDeconvAlgorithm::FLASHDeconvAlgorithm(): DefaultParamHandler("FLASHDeconvAl
   defaults_.setValidStrings("precursor_by_fragments", {"true", "false"});
   defaults_.addTag("precursor_by_fragments", "advanced");
 
-  defaults_.setValue("merging_method", 0,
-                     "Method for merging spectra before deconvolution. 0: No merging  1: Gaussian averaging per MS level, effective for Q-TOF datasets. For MSn (n > 1), only the spectra from the same precursor mass "
-                     "(within 0.2 m/z of precursor m/z and 30 s) are averaged. 2: Block merging, combining all spectra into one per MS level (e.g., for NativeMS datasets).");
-  defaults_.setMinInt("merging_method", 0);
-  defaults_.setMaxInt("merging_method", 2);
-
-  defaults_.setValue("merging_min_ms_level", 1, "Min MS level for merging");
-  defaults_.setValue("merging_max_ms_level", 2, "Max MS level for merging");
-  defaults_.setMinInt("merging_min_ms_level", 1);
-  defaults_.setMinInt("merging_max_ms_level", 1);
-
   auto sd_defaults = SpectralDeconvolution().getDefaults();
   sd_defaults.remove("allowed_isotope_error");
   defaults_.insert("SD:", sd_defaults);
@@ -134,7 +122,6 @@ void FLASHDeconvAlgorithm::updateMembers_()
   use_RNA_averagine_ = param_.getValue("use_RNA_averagine") != "false";
   report_decoy_ = param_.getValue("report_FDR") != "false";
 
-  merge_spec_ = param_.getValue("merging_method");
   isolation_window_size_ = param_.getValue("isolation_window");
   scan_commands_file_ = param_.getValue("scan_commands").toString();
   precursor_rescue_window_ = param_.getValue("precursor_rescue_window");
@@ -229,81 +216,6 @@ void FLASHDeconvAlgorithm::filterLowPeaks_(MSExperiment& map)
     }
   }
   OPENMS_LOG_INFO << "Done" << std::endl;
-}
-
-void FLASHDeconvAlgorithm::mergeSpectra_(MSExperiment& map, uint ms_level)
-{
-  SpectraMerger merger;
-  merger.setLogType(CMD);
-  Param sm_param = merger.getDefaults();
-  sm_param.setValue("mz_binning_width", tols_[ms_level - 1] / 2.5);
-  sm_param.setValue("mz_binning_width_unit", "ppm");
-  uint min_ms_level = param_.getValue("merging_min_ms_level");
-  uint max_ms_level = param_.getValue("merging_max_ms_level");
-  if (merge_spec_ == 1 && ms_level >= min_ms_level && ms_level <= max_ms_level)
-  {
-    if (ms_level == 1)
-    {
-      OPENMS_LOG_INFO << "Gaussian averaging MS1 spectra ... " << std::endl;
-      merger.setParameters(sm_param);
-      map.sortSpectra();
-      merger.average(map, "gaussian", (int)ms_level);
-    }
-    else
-    {
-      // For ms n, first find precursors for all ms n. then make a tmp map having the precursor masses as precursor
-      std::map<String, std::vector<Precursor>> original_precursor_map;
-//#pragma omp parallel for default(none), shared(map, ms_level, original_precursor_map)
-      for (int i = 0; i < (int) map.size(); i++)
-      {
-        const auto& spec = map[i];
-        if (spec.getMSLevel() != ms_level) continue;
-
-        const auto& native_id = spec.getNativeID();
-        original_precursor_map[native_id] = spec.getPrecursors();
-
-        if (! spec.getPrecursors().empty() && native_id_precursor_peak_group_map_.find(native_id) != native_id_precursor_peak_group_map_.end())
-        {
-          auto precursor_pg = native_id_precursor_peak_group_map_[native_id];
-          auto precursor = spec.getPrecursors()[0];
-          precursor.setCharge(1);
-          precursor.setMZ(precursor_pg.getMonoMass());
-          precursor.setIntensity(precursor_pg.getIntensity());
-          map[i].setPrecursors(std::vector<Precursor> {precursor});
-        }
-      }
-      // merge MS n using precursor method
-      OPENMS_LOG_INFO << "Merging MS" << ms_level << " spectra from the same deconvolved precursor masses... " << std::endl;
-      sm_param.setValue("precursor_method:mz_tolerance", 0.2);
-      sm_param.setValue("precursor_method:rt_tolerance", 30.0); // TODO make this as a user input?
-      merger.setParameters(sm_param);
-      map.sortSpectra();
-      merger.mergeSpectraPrecursors(map);
-
-      for (auto& mspec : map)
-      {
-        auto native_id_str = mspec.getNativeID();
-        std::vector<String> native_ids;
-        native_id_str.split(",", native_ids);
-
-        for (auto& native_id : native_ids)
-        {
-          if (original_precursor_map.find(native_id) == original_precursor_map.end()) continue;
-          mspec.setPrecursors(original_precursor_map[native_id]);
-        }
-      }
-    }
-  }
-  else if (merge_spec_ == 2)
-  {
-    OPENMS_LOG_INFO << "Merging spectra into a single spectrum for MS" << ms_level << std::endl;
-    sm_param.setValue("block_method:rt_block_size", map.size() + 1);
-    map.sortSpectra();
-    sm_param.setValue("block_method:ms_levels", IntList {(int)ms_level});
-    merger.setParameters(sm_param);
-    merger.mergeSpectraBlockWise(map);
-  }
-  filterLowPeaks_(map);
 }
 
 int FLASHDeconvAlgorithm::getScanNumber(const MSExperiment& map, Size index)
@@ -583,13 +495,11 @@ void FLASHDeconvAlgorithm::commitSpectrum_(const MSExperiment& map, const Spectr
 void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vector<DeconvolvedSpectrum>& deconvolved_spectra)
 {
   startProgress(0, (SignedSize)map.size(), "running FLASHDeconv");
-  std::map<double, int> rt_scan_map;
   std::vector<int> scan_numbers(map.size());
   for (Size index = 0; index < map.size(); index++)
   {
     int scan_number = getScanNumber(map, index);
     scan_numbers[index] = scan_number;
-    rt_scan_map[map[index].getRT()] = scan_number;
   }
 
   // Spectrum workers: the spectra of an MS level are deconvolved in parallel, whole spectra per thread, each thread with its own
@@ -597,7 +507,7 @@ void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vec
   // per-peak-group loops of SpectralDeconvolution then run serially inside a worker. The spectra only read the precursor maps (filled
   // per MS level before, by findPrecursorPeakGroupsForMSnSpectra_), and what they change (the precursor chosen by the fragments, the decoy
   // precursor, the counters) is committed after the join in the input order, as are the deconvolved spectra: the output is that of the
-  // serial run. Not with merging (the map changes per MS level), a FLASHIda log, a given precursor charge or m/z, inside a parallel
+  // serial run. Not with a FLASHIda log, a given precursor charge or m/z, inside a parallel
   // region, with a single thread, or for an MS level with repeated native IDs (a spectrum would read what another one changes): there the
   // spectra are deconvolved one after the other.
   struct SpectrumWorker
@@ -607,7 +517,7 @@ void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vec
   std::vector<SpectrumWorker> workers;
 #ifdef _OPENMP
   const Param sd_param = sd_.getParameters();
-  if (merge_spec_ == 0 && scan_commands_file_.empty() && ! omp_in_parallel() && (int)sd_param.getValue("precursor_charge") == 0
+  if (scan_commands_file_.empty() && ! omp_in_parallel() && (int)sd_param.getValue("precursor_charge") == 0
       && (double)sd_param.getValue("precursor_mz") == 0)
   {
     std::vector<Size> level_counts(current_max_ms_level_ + 1, 0);
@@ -645,16 +555,6 @@ void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vec
     {
       // here, register precursor peak groups to the ms2 spectra.
       findPrecursorPeakGroupsForMSnSpectra_(map, deconvolved_spectra, ms_level);
-    }
-    if (merge_spec_ > 0)
-    {
-      mergeSpectra_(map, ms_level);
-      // repeat precursor peak group registration for merged/averaged spectra
-      if (ms_level > 1 && merge_spec_ > 0)
-      {
-        // here, register precursor peak groups to the ms2 spectra.
-        findPrecursorPeakGroupsForMSnSpectra_(map, deconvolved_spectra, ms_level);
-      }
     }
 
     // the precursor scan of an MSn spectrum without a precursor peak group: the preceding spectrum of the lower MS level
@@ -707,7 +607,7 @@ void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vec
         // of this level neither read nor change: when this is the last level, one thread traces them (runFeatureFinding_ takes them) while
         // the others deconvolve. The tracing visits the spectra in the order the serial path does (in the scan order of all spectra) only
         // when their scan numbers are unique, so only then.
-        bool trace_in_wave = merge_spec_ != 2 && ms_level == current_min_ms_level_ + 1 && ms_level == current_max_ms_level_;
+        bool trace_in_wave = ms_level == current_min_ms_level_ + 1 && ms_level == current_max_ms_level_;
         for (Size i = 1; trace_in_wave && i < deconvolved_spectra.size(); i++)
         {
           if (deconvolved_spectra[i].getScanNumber() == deconvolved_spectra[i - 1].getScanNumber()) trace_in_wave = false;
@@ -786,8 +686,7 @@ void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vec
 
       SpectrumJob_ job;
       job.index = index;
-      job.scan_number = merge_spec_ == 0 ? getScanNumber(map, index)
-                                         : (rt_scan_map.find(spec.getRT()) == rt_scan_map.end() ? getScanNumber(map, index) : rt_scan_map[spec.getRT()]);
+      job.scan_number = getScanNumber(map, index);
       if (lower_index < map.size() && needs_fallback_scan(spec))
       {
         job.has_fallback_scan = true;
@@ -1748,8 +1647,6 @@ std::vector<FLASHHelperClasses::MassFeature> FLASHDeconvAlgorithm::traceMinLevel
 void FLASHDeconvAlgorithm::runFeatureFinding_(std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
                                               std::vector<FLASHHelperClasses::MassFeature>& deconvolved_features)
 {
-  if (merge_spec_ == 2) return;
-
   // the features of the minimum MS level: traced during the wave of the last MS level if possible (runSpectralDeconvolution_)
   if (min_level_trace_error_)
   {
