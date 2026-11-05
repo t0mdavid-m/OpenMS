@@ -268,29 +268,24 @@ namespace OpenMS
     protein_n_term = false;
     String spec = spec_in;
     spec.trim();
-    try
+    // a name with the site "Protein N-term <residue>" that the database does not know: the same modification at any N-terminus, if the
+    // database has it there (looked up without the name as given, whose failed lookup ModificationsDB would log as a warning)
+    const String tag = "(Protein N-term ";
+    const Size at = spec.find(tag);
+    if (at != std::string::npos && ! ModificationsDB::getInstance()->has(spec))
     {
-      return resolveModification(spec);
-    }
-    catch (const Exception::BaseException&)
-    {
-      // the same modification at any N-terminus, if the database has it there
-      const String tag = "(Protein N-term ";
-      const Size at = spec.find(tag);
-      if (at == std::string::npos) throw;
-      const ResidueModification* mod = nullptr;
-      try
+      const String any_n_term = spec.substr(0, at) + "(N-term " + spec.substr(at + tag.size());
+      if (ModificationsDB::getInstance()->has(any_n_term))
       {
-        mod = resolveModification(spec.substr(0, at) + "(N-term " + spec.substr(at + tag.size()));
+        const ResidueModification* mod = resolveModification(any_n_term);
+        if (mod->getTermSpecificity() == ResidueModification::N_TERM)
+        {
+          protein_n_term = true;
+          return mod;
+        }
       }
-      catch (const Exception::BaseException&)
-      {
-        mod = nullptr;
-      }
-      if (mod == nullptr || mod->getTermSpecificity() != ResidueModification::N_TERM) throw;
-      protein_n_term = true;
-      return mod;
     }
+    return resolveModification(spec);
   }
 
   const ResidueModification* FLASHHelperClasses::resolveModification(const String& spec_in)

@@ -346,7 +346,7 @@ namespace OpenMS
   }
 
   String FLASHExtenderAlgorithm::variableModificationNames_(double mass, double tol, const String& seq, int from, int to, int n_site, int c_site,
-                                                            String& accessions, int& site, const std::uint8_t* occupied) const
+                                                            String& accessions, int& site, double& theoretical_mass, const std::uint8_t* occupied) const
   {
     String names;
     accessions = "";
@@ -358,6 +358,7 @@ namespace OpenMS
     for (; iter != var_mod_combinations_.end() && iter->mass <= mass + tol; ++iter)
     {
       if (! combinationFits_(*iter, seq, from, to, n_site, c_site, occupied)) continue;
+      if (fitting == 0 || std::abs(iter->mass - mass) < std::abs(theoretical_mass - mass)) theoretical_mass = iter->mass;
       fitting++;
       last = &*iter;
       for (Size k = 0; k < iter->mods.size(); k++)
@@ -1330,6 +1331,7 @@ namespace OpenMS
     const UInt mi_end_position = registry.registerName("EndPosition");
     const UInt mi_given_mass = registry.registerName("GivenMass");
     const UInt mi_mass = registry.registerName("Mass");
+    const UInt mi_theoretical_mass = registry.registerName("TheoreticalMass");
     const UInt mi_rt = registry.registerName("RT");
     const UInt mi_num_mass = registry.registerName("NumMass");
     const UInt mi_precursor_score = registry.registerName("PrecursorScore");
@@ -1345,7 +1347,7 @@ namespace OpenMS
     for (const auto& pg : dspec) sorted_masses.push_back(pg.getMonoMass());
     std::sort(sorted_masses.begin(), sorted_masses.end());
 
-  #pragma omp parallel for default(none) schedule(dynamic) if (! omp_in_parallel()) shared(hits, tags, dspec, multiple_hits_per_spec, i2f_mass, c13_spacing, spec_vec, sorted_masses, vec_pro, rev_vec_pro, std::cout, found, mi_tag_indices, mi_fasta_index, mi_modification_ids, mi_modification_accs, mi_modifications, mi_modification_starts, mi_modification_ends, mi_blind_mod_count, mi_variable_modifications, mi_modification_variable, mi_matched_aa, mi_start_position, mi_end_position, mi_given_mass, mi_mass, mi_rt, mi_num_mass, mi_precursor_score, mi_precursor_snr, mi_mass_by_fragments, mi_matched_mass_indices)
+  #pragma omp parallel for default(none) schedule(dynamic) if (! omp_in_parallel()) shared(hits, tags, dspec, multiple_hits_per_spec, i2f_mass, c13_spacing, spec_vec, sorted_masses, vec_pro, rev_vec_pro, std::cout, found, mi_tag_indices, mi_fasta_index, mi_modification_ids, mi_modification_accs, mi_modifications, mi_modification_starts, mi_modification_ends, mi_blind_mod_count, mi_variable_modifications, mi_modification_variable, mi_matched_aa, mi_start_position, mi_end_position, mi_given_mass, mi_mass, mi_theoretical_mass, mi_rt, mi_num_mass, mi_precursor_score, mi_precursor_snr, mi_mass_by_fragments, mi_matched_mass_indices)
     for (int i = 0; i < ((int)hits.size()); i++)
     {
       nextProgress();
@@ -1706,13 +1708,14 @@ namespace OpenMS
                 const double mod_tol = hi.tol_spec_map_[m][node_index].getIntensity();
                 bool is_var = var_count != prev_var_count;
                 String var_names, var_accs;
+                double var_mass = mod_mass; // a variable modification: the mass of its combination (not the shift as measured)
                 if (is_var)
                 {
                   const int from = pre_pro_index;
                   const int n_site = (m != 0 && pre_node_index == 0) ? pre_pro_index : -1;
                   const int c_site = (m == 0 && pre_node_index == 0) ? pre_pro_index : (m == 2 && node_index == (int)t_node_spec.size() - 1) ? pro_index - 1 : -1;
                   int oriented_site = -1;
-                  var_names = variableModificationNames_(mod_mass, mod_tol, oriented_seq, from, to, n_site, c_site, var_accs, oriented_site,
+                  var_names = variableModificationNames_(mod_mass, mod_tol, oriented_seq, from, to, n_site, c_site, var_accs, oriented_site, var_mass,
                                                          oriented_occupied.empty() ? nullptr : oriented_occupied.data());
                   // The edge fitted a combination on these residues; a name is missing only if the shift measured here (from the previous
                   // shift as observed) is outside the tolerance that the edge's shift met (from the previous shift as searched: the nominal
@@ -1732,7 +1735,10 @@ namespace OpenMS
                 }
                 mod_starts.push_back(start + 1);
                 mod_ends.push_back(end);
-                mod_masses.push_back(mod_mass);
+                // A variable modification is reported with its own mass: the shift as measured holds the error of the masses around it (of
+                // the precursor mass at the last shift of a precursor-mass path), which made the proteoform mass the precursor mass and the
+                // modification a number in ProForma beyond 0.05 Da (final_dd2, 1% PrSMs: 22 of 717 lysate and 81 of 1839 Caco sites)
+                mod_masses.push_back(is_var ? var_mass : mod_mass);
                 mod_tols.push_back(mod_tol);
                 mod_vars.push_back(is_var ? 1 : 0);
                 mod_var_names.push_back(var_names);
@@ -2101,6 +2107,39 @@ namespace OpenMS
         hit.setMetaValue(mi_end_position, hi.protein_end_position_);
         hit.setMetaValue(mi_given_mass, given_precursor_mass_);
         hit.setMetaValue(mi_mass, hi.calculated_precursor_mass_);
+        {
+          // The proteoform's own mass: its residues with their fixed modifications, water, the variable modifications at their masses and
+          // the blind shifts as measured. Mass is the measured one (the precursor mass, or the mass inferred from fragments), which the
+          // search compares; the output reports this one, so that the precursor mass error is visible. -1 without a mass, and the measured
+          // one if a residue has no mass.
+          double theoretical = -1;
+          const int first = hi.protein_start_position_ - 1, last = hi.protein_end_position_; // residues [first, last), 0-based
+          if (hi.calculated_precursor_mass_ > 0 && first >= 0 && last > first && last <= (int)hit.getSequence().size())
+          {
+            const auto* rdb = ResidueDB::getInstance();
+            theoretical = Residue::getInternalToFull().getMonoWeight();
+            for (int p = first; p < last && theoretical > 0; p++)
+            {
+              const char aa = hit.getSequence()[p];
+              const Residue* r = (aa >= 'A' && aa <= 'Z' && aa != 'X' && aa != 'B' && aa != 'Z' && aa != 'J') ? rdb->getResidue(aa) : nullptr;
+              if (r == nullptr) theoretical = -1;
+              else theoretical += r->getMonoWeight(Residue::Internal);
+            }
+            if (theoretical > 0 && hi.fixed_ != nullptr)
+            {
+              for (const auto& [p, mass] : *hi.fixed_)
+              {
+                if (p >= first && p < last) theoretical += mass;
+              }
+            }
+            if (theoretical > 0)
+            {
+              for (double m : mod_masses) theoretical += m;
+            }
+            else theoretical = hi.calculated_precursor_mass_;
+          }
+          hit.setMetaValue(mi_theoretical_mass, theoretical);
+        }
         hit.setMetaValue(mi_rt, dspec.getOriginalSpectrum().getRT());
         hit.setMetaValue(mi_num_mass, dspec.size());
         hit.setMetaValue(mi_precursor_score,

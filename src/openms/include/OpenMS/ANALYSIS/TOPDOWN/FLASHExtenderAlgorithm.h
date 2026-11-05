@@ -374,9 +374,10 @@ private:
                         const std::uint8_t* occupied = nullptr) const;
 
   /// names of the variable modification combinations of mass @p mass within @p tol that fit @p seq[from, to); @p site is the only
-  /// possible residue (index in @p seq) if a single one-site modification fits at a single residue, else -1
+  /// possible residue (index in @p seq) if a single one-site modification fits at a single residue, else -1; @p theoretical_mass the
+  /// mass of the fitting combination closest to @p mass (unchanged if none fits)
   String variableModificationNames_(double mass, double tol, const String& seq, int from, int to, int n_site, int c_site, String& accessions,
-                                    int& site, const std::uint8_t* occupied = nullptr) const;
+                                    int& site, double& theoretical_mass, const std::uint8_t* occupied = nullptr) const;
 
   /// whether a variable modification at @p position (0 anywhere, 1 N-terminal, 2 C-terminal) may sit on a residue with fixed kinds @p bits
   static bool freeFor_(std::uint8_t bits, int position)
