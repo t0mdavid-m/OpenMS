@@ -36,7 +36,7 @@ void FLASHTnTFile::writePrSMHeader(std::fstream& fs, bool chimeric)
         "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tPrecursorQscore\tPrecursorSNR\tScore\tPrSMLevelQvalue\tProteoformLevelQvalue"
         "\tProteoformIndex\tCandidateSource\tFDRClass\tModVariable\tDecoyPrecursorWeight\tProteinLevelQvalue"
         "\tExtensionScore\tRawScore\tRawMatchedFragments\tRawFragmentHypotheses\tRawCoverage(%)"
-     << (chimeric ? "\tChimericRound\tMatchedMasses\tRemovedMasses\tResidualNullScore\tResidualScoreRatio" : "") << "\n";
+     << (chimeric ? "\tChimericRound\tMatchedMasses\tRemovedMasses\tResidualNullScore\tResidualScoreRatio\tUniqueMasses\tUniqueScore" : "") << "\n";
 }
 
 /// write header line for Proteoform file
@@ -46,7 +46,7 @@ void FLASHTnTFile::writeProHeader(std::fstream& fs, bool chimeric)
         "orma\tMatchingFragments\tCoverage(%)\tStartPosition\tEndPosition"
         "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tPrecursorQscore\tPrecursorSNR\tScore\tProteoformLevelQvalue\tCandidateSource\tFDRClass\tModVariable\tProteinLevelQvalue"
         "\tExtensionScore\tRawScore\tRawMatchedFragments\tRawFragmentHypotheses\tRawCoverage(%)"
-     << (chimeric ? "\tChimericRound\tMatchedMasses\tRemovedMasses\tResidualNullScore\tResidualScoreRatio" : "") << "\tCombinedPrSMs\tCombinedCoverage(%)\tCombinedCoverageChance(%)\n";
+     << (chimeric ? "\tChimericRound\tMatchedMasses\tRemovedMasses\tResidualNullScore\tResidualScoreRatio\tUniqueMasses\tUniqueScore" : "") << "\tCombinedPrSMs\tCombinedCoverage(%)\tCombinedCoverageChance(%)\n";
 }
 
 /// write the features in regular file output
@@ -245,7 +245,7 @@ namespace
     static const std::unordered_map<std::string, OpenMS::UInt> keys = [] {
       auto& registry = OpenMS::MetaInfoInterface::metaRegistry();
       std::unordered_map<std::string, OpenMS::UInt> k;
-      for (const char* n : {"ChimericRound", "CombinedCoverage", "CombinedCoverageChance", "CombinedPrSMs", "DecoyPrecursor", "Description", "EndPosition", "ExtensionScore", "FDRClass", "GappedTag", "GivenMass", "Index", "Mass", "MatchedAA", "MatchedMassIndices", "ModificationACCs", "ModificationEnds", "ModificationIDs", "ModificationStarts", "ModificationVariable", "Modifications", "NumMass", "PrecursorLadder", "PrecursorSNR", "PrecursorScore", "ProteinQvalue", "ProteoformIndex", "ProteoformMassByFragmentMass", "RT", "RawCoverage", "RawFragmentHypotheses", "RawMatchedFragments", "RawScore", "RemovedMasses", "ResidualNullScore", "ResidualScoreRatio", "Scan", "SlidingLadder", "StartPosition", "TagIndices", "TerminalLadder", "TheoreticalMass", "proqvalue", "qvalue"})
+      for (const char* n : {"ChimericRound", "CombinedCoverage", "CombinedCoverageChance", "CombinedPrSMs", "DecoyPrecursor", "Description", "EndPosition", "ExtensionScore", "FDRClass", "GappedTag", "GivenMass", "Index", "Mass", "MatchedAA", "MatchedMassIndices", "ModificationACCs", "ModificationEnds", "ModificationIDs", "ModificationStarts", "ModificationVariable", "Modifications", "NumMass", "PrecursorLadder", "PrecursorSNR", "PrecursorScore", "ProteinQvalue", "ProteoformIndex", "ProteoformMassByFragmentMass", "RT", "RawCoverage", "RawFragmentHypotheses", "RawMatchedFragments", "RawScore", "RemovedMasses", "ResidualNullScore", "ResidualScoreRatio", "Scan", "SlidingLadder", "StartPosition", "TagIndices", "TerminalLadder", "TheoreticalMass", "UniqueMasses", "UniqueScore", "proqvalue", "qvalue"})
         k.emplace(n, registry.registerName(n));
       return k;
     }();
@@ -324,7 +324,8 @@ namespace
     return out;
   }
 
-  /// the chimeric columns (FLASHTnT -chimeric_rounds): round, matched masses, removed masses, residual null score, score ratio
+  /// the chimeric columns (FLASHTnT -chimeric_rounds): round, matched masses, removed masses, residual null score, score ratio, and of
+  /// native mode the masses of a PrSM no better PrSM of its spectrum matched and their chance score (-1: the first PrSM, or not native)
   OpenMS::String chimericColumns(const OpenMS::ProteinHit& hit)
   {
     OpenMS::String out = "\t";
@@ -333,6 +334,8 @@ namespace
     out += "\t" + OpenMS::String(hit.metaValueExists(prsmKey("RemovedMasses")) ? (int)hit.getMetaValue(prsmKey("RemovedMasses")) : 0);
     out += "\t" + OpenMS::String(hit.metaValueExists(prsmKey("ResidualNullScore")) ? (double)hit.getMetaValue(prsmKey("ResidualNullScore")) : -1.0);
     out += "\t" + OpenMS::String(hit.metaValueExists(prsmKey("ResidualScoreRatio")) ? (double)hit.getMetaValue(prsmKey("ResidualScoreRatio")) : -1.0);
+    out += "\t" + OpenMS::String(hit.metaValueExists(prsmKey("UniqueMasses")) ? (int)hit.getMetaValue(prsmKey("UniqueMasses")) : -1);
+    out += "\t" + OpenMS::String(hit.metaValueExists(prsmKey("UniqueScore")) ? (double)hit.getMetaValue(prsmKey("UniqueScore")) : -1.0);
     return out;
   }
 } // namespace

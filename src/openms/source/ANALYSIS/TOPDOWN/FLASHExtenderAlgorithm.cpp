@@ -1338,6 +1338,7 @@ namespace OpenMS
     const UInt mi_precursor_snr = registry.registerName("PrecursorSNR");
     const UInt mi_mass_by_fragments = registry.registerName("ProteoformMassByFragmentMass");
     const UInt mi_matched_mass_indices = registry.registerName("MatchedMassIndices");
+    const UInt mi_matched_mass_values = registry.registerName("MatchedMassValues");
 
     startProgress(0, (int)hits.size(), "running FLASHExtender ...");
     std::vector<std::pair<int, ProteinHit>> found; // (candidate index, proteoform hit)
@@ -1347,7 +1348,7 @@ namespace OpenMS
     for (const auto& pg : dspec) sorted_masses.push_back(pg.getMonoMass());
     std::sort(sorted_masses.begin(), sorted_masses.end());
 
-  #pragma omp parallel for default(none) schedule(dynamic) if (! omp_in_parallel()) shared(hits, tags, dspec, multiple_hits_per_spec, i2f_mass, c13_spacing, spec_vec, sorted_masses, vec_pro, rev_vec_pro, std::cout, found, mi_tag_indices, mi_fasta_index, mi_modification_ids, mi_modification_accs, mi_modifications, mi_modification_starts, mi_modification_ends, mi_blind_mod_count, mi_variable_modifications, mi_modification_variable, mi_matched_aa, mi_start_position, mi_end_position, mi_given_mass, mi_mass, mi_theoretical_mass, mi_rt, mi_num_mass, mi_precursor_score, mi_precursor_snr, mi_mass_by_fragments, mi_matched_mass_indices)
+  #pragma omp parallel for default(none) schedule(dynamic) if (! omp_in_parallel()) shared(hits, tags, dspec, multiple_hits_per_spec, i2f_mass, c13_spacing, spec_vec, sorted_masses, vec_pro, rev_vec_pro, std::cout, found, mi_tag_indices, mi_fasta_index, mi_modification_ids, mi_modification_accs, mi_modifications, mi_modification_starts, mi_modification_ends, mi_blind_mod_count, mi_variable_modifications, mi_modification_variable, mi_matched_aa, mi_start_position, mi_end_position, mi_given_mass, mi_mass, mi_theoretical_mass, mi_rt, mi_num_mass, mi_precursor_score, mi_precursor_snr, mi_mass_by_fragments, mi_matched_mass_indices, mi_matched_mass_values)
     for (int i = 0; i < ((int)hits.size()); i++)
     {
       nextProgress();
@@ -2148,6 +2149,12 @@ namespace OpenMS
                          dspec.getPrecursorPeakGroup().getSNR()); // it should be charge SNR in theory. But mass SNR was written for ease of coding.
         hit.setMetaValue(mi_mass_by_fragments, precursor_by_fragment ? 1 : 0);
         if (report_matched_masses_) hit.setMetaValue(mi_matched_mass_indices, std::vector<int>(matched_masses.begin(), matched_masses.end()));
+        if (report_matched_masses_) // and the masses themselves (FLASHTnT native mode compares the PrSMs of a spectrum by them)
+        {
+          std::vector<double> mv;
+          for (int mi : matched_masses) { if (mi >= 0 && mi < (int)dspec.size()) mv.push_back(dspec[mi].getMonoMass()); }
+          hit.setMetaValue(mi_matched_mass_values, mv);
+        }
         // hit.setMetaValue("Proforma", string)
         variant_hits.push_back(std::move(hit));
       }

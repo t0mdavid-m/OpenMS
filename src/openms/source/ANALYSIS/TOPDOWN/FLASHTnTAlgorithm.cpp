@@ -15,6 +15,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTCandidateRanker.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/MassLadderAlgorithm.h>
+#include <boost/math/special_functions/gamma.hpp>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -452,7 +453,10 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "determined mass, one per protein (the better one); without native, each spectrum reports its best PrSM only. Gapped tags "
                      "are not used, with the raw spectra two more paths per candidate protein and extension mode are scored on them (the "
                      "next-ranked within one blind modification's penalty of the best), and at least one residual round of chimeric_rounds is searched (co-isolated "
-                     "proteins). Needs decoys in the database (DECOY prefix); without them, the candidates are chosen as without the option.");
+                     "proteins). A PrSM beside a better PrSM of its spectrum is kept only with evidence of its own: the chance probability of its "
+                     "matched masses that no better kept PrSM matched (UniqueMasses) must be below 10^-(2.5 + log10 of the target proteins) "
+                     "(UniqueScore), so that a homolog of the spectrum's protein, which matches that protein's fragments, is not reported beside it. "
+                     "Needs decoys in the database (DECOY prefix); without them, the candidates are chosen as without the option.");
   defaults_.setValidStrings("native", {"true", "false"});
   defaults_.setValue("decoy_precursor", "false",
                      "Decoy precursors: spectra whose PrSM took its mass from MS1 are searched again with the decoy precursor mass of their isolation "
@@ -3757,6 +3761,112 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           last_all[d] = std::move(residual_all[d]);
         }
       }
+    }
+    // Native mode: a PrSM beside a better PrSM of its spectrum needs evidence of its own. Native mode reports every candidate above its
+    // decoy margin, and a homolog of the spectrum's protein passes on that protein's fragments, which shuffled decoys do not model (the
+    // same leak as several PrSMs per spectrum in a lysate, above). The PrSMs of a spectrum are taken in the order native mode keeps them
+    // (round, then isBetterPrSM); the first is kept, and each later one only if its matched masses that no kept PrSM of the spectrum
+    // matched (UniqueMasses; the spectrum's tolerance, +-1 isotope spacing) are unlikely by chance: k ~ Poisson(lambda), lambda = 2 tol x
+    // its fragment positions (stretch length - 1, per ion type) / the residue mass of its stretch x the summed masses of the spectrum below
+    // that mass that no kept PrSM explains (as the terminal ladders, MassLadderAlgorithm::searchTerminalLadders), UniqueScore = -log10 P,
+    // at least native_margin + log10 of the target proteins (the second protein is chosen from all of them). Measured before the rule
+    // (25 native test spectra, PXD047341 carbonic anhydrase and bovine hemoglobin): the real second proteins of a spectrum (DLDH, mAb
+    // chains, the other hemoglobin chain) had 197 such PrSMs, score median 19, lowest 9.7 apart from a second database entry of the same
+    // protein (score 0, same masses); human CA2 beside bovine CA 70 (median 1.7, 1 above the threshold), human hemoglobin chains beside
+    // the bovine ones 117 (2 above); no expected protein of a file was lost.
+    if (native_rule)
+    {
+      static const std::map<char, double> residue_mass {{'G', 57.02146}, {'A', 71.03711}, {'S', 87.03203}, {'P', 97.05276}, {'V', 99.06841},
+        {'T', 101.04768}, {'C', 103.00919}, {'L', 113.08406}, {'I', 113.08406}, {'N', 114.04293}, {'D', 115.02694}, {'Q', 128.05858},
+        {'K', 128.09496}, {'E', 129.04259}, {'M', 131.04049}, {'H', 137.05891}, {'F', 147.06841}, {'R', 156.10111}, {'Y', 163.06333},
+        {'W', 186.07931}, {'U', 150.95364}, {'O', 237.14773}};
+      const double ion_series = (double)param_.getValue("ion_type").toStringVector().size();
+      Size target_proteins = 0;
+      if (db != nullptr) { for (const auto& p : db->proteins) target_proteins += p.decoy ? 0 : 1; }
+      else { for (const auto& e : fasta_entry) target_proteins += e.identifier.hasPrefix("DECOY") ? 0 : 1; }
+      const double unique_min = native_margin + std::log10((double)std::max(target_proteins, (Size)1));
+      const double isotope_spacing = Constants::ISOTOPE_MASSDIFF_55K_U;
+      const UInt mi_values = MetaInfoInterface::metaRegistry().registerName("MatchedMassValues"),
+                 mi_unique = MetaInfoInterface::metaRegistry().registerName("UniqueMasses"),
+                 mi_unique_score = MetaInfoInterface::metaRegistry().registerName("UniqueScore");
+      std::map<int, int> spectrum_of;
+      for (int d = 0; d < (int)dspecs.size(); d++) spectrum_of[dspecs[d].getScanNumber()] = d;
+      std::map<int, std::vector<Size>> prsms_of;
+      for (Size i = 0; i < proteoform_hits_.size(); i++)
+      {
+        const auto it = spectrum_of.find((int)proteoform_hits_[i].getMetaValue(tntKey("Scan")));
+        if (it != spectrum_of.end()) prsms_of[it->second].push_back(i);
+      }
+      std::vector<bool> drop(proteoform_hits_.size(), false);
+      Size tested = 0, dropped = 0;
+      for (auto& [d, list] : prsms_of)
+      {
+        std::sort(list.begin(), list.end(), [&](Size a, Size b) {
+          const int ra = proteoform_hits_[a].getMetaValue("ChimericRound", 0), rb = proteoform_hits_[b].getMetaValue("ChimericRound", 0);
+          if (ra != rb) return ra < rb;
+          return isBetterPrSM(proteoform_hits_[a], proteoform_hits_[b]);
+        });
+        const double tol = spectrum_tols[d];
+        std::vector<double> explained; // the masses of the kept PrSMs, +-1 isotope spacing, ascending
+        auto isExplained = [&](double m) {
+          const double margin = tol * 1e-6 * m;
+          const auto it = std::lower_bound(explained.begin(), explained.end(), m - margin);
+          return it != explained.end() && *it <= m + margin;
+        };
+        for (Size r = 0; r < list.size(); r++)
+        {
+          auto& hit = proteoform_hits_[list[r]];
+          std::vector<double> values;
+          if (hit.metaValueExists(mi_values)) values = hit.getMetaValue(mi_values).toDoubleList();
+          if (r > 0)
+          {
+            Size k = 0;
+            for (double m : values) k += isExplained(m) ? 0 : 1;
+            const String& seq = hit.getSequence();
+            int s = hit.getMetaValue("StartPosition", -1), e = hit.getMetaValue("EndPosition", -1);
+            if (s < 1) s = 1;
+            if (e < 1 || e > (int)seq.size()) e = (int)seq.size();
+            double spread = 0;
+            for (int p = s - 1; p < e; p++)
+            {
+              const auto rm = residue_mass.find(seq[p]);
+              spread += rm == residue_mass.end() ? 111.1 : rm->second;
+            }
+            double summed = 0;
+            for (const auto& pg : dspecs[d])
+            {
+              const double m = pg.getMonoMass();
+              if (m < spread && ! isExplained(m)) summed += m;
+            }
+            const double lambda = spread > 0 ? 2.0 * tol * 1e-6 * (double)std::max(e - s, 0) * ion_series / spread * summed : 0.0;
+            const double score = k > 0 ? -std::log10(std::max(boost::math::gamma_p((double)k, std::max(lambda, 1e-12)), 1e-300)) : 0.0;
+            hit.setMetaValue(mi_unique, (int)k);
+            hit.setMetaValue(mi_unique_score, score);
+            tested++;
+            if (score < unique_min)
+            {
+              drop[list[r]] = true;
+              dropped++;
+              continue;
+            }
+          }
+          for (double m : values)
+          {
+            for (int iso = -1; iso <= 1; iso++) explained.push_back(m + iso * isotope_spacing);
+          }
+          std::sort(explained.begin(), explained.end());
+        }
+      }
+      Size w = 0;
+      for (Size i = 0; i < proteoform_hits_.size(); i++)
+      {
+        if (drop[i]) continue;
+        if (w != i) proteoform_hits_[w] = std::move(proteoform_hits_[i]);
+        w++;
+      }
+      proteoform_hits_.resize(w);
+      OPENMS_LOG_INFO << "Native: " << tested << " PrSMs beside a better PrSM of their spectrum, " << dropped
+                      << " removed without evidence of their own (unique-mass score below " << String::number(unique_min, 2) << ")" << std::endl;
     }
     // the raw spectra stay loaded for the combined coverage after the FDR (setCombinedCoverage_ releases them)
   }
