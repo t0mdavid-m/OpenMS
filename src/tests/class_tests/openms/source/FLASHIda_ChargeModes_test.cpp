@@ -118,8 +118,8 @@ namespace
     "scan_timeout": { "enabled": true, "value_ms": 30000 },
     "agc_interval_seconds": 30
   },
-  "files": { "target_logs": [], "fasta": "", "inclusion_list": ")JSON")
-           + inclusion_list + R"JSON(", "ptm_list": "" },
+  "files": { "target_logs": [], "inclusion_list": ")JSON")
+           + inclusion_list + R"JSON(" },
   "precursor_selection": {
     "rt_window": 180,
     "targeting": ")JSON" + targeting + R"JSON(",
@@ -150,7 +150,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 }
 }
 )JSON";

@@ -461,7 +461,6 @@ set(analysis_executables_list
   FLASHIda_CandidateAdmission_test
   PlanUnit_test
   FLASHIda_Replan_test
-  FLASHIda_DynamicTargets_test
   ScanCommandLayout_test
   FLASHIda_exploration_test
   KineticModel_test

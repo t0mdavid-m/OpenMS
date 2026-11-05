@@ -64,9 +64,7 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
   "precursor_selection": {
     "rt_window": 180,
@@ -97,7 +95,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -147,9 +144,7 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
   "precursor_selection": {
     "rt_window": 180,
@@ -180,7 +175,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -228,9 +222,7 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
   "precursor_selection": {
     "rt_window": 180,
@@ -261,7 +253,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,

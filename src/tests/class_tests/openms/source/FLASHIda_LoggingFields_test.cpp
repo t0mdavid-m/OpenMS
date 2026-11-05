@@ -602,7 +602,7 @@ START_SECTION(commands_ms1_agc_stageless)
     if (lvl >= (int)row.size() || row[lvl] != "1") continue;
     found = true;
     std::string st = cell(t, row, "scan_type");
-    type_ok = type_ok && (st == "survey" || st == "agc" || st == "conditional");
+    type_ok = type_ok && (st == "survey" || st == "agc");
     act_ok  = act_ok  && (cell(t, row, "activation") == "none");
     // stage-less placeholders: per-stage numerics literal "0", scoring scalars "0"
     zero_ok = zero_ok && (cell(t, row, "charge") == "0") && (cell(t, row, "precursor_mz") == "0")
@@ -918,8 +918,8 @@ START_SECTION(results_identification_tag_count_and_proforma)
   ABORT_IF(ms1.empty() || ms2.empty())
 
   const std::string dir = freshLogDir("lf_i3");
-  // inclusion-pinned cytC identification (target_mode=1, M-start proteoform, NO FASTA tag DB) -- the
-  // exact case that used to log tag_count=0 because selection_.hasTargetProteinDatabase() is false.
+  // inclusion-pinned cytC identification (target_mode=1, M-start proteoform) -- the exact case that
+  // used to log tag_count=0 because no FASTA tag database was loaded (tag targeting is retired, ADR-0061).
   std::string json = buildJsonWithLogDir(dir, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
   runFullCycle(&ida, ms1, ms2);
@@ -1752,7 +1752,7 @@ START_SECTION(exclusion_mode2_tqscore_suppresses_target_mass)
       "faims": { "cv_values": [], "max_cv_skip": 0 },
       "ms_settings": { "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 }, "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
-      "files": { "target_logs": [)" << target_log_json << R"(], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+      "files": { "target_logs": [)" << target_log_json << R"(], "inclusion_list": "" },
       "characterization": { "mode": "off" }
     })";
     return o.str();
@@ -1858,7 +1858,7 @@ START_SECTION(target_log_double_digit_target_count_is_not_skipped)
       "faims": { "cv_values": [], "max_cv_skip": 0 },
       "ms_settings": { "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 }, "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
-      "files": { "target_logs": [)" << target_log_json << R"(], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+      "files": { "target_logs": [)" << target_log_json << R"(], "inclusion_list": "" },
       "characterization": { "mode": "off" }
     })";
     return o.str();
@@ -1950,7 +1950,7 @@ START_SECTION(target_log_skips_superseded_masses)
       "faims": { "cv_values": [], "max_cv_skip": 0 },
       "ms_settings": { "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 }, "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
-      "files": { "target_logs": [)" << target_log_json << R"(], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+      "files": { "target_logs": [)" << target_log_json << R"(], "inclusion_list": "" },
       "characterization": { "mode": "off" }
     })";
     return o.str();
@@ -2680,8 +2680,8 @@ END_SECTION
 /////////////////////////////////////////////////////////////
 // [REMOVED §R2t] results_tag_targeting (E4) — asserted a tag-targeted MS2 scan_results row logs
 //   tag_count>0. tag_count was dropped entirely from all logs in the scan_results slim-down, so there
-//   is no re-point target (identification.tsv has no tag_count column). Tag-based targeting still runs
-//   and drives identification; only its scan_results log observability is removed.
+//   is no re-point target (identification.tsv has no tag_count column). Tag-based targeting itself
+//   was later retired (ADR-0061).
 /////////////////////////////////////////////////////////////
 
 /////////////////////////////////////////////////////////////

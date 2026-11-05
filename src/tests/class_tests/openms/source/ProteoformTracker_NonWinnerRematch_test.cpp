@@ -87,11 +87,8 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
-  "conditional_ms2": false,
   "precursor_selection": {
     "rt_window": 180,
     "targeting": "none",
@@ -128,7 +125,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,

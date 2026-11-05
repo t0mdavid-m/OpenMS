@@ -153,7 +153,7 @@ namespace
     "scan_timeout": { "enabled": true, "value_ms": 30000 },
     "agc_interval_seconds": 30
   },
-  "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+  "files": { "target_logs": [], "inclusion_list": "" },
   "precursor_selection": {
     "rt_window": 180,
     "targeting": "none",
@@ -170,7 +170,6 @@ namespace
              "agc_target": 800000, "max_it": 246 },
     "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
   },
-  "tagging": {},
   "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 }
 }
 )JSON";

@@ -155,75 +155,6 @@ START_SECTION(([EXTRA] Config rejects exploration with multiple scan configs))
       }
     }
   },
-  "tagging": {},
-  "quantification": {
-    "enabled": false
-  }
-}
-)";
-  bool threw = false;
-  try { Config cfg{std::string(json)}; }
-  catch (const std::invalid_argument&) { threw = true; }
-  TEST_EQUAL(threw, true)
-  (void)threw;
-}
-END_SECTION
-
-START_SECTION(([EXTRA] Config rejects conditional_ms2 without tagging follow_up_scan))
-{
-  const char* json = R"({
-  "deconvolution": {
-    "min_charge": 4,
-    "max_charge": 50,
-    "min_mass": 500,
-    "max_mass": 50000,
-    "tol": [
-      10,
-      10,
-      10
-    ]
-  },
-  "flashtnt": {
-    "min_length": 3
-  },
-  "conditional_ms2": true,
-  "faims": {},
-  "scheduling": {
-    "cycle_time": {
-      "enabled": false
-    },
-    "scan_timeout": {
-      "enabled": false
-    },
-    "agc_interval_seconds": 30
-  },
-  "files": {},
-  "precursor_selection": {
-    "targeting": "none",
-    "rank_by": "qscore",
-    "max_precursors": 3
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
-  },
-  "ms_settings": {
-    "ms1": {
-      "analyzer": "Orbitrap",
-      "first_mass": 500,
-      "last_mass": 2000,
-      "resolution": 120000,
-      "agc_target": 800000,
-      "max_it": 246
-    },
-    "ms2": {
-      "analyzer": "Orbitrap",
-      "activation": "HCD",
-      "collision_energy": 29,
-      "resolution": 120000
-    }
-  },
-  "tagging": {},
   "quantification": {
     "enabled": false
   }
@@ -291,7 +222,6 @@ START_SECTION(([EXTRA] Config rejects legacy ms3.enabled key))
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false
   }
@@ -359,7 +289,6 @@ START_SECTION(([EXTRA] Config rejects legacy ms3.active key))
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false
   }
@@ -427,7 +356,6 @@ START_SECTION(([EXTRA] Config rejects legacy ms3.mode key))
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false
   }
@@ -495,7 +423,6 @@ START_SECTION(([EXTRA] Config rejects legacy ms3.max_per_ms2 key))
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false
   }
@@ -560,7 +487,6 @@ START_SECTION(([EXTRA] Config accepts characterization with only protein_sequenc
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false
   }

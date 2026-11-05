@@ -181,9 +181,8 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
       "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25, "resolution": 120000 }
     },
     "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "files": { "target_logs": [], "inclusion_list": "" },
     "characterization": { "mode": "coverage", "max_targets": 10, "protein_sequence": "PEPTIDEK" },
-    "conditional_ms2": false,
     "runtime": { "log_dir": ")") + log_dir + R"(" } })";
 
   Config cfg{cfg_json};

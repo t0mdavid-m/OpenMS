@@ -98,7 +98,7 @@ namespace
     "scan_timeout": { "enabled": false, "value_ms": 30000 },
     "agc_interval_seconds": 9999999
   },
-  "files": { "target_logs": [], "fasta": "", "inclusion_list": "../../FlashIDA/test-data/configs/)JSON") + list + R"JSON(", "ptm_list": "" },
+  "files": { "target_logs": [], "inclusion_list": "../../FlashIDA/test-data/configs/)JSON") + list + R"JSON(" },
   "precursor_selection": {
     "rt_window": 180, "targeting": "inclusion", "precursor_charges": "single",
     "consider_all_charges": false, "strict_inclusion": )JSON" + (strict_inclusion ? "true" : "false") + R"JSON(,
@@ -111,7 +111,6 @@ namespace
              "max_it": 100, "microscans": 4, "activation": "ETD", "reaction_time": 7,
              "reagent_agc_target": 700000, "reagent_max_it": 200 }
   },
-  "tagging": {},
   "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
   "runtime": { "log_dir": ")JSON" + log_dir + R"JSON(" }
 })JSON";
@@ -211,14 +210,13 @@ namespace
     "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
   },
   "flashtnt": { "min_length": 3, "max_length": 8 },
-  "conditional_ms2": false,
   "faims": { "cv_values": [], "max_cv_skip": 0 },
   "scheduling": {
     "cycle_time": { "enabled": false, "value_ms": 60000 },
     "scan_timeout": { "enabled": false, "value_ms": 30000 },
     "agc_interval_seconds": 9999999
   },
-  "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+  "files": { "target_logs": [], "inclusion_list": "" },
   "precursor_selection": {
     "rt_window": 180, "targeting": "none", "consider_all_charges": false, "strict_inclusion": false,
     "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 1,
@@ -233,7 +231,6 @@ namespace
     "ms2_quant": { "analyzer": "Orbitrap", "first_mass": 100, "last_mass": 2000, "resolution": 120000, "agc_target": 500000,
                    "max_it": 100, "microscans": 4, "activation": "HCD", "collision_energy": 30 }
   },
-  "tagging": {},
   "quantification": {
     "enabled": true, "labelling": "tmt6plex", "reporter_mz_tol": 0.002,)JSON"
            + (separate ? std::string(R"JSON(
@@ -400,14 +397,13 @@ namespace
     "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
   },
   "flashtnt": { "min_length": 3, "max_length": 8 },
-  "conditional_ms2": false,
   "faims": { "cv_values": [], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
   "scheduling": {
     "cycle_time": { "enabled": false, "value_ms": 60000 },
     "scan_timeout": { "enabled": false, "value_ms": 30000 },
     "agc_interval_seconds": 9999999
   },
-  "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+  "files": { "target_logs": [], "inclusion_list": "" },
   "precursor_selection": {
     "rt_window": 180, "targeting": "none", "consider_all_charges": false, "strict_inclusion": false,
     "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 5
@@ -421,7 +417,6 @@ namespace
     "ms3": { "analyzer": "Orbitrap", "first_mass": 200, "last_mass": 2000, "resolution": 240000, "agc_target": 50000000,
              "max_it": 500, "microscans": 8, "activation": "CID", "collision_energy": 25 }
   },
-  "tagging": {},
   "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
   "runtime": { "log_dir": ")JSON") + log_dir + R"JSON(" }
 })JSON";
@@ -450,22 +445,6 @@ namespace
                 R"("activation": "HCD", "collision_energy": 30 })");
   }
 
-  /// method_tag_targeting.json's twin: inclusion targeting with no list, the FASTA tags are matched against, and an
-  /// HCD conditional follow-up ('C') raised by an MS2 whose tags hit.
-  std::string tagTargetingConfig(const std::string& log_dir)
-  {
-    std::string cfg = with(topn5Config(log_dir), R"("conditional_ms2": false)", R"("conditional_ms2": true)");
-    cfg = with(cfg, R"("fasta": "")", R"("fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta")");
-    cfg = with(cfg, R"("targeting": "none")", R"("targeting": "inclusion")");
-    cfg = with(cfg, R"("tagging": {})", R"("tagging": { "follow_up_scan": "tagging_follow_up" })");
-    return with(cfg, R"("activation": "CID", "collision_energy": 25 })",
-                R"("activation": "CID", "collision_energy": 25 },
-    "additional_ms2": {
-      "tagging_follow_up": { "analyzer": "Orbitrap", "first_mass": 100, "last_mass": 2000, "resolution": 120000,
-                             "agc_target": 500000, "max_it": 100, "microscans": 4, "activation": "HCD", "collision_energy": 30 }
-    })");
-  }
-
   /// method_exploration.json's selection side: one precursor, an HCD mass_count sweep over CE 20..40 step 5. The
   /// shared explorationConfig() with its precursor budget at the method's 1; characterization stays off, since the
   /// method's protein is not cytC's.
@@ -481,8 +460,8 @@ namespace
   {
     std::string cfg = with(quantTwinConfig("multiplexed"), R"("precursor_charges": "multiplexed")", R"("precursor_charges": "separate")");
     if (log_dir.empty()) return cfg;
-    return with(cfg, R"("tagging": {},)", R"("tagging": {},
-  "runtime": { "log_dir": ")" + log_dir + R"(" },)");
+    return with(cfg, R"("quantification": {)", R"("runtime": { "log_dir": ")" + log_dir + R"(" },
+  "quantification": {)");
   }
 
   int nominalOf(const ScanCommand& c) { return SpectralDeconvolution::getNominalMass(c.mono_mass); }
@@ -1197,53 +1176,6 @@ START_SECTION(race_separate_commit_between_plan_and_swap)
 }
 END_SECTION
 
-// A follow-up is derived from a command that went out, so its parent is never a staged (still-registered)
-// command: the queue prints [REPLAN-INVARIANT] if one ever is, and every 'C' row's parent has its own row.
-START_SECTION(follow_up_parent_is_never_staged)
-{
-  const auto ms1 = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_standard.txt");
-  const auto ms2 = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_hcd_fragment.txt");
-  ABORT_IF(ms1.empty() || ms2.empty())
-  // ms1_standard selects at most one species per scan, and most scans none: take the first that selects.
-  int pick = -1;
-  captureCout([&] {
-    const std::string cfg = tagTargetingConfig("");
-    for (size_t i = 0; i < ms1.size() && pick < 0; ++i)
-    {
-      FLASHIda scratch(const_cast<char*>(cfg.c_str()));
-      ScanCommand c{};
-      scratch.getNextScanCommand(c);
-      if (scratch.processScan(ms1[i].mzs.data(), ms1[i].ints.data(), (int)ms1[i].mzs.size(), ms1[i].rt, 1, c.scan_description, 0.0, 0) > 0)
-        pick = static_cast<int>(i);
-    }
-  });
-  ABORT_IF(pick < 0)
-
-  int conditional = 0;
-  for (int k = 0; k <= 1; ++k)
-  {
-    const std::string log_dir = freshLogDir("replan_follow_up_k" + std::to_string(k));
-    const std::string cfg = tagTargetingConfig(log_dir);
-    const ScanData& s = ms1[pick];
-    const std::string out = captureCout([&] {
-      FLASHIda ida(const_cast<char*>(cfg.c_str()));
-      driveStaleSurvey(ida, s, at(s, s.rt + 2.0), k, &ms2[0]);
-    });
-    TEST_EQUAL(out.find("[REPLAN-INVARIANT]"), std::string::npos)
-    const TSVFile tsv = TSVFile::parse(log_dir + "/scan_commands.tsv");
-    std::set<std::string> ids;
-    for (const auto& row : tsv.rows) ids.insert(cell(tsv, row, "tracking_id"));
-    for (const auto& row : tsv.rows)
-    {
-      if (cell(tsv, row, "scan_type") != "conditional") continue;
-      ++conditional;
-      TEST_EQUAL(ids.count(cell(tsv, row, "parent_tracking_id")), 1)
-    }
-  }
-  TEST_EQUAL(conditional > 0, true) // non-vacuity: a follow-up was raised
-}
-END_SECTION
-
 // Every place FLASHIda.cpp puts a command in the queue, by enclosing function and call text. Re-planning owns the
 // survey's MS2s through replacePlan alone; every other site is a permanent push of a command derived from one that
 // went out, or an MS1. A new or moved site fails here until this table is updated -- and whoever updates it decides
@@ -1257,11 +1189,10 @@ START_SECTION(push_site_inventory)
   const std::multiset<std::string> expected = {
     // the survey's plan, in one call
     "runSurveyMS1_ | const ReplanResult replan = queue_.replacePlan(faims_cv, std::move(units), adjust, replace_remainder_of);",
-    // the six permanent sites
+    // the five permanent sites
     "refineRoundClose_ | stampAndPush_(c, precursor_id);",                  // refine re-dispatch
     "processScan | stampAndPush_(c, precursor_id);",                        // exploration MS2 return
     "processScan | stampAndPush_(ident, cons.winner_precursor_id);",        // bought R
-    "processScan | stampAndPush_(cond, precursor_id);",                     // tag follow-up
     "processScan | stampAndPush_(c, precursor_id);",                        // MS3 targeting
     "processScan | stampAndPush_(c, precursor_id);",                        // exploration MS3 return
     // the bought R, registered adjustable at the quant verdict

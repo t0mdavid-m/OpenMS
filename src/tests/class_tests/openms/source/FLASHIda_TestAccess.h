@@ -275,22 +275,6 @@ namespace OpenMS
         out.emplace_back(sel.selected_peak_groups_[i].getMonoMass(), charges[i]);
       return out;
     }
-
-    // ---- FASTA tag-based targeting: what an inclusion-mode survey matches against -----------------
-
-    /// Add tag-expanded targets exactly as a tag detection does (PrecursorSelection::addDynamicTargets_).
-    static void addDynamicTargets(PrecursorSelection& s, const std::vector<double>& masses, double rt, int priority)
-    {
-      s.addDynamicTargets_(masses, rt, priority);
-    }
-
-    /// The sorted target masses of an inclusion-mode survey at @p rt (seconds) -- the list filterAndRank
-    /// hands the deconvolution engine and matches every candidate against.
-    static std::vector<double> inclusionTargetMasses(PrecursorSelection& s, double rt)
-    {
-      s.collectInclusionTargets_(rt);
-      return s.target_masses_;
-    }
   };
 
   /// Reaches into Exploration's private feedResultImpl_ / getGroup for the test suite.

@@ -641,7 +641,7 @@ namespace
         "agc_interval_seconds": 999999
       },
       )" << ms3_block << R"(
-      "files": { "target_logs": [], "fasta": "", "inclusion_list": ")" << inclusion_list_val << R"(", "ptm_list": "" },
+      "files": { "target_logs": [], "inclusion_list": ")" << inclusion_list_val << R"(" },
       "runtime": { "log_dir": ")" << log_dir << R"(" }
     })";
     return oss.str();
@@ -680,9 +680,8 @@ namespace
         "ms3": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35, "resolution": 120000 }
       },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
-      "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-      "characterization": { "mode": "off", "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE", "max_targets": 3 },
-      "conditional_ms2": false
+      "files": { "target_logs": [], "inclusion_list": "" },
+      "characterization": { "mode": "off", "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE", "max_targets": 3 }
     })";
   }
 
@@ -704,10 +703,9 @@ namespace
         "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25, "resolution": 120000 }
       },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
-      "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+      "files": { "target_logs": [], "inclusion_list": "" },
       "characterization": { "mode": "ambiguity", "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE", "max_targets": 3,
-        "exploration": { "metric": "fragment_count", "ce_min": 15.0, "ce_max": 35.0, "ce_step": 5.0 } },
-      "conditional_ms2": false
+        "exploration": { "metric": "fragment_count", "ce_min": 15.0, "ce_max": 35.0, "ce_step": 5.0 } }
     })";
   }
 
@@ -729,9 +727,8 @@ namespace
         "ms3": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35, "resolution": 120000 }
       },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
-      "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-      "characterization": { "mode": "ambiguity", "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE", "max_targets": 3 },
-      "conditional_ms2": false
+      "files": { "target_logs": [], "inclusion_list": "" },
+      "characterization": { "mode": "ambiguity", "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE", "max_targets": 3 }
     })";
   }
 
@@ -774,9 +771,8 @@ namespace
         "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000, "first_mass": 150, "last_mass": 2000 }
       },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
-      "files": { "target_logs": [], "fasta": "", "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc_z17.txt", "ptm_list": "" },
-      "characterization": { "mode": "off", "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE", "max_targets": 3 },
-      "conditional_ms2": false
+      "files": { "target_logs": [], "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc_z17.txt" },
+      "characterization": { "mode": "off", "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE", "max_targets": 3 }
     })";
   }
 

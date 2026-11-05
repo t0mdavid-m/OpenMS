@@ -74,9 +74,7 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
   "precursor_selection": {
     "rt_window": 180,
@@ -119,7 +117,6 @@ namespace
       }
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -165,9 +162,7 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt",
-    "ptm_list": ""
+    "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt"
   },
   "precursor_selection": {
     "rt_window": 180,
@@ -205,7 +200,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -250,9 +244,7 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
   "precursor_selection": {
     "rt_window": 180,
@@ -295,7 +287,6 @@ namespace
       }
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -340,9 +331,7 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
   "precursor_selection": {
     "rt_window": 180,
@@ -385,189 +374,8 @@ namespace
       }
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": true,
-    "reporter_mz_tol": 0.002,
-    "fold_change_threshold": 1.4
-  }
-}
-)";
-
-  // Config with tag-based targeting enabled via valid FASTA path, 2 MS2 configs
-  const char* tag_targeting_json = R"({
-  "deconvolution": {
-    "score_threshold": 0.0,
-    "tqscore_threshold": 0.9,
-    "min_charge": 4,
-    "max_charge": 50,
-    "min_mass": 500,
-    "max_mass": 50000,
-    "tol": [
-      10,
-      10,
-      10
-    ]
-  },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
-  "faims": {
-    "cv_values": [],
-    "max_cv_skip": 0
-  },
-  "scheduling": {
-    "cycle_time": {
-      "enabled": false,
-      "value_ms": 60000
-    },
-    "scan_timeout": {
-      "enabled": false,
-      "value_ms": 30000
-    },
-    "agc_interval_seconds": 9999999
-  },
-  "files": {
-    "target_logs": [],
-    "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta",
-    "inclusion_list": "",
-    "ptm_list": ""
-  },
-  "precursor_selection": {
-    "rt_window": 180,
-    "targeting": "none",
-    "consider_all_charges": false,
-    "strict_inclusion": false,
-    "tie_threshold": 0.1,
-    "rank_by": "qscore",
-    "max_precursors": 3,
-    "additional_scans": [
-      "secondary"
-    ]
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
-  },
-  "ms_settings": {
-    "ms1": {
-      "analyzer": "Orbitrap",
-      "first_mass": 500,
-      "last_mass": 2000,
-      "resolution": 120000,
-      "agc_target": 800000,
-      "max_it": 246
-    },
-    "ms2": {
-      "analyzer": "Orbitrap",
-      "activation": "HCD",
-      "collision_energy": 29,
-      "resolution": 120000
-    },
-    "additional_ms2": {
-      "secondary": {
-        "analyzer": "Orbitrap",
-        "activation": "ETD",
-        "collision_energy": 0,
-        "reaction_time": 10.0,
-        "resolution": 120000
-      }
-    }
-  },
-  "tagging": {},
-  "quantification": {
-    "enabled": false,
-    "reporter_mz_tol": 0.002,
-    "fold_change_threshold": 1.4
-  }
-}
-)";
-
-  // Config with conditional MS2 enabled (no FASTA — tags cannot be found)
-  const char* conditional_json = R"({
-  "deconvolution": {
-    "score_threshold": 0.0,
-    "tqscore_threshold": 0.9,
-    "min_charge": 4,
-    "max_charge": 50,
-    "min_mass": 500,
-    "max_mass": 50000,
-    "tol": [
-      10,
-      10,
-      10
-    ]
-  },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
-  "faims": {
-    "cv_values": [],
-    "max_cv_skip": 0
-  },
-  "scheduling": {
-    "cycle_time": {
-      "enabled": false,
-      "value_ms": 60000
-    },
-    "scan_timeout": {
-      "enabled": false,
-      "value_ms": 30000
-    },
-    "agc_interval_seconds": 9999999
-  },
-  "conditional_ms2": true,
-  "files": {
-    "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
-  },
-  "precursor_selection": {
-    "rt_window": 180,
-    "targeting": "none",
-    "consider_all_charges": false,
-    "strict_inclusion": false,
-    "tie_threshold": 0.1,
-    "rank_by": "qscore",
-    "max_precursors": 3
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
-  },
-  "ms_settings": {
-    "ms1": {
-      "analyzer": "Orbitrap",
-      "first_mass": 500,
-      "last_mass": 2000,
-      "resolution": 120000,
-      "agc_target": 800000,
-      "max_it": 246
-    },
-    "ms2": {
-      "analyzer": "Orbitrap",
-      "activation": "HCD",
-      "collision_energy": 29,
-      "resolution": 120000
-    },
-    "additional_ms2": {
-      "tagging_follow_up": {
-        "analyzer": "Orbitrap",
-        "activation": "ETD",
-        "collision_energy": 0,
-        "reaction_time": 10.0,
-        "resolution": 120000
-      }
-    }
-  },
-  "tagging": {
-    "follow_up_scan": "tagging_follow_up"
-  },
-  "quantification": {
-    "enabled": false,
     "reporter_mz_tol": 0.002,
     "fold_change_threshold": 1.4
   }
@@ -610,9 +418,7 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
   "precursor_selection": {
     "rt_window": 180,
@@ -643,7 +449,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -688,9 +493,7 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
   "precursor_selection": {
     "rt_window": 180,
@@ -720,195 +523,6 @@ namespace
       "collision_energy": 29,
       "resolution": 120000
     }
-  },
-  "tagging": {},
-  "quantification": {
-    "enabled": false,
-    "reporter_mz_tol": 0.002,
-    "fold_change_threshold": 1.4
-  }
-}
-)";
-
-  // Config with conditional MS2 + tag targeting + FASTA (tags CAN be found)
-  const char* conditional_with_tags_json = R"({
-  "deconvolution": {
-    "score_threshold": 0.0,
-    "tqscore_threshold": 0.9,
-    "min_charge": 4,
-    "max_charge": 50,
-    "min_mass": 500,
-    "max_mass": 50000,
-    "tol": [
-      10,
-      10,
-      10
-    ]
-  },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
-  "faims": {
-    "cv_values": [],
-    "max_cv_skip": 0
-  },
-  "scheduling": {
-    "cycle_time": {
-      "enabled": false,
-      "value_ms": 60000
-    },
-    "scan_timeout": {
-      "enabled": false,
-      "value_ms": 30000
-    },
-    "agc_interval_seconds": 9999999
-  },
-  "conditional_ms2": true,
-  "files": {
-    "target_logs": [],
-    "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta",
-    "inclusion_list": "",
-    "ptm_list": ""
-  },
-  "precursor_selection": {
-    "rt_window": 180,
-    "targeting": "none",
-    "consider_all_charges": false,
-    "strict_inclusion": false,
-    "tie_threshold": 0.1,
-    "rank_by": "qscore",
-    "max_precursors": 3
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
-  },
-  "ms_settings": {
-    "ms1": {
-      "analyzer": "Orbitrap",
-      "first_mass": 500,
-      "last_mass": 2000,
-      "resolution": 120000,
-      "agc_target": 800000,
-      "max_it": 246
-    },
-    "ms2": {
-      "analyzer": "Orbitrap",
-      "activation": "HCD",
-      "collision_energy": 29,
-      "resolution": 120000
-    },
-    "additional_ms2": {
-      "tagging_follow_up": {
-        "analyzer": "Orbitrap",
-        "activation": "ETD",
-        "collision_energy": 0,
-        "reaction_time": 10.0,
-        "resolution": 120000
-      }
-    }
-  },
-  "tagging": {
-    "follow_up_scan": "tagging_follow_up"
-  },
-  "quantification": {
-    "enabled": false,
-    "reporter_mz_tol": 0.002,
-    "fold_change_threshold": 1.4
-  }
-}
-)";
-
-  // Follow-up parameter-ownership configs. The MS2 and the follow_up_scan differ in EVERY
-  // activation-coupled parameter on purpose: if the follow-up inherited them from the triggering
-  // MS2 (the defect), each assertion below would read the MS2's value instead of the follow-up's.
-  // A config where the two agree would make the test vacuous.
-  const char* followup_owns_params_conditional_json = R"({
-  "deconvolution": {
-    "score_threshold": 0.0,
-    "tqscore_threshold": 0.9,
-    "min_charge": 4,
-    "max_charge": 50,
-    "min_mass": 500,
-    "max_mass": 50000,
-    "tol": [
-      10,
-      10,
-      10
-    ]
-  },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
-  "faims": {
-    "cv_values": [],
-    "max_cv_skip": 0
-  },
-  "scheduling": {
-    "cycle_time": {
-      "enabled": false,
-      "value_ms": 60000
-    },
-    "scan_timeout": {
-      "enabled": false,
-      "value_ms": 30000
-    },
-    "agc_interval_seconds": 9999999
-  },
-  "conditional_ms2": true,
-  "files": {
-    "target_logs": [],
-    "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta",
-    "inclusion_list": "",
-    "ptm_list": ""
-  },
-  "precursor_selection": {
-    "rt_window": 180,
-    "targeting": "none",
-    "consider_all_charges": false,
-    "strict_inclusion": false,
-    "tie_threshold": 0.1,
-    "rank_by": "qscore",
-    "max_precursors": 3
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
-  },
-  "ms_settings": {
-    "ms1": {
-      "analyzer": "Orbitrap",
-      "first_mass": 500,
-      "last_mass": 2000,
-      "resolution": 120000,
-      "agc_target": 800000,
-      "max_it": 246
-    },
-    "ms2": {
-      "analyzer": "Orbitrap",
-      "activation": "HCD",
-      "collision_energy": 29,
-      "resolution": 120000,
-      "reaction_time": 10.0,
-      "reagent_max_it": 200.0,
-      "reagent_agc_target": 700000
-    },
-    "additional_ms2": {
-      "tagging_follow_up": {
-        "analyzer": "Orbitrap",
-        "activation": "EThcD",
-        "collision_energy": 7,
-        "reaction_time": 5.0,
-        "reagent_max_it": 111.0,
-        "reagent_agc_target": 222,
-        "resolution": 120000
-      }
-    }
-  },
-  "tagging": {
-    "follow_up_scan": "tagging_follow_up"
   },
   "quantification": {
     "enabled": false,
@@ -953,9 +567,7 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
   "precursor_selection": {
     "rt_window": 180,
@@ -998,7 +610,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": true,
     "labelling": "tmt6plex",
@@ -1048,9 +659,7 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
   "precursor_selection": {
     "rt_window": 180,
@@ -1088,7 +697,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": true,
     "labelling": "tmt6plex",
@@ -1139,9 +747,7 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
   "precursor_selection": {
     "rt_window": 180,
@@ -1172,7 +778,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -1217,9 +822,7 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
   "precursor_selection": {
     "rt_window": 180,
@@ -1262,7 +865,6 @@ namespace
       }
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -1307,9 +909,7 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
   "precursor_selection": {
     "rt_window": 180,
@@ -1340,7 +940,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -1385,9 +984,7 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
   "precursor_selection": {
     "rt_window": 180,
@@ -1418,7 +1015,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -1455,7 +1051,6 @@ namespace
   // Fresh real Mode-2 MS3 CytC run (20250121): intact-cytC MS2 (HCD CE40, scan 57) with a rich b/y
   // ladder that FLASHExtender can validate -> real MS3. Extracted via test-scripts/prepare-test-data.py.
   const std::string ms2_cytc_fresh_tsv_path = "../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt";
-  const std::string fasta_path = "../../FlashIDA/test-data/configs/test_fasta.fasta";
 
 
   // Build a cap-test config from the max1_json template: set the precursor cap, optionally add a
@@ -1542,7 +1137,7 @@ namespace
   }
 
   // ADR-0039. One quantification config, parameterized on the three knobs the objective sections
-  // vary. Deliberately carries NO fasta and conditional_ms2: false, so nothing but the
+  // vary. Deliberately carries no characterization sequence, so nothing but the
   // quantification screen can ever push a command -- which is what lets those sections assert on
   // `pushed` directly rather than having to classify what came back.
   //
@@ -1566,8 +1161,7 @@ namespace
   "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 },
                   "scan_timeout": { "enabled": false, "value_ms": 30000 },
                   "agc_interval_seconds": 9999999 },
-  "conditional_ms2": false,
-  "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+  "files": { "target_logs": [], "inclusion_list": "" },
   "precursor_selection": { "rt_window": 180, "targeting": "none", "consider_all_charges": false,
                            "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore",
                            "max_precursors": 1)" + precursor_extra + R"( },
@@ -1793,7 +1387,7 @@ START_SECTION(processScan_ms2_path)
   int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
                                      (int)ms2.mzs.size(), ms2.rt,
                                      2, ms2_cmd.scan_description, 0.0, instrumentScanNumberOf(ms2));
-  // Should return 0 (no conditional, no MS3, no quant in standard config). Interleaving does not change
+  // Should return 0 (no MS3, no quant in standard config). Interleaving does not change
   // the standard-config MS2-path follow-up count: this re-derives to the same 0 as before.
   TEST_EQUAL(ms2_result, 0)
 
@@ -1839,100 +1433,6 @@ START_SECTION(processScan_empty_spectrum)
   FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
   int n = ida->processScan(nullptr, nullptr, 0, 0.0, 1, "empty", 0.0, 0);
   TEST_EQUAL(n, 0)
-  delete ida;
-}
-END_SECTION
-
-// P4-U06: conditional MS2 follow-up is pushed at priority 0 (requires tag detection)
-START_SECTION(processScan_conditional_ms2_followup)
-{
-  {
-    std::ifstream fasta_check(fasta_path);
-    ABORT_IF(! fasta_check.good())
-  }
-  auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  auto ms2_scans = loadTsvScans(ms2_tsv_path);
-  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
-  // Uses conditional_with_tags_json: conditional_ms2=true + FASTA for tag detection
-  FLASHIda* ida = new FLASHIda(const_cast<char*>(conditional_with_tags_json));
-
-  // Drive MS1 via engine-id echo with NO MS2 feed (so the emitted MS2 commands stay pending and we feed
-  // the first one ourselves below to exercise the conditional follow-up).
-  AcqResult acq = runInterleaved(ida, ms1_scans, {});
-  TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
-  ABORT_IF(acq.ms2_cmds.empty())
-
-  const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
-  TEST_EQUAL(std::strlen(ms2_cmd.scan_description) <= 15, true)
-  TEST_EQUAL(ms2_cmd.msn_level, 2)
-  TEST_EQUAL(ms2_cmd.priority, 2)
-
-  // Process MS2 return — tags found → conditional follow-up at priority 0
-  const auto& ms2 = ms2_scans[0];
-  int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
-                                     (int)ms2.mzs.size(), ms2.rt,
-                                     2, ms2_cmd.scan_description, 0.0, instrumentScanNumberOf(ms2));
-  TEST_EQUAL(ms2_result > 0, true)
-
-  // Follow-up at priority 0 dequeues before remaining MS2s at priority 2
-  ScanCommand out{};
-  int r = ida->getNextScanCommand(out);
-  TEST_EQUAL(r, 1)
-  TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
-  TEST_EQUAL(out.priority, 0)
-  TEST_EQUAL(out.msn_level, 2)
-
-  // D1: Conditional follow-up uses 3-char ID + type code 'C'
-  std::string cond_desc(out.scan_description);
-  TEST_EQUAL(cond_desc.size() >= 4, true)
-  TEST_EQUAL(cond_desc[3], 'C')
-
-  delete ida;
-}
-END_SECTION
-
-// P4-U06b (F6): a follow-up MS2 ('C' conditional / 'F' quant) must NOT spawn a SECOND-generation follow-up.
-// A follow-up is itself processed through the MS2 path, so without a single-generation guard its (same)
-// tag-bearing spectrum re-satisfies the predicate and recurses. Feeds a fired 'C' follow-up's own response
-// back and asserts zero new follow-ups. Set/count relationship only -> drift-stable.
-START_SECTION(processScan_followup_does_not_recurse)
-{
-  {
-    std::ifstream fasta_check(fasta_path);
-    ABORT_IF(! fasta_check.good())
-  }
-  auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  auto ms2_scans = loadTsvScans(ms2_tsv_path);
-  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
-  FLASHIda* ida = new FLASHIda(const_cast<char*>(conditional_with_tags_json));
-
-  // Drive the FULL acquisition through the canonical harness with a NON-empty ms2_scans: runInterleaved feeds
-  // each dequeued MS2 command's own response back BY LEVEL (the engine paces it; bounded by idle>=3/max_iters,
-  // so NO raw getNextScanCommand drain loop and no hang). The 'R' MS2 is fed -> tags -> a first-generation 'C'
-  // follow-up; that 'C' is itself an MS2-level command, so the harness dequeues it, collects it in acq.ms2_cmds,
-  // AND feeds ITS response back too. A second-generation follow-up (pre-fix) would likewise be dequeued + collected.
-  AcqResult acq = runInterleaved(ida, ms1_scans, ms2_scans);
-  ABORT_IF(acq.ms2_cmds.empty())
-
-  // conditional_with_tags_json has quant disabled, so each original ('R') MS2 yields at most ONE 'C' follow-up.
-  // With the single-generation guard (FLASHIda.cpp:984) every follow-up's parent is an 'R', never another
-  // follow-up, so followups <= r_count.
-  // ISSUE(F6): pre-fix feeding a follow-up re-triggered buildFollowUp -> a 'C' spawned another 'C' -> followups
-  // ISSUE      grows past r_count (bounded only by max_iters). followups <= r_count is the no-recursion invariant.
-  int r_count = 0, followups = 0;
-  for (const auto& c : acq.ms2_cmds)
-  {
-    std::string d(c.scan_description);
-    if (d.size() < 4) continue;
-    if (d[3] == 'R')      ++r_count;     // original production MS2
-    else if (d[3] == 'C') ++followups;   // conditional follow-up
-    // 'F' is gone (ADR-0038) and is deliberately NOT replaced by 'Q' here: a 'Q' is a ROSTERED
-    // quantification scan, not a follow-up, so counting it would break the invariant this test
-    // asserts. This fixture disables quantification anyway, so no 'Q' is emitted.
-  }
-  TEST_TRUE(followups >= 1)          // a follow-up WAS produced (the test is meaningful)
-  TEST_TRUE(followups <= r_count)    // no follow-up spawned another (single-generation guard holds)
-
   delete ida;
 }
 END_SECTION
@@ -2529,17 +2029,12 @@ END_SECTION
 // P4-U07: Quantification follow-up routing — hard positive with sensitive threshold
 // ADR-0038: a quantification scan is MEASURED and BUYS the identification scan -- and does nothing
 // else. Its activation and energy were chosen to release a reporter ion, not to fragment
-// informatively, so tags read off it would come from the wrong spectrum and a 'C' follow-up bought
-// here would be a third scan on the precursor before the identification scan has even run.
-//
-// The control is what makes this a test rather than an observation: tags_with_quant_json is
-// conditional_with_tags_json with quantification ADDED and nothing else changed -- same fasta, same
-// tagging.follow_up_scan, same spectra. processScan_followup_does_not_recurse already asserts the
-// control produces at least one 'C'. So if the is_quant_scan gate on the tagging branch were
-// removed, this section would see those same 'C' commands and fail.
-START_SECTION(processScan_quant_scan_raises_no_tagging_or_ms3)
+// informatively, so MS3 targets picked off it would come from the wrong spectrum.
+// (It used to also assert that no tag-bought 'C' follow-up came out; tag targeting and the 'C'
+// role are retired, ADR-0061.)
+START_SECTION(processScan_quant_scan_raises_no_ms3)
 {
-  const char* tags_with_quant_json = R"({
+  const char* quant_json = R"({
   "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4,
                      "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
   "flashtnt": { "min_length": 3, "max_length": 8 },
@@ -2547,9 +2042,7 @@ START_SECTION(processScan_quant_scan_raises_no_tagging_or_ms3)
   "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 },
                   "scan_timeout": { "enabled": false, "value_ms": 30000 },
                   "agc_interval_seconds": 9999999 },
-  "conditional_ms2": true,
-  "files": { "target_logs": [], "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta",
-             "inclusion_list": "", "ptm_list": "" },
+  "files": { "target_logs": [], "inclusion_list": "" },
   "precursor_selection": { "rt_window": 180, "targeting": "none", "consider_all_charges": false,
                            "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore",
                            "max_precursors": 3 },
@@ -2558,12 +2051,8 @@ START_SECTION(processScan_quant_scan_raises_no_tagging_or_ms3)
     "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000,
              "agc_target": 800000, "max_it": 246 },
     "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
-    "ms2_quant": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 30, "resolution": 120000 },
-    "additional_ms2": { "tagging_follow_up": { "analyzer": "Orbitrap", "activation": "ETD",
-                                               "collision_energy": 0, "reaction_time": 10.0,
-                                               "resolution": 120000 } }
+    "ms2_quant": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 30, "resolution": 120000 }
   },
-  "tagging": { "follow_up_scan": "tagging_follow_up" },
   "quantification": { "enabled": true, "labelling": "tmt6plex", "reporter_mz_tol": 0.002,
                       "fold_change_threshold": 0.01,
                       "conditions": [ { "name": "a", "channels": ["126", "127", "128"] },
@@ -2573,25 +2062,23 @@ START_SECTION(processScan_quant_scan_raises_no_tagging_or_ms3)
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   auto ms2_tmt_scans = loadTsvScans(ms2_tmt_tsv_path);
   ABORT_IF(ms1_scans.empty() || ms2_tmt_scans.empty())
-  FLASHIda* ida = new FLASHIda(const_cast<char*>(tags_with_quant_json));
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(quant_json));
 
   AcqResult acq = runInterleaved(ida, ms1_scans, {});
   ABORT_IF(acq.ms2_cmds.empty())
 
-  // The rostered scan is the 'Q'. Feed its return the TMT spectrum, which the fasta ALSO yields
-  // tags from -- that is what the control demonstrates.
+  // The rostered scan is the 'Q'. Feed its return the TMT spectrum.
   const ScanCommand& q = acq.ms2_cmds[0];
   TEST_EQUAL(q.scan_description[3], 'Q')
   const auto& ms2 = ms2_tmt_scans[0];
   int pushed = ida->processScan(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt,
                                 2, q.scan_description, 0.0, instrumentScanNumberOf(ms2));
 
-  // EXACTLY ONE command: the identification scan it bought. Not two, which is what a 'C' alongside
-  // it would make, and not more.
+  // EXACTLY ONE command: the identification scan it bought, and nothing else.
   TEST_EQUAL(pushed, 1)
 
-  // Drain everything and confirm what came out: no 'C' anywhere, and no MS3 at any point.
-  int c_count = 0, r_count = 0, q_count = 0;
+  // Drain everything and confirm what came out: no MS3 at any point.
+  int r_count = 0, q_count = 0;
   ScanCommand out{};
   for (int i = 0; i < 40; ++i)
   {
@@ -2600,13 +2087,11 @@ START_SECTION(processScan_quant_scan_raises_no_tagging_or_ms3)
     if (out.msn_level == 3) { TEST_EQUAL(out.msn_level, 2) }  // fails loudly naming the level
     if (std::strlen(out.scan_description) >= 4)
     {
-      if (out.scan_description[3] == 'C') ++c_count;
       if (out.scan_description[3] == 'R') ++r_count;
       if (out.scan_description[3] == 'Q') ++q_count;
     }
     out = ScanCommand{};
   }
-  TEST_EQUAL(c_count, 0)          // the whole point: tagging is suppressed on a 'Q'
   TEST_TRUE(r_count >= 1)         // ...but the identification scan WAS bought, so this is not
                                   //    "nothing happened", which would pass vacuously
 
@@ -2846,62 +2331,10 @@ START_SECTION(processScan_quant_followup)
 }
 END_SECTION
 
-// A conditional ('C') follow-up takes its fragmentation parameters from tagging.follow_up_scan,
-// never from the MS2 that triggered it. Regression guard for the defect where buildFollowUp
-// overrode the activation but left the activation-coupled parameters inherited, emitting a scan
-// whose activation and reaction settings came from different configs.
-START_SECTION(processScan_conditional_followup_owns_its_scan_parameters)
-{
-  {
-    std::ifstream fasta_check(fasta_path);
-    ABORT_IF(! fasta_check.good())
-  }
-  auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  auto ms2_scans = loadTsvScans(ms2_tsv_path);
-  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
-  FLASHIda* ida = new FLASHIda(const_cast<char*>(followup_owns_params_conditional_json));
-
-  AcqResult acq = runInterleaved(ida, ms1_scans, {});
-  TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
-  ABORT_IF(acq.ms2_cmds.empty())
-
-  // The triggering MS2 carries the OTHER set of values -- assert that first, so a failure
-  // distinguishes "the follow-up inherited" from "the MS2 itself was misconfigured".
-  const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
-  TEST_STRING_EQUAL(std::string(ms2_cmd.stages[0].activation_type), "HCD")
-  TEST_REAL_SIMILAR(ms2_cmd.stages[0].reaction_time, 10.0)
-
-  const auto& ms2 = ms2_scans[0];
-  int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
-                                    (int)ms2.mzs.size(), ms2.rt,
-                                    2, ms2_cmd.scan_description, 0.0, instrumentScanNumberOf(ms2));
-  TEST_EQUAL(ms2_result > 0, true)
-  ABORT_IF(ms2_result <= 0)
-
-  ScanCommand out{};
-  int r = ida->getNextScanCommand(out);
-  TEST_EQUAL(r, 1)
-  TEST_EQUAL(out.priority, 0)
-  TEST_STRING_EQUAL(std::string(out.stages[0].activation_type), "EThcD")
-
-  // Every one of these differs from the triggering MS2's value, so each fails under the defect.
-  TEST_REAL_SIMILAR(out.stages[0].reaction_time, 5.0)        // MS2 had 10.0
-  TEST_REAL_SIMILAR(out.stages[0].reagent_max_it, 111.0)     // MS2 had 200.0
-  TEST_EQUAL(out.stages[0].reagent_agc_target, 222)          // MS2 had 700000
-  TEST_REAL_SIMILAR(out.stages[0].collision_energy, 7.0)     // MS2 had 29
-  TEST_EQUAL(out.hcd_energy, 7)                              // MS2 had 29
-
-  // Precursor context still comes from the triggering MS2 -- a follow-up of THAT precursor.
-  TEST_REAL_SIMILAR(out.mono_mass, ms2_cmd.mono_mass)
-  TEST_EQUAL(out.stages[0].charge_state, ms2_cmd.stages[0].charge_state)
-  TEST_REAL_SIMILAR(out.faims_cv, ms2_cmd.faims_cv)
-
-  delete ida;
-}
-END_SECTION
-
-// Same contract on the quantification ('F') path: the two follow-up kinds share buildFollowUp but
-// have independent config blocks, so both must be pinned.
+// A follow-up takes its fragmentation parameters from its own scan config, never from the MS2 that
+// triggered it: the bought identification scan ('R', once 'F') is the one follow-up kind left
+// (the tag-bought 'C' is retired, ADR-0061), and buildFollowUp must not inherit the activation-
+// coupled parameters of the quantification scan it was bought by.
 START_SECTION(processScan_quant_followup_owns_its_scan_parameters)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
@@ -2941,42 +2374,6 @@ START_SECTION(processScan_quant_followup_owns_its_scan_parameters)
   TEST_REAL_SIMILAR(out.stages[0].reagent_max_it, 200.0)     // the Q scan had 111.0
   TEST_EQUAL(out.stages[0].reagent_agc_target, 700000)       // the Q scan had 222
   TEST_EQUAL(out.stages[0].collision_energy, 29)             // the Q scan had 7
-
-  delete ida;
-}
-END_SECTION
-
-// P4-U08: Tag-based targeting code path executes without crash
-START_SECTION(processScan_tag_targeting)
-{
-  // Guard: check fasta file exists
-  {
-    std::ifstream fasta_check(fasta_path);
-    ABORT_IF(! fasta_check.good())
-  }
-  auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  auto ms2_scans = loadTsvScans(ms2_tsv_path);
-  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
-  FLASHIda* ida = new FLASHIda(const_cast<char*>(tag_targeting_json));
-
-  // Drive MS1 via engine-id echo with NO MS2 feed (the emitted MS2 commands stay pending; we feed one back
-  // ourselves below to exercise the tag-targeting MS2 path).
-  AcqResult acq = runInterleaved(ida, ms1_scans, {});
-  TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
-  ABORT_IF(acq.ms2_cmds.empty())
-
-  const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
-  TEST_EQUAL(std::strlen(ms2_cmd.scan_description) <= 15, true)
-  TEST_EQUAL(ms2_cmd.msn_level, 2)
-
-  // Push MS2 return (HCD fragment data)
-  const auto& ms2 = ms2_scans[0];
-  int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
-                                     (int)ms2.mzs.size(), ms2.rt,
-                                     2, ms2_cmd.scan_description, 0.0, instrumentScanNumberOf(ms2));
-  // tag_targeting_json has no quant/conditional/ms3 — tag targeting updates internal state
-  // but pushes 0 follow-up commands
-  TEST_EQUAL(ms2_result, 0)
 
   delete ida;
 }
@@ -3051,78 +2448,6 @@ START_SECTION(agc_command_values)
   std::string desc(cmd.scan_description);
   TEST_EQUAL(desc.size() >= 4, true)
   TEST_EQUAL(desc[3], 'A')
-
-  delete ida;
-}
-END_SECTION
-
-// P4-U17: Conditional MS2 does NOT fire when no FASTA is loaded (no tags possible)
-START_SECTION(processScan_conditional_ms2_requires_tags)
-{
-  auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  auto ms2_scans = loadTsvScans(ms2_tsv_path);
-  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
-  // conditional_json has conditional_ms2=true but fasta="" — no tag targeting possible
-  FLASHIda* ida = new FLASHIda(const_cast<char*>(conditional_json));
-
-  // Drive MS1 via engine-id echo with NO MS2 feed; feed one emitted MS2 back ourselves below.
-  AcqResult acq = runInterleaved(ida, ms1_scans, {});
-  TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
-  ABORT_IF(acq.ms2_cmds.empty())
-
-  const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
-  TEST_EQUAL(std::strlen(ms2_cmd.scan_description) <= 15, true)
-
-  const auto& ms2 = ms2_scans[0];
-  int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
-                                     (int)ms2.mzs.size(), ms2.rt,
-                                     2, ms2_cmd.scan_description, 0.0, instrumentScanNumberOf(ms2));
-  // Without FASTA, tags cannot be found — conditional must NOT fire
-  TEST_EQUAL(ms2_result, 0)
-
-  delete ida;
-}
-END_SECTION
-
-// P4-U19: Tag targeting + conditional MS2 produces follow-up commands
-START_SECTION(processScan_tag_targeting_produces_followups)
-{
-  {
-    std::ifstream fasta_check(fasta_path);
-    ABORT_IF(! fasta_check.good())
-  }
-  auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  auto ms2_scans = loadTsvScans(ms2_tsv_path);
-  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
-  FLASHIda* ida = new FLASHIda(const_cast<char*>(conditional_with_tags_json));
-
-  // Drive MS1 via engine-id echo with NO MS2 feed; feed one emitted MS2 back ourselves below.
-  AcqResult acq = runInterleaved(ida, ms1_scans, {});
-  TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
-  ABORT_IF(acq.ms2_cmds.empty())
-
-  const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
-  TEST_EQUAL(std::strlen(ms2_cmd.scan_description) <= 15, true)
-  TEST_EQUAL(ms2_cmd.msn_level, 2)
-  TEST_EQUAL(ms2_cmd.priority, 2)
-
-  // Push MS2 return — should find tags and trigger conditional follow-up
-  const auto& ms2 = ms2_scans[0];
-  int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
-                                     (int)ms2.mzs.size(), ms2.rt,
-                                     2, ms2_cmd.scan_description, 0.0, instrumentScanNumberOf(ms2));
-  // Golden file continuity_tag_ms2return.json confirms: tags found → follow-ups produced
-  TEST_EQUAL(ms2_result > 0, true)
-
-  // Follow-up at priority 0 dequeues before remaining MS2s at priority 2
-  ScanCommand out{};
-  int r = ida->getNextScanCommand(out);
-  TEST_EQUAL(r, 1)
-  TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
-  TEST_EQUAL(out.priority, 0)
-  TEST_EQUAL(out.msn_level, 2)
-  // Conditional follow-up uses second MS2 config (ETD)
-  TEST_STRING_EQUAL(std::string(out.stages[0].activation_type), "ETD")
 
   delete ida;
 }
@@ -3412,11 +2737,8 @@ START_SECTION(processScan_ms1_min_charge_filter)
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
-  "conditional_ms2": false,
   "precursor_selection": {
     "rt_window": 180,
     "targeting": "none",
@@ -3447,7 +2769,6 @@ START_SECTION(processScan_ms1_min_charge_filter)
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -3569,9 +2890,7 @@ START_SECTION(cleanup_expired_drops_stale_queued_commands)
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
   "precursor_selection": {
     "rt_window": 180,
@@ -3602,7 +2921,6 @@ START_SECTION(cleanup_expired_drops_stale_queued_commands)
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,

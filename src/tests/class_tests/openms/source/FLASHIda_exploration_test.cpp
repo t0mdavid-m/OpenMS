@@ -156,11 +156,8 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
-  "conditional_ms2": false,
   "precursor_selection": {
     "rt_window": 180,
     "targeting": "none",
@@ -203,7 +200,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -249,11 +245,8 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
-  "conditional_ms2": false,
   "precursor_selection": {
     "rt_window": 180,
     "targeting": "none",
@@ -302,7 +295,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -348,11 +340,8 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
-  "conditional_ms2": false,
   "precursor_selection": {
     "rt_window": 180,
     "targeting": "none",
@@ -395,7 +384,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -510,11 +498,8 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
-  "conditional_ms2": false,
   "precursor_selection": {
     "rt_window": 180,
     "targeting": "none",
@@ -551,7 +536,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -604,11 +588,8 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
-  "conditional_ms2": false,
   "precursor_selection": {
     "rt_window": 180,
     "targeting": "none",
@@ -651,7 +632,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -706,11 +686,8 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
-  "conditional_ms2": false,
   "precursor_selection": {
     "rt_window": 180,
     "targeting": "none",
@@ -752,7 +729,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -798,11 +774,8 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
-  "conditional_ms2": false,
   "precursor_selection": {
     "rt_window": 180,
     "targeting": "none",
@@ -838,7 +811,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -884,11 +856,8 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
-  "conditional_ms2": false,
   "precursor_selection": {
     "rt_window": 180,
     "targeting": "none",
@@ -931,7 +900,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -1006,11 +974,8 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
-  "conditional_ms2": false,
   "precursor_selection": {
     "rt_window": 180,
     "targeting": "none",
@@ -1059,7 +1024,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -1105,11 +1069,8 @@ namespace
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
-  "conditional_ms2": false,
   "precursor_selection": {
     "rt_window": 180,
     "targeting": "none",
@@ -1155,7 +1116,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -3483,7 +3443,6 @@ START_SECTION(tol_validation_insufficient_entries)
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false
   }
@@ -3544,7 +3503,6 @@ START_SECTION(selection_without_next_level_scan_config_rejected)
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false
   }
@@ -3816,11 +3774,8 @@ START_SECTION(inclusion_ms3_full_acquisition_roundtrip)
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt",
-    "ptm_list": ""
+    "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt"
   },
-  "conditional_ms2": false,
   "precursor_selection": {
     "rt_window": 180,
     "targeting": "inclusion",
@@ -3857,7 +3812,6 @@ START_SECTION(inclusion_ms3_full_acquisition_roundtrip)
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -3969,11 +3923,8 @@ START_SECTION(exploration_multiplexed_ms3_inherits_the_variant_notch_set)
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "",
-    "ptm_list": ""
+    "inclusion_list": ""
   },
-  "conditional_ms2": false,
   "precursor_selection": {
     "rt_window": 180,
     "targeting": "none",
@@ -4019,7 +3970,6 @@ START_SECTION(exploration_multiplexed_ms3_inherits_the_variant_notch_set)
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -4160,11 +4110,8 @@ START_SECTION(ms3_min_charge_floor_filters_all_targets)
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt",
-    "ptm_list": ""
+    "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt"
   },
-  "conditional_ms2": false,
   "precursor_selection": {
     "rt_window": 180,
     "targeting": "inclusion",
@@ -4202,7 +4149,6 @@ START_SECTION(ms3_min_charge_floor_filters_all_targets)
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -4270,11 +4216,8 @@ START_SECTION(ms3_min_charge_default_emits_ms3)
   },
   "files": {
     "target_logs": [],
-    "fasta": "",
-    "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt",
-    "ptm_list": ""
+    "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt"
   },
-  "conditional_ms2": false,
   "precursor_selection": {
     "rt_window": 180,
     "targeting": "inclusion",
@@ -4312,7 +4255,6 @@ START_SECTION(ms3_min_charge_default_emits_ms3)
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false,
     "reporter_mz_tol": 0.002,
@@ -4902,14 +4844,14 @@ END_SECTION
 START_SECTION(roleName_matches_the_legacy_scan_type_strings)
 {
   // scan_commands.tsv's `scan_type` column is a GOLDEN column and ScanRole.h's table is now its only
-  // source. These six pairs are exactly what IdaLogger::scanTypeFromDescription_'s switch returned
+  // source. These five pairs are exactly what IdaLogger::scanTypeFromDescription_'s switch returned
   // before ADR-0042 moved it: the byte-identity proof for 28 golden files, as a test rather than as
-  // a diff someone has to remember to run.
+  // a diff someone has to remember to run. ("conditional"/'C', the tagging follow-up, was retired
+  // with ADR-0061.)
   TEST_EQUAL(std::string(roleName(ScanRole::Survey)),             "survey")
   TEST_EQUAL(std::string(roleName(ScanRole::Agc)),                "agc")
   TEST_EQUAL(std::string(roleName(ScanRole::Identification)),     "recording")
   TEST_EQUAL(std::string(roleName(ScanRole::Quantification)),     "quantification")
-  TEST_EQUAL(std::string(roleName(ScanRole::FollowUp)),           "conditional")
   TEST_EQUAL(std::string(roleName(ScanRole::ExplorationVariant)), "exploration")
   TEST_EQUAL(std::string(roleName(ScanRole::Monitor)),            "monitor")   // the only new value
 
@@ -4917,7 +4859,6 @@ START_SECTION(roleName_matches_the_legacy_scan_type_strings)
   TEST_EQUAL(roleMarker(ScanRole::Agc),                'A')
   TEST_EQUAL(roleMarker(ScanRole::Identification),     'R')
   TEST_EQUAL(roleMarker(ScanRole::Quantification),     'Q')
-  TEST_EQUAL(roleMarker(ScanRole::FollowUp),           'C')
   TEST_EQUAL(roleMarker(ScanRole::ExplorationVariant), 'E')
   TEST_EQUAL(roleMarker(ScanRole::Monitor),            'M')
 

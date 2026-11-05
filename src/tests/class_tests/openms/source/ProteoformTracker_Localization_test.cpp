@@ -161,9 +161,8 @@ namespace
       "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25, "resolution": 120000 }
     },
     "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "files": { "target_logs": [], "inclusion_list": "" },
     "characterization": { "mode": "coverage", "max_targets": 10, "protein_sequence": ")") + std::string(WINNER_SEQ) + R"(" },
-    "conditional_ms2": false,
     "runtime": {} })";
   }
 }

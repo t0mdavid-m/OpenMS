@@ -81,7 +81,6 @@ namespace
       "resolution": 120000
     }
   },
-  "tagging": {},
   "quantification": {
     "enabled": false
   }

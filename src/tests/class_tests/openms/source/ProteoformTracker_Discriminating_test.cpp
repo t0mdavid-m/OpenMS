@@ -81,8 +81,7 @@ namespace
     "cycle_time": {"enabled": false, "value_ms": 60000},
     "scan_timeout": {"enabled": false, "value_ms": 30000}
   },
-  "files": {"target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": ""},
-  "conditional_ms2": false,
+  "files": {"target_logs": [], "inclusion_list": ""},
   "precursor_selection": {
     "rt_window": 180, "targeting": "none", "consider_all_charges": false, "strict_inclusion": false,
     "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 3
@@ -98,7 +97,6 @@ namespace
     "ms2": {"analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000},
     "ms3": {"analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25, "resolution": 120000}
   },
-  "tagging": {},
   "quantification": {"enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4})JSON";
     if (!log_dir.empty()) s += ",\n  \"runtime\": {\"log_dir\": \"" + log_dir + "\"}";
     s += "\n}\n";

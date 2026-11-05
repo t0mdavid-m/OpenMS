@@ -61,7 +61,6 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   TEST_REAL_SIMILAR(cfg.deconvolution().max_mass, j["deconvolution"]["max_mass"].get<double>())
   TEST_REAL_SIMILAR(cfg.targeting().qscore_threshold, j["deconvolution"]["score_threshold"].get<double>())
   TEST_REAL_SIMILAR(cfg.targeting().tqscore_threshold, j["deconvolution"]["tqscore_threshold"].get<double>())
-  TEST_REAL_SIMILAR(cfg.targeting().tag_matching_tolerance_ppm, j["deconvolution"]["tol"][1].get<double>())
 
   // --- precursor_selection ---
   TEST_REAL_SIMILAR(cfg.targeting().rt_window, j["precursor_selection"]["rt_window"].get<double>())
@@ -90,18 +89,6 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   TEST_EQUAL(cfg.level(1).max_targets, j["precursor_selection"]["max_precursors"].get<int>())
   TEST_EQUAL(cfg.level(1).min_charge, j["precursor_selection"]["min_precursor_charge"].get<int>())
 
-  // --- precursor_selection.tag_expansion ---
-  // These two keys were authored under `flashtnt` but are neither FLASHTnT Params: max_ptm_count is
-  // read only by PrecursorSelection::generatePTMCombinations_, and max_flanking_mass_diff is a call
-  // argument FLASHIda passes to a static tagger helper. They now live where the feature does.
-  // The C++ STORAGE deliberately did NOT move -- both still land in TargetingConfig -- so this pair
-  // is the mechanical proof that the new parse path binds to the same fields as the old one. Read
-  // the new JSON path, compare against the unchanged cfg.targeting() fields.
-  TEST_EQUAL(cfg.targeting().max_total_ptm_count,
-             j["precursor_selection"]["tag_expansion"]["max_ptm_count"].get<int>())
-  TEST_REAL_SIMILAR(cfg.targeting().max_flanking_mass_diff,
-                    j["precursor_selection"]["tag_expansion"]["max_flanking_mass_diff"].get<double>())
-
   // --- flashtnt (now only genuine FLASHTnT Params) ---
   TEST_EQUAL(cfg.targeting().min_tag_length, j["flashtnt"]["min_length"].get<int>())
   TEST_EQUAL(cfg.targeting().max_tag_length, j["flashtnt"]["max_length"].get<int>())
@@ -112,35 +99,6 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   TEST_EQUAL(cfg.targeting().fixed_mod.size(), j["flashtnt"]["fixed_mod"].size())
   TEST_EQUAL(cfg.targeting().fixed_mod.empty() ? std::string("") : cfg.targeting().fixed_mod[0],
              j["flashtnt"]["fixed_mod"][0].get<std::string>())
-
-  // --- tagging.follow_up_scan ---
-  // EVERY key, not a subset. This block previously asserted only the 4 keys Config happened to
-  // parse, so the 9 it silently discarded were invisible here -- which is how a follow_up_scan
-  // became unable to carry its own reaction_time. A follow_up_scan is a full scan config
-  // (ADR-0009), so every key it declares must bind.
-  //
-  // follow_up_scan is a NAME now, so this follows the indirection into additional_ms2 rather than
-  // reading an inline block. That makes the assertion strictly stronger: it proves the resolved
-  // ScanConfig matches the JSON of the entry the name actually points at, so a resolver that picked
-  // the wrong entry (or the first one by map order) would fail here.
-  {
-    const auto& fus = cfg.targeting().tagging_follow_up_scan;
-    const std::string fname = j["tagging"]["follow_up_scan"].get<std::string>();
-    const auto& jf = j["ms_settings"]["additional_ms2"][fname];
-    TEST_EQUAL(fus.analyzer, jf["analyzer"].get<std::string>())
-    TEST_EQUAL(fus.activation, jf["activation"].get<std::string>())
-    TEST_EQUAL(fus.collision_energy, jf["collision_energy"].get<int>())
-    TEST_EQUAL(fus.resolution, jf["resolution"].get<int>())
-    TEST_EQUAL(fus.agc_target, jf["agc_target"].get<int>())
-    TEST_REAL_SIMILAR(fus.max_it, jf["max_it"].get<double>())
-    TEST_REAL_SIMILAR(fus.first_mass, jf["first_mass"].get<double>())
-    TEST_REAL_SIMILAR(fus.last_mass, jf["last_mass"].get<double>())
-    TEST_EQUAL(fus.microscans, jf["microscans"].get<int>())
-    TEST_EQUAL(fus.data_type, jf["data_type"].get<std::string>())
-    TEST_REAL_SIMILAR(fus.reaction_time, jf["reaction_time"].get<double>())
-    TEST_REAL_SIMILAR(fus.reagent_max_it, jf["reagent_max_it"].get<double>())
-    TEST_EQUAL(fus.reagent_agc_target, jf["reagent_agc_target"].get<int>())
-  }
 
   // --- ms_settings.ms2_quant, the quantification scan (ADR-0038) ---
   // Replaces the old quantification.follow_up_scan block. That key named the scan quantification
@@ -167,9 +125,6 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
     TEST_REAL_SIMILAR(fus.reagent_max_it, jf["reagent_max_it"].get<double>())
     TEST_EQUAL(fus.reagent_agc_target, jf["reagent_agc_target"].get<int>())
   }
-
-  // --- conditional_ms2 ---
-  TEST_EQUAL(cfg.targeting().conditional_ms2_enabled, j["conditional_ms2"].get<bool>())
 
   // --- quantification ---
   TEST_EQUAL(cfg.quantification().enabled, j["quantification"]["enabled"].get<bool>())
@@ -227,7 +182,7 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
 
   // --- ms_settings.ms2 / ms3 ---
   // Both blocks assert ALL 17 keys. They used to assert 10 and 3 respectively -- the "assert only
-  // the keys someone remembered" anti-pattern that the follow_up_scan blocks above were already
+  // the keys someone remembered" anti-pattern that the ms2_quant block above was already
   // fixed for. A key nobody asserts is a key that can be dropped silently, which is how
   // rf_lens/source_cid/source_cid_scaling/scan_rate went missing from every MSn scan.
   const auto& ms2 = cfg.level(2).scans[0];
@@ -396,15 +351,16 @@ START_SECTION(GeneratedReference_CarriesEveryScanKey)
   const std::set<std::string> stage_carried = {
     "activation", "collision_energy", "reaction_time", "reagent_max_it", "reagent_agc_target"};
 
-  // ms2 and ms3 are bare objects, and every extra MS2 -- including the two that back the follow-up
-  // references -- lives in additional_ms2. The follow-up sites are DISCOVERED here rather than
-  // named: j["tagging"]["follow_up_scan"] is a name string now, and hard-coding the generator's
-  // chosen names would make this loop quietly stop covering a site the day one is renamed.
+  // ms2 and ms3 are bare objects, and every extra MS2 lives in additional_ms2. Those entries are
+  // DISCOVERED here rather than named: hard-coding the generator's chosen names would make this loop
+  // quietly stop covering a site the day one is renamed. The reference's one entry (etd_reference)
+  // is referenced by nothing since the tagging follow-up was retired (ADR-0061); it stays because it
+  // is the only scan carrying non-zero ETD reagent values.
   std::vector<json> msn_sites = {j["ms_settings"]["ms2"], j["ms_settings"]["ms3"]};
   if (j["ms_settings"].contains("additional_ms2") && j["ms_settings"]["additional_ms2"].is_object())
     for (const auto& entry : j["ms_settings"]["additional_ms2"])
       msn_sites.push_back(entry);
-  TEST_EQUAL(msn_sites.size() >= 3, true)  // else the reference stopped covering the follow-ups
+  TEST_EQUAL(msn_sites.size() >= 3, true)  // else the reference stopped covering additional_ms2
 
   for (const auto& key : Config::scanKeys())
   {
