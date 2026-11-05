@@ -140,6 +140,10 @@ private:
   void releaseRawSpectra_();
   /// annotate every hit of @p hits on its raw spectrum (loaded by loadRawSpectra_) and set the combined score
   void annotateOnRawSpectra_(std::vector<ProteinHit>& hits) const;
+  /// the raw evidence of the PrSMs of each proteoform combined (meta values CombinedPrSMs, CombinedCoverage, CombinedCoverageChance on its
+  /// representative): @p clusters as markRepresentativeProteoformHits_ returns them, @p qvalues the PrSM q-values, a PrSM taking part if its
+  /// q-value is at most @p rep_q (with @p use_fdr; otherwise only the representative's own termini and modifications count)
+  void setCombinedCoverage_(const std::vector<std::vector<Size>>& clusters, const std::vector<double>& qvalues, double rep_q, bool use_fdr);
   /// the raw-spectrum PrSM of @p hit (its proteoform, bounded by the entry where a terminus is open) and its given precursor mass (-1:
   /// none); false if its spectrum is not loaded
   bool toRawPrSM_(const ProteinHit& hit, FLASHAnnotatorAlgorithm::PrSM& prsm, double& precursor_mass) const;

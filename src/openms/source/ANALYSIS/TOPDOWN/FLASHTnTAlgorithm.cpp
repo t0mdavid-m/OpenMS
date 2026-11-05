@@ -3735,7 +3735,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         }
       }
     }
-    releaseRawSpectra_();
+    // the raw spectra stay loaded for the combined coverage after the FDR (setCombinedCoverage_ releases them)
   }
 
   // the order below and every ranking of the FDR need finite scores: a NaN breaks the sorts and never closes a tie group, and an infinite
@@ -3867,6 +3867,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   // the proteoforms: positions of their PrSMs in proteoform_hits_ (Index), the representative first; representatives in the order above
   const auto clusters = proteoformQvalues(hit_class, qvalues, decoys, decoy_weights, true);
   const Size hit_count = proteoform_hits_.size();
+  setCombinedCoverage_(clusters, qvalues, rep_q, use_fdr);
 
   if (use_fdr && native_rule) { setProteinQvalues_(hit_class, qvalues, decoys, decoy_weights, clusters, rep_q, *db); }
   else if (use_fdr)
@@ -4052,12 +4053,19 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 
 void FLASHTnTAlgorithm::loadRawSpectra_(const std::set<int>& scans)
 {
-  // loaded already (path alternatives load every spectrum before the extension)
-  if (! raw_slot_.empty() && std::all_of(scans.begin(), scans.end(), [this](int scan) { return raw_slot_.count(scan) > 0; })) return;
-  releaseRawSpectra_();
+  // Only the spectra not loaded yet are read, and they join those loaded: the stages, the chimeric rounds and the combined coverage of the
+  // proteoforms (setCombinedCoverage_) reuse what an earlier step read. A raw file given with -in_raw is read in full for every call that
+  // needs a spectrum not loaded yet (FLASHAnnotatorAlgorithm::loadSpectra).
+  std::set<int> missing;
+  for (int scan : scans)
+  {
+    if (raw_slot_.count(scan) == 0) missing.insert(scan);
+  }
+  if (missing.empty()) return;
   std::map<int, MSSpectrum> raw;
-  raw_loader_(scans, raw);
-  raw_spectra_.reserve(raw.size());
+  raw_loader_(missing, raw);
+  const Size first = raw_spectra_.size();
+  raw_spectra_.reserve(first + raw.size());
   for (auto& [scan, spec] : raw)
   {
     raw_slot_[scan] = (int)raw_spectra_.size();
@@ -4066,13 +4074,13 @@ void FLASHTnTAlgorithm::loadRawSpectra_(const std::set<int>& scans)
   raw_peaks_.resize(raw_spectra_.size());
   int profile_count = 0;
 #pragma omp parallel for schedule(dynamic) reduction(+ : profile_count)
-  for (int i = 0; i < (int)raw_spectra_.size(); i++)
+  for (int i = (int)first; i < (int)raw_spectra_.size(); i++)
   {
     profile_count += FLASHAnnotatorAlgorithm::toCentroidedPeakArrays(raw_spectra_[i], raw_peaks_[i]) ? 1 : 0;
     raw_spectra_[i].clear(false); // the precursor information stays
     raw_spectra_[i].shrink_to_fit();
   }
-  raw_profile_count_ = profile_count;
+  raw_profile_count_ += profile_count;
 }
 
 void FLASHTnTAlgorithm::releaseRawSpectra_()
@@ -4201,6 +4209,168 @@ void FLASHTnTAlgorithm::annotateOnRawSpectra_(std::vector<ProteinHit>& hits) con
   }
   OPENMS_LOG_INFO << "Raw spectra: " << raw_peaks_.size() << " loaded (" << raw_profile_count_ << " centroided); PrSMs annotated: " << annotated
                   << " of " << hits.size() << " (" << without_spectrum << " without their scan in the raw file)" << std::endl;
+}
+
+void FLASHTnTAlgorithm::setCombinedCoverage_(const std::vector<std::vector<Size>>& clusters, const std::vector<double>& qvalues, double rep_q, bool use_fdr)
+{
+  // A proteoform identified by several spectra has the raw evidence of all of them. Its combined coverage counts the terminal bonds covered
+  // by its best PrSM (the most covered bonds; the representative among equal ones) and those covered in at least two of its PrSMs, by the
+  // envelope rule of the raw score (FLASHAnnotatorAlgorithm, the same for every spectrum). Its chance is the same rule on the decoy fragment
+  // sets of the raw score (decoy_shifts), each set combined over the PrSMs as the targets are, averaged over the sets. The PrSMs combined
+  // are those of the proteoform at a PrSM q-value of at most rep_q, of one spectrum each, not of a residual round, with the termini and the
+  // modification masses (to 0.05 Da) of its representative; the representative always takes part. Prototype on the f5c72eda25 outputs
+  // (proteoforms with two or more such PrSMs; mean coverage %, chance in brackets): best PrSM, this rule, the union of all PrSMs, one
+  // spectrum averaged from the calibrated raw spectra:
+  //   Eclip_1480  35.9 (1.6), 38.4 (2.1), 43.0 (4.1), 40.4 (3.8)
+  //   Caco-2      29.3 (1.9), 32.3 (3.0), 37.8 (6.7), 34.5 (5.3)
+  //   ETD PXD012247 (14 fractions) 33.4 (0.9), 34.4 (1.0), 37.8 (1.6), 35.8 (1.4)
+  // The union and the averaged spectrum gain coverage at the price of their chance: decoy bonds recur in the spectra of one proteoform,
+  // and an averaged spectrum holds the peaks of all of them. Targets and decoys alike, so a later use in a score stays target-decoy fair.
+  if (! raw_loader_) return;
+  if (clusters.empty())
+  {
+    releaseRawSpectra_();
+    return;
+  }
+  auto& registry = MetaInfoInterface::metaRegistry();
+  const UInt mi_chimeric = registry.registerName("ChimericRound"), mi_prsms = registry.registerName("CombinedPrSMs"),
+             mi_coverage = registry.registerName("CombinedCoverage"), mi_chance = registry.registerName("CombinedCoverageChance");
+  auto modKey = [](const ProteinHit& h) {
+    std::vector<long> k;
+    if (h.metaValueExists("Modifications"))
+    {
+      for (double m : (std::vector<double>)h.getMetaValue("Modifications")) k.push_back(std::lround(m / 0.05));
+    }
+    std::sort(k.begin(), k.end());
+    return k;
+  };
+  std::vector<std::vector<Size>> members(clusters.size());
+  std::set<int> scans;
+  for (Size c = 0; c < clusters.size(); c++)
+  {
+    if (clusters[c].empty()) continue;
+    const auto& rep = proteoform_hits_[clusters[c][0]];
+    const int start = rep.getMetaValue(tntKey("StartPosition")), end = rep.getMetaValue(tntKey("EndPosition"));
+    const auto key = modKey(rep);
+    std::set<int> seen;
+    for (Size i : clusters[c])
+    {
+      const auto& h = proteoform_hits_[i];
+      if (i != clusters[c][0])
+      {
+        if (use_fdr && qvalues[i] > rep_q) continue;
+        if (h.metaValueExists(mi_chimeric) && (int)h.getMetaValue(mi_chimeric) > 0) continue;
+        if ((int)h.getMetaValue(tntKey("StartPosition")) != start || (int)h.getMetaValue(tntKey("EndPosition")) != end || modKey(h) != key) continue;
+      }
+      const int scan = h.getMetaValue(tntKey("Scan"));
+      if (! seen.insert(scan).second) continue;
+      members[c].push_back(i);
+      scans.insert(scan);
+    }
+  }
+  loadRawSpectra_(scans);
+
+  FLASHAnnotatorAlgorithm annotator;
+  Param aparam = annotator_param_;
+  aparam.setValue("internal_ions", "false");
+  aparam.setValue("report_decoy_envelopes", "true");
+  annotator.setParameters(aparam);
+  const std::vector<double> shifts = aparam.getValue("decoy_shifts").toDoubleVector();
+  std::vector<FLASHAnnotatorAlgorithm::PrSM> prsms;
+  std::vector<double> precursor_masses;
+  std::vector<Size> first_of(clusters.size() + 1, 0); // the PrSMs of cluster c: prsms[first_of[c], first_of[c + 1])
+  double max_mass = 0;
+  for (Size c = 0; c < clusters.size(); c++)
+  {
+    first_of[c] = prsms.size();
+    for (Size i : members[c])
+    {
+      FLASHAnnotatorAlgorithm::PrSM prsm;
+      double precursor_mass = -1.0;
+      if (! toRawPrSM_(proteoform_hits_[i], prsm, precursor_mass)) continue;
+      max_mass = std::max({max_mass, precursor_mass, FLASHAnnotatorAlgorithm::getProteoformMass(prsm.sequence, prsm.modifications)});
+      prsms.push_back(std::move(prsm));
+      precursor_masses.push_back(precursor_mass);
+    }
+  }
+  first_of[clusters.size()] = prsms.size();
+  std::vector<double> iso_mzs, iso_intensities;
+  annotator.getIsotopeEnvelope(max_mass + 200.0, 1, iso_mzs, iso_intensities);
+  for (Size j = 0; j < prsms.size(); j++)
+  {
+    int reason = 4;
+    prsms[j].precursor_charge = annotator.precursorChargeCap(raw_spectra_[prsms[j].spectrum_index], precursor_masses[j], reason);
+  }
+  std::vector<FLASHAnnotatorAlgorithm::Result> results;
+  annotator.annotate(raw_peaks_, prsms, results);
+
+  Size combined = 0;
+  double sum_best = 0, sum_combined = 0, sum_chance = 0;
+  for (Size c = 0; c < clusters.size(); c++)
+  {
+    const Size first = first_of[c], n = first_of[c + 1] - first;
+    if (n == 0 || members[c].empty() || ! results[first].annotated) continue;
+    const int bonds = (int)prsms[first].sequence.size() - 1;
+    if (bonds <= 0) continue;
+    // covered[v][j][b]: bond b covered in PrSM j by the target fragments (v = 0) or by decoy set v - 1
+    std::vector<std::vector<std::vector<char>>> covered(shifts.size() + 1, std::vector<std::vector<char>>(n, std::vector<char>(bonds + 1, 0)));
+    for (Size j = 0; j < n; j++)
+    {
+      for (const auto& e : results[first + j].envelopes)
+      {
+        if (e.first >= 0 || e.bond < 1 || e.bond > bonds) continue; // terminal fragments only
+        Size v = 0;
+        if (e.decoy_shift != 0)
+        {
+          v = std::find_if(shifts.begin(), shifts.end(), [&e](double s) { return std::abs(s - e.decoy_shift) < 1e-9; }) - shifts.begin() + 1;
+          if (v > shifts.size()) continue;
+        }
+        covered[v][j][e.bond] = 1;
+      }
+    }
+    Size best = 0;
+    int best_count = -1;
+    for (Size j = 0; j < n; j++)
+    {
+      const int count = (int)std::count(covered[0][j].begin(), covered[0][j].end(), (char)1);
+      if (count > best_count)
+      {
+        best_count = count;
+        best = j;
+      }
+    }
+    auto combinedCount = [&](Size v) {
+      int count = 0;
+      for (int b = 1; b <= bonds; b++)
+      {
+        int in = 0;
+        for (Size j = 0; j < n; j++) in += covered[v][j][b];
+        count += (covered[v][best][b] || in >= 2) ? 1 : 0;
+      }
+      return count;
+    };
+    const double coverage = 100.0 * combinedCount(0) / bonds;
+    double chance = 0;
+    for (Size v = 1; v <= shifts.size(); v++) chance += 100.0 * combinedCount(v) / bonds;
+    chance = shifts.empty() ? -1.0 : chance / (double)shifts.size();
+    auto& rep = proteoform_hits_[clusters[c][0]];
+    rep.setMetaValue(mi_prsms, (int)n);
+    rep.setMetaValue(mi_coverage, coverage);
+    rep.setMetaValue(mi_chance, chance);
+    if (n >= 2 && ! rep.getAccession().hasPrefix("DECOY"))
+    {
+      combined++;
+      sum_best += 100.0 * best_count / bonds;
+      sum_combined += coverage;
+      sum_chance += chance;
+    }
+  }
+  releaseRawSpectra_();
+  if (combined > 0)
+  {
+    OPENMS_LOG_INFO << "Combined coverage: " << combined << " target proteoforms with two or more PrSMs combined; their mean coverage " << sum_best / combined
+                    << "% by the best PrSM, " << sum_combined / combined << "% combined (chance " << sum_chance / combined << "%)" << std::endl;
+  }
 }
 
 void FLASHTnTAlgorithm::keepBestPerSpectrum_(std::vector<ProteinHit>& hits, const String& label, const String& score_name)
