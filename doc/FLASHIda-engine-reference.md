@@ -52,9 +52,6 @@ is airtight:
   knob is added once, not per site. `fixed_mod` is set **unconditionally** there: an empty config
   list is passed verbatim as an empty Param list, *not* left at the algorithms' declared `{""}`
   placeholder — pinned by `FragmentAnalysis_test`'s `build*Param_sets_fixed_mod_when_empty`.
-  ⚠️ Two keys that look like FLASHTnT tuning are **not**: `max_ptm_count` and
-  `max_flanking_mass_diff` are neither Params nor read by either algorithm on the IDA path. They
-  come from `precursor_selection.tag_expansion` and drive FLASHIda's own FASTA target expansion.
 
 > **Name trap.** `TopDownIsobaricQuantification` (flat, off-limits, used only by
 > `FLASHDeconvAlgorithm`) and `FLASHIda/Quantification` (IDA, fair game) are unrelated — but the
@@ -109,10 +106,10 @@ mirrors the declaration order exactly (`FLASHIda.cpp:54-64`).
 
 `FLASHIda.cpp` is the **sole enqueuer**, and since ADR-0060 its sites come in three kinds, pinned as a
 table by `FLASHIda_Replan_test::push_site_inventory` (a new or moved site fails it until the table says
-what the site is): a survey's MS2s enter through **one** `queue_.replacePlan(` in `runSurveyMS1_`; six
+what the site is): a survey's MS2s enter through **one** `queue_.replacePlan(` in `runSurveyMS1_`; five
 **permanent** sites go through `stampAndPush_` (`FLASHIda.h`, the one `queue_.push` that stamps a
-precursor id first: refine re-dispatch, exploration MS2 return, the bought `R`, the tag follow-up, MS3
-targeting, exploration MS3 return); three MS1-family `queue_.push(` sites (CV transition, cycle time,
+precursor id first: refine re-dispatch, exploration MS2 return, the bought `R`, MS3 targeting,
+exploration MS3 return; the tag follow-up `C` went with ADR-0061); three MS1-family `queue_.push(` sites (CV transition, cycle time,
 monitor) plus the idle survey's `pushAndDequeue`; and one `registerAdjustable` (the quant verdict). No
 `.push(` on a `ScanCommandQueue` exists anywhere else under `TOPDOWN/`. The `ScanCommandQueue&` that
 `Exploration::initiate/feedResult/initiateNextLevel` receive is a **command builder, not an
@@ -200,7 +197,7 @@ entry. It is deliberately not tied to `scheduling.scan_timeout`, which only drop
 **`processScan` takes retention time in SECONDS** (ADR-0051). The C export converts the host's
 minutes, and it is the only production caller; the C++ tests call `processScan` directly with
 seconds. Everything behind it decides in seconds — `rt_window`, the expiry of acquisition memory,
-inclusion rows, target logs, tag targets. The two log streams that record it (`scan_results` `rt`,
+inclusion rows, target logs. The two log streams that record it (`scan_results` `rt`,
 `ida.log` `RT`) write `rt / 60`, because their readers read minutes; the stdout markers
 (`[TRACK-RESOLVE] rt=`, `[CHARGE-SET] rt=`) print seconds.
 
@@ -217,7 +214,6 @@ place — `FLASHIda/ScanRole.h`'s `constexpr` traits table (ADR-0042), which
 | `M` | `monitor` | ✓ | **✗** | monitor scan — observed, never acted upon (ADR-0042) |
 | `R` | `recording` | ✓ | ✓ | any data-acquiring MS2 *or* MS3, **and the identification scan a quantification verdict buys** |
 | `Q` | `quantification` | ✓ | ✓ | the quantification scan (ADR-0038) |
-| `C` | `conditional` | ✓ | ✓ | tagging conditional follow-up MS2 |
 | `E` | `exploration` | ✓ | ✓ | exploration variant |
 
 The `scan_type` strings are a **golden column** and the table is now their only source — `"recording"`
@@ -254,11 +250,12 @@ The predicate is `quantBuysIdentification` in `FLASHIda.cpp`'s anonymous namespa
 with `fold_change == -1.0`, a sentinel, so a `fold_change`-based direction test drops exactly the
 species the experiment exists to find. Two fixtures pin it, one per absence direction, because with
 `conditions[0]` absent a bug spelled `fold_change < 1.0` coincidentally agrees with the right
-answer. Since tagging and MS3 are suppressed on a `Q` and ride the bought `R`, `identify` also
+answer. Since identification and MS3 are suppressed on a `Q` and ride the bought `R`, `identify` also
 governs what gets characterized — with no MS3 code involved.
 
-`processScan` branches on the marker three times: `desc[3]=='A'` (gate 2),
-`is_follow_up_scan = desc[3]=='C'`, and `is_quant_scan = desc[3]=='Q'`. The screen gate keys on
+`processScan` branches on the marker twice: `desc[3]=='A'` (gate 2) and
+`is_quant_scan = desc[3]=='Q'` (`is_follow_up_scan`, for the retired `C`, went with ADR-0061). The
+screen gate keys on
 `'Q'` rather than on "is not a follow-up", which is what makes it safe for the bought scan to be an
 indistinguishable `'R'` — an `R` is never re-screened, so depth-one holds without the marker having
 to separate a follow-up from a primary.
@@ -267,8 +264,6 @@ to separate a follow-up from a primary.
 > — 15 chars + NUL.** That is why MS2/MS3 mass tokens go through
 > `ScanCommandQueue::formatMassToken`, which computes a token budget and degrades decimal precision
 > from 6 down to 0 so the trailing `@{charge}{ion_type}{index}` is never truncated.
-> Known dead store: `FLASHIda.cpp:661` sets `[3]='C'` but :665 overwrites the buffer, so
-> cycle-time-forced MS1s emit as `'S'`.
 
 ## `getNextScanCommand` — never returns 0
 
@@ -328,7 +323,7 @@ the C# TPL Dataflow `ActionBlock` thread (serialized with itself, `MaxDegreeOfPa
 
 | P | Commands |
 |---|---|
-| 0 | FAIMS CV-transition MS1; cycle-time MS1; **both bought scans** — the identification scan a quantification verdict buys (`R`, ADR-0038) and the tagging conditional follow-up (`C`); the **monitor scan** (`M`, ADR-0042) — 3 is the idle sentinel and 1/2 are the sweep's own lanes, so 0 is the only priority at which its authored interval can govern |
+| 0 | FAIMS CV-transition MS1; cycle-time MS1; the **bought scan** — the identification scan a quantification verdict buys (`R`, ADR-0038; the tagging conditional follow-up `C` was retired with ADR-0061); the **monitor scan** (`M`, ADR-0042) — 3 is the idle sentinel and 1/2 are the sweep's own lanes, so 0 is the only priority at which its authored interval can govern |
 | 1 | MS3, including exploration MS3 variants |
 | 2 | MS2 from MS1 selection; exploration MS2 variants |
 | 3 | idle survey MS1 — **and nothing else** |
@@ -729,7 +724,7 @@ Traps worth internalizing before touching config code:
 - **`kScanKeys` is one lenient 17-key union validating every scan object, and one parser reads all
   17 at all five sites.** Validation and parsing share a single source of truth (`Config.cpp:70-73`
   records why: when the two lists drifted, nine keys passed validation and were then discarded —
-  notably `reaction_time` on a `follow_up_scan`, which made an ETD follow-up unconfigurable). The
+  notably `reaction_time` on a follow-up scan, which made an ETD follow-up unconfigurable). The
   set is exposed as `Config::scanKeys()`.
   **The constraint has never been on this side — it is the C# emit set.** A key C# does not emit
   cannot reach C++ regardless of what `kScanKeys` admits, which is how `rf_lens`, `source_cid`,
@@ -741,7 +736,8 @@ Traps worth internalizing before touching config code:
   `num_stages = 0`, so they could never reach an MS1 scan.
 - **`ScanConfig.analyzer`'s default flips by parse site**: the in-class default is `"Orbitrap"`, but
   the `ms_settings.ms{1,2,3}` parsers override it with `""` (strncpy'd straight into the
-  `ScanCommand`). Only the two `follow_up_scan` blocks keep `"Orbitrap"`.
+  `ScanCommand`). No parse site keeps `"Orbitrap"` any more: the last one, `tagging.follow_up_scan`'s
+  dead inline-object branch, went with ADR-0061.
   **The value is a closed set** (ADR-0045 decision 3): `"Orbitrap" | "IonTrap" | ""`, checked on the
   **raw JSON** in `parseScanConfig` and in the overrides loop — `str()`'s `is_string()` guard would
   otherwise coerce `"analyzer": 5` to `""` and load clean. `null` stays a default because the
@@ -825,10 +821,8 @@ the caller's responsibility.
     uses that charge up, through `target_mass_charge_map_`, and the erase is journaled as a
     `LegacyTargetChargeErase` stamp, so a re-planned-away command spends nothing.
 
-  The loader files `AllMass` lines under their own survey. FASTA tag-expanded targets **add** to the
-  log targets: they used to fill `inclusion_targets_`, which silently made the TSV branch replace them.
-  The gate is C++: `FLASHIda_DynamicTargets_test` together with `FLASHIda_ProcessScan_test`'s GTM
-  sections. The `log_target_charges: "reference"` path is also exercised by `FLASHIda_ChargeModes_test`'s
+  The loader files `AllMass` lines under their own survey. The gate is C++: `FLASHIda_ProcessScan_test`'s
+  GTM sections (FASTA tag-expanded targets, which used to add to these, are retired with ADR-0061). The `log_target_charges: "reference"` path is also exercised by `FLASHIda_ChargeModes_test`'s
   two legacy-inclusion cases.
 - **`Mass=` and `AllMass=` are the same rendering, and that is asserted** (ADR-0035 decision 5).
   Both are `std::fixed << setprecision(4)`, so a target's mass appears **verbatim** among its own

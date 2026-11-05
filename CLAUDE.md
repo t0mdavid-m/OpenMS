@@ -63,7 +63,7 @@ departure from the plan goes back to the owner. Ambiguous cases count as source 
 - **Retention time is SECONDS here** (ADR-0051): the export converts the host's minutes; C++ tests
   pass seconds. `scan_results` `rt` and `ida.log` `RT` write minutes back.
 - **Scan description**: `{3-char base-94 id}{marker}{payload}`, at most 15 chars. The marker is
-  decoded only in `FLASHIda/ScanRole.h` (`S A M R Q C E`); its table is the source of the golden
+  decoded only in `FLASHIda/ScanRole.h` (`S A M R Q E`; `C` retired with tag targeting, ADR-0061); its table is the source of the golden
   `scan_type` strings, and a new enumerator without a row fails to compile. **An undecodable
   description resolves as a survey**: do not "fail closed" there.
 - **The decision gates read the engine's own command (`parent_ctx`)**; only the observe gate reads
@@ -82,7 +82,7 @@ Steps: (1) scheduled AGC prescan → (2) cycle-time MS1 → (2b) monitor scan �
 - **`recordMS1Time()` carries a `roleDecides` conjunct**, or a monitor scan starves `cycle_time`.
 - **No `analysis_mutex_` in the drain** (ADR-0025). Lock order: `analysis_mutex_` → `queue_mutex_`.
   The steps are not atomic; the drain and `processScan` run on different threads.
-- **Priorities**: 0 = CV-transition/cycle-time MS1, bought `R`, conditional `C`, monitor `M`;
+- **Priorities**: 0 = CV-transition/cycle-time MS1, bought `R`, monitor `M`;
   1 = MS3; 2 = MS2; **3 = the idle survey and nothing else** (C# drain loops stop on it). Strict
   FIFO within a priority.
 
