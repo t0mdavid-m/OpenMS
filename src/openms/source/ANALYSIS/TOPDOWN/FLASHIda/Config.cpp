@@ -155,7 +155,7 @@ namespace
                                                        : std::string(fallback);
   }
 
-  // One lenient scan-config allowlist for every scan object (ms1/ms2/ms3/follow_up_scan): the union
+  // One lenient scan-config allowlist for every scan object (ms1/ms2/ms3/additional_ms2): the union
   // of MS1- and MS2/MS3-level keys. Rejects non-schema scan keys such as the removed 'IsolationMode'.
   const std::set<std::string> kScanKeys = {
     "analyzer", "activation", "collision_energy", "resolution", "agc_target", "max_it",
@@ -164,7 +164,7 @@ namespace
 
   // Read EVERY key kScanKeys admits, so validation and parsing share one source of truth. When the
   // two lists drifted apart, nine keys passed validation and were then silently discarded --
-  // notably reaction_time on a follow_up_scan, which made an ETD follow-up unconfigurable.
+  // notably reaction_time on a follow-up scan, which made an ETD follow-up unconfigurable.
   //
   // A ScanConfig fully determines its scan's instrument parameters (ADR-0009); an unset value means
   // "use the instrument method default", never "inherit from another scan".
@@ -230,36 +230,6 @@ namespace
     return s + ".";
   }
 
-  void resolveFollowUp_(const nlohmann::json& config, const std::string& section,
-                                const std::map<std::string, OpenMS::ScanConfig>& additional_ms2,
-                                OpenMS::ScanConfig& out, bool& has_follow_up, std::string& out_name)
-  {
-    const auto sec = config.value(section, nlohmann::json::object());
-    if (!sec.contains("follow_up_scan") || sec["follow_up_scan"].is_null())
-      return;
-
-    // A follow-up is just another MS2, so it names an additional_ms2 entry rather than repeating a
-    // 17-key block. An object here is someone carrying the old shape forward.
-    if (sec["follow_up_scan"].is_object())
-      throw std::invalid_argument(
-          "Config: " + section + ".follow_up_scan is no longer an inline scan object. It is now the "
-          "NAME of an ms_settings.additional_ms2 entry, e.g. \"" + section + "_follow_up\".");
-    if (!sec["follow_up_scan"].is_string())
-      throw std::invalid_argument("Config: " + section + ".follow_up_scan must be a scan-config name.");
-
-    const std::string name = sec["follow_up_scan"].get<std::string>();
-    if (name.empty()) return;
-
-    auto found = additional_ms2.find(name);
-    if (found == additional_ms2.end())
-      throw std::invalid_argument(
-          "Config: " + section + ".follow_up_scan references unknown MS2 scan config '" + name
-          + "'. " + knownScanNames(additional_ms2));
-
-    out = found->second;
-    has_follow_up = true;
-    out_name = name;
-  }
 }
 
 namespace OpenMS
@@ -371,7 +341,7 @@ namespace OpenMS
           "(off|ambiguity|coverage|fragments|exhaustive|discriminating); ms3.max_targets and ms3.min_charge were never read and are "
           "deleted.");
     rejectUnknownKeys(config,
-        {"global", "deconvolution", "precursor_selection", "flashtnt", "tagging", "conditional_ms2",
+        {"global", "deconvolution", "precursor_selection", "flashtnt",
          "quantification", "faims", "ms_settings", "scheduling",
          "characterization", "files", "runtime"},
         "(root)");
@@ -401,9 +371,6 @@ namespace OpenMS
       tol_values = {10.0, 10.0};
     if (tol_values.size() == 1)
       tol_values.push_back(tol_values[0]);
-
-    // Use MS2 tolerance for tag matching (index 1, guaranteed to exist)
-    targeting_.tag_matching_tolerance_ppm = tol_values.size() >= 2 ? tol_values[1] : tol_values[0];
 
     // --- precursor_selection section: WHICH intact species do we fragment? ---
     // Absorbs what used to be selection_strategy.ms1. Keys are snake_case throughout and named for
@@ -435,7 +402,7 @@ namespace OpenMS
         {"rt_window", "targeting", "consider_all_charges",
          "precursor_charges", "strict_inclusion", "tie_threshold",
          "rank_by", "max_precursors", "min_precursor_charge", "additional_scans", "exploration",
-         "tag_expansion", "snr_threshold", "max_charge_states", "min_charge_states",
+         "snr_threshold", "max_charge_states", "min_charge_states",
          "log_target_rt_window", "log_target_charges", "charge_selection"},
         "precursor_selection");
     targeting_.rt_window = ps.value("rt_window", 180.0);
@@ -481,19 +448,6 @@ namespace OpenMS
     if (targeting_.mode == 1)
       std::cout << "Inclusion mode: " << (targeting_.strict_inclusion ? "strict" : "non-strict") << "\n";
 
-    // tag_expansion: these two used to sit in `flashtnt`, which was a misnomer -- neither is a
-    // FLASHTagger/FLASHExtender Param. max_ptm_count is read only by
-    // PrecursorSelection::generatePTMCombinations_, and max_flanking_mass_diff is a call argument
-    // FLASHIda passes to the static FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs.
-    // Both belong to FLASHIda's tag-based target expansion, so they are authored where that feature
-    // lives. STORAGE IS DELIBERATELY UNCHANGED (still TargetingConfig): this is a parse-path move
-    // only, so every read site keeps working untouched. The old flashtnt placement now fails through
-    // the ordinary unknown-key path -- no migration message, by design.
-    auto te = ps.value("tag_expansion", json::object());
-    rejectUnknownKeys(te, {"max_ptm_count", "max_flanking_mass_diff"}, "precursor_selection.tag_expansion");
-    targeting_.max_total_ptm_count = te.value("max_ptm_count", 3);
-    targeting_.max_flanking_mass_diff = te.value("max_flanking_mass_diff", 50000.0);
-
     // --- flashtnt section (FLASHTagger/FLASHExtender tuning) ---
     auto flashtnt = config.value("flashtnt", json::object());
     rejectUnknownKeys(flashtnt,
@@ -512,32 +466,20 @@ namespace OpenMS
         targeting_.fixed_mod.push_back(m.get<std::string>());
     }
 
-    // --- tagging section (acquisition-workflow controls; algorithm knobs live in flashtnt) ---
-    auto tagging = config.value("tagging", json::object());
-    rejectUnknownKeys(tagging, {"follow_up_scan"}, "tagging");
-
-    if (tagging.contains("follow_up_scan") && tagging["follow_up_scan"].is_object())
-    {
-      auto fus = tagging["follow_up_scan"];
-      rejectUnknownKeys(fus, kScanKeys, "tagging.follow_up_scan");
-      parseScanConfig(fus, targeting_.tagging_follow_up_scan, "tagging.follow_up_scan", "Orbitrap");
-    }
-
     // --- files section (paths only; loading stays in FLASHIda) ---
+    // Tag-based targeting, with its `fasta` and `ptm_list` and the root `tagging` and
+    // `conditional_ms2`, is retired (ADR-0061). The C# loader refuses those keys with a migration
+    // hint before anything reaches here; on this side they fail as ordinary unknown keys.
     auto files = config.value("files", json::object());
-    rejectUnknownKeys(files, {"target_logs", "fasta", "inclusion_list", "ptm_list"}, "files");
+    rejectUnknownKeys(files, {"target_logs", "inclusion_list"}, "files");
 
     if (files.contains("target_logs") && files["target_logs"].is_array())
     {
       for (const auto& f : files["target_logs"])
         targeting_.target_log_files.push_back(f.get<std::string>());
     }
-    if (files.contains("fasta") && !files["fasta"].get<std::string>().empty())
-      targeting_.fasta_file = files["fasta"].get<std::string>();
     if (files.contains("inclusion_list") && !files["inclusion_list"].get<std::string>().empty())
       targeting_.inclusion_list_file = files["inclusion_list"].get<std::string>();
-    if (files.contains("ptm_list") && !files["ptm_list"].get<std::string>().empty())
-      targeting_.ptm_list_file = files["ptm_list"].get<std::string>();
 
     // --- characterization section: WHETHER and HOW we characterize ---
     // `mode` is the single MS3 switch. It absorbs the old `objective` key AND the two
@@ -648,9 +590,6 @@ namespace OpenMS
       characterization_.fragment_charges = parseChargeMode(charact, "fragment_charges", "characterization");
     }
 
-    // --- conditional_ms2 (top-level only) ---
-    targeting_.conditional_ms2_enabled = config.value("conditional_ms2", false);
-
     // --- quantification (ADR-0038) ---
     auto quant = config.value("quantification", json::object());
 
@@ -756,7 +695,7 @@ namespace OpenMS
     // NOTE the is_null() arm on both of these, and it is not defensive padding. ToCppJson uses the
     // STOCK JavaScriptSerializer, which EMITS nulls -- so every config that authors neither key
     // sends `"conditions": null, "correction_matrix": null`, and a bare contains() check would
-    // throw "must be an ARRAY" for all 41 of them. Same idiom resolveFollowUp_ already uses above.
+    // throw "must be an ARRAY" for all 41 of them.
     if (quant.contains("correction_matrix") && !quant["correction_matrix"].is_null())
     {
       if (!quant["correction_matrix"].is_array())
@@ -926,7 +865,7 @@ namespace OpenMS
       throw std::invalid_argument(
           "Config: 'ms_settings.ms2' is no longer an array. It is now a single scan object; "
           "additional MS2 configs go in 'ms_settings.additional_ms2' as a name->object map and are "
-          "referenced from precursor_selection.additional_scans or tagging.follow_up_scan.");
+          "referenced from precursor_selection.additional_scans.");
     if (ms_settings.contains("ms3") && ms_settings["ms3"].is_array())
       throw std::invalid_argument(
           "Config: 'ms_settings.ms3' is no longer an array. It is now a single scan object. "
@@ -1048,29 +987,10 @@ namespace OpenMS
       additional_scan_names_ = seen;
     }
 
-    // Follow-ups are name references now, resolved here so no downstream consumer learns that
-    // names exist -- FLASHIda.cpp keeps reading targeting_.tagging_follow_up_scan verbatim.
-    // Tagging is the only remaining name-referenced follow-up. Quantification's went away with
-    // ADR-0038: its bought scan is ms_settings.ms2, a bare slot, so there is no name to resolve.
-    resolveFollowUp_(config, "tagging", additional_ms2, targeting_.tagging_follow_up_scan,
-                     targeting_.has_tagging_follow_up, targeting_.tagging_follow_up_name);
-
-    // additional_ms2 is ONE flat namespace serving two roles, and the roles are mutually exclusive:
-    // additional_scans dispatches unconditionally once per precursor, a follow_up_scan fires
-    // conditionally off a returning MS2. A name in both does BOTH -- the same scan config acquired
-    // twice per precursor, at two different priorities (2 for the roster entry, 0 for the
-    // follow-up), with no diagnostic. Nothing else in the schema catches it: both references
-    // resolve, so the dangling-name check passes, and the block is referenced, so the unreferenced
-    // warning below stays quiet.
-    auto rejectDoubleDuty = [this](const std::string& section, const std::string& name) {
-      if (name.empty() || additional_scan_names_.count(name) == 0) return;
-      throw std::invalid_argument(
-          "Config: ms_settings.additional_ms2." + name + " is listed in "
-          "precursor_selection.additional_scans AND referenced by " + section
-          + ".follow_up_scan. It would fire unconditionally once per precursor and again as a "
-            "conditional follow-up. Define two entries, or drop it from additional_scans.");
-    };
-    rejectDoubleDuty("tagging", targeting_.tagging_follow_up_name);
+    // No follow-up names an additional_ms2 entry any more: tagging's went with ADR-0061, and
+    // quantification's with ADR-0038 (its bought scan is the bare ms_settings.ms2 slot). So
+    // additional_scans is the only reference, and the double-duty check that guarded a name used
+    // both ways went with the second role.
 
     // A definition nobody references never fires. That is legal but almost always a mistake, and it
     // is the only check that catches a typo on the DEFINITION side (a typo on the reference side is
@@ -1079,8 +999,7 @@ namespace OpenMS
     // Quantification no longer appears here: its two scans are the bare ms_settings.ms2_quant and
     // ms_settings.ms2 slots, so neither is an additional_ms2 definition that could go unreferenced.
     for (const auto& kv : additional_ms2)
-      if (additional_scan_names_.count(kv.first) == 0
-          && targeting_.tagging_follow_up_name != kv.first)
+      if (additional_scan_names_.count(kv.first) == 0)
         std::cout << "[CONFIG-WARN] ms_settings.additional_ms2." << kv.first
                   << " is defined but never referenced; it will never be acquired.\n";
 
@@ -1329,15 +1248,6 @@ namespace OpenMS
 
   void Config::validate() const
   {
-    // Re-keyed off the REFERENCE rather than the resolved block's activation string. The old
-    // sentinel (`tagging_follow_up_scan.activation.empty()`) was a proxy for "nobody configured
-    // one"; now that the block is defined elsewhere and merely named, presence of the name is the
-    // direct answer.
-    if (targeting_.conditional_ms2_enabled && !targeting_.has_tagging_follow_up)
-      throw std::invalid_argument(
-          "conditional_ms2 is true but tagging.follow_up_scan is not set. Name an "
-          "ms_settings.additional_ms2 entry, or set conditional_ms2 to false.");
-
     // --- charge-set bounds (ADR-0040) -----------------------------------------------------------
     // Unsatisfiable rather than merely odd: the cap truncates the acquisition charge set BELOW the
     // floor, so admitCandidate refuses every species and the run acquires nothing -- silently, with

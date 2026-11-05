@@ -39,7 +39,6 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PlanUnit.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
-#include <OpenMS/FORMAT/FASTAFile.h>
 
 #include <algorithm>
 #include <functional>
@@ -58,9 +57,8 @@ namespace OpenMS
    * Responsible for:
    * - Filtering and ranking deconvolved MS1 peak groups
    * - Mass exclusion (mz-based and mass-based)
-   * - Inclusion/exclusion targeting (TSV-based, log-file-based, tag-based)
-   * - Dynamic target expansion via PTM combinations
-   * - Loading targeting data (FASTA, TSV, log files) from config paths
+   * - Inclusion/exclusion targeting (TSV-based, log-file-based)
+   * - Loading targeting data (TSV, log files) from config paths
    */
   class OPENMS_DLLAPI PrecursorSelection
   {
@@ -94,34 +92,7 @@ namespace OpenMS
       }
     };
 
-    /**
-     * @brief Structure for PTM modifications with combinatorial limits for target expansion
-     *
-     * Used by tag-based targeting to generate PTM mass combinations for dynamic inclusion lists.
-     */
-    struct TargetPTM
-    {
-      String name;      ///< Modification name (e.g., "acetylation")
-      double mass;      ///< Delta mass in Da
-      int max_count;    ///< Maximum occurrences on single proteoform
-    };
-
-    /**
-     * @brief Structure to hold a sequence tag match result
-     */
-    struct TagMatch
-    {
-      String tag_sequence;        ///< The sequence tag string
-      double n_term_mass;         ///< N-terminal flanking mass
-      double c_term_mass;         ///< C-terminal flanking mass
-      double tag_score;           ///< Score of the tag
-      int protein_index;          ///< Index in the FASTA file
-      String protein_accession;   ///< Protein accession
-      int match_position;         ///< Position in the protein sequence where tag matches
-      double flanking_mass_diff;  ///< Difference between tag flanking mass and protein flanking mass
-    };
-
-    /// Constructor: loads targeting data (FASTA, TSV, log files) from config
+    /// Constructor: loads targeting data (TSV, log files) from config
     PrecursorSelection(const Config& config, Deconvolution& deconv);
 
     /**
@@ -214,22 +185,6 @@ namespace OpenMS
                                                                   const std::vector<int>& allowed, int count) const;
 
     /**
-     * @brief Process stored MS2 deconvolution for protein family detection and inclusion list expansion
-     *
-     * Performs real-time tag-based targeting:
-     * 1. Uses stored MS2 deconvolution results (requires deconvolveMSn() first)
-     * 2. Extracts sequence tags (minimum length 3)
-     * 3. Matches tags against the target protein database
-     * 4. If match found: Expands target masses using PTM combinations from precursor mass
-     * 5. Adds expanded masses to dynamic inclusion list
-     *
-     * @param precursor_mass monoisotopic mass of the precursor (from iAPI)
-     * @return number of sequence tags found (0 = none / no target); truthy (>0) when a target
-     *         protein was detected. Used directly as the scan_results tag_count.
-     */
-    int processMS2ForTagBasedTargeting(double precursor_mass, const std::string& activation_type);
-
-    /**
      * @brief Remove a given precursor from the exclusion list by id (needed for FAIMS)
      *
      * Undoes what acquisition @p id wrote to acquisition memory: both dynamic-exclusion bars of its
@@ -241,9 +196,6 @@ namespace OpenMS
      * @param id id of precursor (a trigger id, PrecursorSelection::triggerIds())
      */
     void removeFromExclusionList(int id);
-
-    /// Check if tag-based targeting database is loaded (non-empty)
-    bool hasTargetProteinDatabase() const { return !target_protein_database_.empty(); }
 
   private:
     const Config& config_;
@@ -376,23 +328,9 @@ namespace OpenMS
     std::vector<const InclusionTarget*> active_targets_;
     std::map<int, int> target_priority_map_;
 
-    /// Tag-based protein family targeting
-    std::vector<FASTAFile::FASTAEntry> target_protein_database_;
-    std::vector<TargetPTM> target_ptms_;
-    std::set<double> expanded_target_masses_;
-
-    /// The tag-expanded targets (addDynamicTargets_), kept APART from inclusion_targets_.
-    ///
-    /// They used to be appended to inclusion_targets_, and filterAndRank reads a NON-EMPTY
-    /// inclusion_targets_ as "a TSV inclusion list was loaded" -- so the first tag detection of a
-    /// run switched it from the ida.log targets (target_logs) to the TSV path and every reference
-    /// target was dropped for the rest of the run. Kept here, they are added on top of whichever
-    /// reference list is in force, TSV or ida.log.
-    std::vector<InclusionTarget> dynamic_targets_;
-
     /// Rebuild target_masses_, active_targets_ and target_priority_map_ for inclusion mode at @p rt:
     /// the reference targets (the TSV inclusion list if one was loaded, otherwise the ida.log
-    /// targets) plus the tag-expanded targets active at @p rt. target_masses_ comes back sorted.
+    /// targets) active at @p rt. target_masses_ comes back sorted.
     void collectInclusionTargets_(double rt);
 
     /// Filter peak groups using mass exclusion logic
@@ -417,16 +355,6 @@ namespace OpenMS
 
     /// Parse TSV inclusion list file
     void parseInclusionListTSV_(const String& filename);
-
-    /// Parse TSV file containing PTM modifications for target expansion
-    void parseTargetPTMsTSV_(const String& filename);
-
-    /// Generate all PTM mass combinations for a base protein mass
-    std::vector<double> generatePTMCombinations_(double base_mass,
-                                                 const std::vector<TargetPTM>& ptms) const;
-
-    /// Add expanded target masses to the dynamic inclusion list
-    void addDynamicTargets_(const std::vector<double>& masses, double rt, int priority);
   };
 
 } // namespace OpenMS

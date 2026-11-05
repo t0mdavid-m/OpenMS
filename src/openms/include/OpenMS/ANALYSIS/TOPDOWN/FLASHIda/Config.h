@@ -220,8 +220,8 @@ namespace OpenMS
   {
     /// The DISPATCH ROSTER for this level, in dispatch order -- NOT every scan config defined for
     /// it. Config materialises this from ms_settings.msN plus the names listed in
-    /// precursor_selection.additional_scans, so a block that exists only to back a follow-up
-    /// reference is absent here and never fires unconditionally.
+    /// precursor_selection.additional_scans, so a block nobody lists there is absent here and never
+    /// fires.
     /// (The old comment claimed "[1]=conditional follow-up". That was never true: FLASHIda.cpp:211
     /// range-fors the whole vector, so entry [1] was a second UNCONDITIONAL MS2.)
     std::vector<ScanConfig> scans;
@@ -362,29 +362,16 @@ namespace OpenMS
     double qscore_threshold = 0.0;
     double tqscore_threshold = 0.9;
     double snr_threshold = 1.0;
-    bool conditional_ms2_enabled = false; ///< Explicit conditional_ms2 flag from JSON
     std::vector<std::string> target_log_files;
-    std::string fasta_file;
     std::string inclusion_list_file;
-    std::string ptm_list_file;
     int min_tag_length = 3;
     int max_tag_length = 8;
-    double tag_matching_tolerance_ppm = 10.0;
-    double max_flanking_mass_diff = 50000.0;
-    int max_total_ptm_count = 3;
     // --- FLASHTnT (FLASHTagger/FLASHExtender) tuning, from the `flashtnt` config block ---
     bool allow_gap = false;                 ///< FLASHTagger allow_gap (passed as "true"/"false")
     int max_aa_in_gap = 2;                   ///< FLASHTagger max_aa_in_gap
     std::vector<std::string> fixed_mod;      ///< Fixed mods, passed VERBATIM to tagger+extender; empty = empty Param list, NOT the declared {""}
     int max_blind_mod_count = 2;             ///< FLASHExtender max_blind_mod_count
     double max_mod_mass = 700.0;             ///< FLASHExtender max_mod_mass. 700 preserves current MS2 behavior; NOT the extender's own 500 default.
-    ScanConfig tagging_follow_up_scan;  ///< Follow-up scan config for conditional MS2, RESOLVED from a name
-    /// Whether tagging.follow_up_scan named anything. Replaces the old
-    /// `tagging_follow_up_scan.activation.empty()` sentinel: with the block now defined elsewhere
-    /// and merely referenced, "is one configured" is a property of the REFERENCE, not of the
-    /// resolved block's contents.
-    bool has_tagging_follow_up = false;
-    std::string tagging_follow_up_name;  ///< the referenced name, for diagnostics only
   };
 
   /// Characterization configuration: objective + protein sequence
@@ -416,8 +403,8 @@ namespace OpenMS
   /// "no usable quant number" and differ only in why, which quant_verdict already reports.
   ///
   /// This replaces the hardcoded `verdict == Differential` that was the whole of the decision until
-  /// ADR-0039. Note what it transitively governs: tagging and MS3 targeting are suppressed on a 'Q'
-  /// scan and ride the bought 'R', so this enum also decides which species are CHARACTERIZED.
+  /// ADR-0039. Note what it transitively governs: identification and MS3 targeting are suppressed on a
+  /// 'Q' scan and ride the bought 'R', so this enum also decides which species are CHARACTERIZED.
   enum class QuantIdentify
   {
     /// Differential only, subject to `enriched_in`. THE DEFAULT, and exactly ADR-0038's behaviour.
@@ -637,7 +624,7 @@ namespace OpenMS
    *
    * Constructed from a JSON string (the same format produced by C# Parameter.ToJSON()).
    * Throws std::invalid_argument if the input is not JSON.
-   * File-loading code (FASTA, log file parsing, TSV parsing) stays in FLASHIda.
+   * File-loading code (log file parsing, TSV parsing) stays in FLASHIda.
    */
   class OPENMS_DLLAPI Config
   {
@@ -670,7 +657,7 @@ namespace OpenMS
     const CharacterizationConfig& characterization() const { return characterization_; }
 
     /**
-     * @brief The complete set of keys any scan object may carry (ms1, ms2[], ms3[], follow_up_scan).
+     * @brief The complete set of keys any scan object may carry (ms1, ms2, ms3, additional_ms2 entries).
      *
      * This is schema, not an implementation detail: it is what rejectUnknownKeys validates against
      * and what parseScanConfig reads, and the loader's error message already points users at the
@@ -707,8 +694,8 @@ namespace OpenMS
     void applyCharacterizationMode_(const std::string& rank_by, int max_precursors,
                                     int min_precursor_charge);
 
-    // Scan-name resolution (resolving a `<section>.follow_up_scan` reference, validating a
-    // user-authored name as an identifier, listing what is defined for an error message) lives in
+    // Scan-name resolution (validating a user-authored name as an identifier, listing what is
+    // defined for an error message) lives in
     // Config.cpp's anonymous namespace, NOT here. Those helpers need nlohmann::json in their
     // signatures, and this header deliberately does not know that type exists -- the public
     // constructor takes a `const std::string&` of raw JSON precisely so the JSON library stays an

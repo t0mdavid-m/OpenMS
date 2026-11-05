@@ -691,10 +691,9 @@ FLASHIda::FLASHIda(char* arg) :
       return 0;
     }
 
-    // Locals shared by all levels: the two scan-role flags and the child-id accumulator.
+    // Locals shared by all levels: the scan-role flag and the child-id accumulator.
     //
-    // 'F' is gone with ADR-0038. The two roles it used to conflate are now separate marks:
-    //   'C'  a tagging follow-up  -- bought by tag detection, must not buy another (depth one)
+    // 'F' is gone with ADR-0038, and 'C' (the tagging follow-up) with ADR-0061. What remains is
     //   'Q'  the QUANTIFICATION scan -- rostered, primary, and the only scan ever measured
     // The identification scan a differential verdict buys is an ordinary 'R', which is what keeps
     // 'R' meaning "identification MS2" in every mode. It is safe for it to be indistinguishable
@@ -702,11 +701,10 @@ FLASHIda::FLASHIda(char* arg) :
     // "is not a follow-up": an 'R' is never re-screened, so it can never buy a second scan.
     // THE ENGINE RECORD's role -- the copy every DECISION gate reads, and the one the MS1 fork below
     // dispatches on. Not `echo_role`: see the note at its declaration. Comparing an engaged optional
-    // to a ScanRole is exactly the old `len >= 4 && desc[3] == 'C'` test, since an undecodable
+    // to a ScanRole is exactly a `len >= 4 && desc[3] == ...` test, since an undecodable
     // description yields nullopt and nullopt equals no role.
     const std::optional<ScanRole> cmd_role = roleOf(parent_ctx);
-    const bool is_follow_up_scan = (cmd_role == ScanRole::FollowUp);
-    const bool is_quant_scan     = (cmd_role == ScanRole::Quantification);
+    const bool is_quant_scan = (cmd_role == ScanRole::Quantification);
     std::vector<std::string> child_ids;
 
     // Carriers for the file-backed TSV rows (scan_results + identification): each branch fills these,
@@ -834,7 +832,7 @@ FLASHIda::FLASHIda(char* arg) :
       }
       else
       {
-        // ===== MS2 (regular): deconvolve -> targeting + follow-ups -> MS3 targeting -> row =====
+        // ===== MS2 (regular): deconvolve -> quantification -> MS3 targeting -> row =====
         double precursor_mass = parent_ctx.mono_mass;
         // The HIGHEST charge this scan actually isolated, not the anchor's (ADR-0016). With a
         // co-isolated charge set every member is genuinely present in the isolation, so a fragment of
@@ -842,22 +840,6 @@ FLASHIda::FLASHIda(char* arg) :
         // fragments. Identical to stages[0].charge_state whenever there are no notches.
         int precursor_charge = maxIsolatedCharge(parent_ctx, 0);
         deconv_.deconvolveMSn(mzs, ints, length, rt, precursor_mass, precursor_charge);
-
-        // Tag-based targeting. processMS2ForTagBasedTargeting returns how many tags matched the FASTA
-        // target database, but nothing consumes that as a COUNT -- it is a gate, and the only question
-        // asked of it is whether a target protein was detected. It is also 0 whenever tags existed but
-        // matched no DB protein, which is why it is not the number any log reports; the identification
-        // tag count on ProteoformMatch is, and that one is taken before any protein is consulted.
-        // Not on a quantification scan (ADR-0038). Its activation and energy were chosen to release
-        // a reporter ion, not to fragment informatively, so tags read off it would be read from the
-        // wrong spectrum -- and a 'C' follow-up bought here would be a third scan on the precursor
-        // before the identification scan has even run. Skipping the detection also skips the work.
-        bool tags_found = false;
-        if (selection_.hasTargetProteinDatabase() && precursor_mass > 0 && !is_quant_scan)
-        {
-          std::string ms2_activation = std::string(parent_ctx.stages[0].activation_type);
-          tags_found = selection_.processMS2ForTagBasedTargeting(precursor_mass, ms2_activation) > 0;
-        }
 
         // --- Quantification: measure THIS scan, and buy the identification scan (ADR-0038) -------
         // Gated on the scan's own mark, not on "is not a follow-up". Only a 'Q' is measured, so the
@@ -924,15 +906,6 @@ FLASHIda::FLASHIda(char* arg) :
             }
             quant_.closeGroup(gid);
           }
-        }
-
-        // Conditional MS2 follow-up -- only when tags detected AND explicitly enabled
-        if (config_.targeting().conditional_ms2_enabled && tags_found && !is_follow_up_scan)
-        {
-          auto cond = queue_.buildFollowUp(parent_ctx, config_.targeting().tagging_follow_up_scan, 'C');
-          stampAndPush_(cond, precursor_id);  // P5: follow-up inherits the MS2's precursor_id
-          child_ids.push_back(ScanCommandQueue::encode(cond.scan_id));
-          commands_pushed++;
         }
 
         // Identification + MS3 targeting, gated by the SEQUENCE rather than by characterization.mode.

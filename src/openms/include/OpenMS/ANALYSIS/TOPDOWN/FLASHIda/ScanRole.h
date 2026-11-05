@@ -59,7 +59,6 @@ namespace OpenMS
     Monitor,             ///< 'M' observed and never acted upon (ADR-0042)
     Identification,      ///< 'R' the MS2/MS3 acquired to sequence a proteoform
     Quantification,      ///< 'Q' the MS2 acquired to measure reporter ions (ADR-0038)
-    FollowUp,            ///< 'C' a tagging follow-up, bought by tag detection; depth one
     ExplorationVariant,  ///< 'E' one point of a CE/reaction-time sweep
     _Count
   };
@@ -77,7 +76,7 @@ namespace OpenMS
   /**
    * @brief The role table. Rows MUST be in enumerator order -- scanRoleTableIsTotal() asserts it.
    *
-   * `log_name` IS NOT A NAMING OPPORTUNITY. These seven strings are the exact values
+   * `log_name` IS NOT A NAMING OPPORTUNITY. These six strings are the exact values
    * IdaLogger::scanTypeFromDescription_ has always returned, and they are emitted into
    * scan_commands.tsv's `scan_type` column, which is a golden column. "recording" is a poor name for
    * an identification MS2 and it MUST NOT be improved here: renaming it revalues 28 golden files for
@@ -85,7 +84,7 @@ namespace OpenMS
    * roleName_matches_the_legacy_scan_type_strings.
    *
    * `observes` is false for exactly one row today, and `decides` for exactly two. Neither is a rich
-   * policy -- the point is that adding an eighth role cannot compile until someone has answered both
+   * policy -- the point is that adding a seventh role cannot compile until someone has answered both
    * questions for it.
    */
   inline constexpr std::array<ScanRoleTraits, static_cast<size_t>(ScanRole::_Count)> kScanRoleTraits {{
@@ -94,7 +93,6 @@ namespace OpenMS
     {ScanRole::Monitor,            'M', "monitor",        true,  false},  // ADR-0042
     {ScanRole::Identification,     'R', "recording",      true,  true },
     {ScanRole::Quantification,     'Q', "quantification", true,  true },
-    {ScanRole::FollowUp,           'C', "conditional",    true,  true },
     {ScanRole::ExplorationVariant, 'E', "exploration",    true,  true },
   }};
 

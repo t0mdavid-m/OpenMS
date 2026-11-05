@@ -169,8 +169,7 @@ namespace OpenMS
       // Collapsing the first two to a plain 0 recreates precisely the ambiguity ADR-0012 had to add a
       // whole column (faims_enabled) to undo, once faims_cv = 0.0 turned out to mean two things.
       // tag_count is the identification count from ProteoformMatch, taken before any protein is
-      // consulted -- NOT PrecursorSelection's FASTA-gated targeting return, which reports 0 both when
-      // no tags existed and when tags existed but matched nothing, and so is a gate, not a measurement.
+      // consulted -- a measurement of the spectrum, not a gate on a protein match.
       int tag_count = -1;
       int fragment_count = -1;
       /// Matched-fragment TIC coverage. -1.0 when identification did not run, so that "ran and matched

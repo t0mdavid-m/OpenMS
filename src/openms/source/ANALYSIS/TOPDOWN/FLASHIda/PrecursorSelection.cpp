@@ -34,10 +34,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PrecursorSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/CandidateAdmission.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 
 #include <algorithm>
@@ -182,32 +179,6 @@ namespace OpenMS
       parseInclusionListTSV_(targeting.inclusion_list_file);
       std::cout << inclusion_targets_.size() << " targets loaded from TSV inclusion list\n";
     }
-
-    // Load FASTA files for tag-based targeting
-    if (!targeting.fasta_file.empty())
-    {
-      std::vector<FASTAFile::FASTAEntry> entries;
-      FASTAFile().load(targeting.fasta_file, entries);
-      target_protein_database_.insert(target_protein_database_.end(), entries.begin(), entries.end());
-      std::cout << target_protein_database_.size() << " protein entries loaded for tag-based targeting\n";
-    }
-
-    if (!target_protein_database_.empty())
-    {
-      std::cout << "Tag-based targeting: min_tag_length=" << targeting.min_tag_length
-                << ", max_tag_length=" << targeting.max_tag_length
-                << ", tolerance=" << targeting.tag_matching_tolerance_ppm << " ppm"
-                << ", max_flanking_mass_diff=" << targeting.max_flanking_mass_diff << " Da\n";
-    }
-
-    // Load PTM TSV files
-    if (!targeting.ptm_list_file.empty())
-      parseTargetPTMsTSV_(targeting.ptm_list_file);
-    if (!target_ptms_.empty())
-    {
-      std::cout << target_ptms_.size() << " PTM modifications loaded for target expansion (max "
-                << targeting.max_total_ptm_count << " total per proteoform)\n";
-    }
   }
 
   int PrecursorSelection::filterAndRank(const double* mzs, const double* ints, int length,
@@ -294,13 +265,6 @@ namespace OpenMS
       }
     }
 
-    // The tag-expanded targets ADD to the reference list, whichever it is. Read from their own
-    // container: in inclusion_targets_ they made the TSV branch above fire and silently replaced
-    // the ida.log targets. The order of active_targets_ decides nothing (target_masses_ is sorted
-    // below, the priority map keeps the maximum, authoredChargesFor_ takes a sorted union), so a
-    // TSV run sees exactly what it saw when these rows were interleaved with its own.
-    for (const auto& target : dynamic_targets_) addActive(target);
-
     std::sort(target_masses_.begin(), target_masses_.end());
   }
 
@@ -312,10 +276,8 @@ namespace OpenMS
     // The inclusion-priority stable_sort immediately below stays HERE: it is a selection decision.
     sortByLevelMetric(deconv_.deconvolvedMS1(), config_, ms_level);
 
-    // Apply priority tie-breaking when TSV or tag-expanded targets exist (the ida.log targets carry
-    // no priority). The second operand keeps it on wherever it was on while the tag-expanded rows
-    // lived in inclusion_targets_.
-    if (config_.targeting().mode == 1 && (!inclusion_targets_.empty() || !dynamic_targets_.empty()))
+    // Apply priority tie-breaking when TSV targets exist (the ida.log targets carry no priority).
+    if (config_.targeting().mode == 1 && !inclusion_targets_.empty())
     {
       std::stable_sort(deconv_.deconvolvedMS1().begin(), deconv_.deconvolvedMS1().end(),
         [this](const PeakGroup& a, const PeakGroup& b) {
@@ -652,9 +614,9 @@ namespace OpenMS
                         charges_key = it->first;
                         target_matched = std::find(charges->begin(), charges->end(), charge) != charges->end();
                       }
-                      else target_matched = true; // a tag-expanded target among them: a mass, matched on mass alone
+                      else target_matched = true; // a mass with no charge list: matched on mass alone
                     }
-                    else  // ida.log targets (and the tag-expanded ones among them): mass targeting, any charge
+                    else  // ida.log targets: mass targeting, any charge
                     {
                       target_matched = true;
                     }
@@ -675,7 +637,10 @@ namespace OpenMS
               if (target_matched)
               {
                 snr_threshold = 0.0;
-                qscore_threshold = 0.0; // stop exclusion for targets. todo tqscore lowest first? charge change.
+                // Lowers the SELECTION floors only. A matched target still arms the exclusion bars on
+                // tqscore_threshold and still meets the qscore bar: ADR-0037, which would have exempted
+                // it, is withdrawn.
+                qscore_threshold = 0.0;
               }
               else if (selection_phase == 0)
               {
@@ -1348,255 +1313,6 @@ namespace OpenMS
     // Sort by mass for efficient binary search later
     std::sort(inclusion_targets_.begin(), inclusion_targets_.end(),
       [](const InclusionTarget& a, const InclusionTarget& b) { return a.mass < b.mass; });
-  }
-
-  void PrecursorSelection::parseTargetPTMsTSV_(const String& filename)
-  {
-    std::ifstream instream(filename);
-    if (!instream.good())
-    {
-      throw Exception::FileNotFound(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, filename);
-    }
-
-    String line;
-    bool header_skipped = false;
-
-    while (std::getline(instream, line))
-    {
-      line = line.trim();
-      if (line.empty() || line.hasPrefix("#")) continue;
-
-      StringList cells;
-      line.split('\t', cells);
-
-      // Skip header row (check if first cell looks like "name" header)
-      if (!header_skipped && cells.size() > 0 && cells[0].toLower() == "name")
-      {
-        header_skipped = true;
-        continue;
-      }
-
-      // Expect 3 columns: name, mass, max_count
-      if (cells.size() < 3)
-      {
-        OPENMS_LOG_WARN << "Skipping malformed PTM line (expected 3 columns): " << line << std::endl;
-        continue;
-      }
-
-      TargetPTM ptm;
-      ptm.name = cells[0].trim();
-      ptm.mass = cells[1].toDouble();
-      ptm.max_count = cells[2].toInt();
-
-      target_ptms_.push_back(ptm);
-    }
-  }
-
-  std::vector<double> PrecursorSelection::generatePTMCombinations_(double base_mass,
-                                                                   const std::vector<TargetPTM>& ptms) const
-  {
-    std::vector<double> result;
-    // Unmodified base mass intentionally excluded - only PTM-modified forms
-
-    if (ptms.empty())
-    {
-      return result;
-    }
-
-    // Use iterative approach to generate all combinations
-    // For each PTM, generate 0 to max_count occurrences, respecting global max
-    std::function<void(Size, double, int)> generate;
-    generate = [&](Size ptm_idx, double current_mass, int total_count) {
-      if (ptm_idx >= ptms.size())
-      {
-        if (total_count > 0)  // Only include modified forms
-        {
-          result.push_back(current_mass);
-        }
-        return;
-      }
-
-      const TargetPTM& ptm = ptms[ptm_idx];
-      // Generate both negative and positive mass shifts: -max_count to +max_count
-      for (int count = -ptm.max_count; count <= ptm.max_count; ++count)
-      {
-        int new_total = total_count + std::abs(count);  // Track absolute count for pruning
-        if (new_total > config_.targeting().max_total_ptm_count) continue;  // Skip if exceeds global max
-        double new_mass = current_mass + count * ptm.mass;
-        generate(ptm_idx + 1, new_mass, new_total);
-      }
-    };
-
-    // Generate all combinations starting from base mass
-    generate(0, base_mass, 0);
-
-    // Remove duplicates (masses within 0.01 Da are considered equal)
-    std::sort(result.begin(), result.end());
-    result.erase(std::unique(result.begin(), result.end(),
-      [](double a, double b) { return std::abs(a - b) < 0.01; }), result.end());
-
-    return result;
-  }
-
-  void PrecursorSelection::addDynamicTargets_(const std::vector<double>& masses,
-                                              double rt,
-                                              int priority)
-  {
-    // Add new targets to the dynamic inclusion list.
-    // Note: target_masses_ and deconv_.engine().setTargetMasses() are managed by filterAndRank()
-    // which clears and rebuilds them (collectInclusionTargets_) on each MS1 scan from the reference
-    // targets PLUS these. NOT into inclusion_targets_: a non-empty inclusion_targets_ means "a TSV
-    // list was loaded" there, so one detection used to drop every ida.log target of the run.
-    for (double mass : masses)
-    {
-      InclusionTarget target;
-      target.mass = mass;
-      // No authored charge set: a tag-expanded target is a MASS hypothesis, and nothing in the tag
-      // match says anything about which charge states of it will be worth isolating. Leaving
-      // `charges` empty keeps acquisition unrestricted, exactly as the old `-1` did.
-      target.rt_start = rt;
-      target.rt_end = rt + config_.targeting().rt_window;
-      target.priority = priority;
-
-      dynamic_targets_.push_back(target);
-    }
-
-    std::cout << "Added " << masses.size() << " dynamic target masses (RT window: "
-              << rt << "-" << (rt + config_.targeting().rt_window) << "s)\n";
-    std::cout << "  Masses: ";
-    for (Size i = 0; i < masses.size(); ++i)
-    {
-      if (i > 0) std::cout << ", ";
-      std::cout << std::fixed << std::setprecision(4) << masses[i];
-    }
-    std::cout << std::endl;
-  }
-
-  int PrecursorSelection::processMS2ForTagBasedTargeting(double precursor_mass, const std::string& activation_type)
-  {
-    // Early exit if tag-based targeting not enabled
-    if (target_protein_database_.empty())
-    {
-      return false;
-    }
-
-    // Require deconvolveMSn() to be called first
-    if (!deconv_.hasStoredMS2())
-    {
-      return false;
-    }
-
-    // Use stored MS2 deconvolution
-    DeconvolvedSpectrum dspec = deconv_.storedMS2();
-    if (dspec.empty())
-    {
-      return false;
-    }
-
-    // Sort deconvolved spectrum by mass
-    dspec.sort();
-
-    // Create and configure tagger with tag length parameters
-    FLASHTaggerAlgorithm tagger;
-    tagger.setParameters(
-      FragmentAnalysis::buildTaggerParam(config_, FragmentAnalysis::getIonTypesForFragmentationMethod(activation_type)));
-
-    // Run tag generation
-    tagger.run(dspec, config_.targeting().tag_matching_tolerance_ppm);
-
-    // Get the generated tags
-    std::vector<FLASHHelperClasses::Tag> tags;
-    tagger.fillTags(tags);
-
-    if (tags.empty())
-    {
-      return false;
-    }
-
-    // Prepare protein sequences for matching (replace I with L for matching)
-    std::vector<String> protein_seqs;
-    protein_seqs.reserve(target_protein_database_.size());
-    for (const auto& fe : target_protein_database_)
-    {
-      String seq = fe.sequence;
-      std::replace(seq.begin(), seq.end(), 'I', 'L');
-      protein_seqs.push_back(seq);
-    }
-
-    // Match tags against target protein database
-    std::set<Size> matched_protein_indices;
-    for (const auto& tag : tags)
-    {
-      for (Size protein_idx = 0; protein_idx < protein_seqs.size(); ++protein_idx)
-      {
-        const String& pseq = protein_seqs[protein_idx];
-
-        std::vector<int> positions;
-        std::vector<double> flanking_mass_diffs;
-
-        FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(
-          positions,
-          flanking_mass_diffs,
-          config_.targeting().max_flanking_mass_diff,
-          pseq,
-          tag);
-
-        if (!positions.empty())
-        {
-          matched_protein_indices.insert(protein_idx);
-        }
-      }
-    }
-
-    if (matched_protein_indices.empty())
-    {
-      return false;
-    }
-
-    // Target protein detected! Expand target masses with PTM combinations
-    // Use precursor mass from iAPI as base (not theoretical protein mass)
-    std::vector<double> new_targets;
-    if (precursor_mass > 0)
-    {
-      std::vector<double> ptm_masses = generatePTMCombinations_(precursor_mass, target_ptms_);
-      new_targets.insert(new_targets.end(), ptm_masses.begin(), ptm_masses.end());
-    }
-
-    // Remove duplicates and already-tracked masses
-    std::sort(new_targets.begin(), new_targets.end());
-    new_targets.erase(std::unique(new_targets.begin(), new_targets.end(),
-      [](double a, double b) { return std::abs(a - b) < 0.01; }), new_targets.end());
-
-    // Filter out masses already in expanded set
-    std::vector<double> truly_new_targets;
-    for (double mass : new_targets)
-    {
-      int nominal = SpectralDeconvolution::getNominalMass(mass);
-      bool already_tracked = false;
-      for (double tracked : expanded_target_masses_)
-      {
-        if (std::abs(SpectralDeconvolution::getNominalMass(tracked) - nominal) <= 1)
-        {
-          already_tracked = true;
-          break;
-        }
-      }
-      if (!already_tracked)
-      {
-        truly_new_targets.push_back(mass);
-        expanded_target_masses_.insert(mass);
-      }
-    }
-
-    if (truly_new_targets.empty())
-    {
-      return static_cast<int>(tags.size()); // target detected (all masses already tracked); tag_count = #tags
-    }
-
-    // Add to dynamic inclusion list
-    addDynamicTargets_(truly_new_targets, deconv_.storedMS2RT(), 100); // High priority
-
-    return static_cast<int>(tags.size());
   }
 
 } // namespace OpenMS

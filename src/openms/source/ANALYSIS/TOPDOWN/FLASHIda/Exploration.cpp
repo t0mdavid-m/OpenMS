@@ -522,8 +522,7 @@ namespace OpenMS
     if (group.msn_level >= 3 && !info.identification.ms2_context.proteoform_sequence.empty())
     {
       info.identification.proteoform_sequence = info.identification.ms2_context.proteoform_sequence;
-      info.identification.matched_protein = config_.targeting().fasta_file.empty()
-          ? config_.characterization().protein_sequence : config_.targeting().fasta_file;
+      info.identification.matched_protein = config_.characterization().protein_sequence;
     }
     
     auto& meta = v.result.getOrCreateOptimizationMetadata();
@@ -991,8 +990,7 @@ namespace OpenMS
     nlr.proteoform_match = frag_result;
     if (!seq.empty() && found > 0)
     {
-      nlr.matched_protein = config_.targeting().fasta_file.empty()
-          ? config_.characterization().protein_sequence : config_.targeting().fasta_file;
+      nlr.matched_protein = config_.characterization().protein_sequence;
       nlr.proteoform_sequence = seq;
       // TIC coverage: sum of matched qscores / total spectrum intensity
       double total_tic = 0.0;
@@ -1356,8 +1354,7 @@ namespace OpenMS
 
     if (result.total_match_count > 0)
     {
-      result.matched_protein = config_.targeting().fasta_file.empty()
-          ? config_.characterization().protein_sequence : config_.targeting().fasta_file;
+      result.matched_protein = config_.characterization().protein_sequence;
     }
     return result;
   }

@@ -481,12 +481,9 @@ namespace OpenMS
     // for the charges the row named; everything else is keyed on the mass and on the integer m/z of
     // the anchor's isolation centre, ORed.
     //
-    // A species that matched an inclusion row does not READ either mass-keyed bar (ADR-0037). It
-    // still arms them below, once, so every other species sees exactly what it sees today; what
-    // changes is that a target is no longer barred from its own re-acquisition for the whole
-    // retention-time window regardless of how much better a later survey resolves it. With
-    // tqscore_threshold at 0.1 against observed qscores of 0.48-0.98, the first acquisition armed
-    // those bars every time and the qscore ledger below was unreachable.
+    // A species that matched an inclusion row on mass alone reads both mass-keyed bars like any
+    // other species. ADR-0037 proposed exempting it and was WITHDRAWN; only a row that names
+    // charges (the has_authored branch) is gated per (mass, charge) instead (ADR-0028).
     if (ctx.has_authored)
     {
       if (ctx.anchor_spent)
