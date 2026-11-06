@@ -9,19 +9,36 @@
 #pragma once
 
 #include <OpenMS/config.h> // OPENMS_DLLAPI
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 #include <OpenMS/DATASTRUCTURES/Param.h>
 
 namespace OpenMS
 {
   /**
-    @brief AbsoluteQuantitationMethod is a class to hold information about the
-    quantitation method and for applying and/or generating the quantitation method.
+    @brief AbsoluteQuantitationMethod is a class to hold information about the quantitation method
+    and for applying and/or generating the quantitation method.
 
     The quantitation method describes all parameters required to define the
     calibration curve used for absolute quantitation by Isotope Dilution Mass Spectrometry (IDMS).
     The quantitation method also defines the statistics of the fitted calibration curve as well
     as the lower and upper bounds of the calibration for later Quality Control.
+
+    @section AbsoluteQuantitationMethod_params Key Parameters
+
+    | Parameter | Description |
+    |-----------|-------------|
+    | component_name | Unique identifier for the analyte |
+    | feature_name | Which feature to use (e.g., "peak_apex_int", "peak_area") |
+    | IS_name | Internal standard name for ratio calculation |
+    | LLOD/ULOD | Lower/Upper Limit of Detection |
+    | LLOQ/ULOQ | Lower/Upper Limit of Quantitation |
+    | transformation_model | Calibration model (e.g., "linear", "b_spline") |
+    | correlation_coefficient | Pearson R of the calibration fit |
+
+    @see AbsoluteQuantitation for the main quantitation workflow
+    @see AbsoluteQuantitationMethodFile for file I/O
+
+    @ingroup TargetedQuantitation
   */
   class OPENMS_DLLAPI AbsoluteQuantitationMethod
   {
@@ -29,14 +46,14 @@ public:
     bool operator==(const AbsoluteQuantitationMethod& other) const;
     bool operator!=(const AbsoluteQuantitationMethod& other) const;
 
-    void setComponentName(const String& component_name); ///< Component name setter
-    String getComponentName() const; ///< Component name getter
+    void setComponentName(const std::string& component_name); ///< Component name setter
+    std::string getComponentName() const; ///< Component name getter
 
-    void setFeatureName(const String& feature_name); ///< Feature name setter
-    String getFeatureName() const; ///< Feature name getter
+    void setFeatureName(const std::string& feature_name); ///< Feature name setter
+    std::string getFeatureName() const; ///< Feature name getter
 
-    void setISName(const String& IS_name); ///< IS name setter
-    String getISName() const; ///< IS_name getter
+    void setISName(const std::string& IS_name); ///< IS name setter
+    std::string getISName() const; ///< IS_name getter
 
     void setLLOD(const double llod); ///< LLOD setter
     double getLLOD() const; ///< LLOD getter
@@ -56,22 +73,22 @@ public:
     void setCorrelationCoefficient(const double correlation_coefficient); ///< Set the correlation coefficient
     double getCorrelationCoefficient() const; ///< Get the correlation coefficient
 
-    void setConcentrationUnits(const String& concentration_units); ///< Concentration units setter
-    String getConcentrationUnits() const; ///< Concentration units getter
+    void setConcentrationUnits(const std::string& concentration_units); ///< Concentration units setter
+    std::string getConcentrationUnits() const; ///< Concentration units getter
 
-    void setTransformationModel(const String& transformation_model); ///< Transformation model setter
-    String getTransformationModel() const; ///< Transformation model getter
+    void setTransformationModel(const std::string& transformation_model); ///< Transformation model setter
+    std::string getTransformationModel() const; ///< Transformation model getter
 
     void setTransformationModelParams(const Param& transformation_model_params); ///< Transformation model parameters setter
     Param getTransformationModelParams() const; ///< Transformation model parameters getter
 
 private:
     Param transformation_model_params_; ///< transformation model parameters
-    String component_name_; ///< id of the component
-    String feature_name_; ///< name of the feature (i.e., peak_apex_int or peak_area)
-    String IS_name_; ///< the internal standard (IS) name for the transition
-    String concentration_units_; ///< concentration units of the component's concentration
-    String transformation_model_; ///< transformation model
+    std::string component_name_; ///< id of the component
+    std::string feature_name_; ///< name of the feature (i.e., peak_apex_int or peak_area)
+    std::string IS_name_; ///< the internal standard (IS) name for the transition
+    std::string concentration_units_; ///< concentration units of the component's concentration
+    std::string transformation_model_; ///< transformation model
     double llod_ { 0.0 }; ///< lower limit of detection (LLOD) of the transition
     double ulod_ { 0.0 }; ///< upper limit of detection (ULOD) of the transition
     double lloq_ { 0.0 }; ///< lower limit of quantitation (LLOQ) of the transition

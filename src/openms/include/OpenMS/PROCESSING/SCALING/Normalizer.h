@@ -53,7 +53,7 @@ public:
     /**
       @brief Workhorse of this class.
 
-      @param spectrum Input/output spectrum containing peaks
+      @param[in,out] spectrum Input/output spectrum containing peaks
       @throws Exception::InvalidValue if 'method_' has unknown value
     */
     template <typename SpectrumType>
@@ -107,7 +107,7 @@ public:
     // @}
 
 private:
-    String method_;
+    std::string method_;
   };
 
 

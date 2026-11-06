@@ -12,11 +12,12 @@
 #include <OpenMS/CHEMISTRY/ProteaseDB.h>
 #include <OpenMS/CHEMISTRY/ProteaseDigestion.h>
 #include <OpenMS/CONCEPT/EnumHelpers.h>
+#include <OpenMS/DATASTRUCTURES/ListUtils.h>
 #include <OpenMS/SYSTEM/StopWatch.h>
 #include <OpenMS/SYSTEM/SysInfo.h>
 
 #include <atomic>
-#include <map>
+#include <unordered_map>
 #include <array>
 
 
@@ -101,7 +102,7 @@ using namespace std;
       other.filter_rejected = 0;
     }
 
-    bool validate(const String& seq_prot, const Int position, const Int len_pep, const bool allow_nterm_protein_cleavage)
+    bool validate(const std::string& seq_prot, const Int position, const Int len_pep, const bool allow_nterm_protein_cleavage)
     {
       const bool ignore_missed_cleavages = true;
       return enzyme.isValidProduct(seq_prot, position, len_pep, ignore_missed_cleavages, allow_nterm_protein_cleavage, xtandem_);
@@ -112,7 +113,7 @@ using namespace std;
       const Hit::T idx_pep,
       const Hit::T idx_prot,
       const Hit::T len_pep,
-      const String& seq_prot,
+      const std::string& seq_prot,
       const Hit::T position)
     {
       //TODO we could read and double-check missed cleavages as well
@@ -131,7 +132,7 @@ using namespace std;
       else
       {
         //std::cerr << "REJECTED Peptide " << seq_pep << " with hit to protein "
-        //  << seq_prot << " at position " << position << std::endl;
+        //  << seq_prot << " at position " << position << '\n';
         ++filter_rejected;
       }
     }
@@ -140,7 +141,7 @@ using namespace std;
 
 
   // free function (not exported) used to add hits
-  void search(ACTrie& trie, ACTrieState& state, const String& prot, const String& full_prot, size_t prot_offset, Hit::T idx_prot, 
+  void search(ACTrie& trie, ACTrieState& state, const std::string& prot, const std::string& full_prot, size_t prot_offset, Hit::T idx_prot, 
               FoundProteinFunctor& func_threads, const bool allow_nterm_protein_cleavage)
   {
     state.setQuery(prot);
@@ -169,7 +170,7 @@ using namespace std;
   PeptideIndexing::PeptideIndexing()
     : DefaultParamHandler("PeptideIndexing")
   {
-    defaults_.setValue("decoy_string", "", "String that was appended (or prefixed - see 'decoy_string_position' flag below) to the accessions in the protein database to indicate decoy proteins. If empty (default), it's determined automatically (checking for common terms, both as prefix and suffix).");
+    defaults_.setValue("decoy_string", "", "std::string that was appended (or prefixed - see 'decoy_string_position' flag below) to the accessions in the protein database to indicate decoy proteins. If empty (default), it's determined automatically (checking for common terms, both as prefix and suffix).");
 
     defaults_.setValue("decoy_string_position", "prefix", "Is the 'decoy_string' prepended (prefix) or appended (suffix) to the protein accession? (ignored if decoy_string is empty)");
     defaults_.setValidStrings("decoy_string_position", { "prefix", "suffix" });
@@ -263,7 +264,7 @@ PeptideIndexing::ExitCodes PeptideIndexing::run(FASTAContainer<TFI_Vector>& prot
   return run_<TFI_Vector>(proteins, prot_ids, pep_ids);
 }
 
-const String& PeptideIndexing::getDecoyString() const
+const std::string& PeptideIndexing::getDecoyString() const
 {
   return decoy_string_;
 }
@@ -292,12 +293,12 @@ PeptideIndexing::ExitCodes PeptideIndexing::run_(FASTAContainer<T>& proteins, st
       r.is_prefix = true;
       r.name = "DECOY_";
       OPENMS_LOG_WARN << "Unable to determine decoy string automatically (not enough decoys were detected)! Using default " << (r.is_prefix ? "prefix" : "suffix") << " decoy string '" << r.name << "'\n"
-                      << "If you think that this is incorrect, please provide a decoy_string and its position manually!" << std::endl;
+                      << "If you think that this is incorrect, please provide a decoy_string and its position manually!\n";
     }
     prefix_ = r.is_prefix;
     decoy_string_ = r.name;
     // decoy string and position was extracted successfully
-    OPENMS_LOG_INFO << "Using " << (prefix_ ? "prefix" : "suffix") << " decoy string '" << decoy_string_ << "'" << std::endl;
+    OPENMS_LOG_INFO << "Using " << (prefix_ ? "prefix" : "suffix") << " decoy string '" << decoy_string_ << "'\n";
   }
 
   //---------------------------------------------------------------
@@ -310,12 +311,12 @@ PeptideIndexing::ExitCodes PeptideIndexing::run_(FASTAContainer<T>& proteins, st
   }
   else if (!prot_ids.empty() && prot_ids[0].getSearchParameters().digestion_enzyme.getName() != "unknown_enzyme")
   { // take from meta (this assumes all runs used the same enzyme)
-    OPENMS_LOG_INFO << "Info: using '" << prot_ids[0].getSearchParameters().digestion_enzyme.getName() << "' as enzyme (obtained from idXML) for digestion." << std::endl;
+    OPENMS_LOG_INFO << "Info: using '" << prot_ids[0].getSearchParameters().digestion_enzyme.getName() << "' as enzyme (obtained from idXML) for digestion.\n";
     enzyme.setEnzyme(&prot_ids[0].getSearchParameters().digestion_enzyme);
   }
   else
   { // fall-back
-    OPENMS_LOG_WARN << "Warning: Enzyme name neither given nor deducible from input. Defaulting to Trypsin!" << std::endl;
+    OPENMS_LOG_WARN << "Warning: Enzyme name neither given nor deducible from input. Defaulting to Trypsin!\n";
     enzyme.setEnzyme("Trypsin");
   } 
 
@@ -325,26 +326,26 @@ PeptideIndexing::ExitCodes PeptideIndexing::run_(FASTAContainer<T>& proteins, st
   // determine if at least one search engine was XTandem or MSGFPlus to enable special rules
   for (const auto& prot_id : prot_ids)
   {
-    String search_engine = prot_id.getOriginalSearchEngineName();
+    std::string search_engine = prot_id.getOriginalSearchEngineName();
     StringUtils::toUpper(search_engine);
-    OPENMS_LOG_INFO << "Peptide identification engine: " << search_engine << std::endl;
+    OPENMS_LOG_INFO << "Peptide identification engine: " << search_engine << '\n';
     if (search_engine == "XTANDEM" || prot_id.getSearchParameters().metaValueExists("SE:XTandem")) { xtandem_fix_parameters = true; }
     if (search_engine == "MS-GF+" || search_engine == "MSGFPLUS" || prot_id.getSearchParameters().metaValueExists("SE:MS-GF+")) { msgfplus_fix_parameters = true; }
   }
 
   if (xtandem_fix_parameters)
   {
-    OPENMS_LOG_WARN << "X!Tandem detected. Allowing random Asp/Pro cleavage." << std::endl;
+    OPENMS_LOG_WARN << "X!Tandem detected. Allowing random Asp/Pro cleavage.\n";
   }
 
   // including MSGFPlus -> Trypsin/P as enzyme
   if (msgfplus_fix_parameters && enzyme.getEnzymeName() == "Trypsin")
   {
-    OPENMS_LOG_WARN << "MSGFPlus detected but enzyme cutting rules were set to Trypsin. Correcting to Trypsin/P to cope with special cutting rule in MSGFPlus." << std::endl;
+    OPENMS_LOG_WARN << "MSGFPlus detected but enzyme cutting rules were set to Trypsin. Correcting to Trypsin/P to cope with special cutting rule in MSGFPlus.\n";
     enzyme.setEnzyme("Trypsin/P");
   }
 
-  OPENMS_LOG_INFO << "Enzyme: " << enzyme.getEnzymeName() << std::endl;
+  OPENMS_LOG_INFO << "Enzyme: " << enzyme.getEnzymeName() << '\n';
 
   if (!enzyme_specificity_.empty() && (enzyme_specificity_.compare(AUTO_MODE) != 0))
   { // use param (not empty and not 'auto')
@@ -353,11 +354,11 @@ PeptideIndexing::ExitCodes PeptideIndexing::run_(FASTAContainer<T>& proteins, st
   else if (!prot_ids.empty() && prot_ids[0].getSearchParameters().enzyme_term_specificity != ProteaseDigestion::SPEC_UNKNOWN)
   { // deduce from data ('auto')
     enzyme.setSpecificity(prot_ids[0].getSearchParameters().enzyme_term_specificity);
-    OPENMS_LOG_INFO << "Info: using '" << EnzymaticDigestion::NamesOfSpecificity[prot_ids[0].getSearchParameters().enzyme_term_specificity] << "' as enzyme specificity (obtained from idXML) for digestion." << std::endl;
+    OPENMS_LOG_INFO << "Info: using '" << EnzymaticDigestion::NamesOfSpecificity[prot_ids[0].getSearchParameters().enzyme_term_specificity] << "' as enzyme specificity (obtained from idXML) for digestion.\n";
   }
   else
   { // fall-back
-    OPENMS_LOG_WARN << "Warning: Enzyme specificity neither given nor present in the input file. Defaulting to 'full'!" << std::endl;
+    OPENMS_LOG_WARN << "Warning: Enzyme specificity neither given nor present in the input file. Defaulting to 'full'!\n";
     enzyme.setSpecificity(ProteaseDigestion::SPEC_FULL);
   }
 
@@ -373,13 +374,13 @@ PeptideIndexing::ExitCodes PeptideIndexing::run_(FASTAContainer<T>& proteins, st
 
   if (proteins.empty()) // we do not allow an empty database
   {
-    OPENMS_LOG_ERROR << "Error: An empty database was provided. Mapping makes no sense. Aborting..." << std::endl;
-    return DATABASE_EMPTY;
+    OPENMS_LOG_ERROR << "Error: An empty database was provided. Mapping makes no sense. Aborting...\n";
+    return ExitCodes::DATABASE_EMPTY;
   }
 
   if (pep_ids.empty()) // Aho-Corasick requires non-empty input; but we allow this case, since the TOPP tool should not crash when encountering a bad raw file (with no PSMs)
   {
-    OPENMS_LOG_WARN << "Warning: An empty set of peptide identifications was provided. Output will be empty as well." << std::endl;
+    OPENMS_LOG_WARN << "Warning: An empty set of peptide identifications was provided. Output will be empty as well.\n";
     if (!keep_unreferenced_proteins_)
     {
       // delete only protein hits, not whole ID runs incl. meta data:
@@ -389,11 +390,11 @@ PeptideIndexing::ExitCodes PeptideIndexing::run_(FASTAContainer<T>& proteins, st
         it->getHits().clear();
       }
     }
-    return PEPTIDE_IDS_EMPTY;
+    return ExitCodes::PEPTIDE_IDS_EMPTY;
   }
 
   FoundProteinFunctor func(enzyme, xtandem_fix_parameters); // store the matches
-  std::map<String, Size> acc_to_prot; // map: accessions --> FASTA protein index
+  std::unordered_map<std::string, Size> acc_to_prot; // map: accessions --> FASTA protein index
   std::vector<bool> protein_is_decoy; // protein index -> is decoy?
   std::vector<std::string> protein_accessions; // protein index -> accession
 
@@ -417,32 +418,33 @@ PeptideIndexing::ExitCodes PeptideIndexing::run_(FASTAContainer<T>& proteins, st
         // Warning:
         // do not skip over peptides here, since the results are iterated in the same way
         //
-        String seq = hit.getSequence().toUnmodifiedString().remove('*'); // make a copy, i.e. do NOT change the peptide sequence!
+        std::string seq = hit.getSequence().toUnmodifiedString(); // make a copy, i.e. do NOT change the peptide sequence!
+        StringUtils::remove(seq, '*');
         if (IL_equivalent_)                                              // convert L to I;
         {
-          seq.substitute('L', 'I');
+          StringUtils::substitute(seq, 'L', 'I');
         }
-        peptide_has_X |= seq.has('X');
+        peptide_has_X |= StringUtils::has(seq, 'X');
         ac_trie.addNeedle(seq);
       }
     }
     s.stop();
-    OPENMS_LOG_INFO << " done (" << int(s.getClockTime()) << "s)" << std::endl;
+    OPENMS_LOG_INFO << " done (" << int(s.getClockTime()) << "s)\n";
     if (ac_trie.getNeedleCount() == 0)
     { // Aho-Corasick will crash if given empty needles as input
-      OPENMS_LOG_WARN << "Warning: Peptide identifications have no hits inside! Output will be empty as well." << std::endl;
-      return PEPTIDE_IDS_EMPTY;
+      OPENMS_LOG_WARN << "Warning: Peptide identifications have no hits inside! Output will be empty as well.\n";
+      return ExitCodes::PEPTIDE_IDS_EMPTY;
     }
     s.start();
-    OPENMS_LOG_INFO << "Compressing trie to BFS format ..." << std::endl;
+    OPENMS_LOG_INFO << "Compressing trie to BFS format ...\n";
     ac_trie.compressTrie();
     s.stop();
-    OPENMS_LOG_INFO << " done (" << int(s.getClockTime()) << "s)" << std::endl;
+    OPENMS_LOG_INFO << " done (" << int(s.getClockTime()) << "s)\n";
     s.reset();
-    OPENMS_LOG_INFO << "Mapping " << ac_trie.getNeedleCount() << " peptides to " << (proteins.size() == PROTEIN_CACHE_SIZE ? "? (unknown number of)" : String(proteins.size())) << " proteins."
-                    << std::endl;
+    OPENMS_LOG_INFO << "Mapping " << ac_trie.getNeedleCount() << " peptides to " << (proteins.size() == PROTEIN_CACHE_SIZE ? "? (unknown number of)" : StringUtils::toStr(proteins.size())) << " proteins."
+                    << '\n';
 
-    OPENMS_LOG_INFO << "Searching with up to " << aaa_max_ << " ambiguous amino acid(s) and " << mm_max_ << " mismatch(es)!" << std::endl;
+    OPENMS_LOG_INFO << "Searching with up to " << aaa_max_ << " ambiguous amino acid(s) and " << mm_max_ << " mismatch(es)!\n";
 
     uint16_t count_j_proteins(0);
     bool has_active_data = true; // becomes false if end of FASTA file is reached
@@ -454,9 +456,9 @@ PeptideIndexing::ExitCodes PeptideIndexing::run_(FASTAContainer<T>& proteins, st
     #pragma omp parallel
     {
       FoundProteinFunctor func_threads(enzyme, xtandem_fix_parameters);
-      std::map<String, Size> acc_to_prot_thread; // map: accessions --> FASTA protein index
+      std::unordered_map<std::string, Size> acc_to_prot_thread; // map: accessions --> FASTA protein index
       ACTrieState ac_state;
-      String prot;
+      std::string prot;
 
       while (true) 
       {
@@ -476,8 +478,8 @@ PeptideIndexing::ExitCodes PeptideIndexing::run_(FASTAContainer<T>& proteins, st
           protein_is_decoy.resize(proteins.getChunkOffset() + prot_count);
           for (SignedSize i = 0; i < prot_count; ++i)
           { // do this in master only, to avoid false sharing
-            const String& seq = proteins.chunkAt(i).identifier;
-            protein_is_decoy[i + proteins.getChunkOffset()] = (prefix_ ? seq.hasPrefix(decoy_string_) : seq.hasSuffix(decoy_string_));
+            const std::string& seq = proteins.chunkAt(i).identifier;
+            protein_is_decoy[i + proteins.getChunkOffset()] = (prefix_ ? StringUtils::hasPrefix(seq, decoy_string_) : StringUtils::hasSuffix(seq, decoy_string_));
           }
         }
 
@@ -494,10 +496,10 @@ PeptideIndexing::ExitCodes PeptideIndexing::run_(FASTAContainer<T>& proteins, st
           }
 
           prot = proteins.chunkAt(i).sequence;
-          prot.remove('*');
+          StringUtils::remove(prot, '*');
 
           // check for invalid sequences with modifications
-          if (prot.has('[') || prot.has('('))
+          if (StringUtils::has(prot, '[') || StringUtils::has(prot, '('))
           { 
               invalid_protein_sequence = true; // not omp-critical because its write-only
               // we cannot throw an exception here, since we'd need to catch it within the parallel region
@@ -506,12 +508,12 @@ PeptideIndexing::ExitCodes PeptideIndexing::run_(FASTAContainer<T>& proteins, st
           // convert  L/J to I; also replace 'J' in proteins
           if (IL_equivalent_)
           {
-            prot.substitute('L', 'I');
-            prot.substitute('J', 'I');
+            StringUtils::substitute(prot, 'L', 'I');
+            StringUtils::substitute(prot, 'J', 'I');
           }
           else
           { // warn if 'J' is found (it eats into aaa_max)
-            if (prot.has('J'))
+            if (StringUtils::has(prot, 'J'))
             {
               #pragma omp atomic
               ++count_j_proteins;
@@ -524,14 +526,14 @@ PeptideIndexing::ExitCodes PeptideIndexing::run_(FASTAContainer<T>& proteins, st
           const Size hits_total = func_threads.filter_passed + func_threads.filter_rejected;
 
           // check if there are stretches of 'X' in the protein, but not in the peptide
-          if (!peptide_has_X && prot.has('X'))
+          if (!peptide_has_X && StringUtils::has(prot, 'X'))
           {
             // create chunks of the protein (splitting it at stretches of 'X..X') and feed them to AC one by one
             size_t offset = -1, start = 0;
             while ((offset = prot.find(jumpX, offset + 1)) != std::string::npos)
             {
               //std::cout << "found X..X at " << offset << " in protein " << proteins[i].identifier << "\n";
-              search(ac_trie, ac_state, prot.substr(start, offset + jumpX.size() - start), prot, start, prot_idx, func_threads,
+              search(ac_trie, ac_state, StringUtils::substr(prot, start, offset + jumpX.size() - start), prot, start, prot_idx, func_threads,
                      allow_nterm_protein_cleavage_);
               // skip ahead while we encounter more X...
               while (offset + jumpX.size() < prot.size() && prot[offset + jumpX.size()] == 'X') ++offset;
@@ -541,7 +543,7 @@ PeptideIndexing::ExitCodes PeptideIndexing::run_(FASTAContainer<T>& proteins, st
             // last chunk
             if (start < prot.size())
             {
-              search(ac_trie, ac_state, prot.substr(start), prot, start, prot_idx, func_threads, allow_nterm_protein_cleavage_);
+              search(ac_trie, ac_state, StringUtils::substr(prot, start), prot, start, prot_idx, func_threads, allow_nterm_protein_cleavage_);
             }
           }
           else // search the whole protein at once
@@ -595,14 +597,14 @@ PeptideIndexing::ExitCodes PeptideIndexing::run_(FASTAContainer<T>& proteins, st
     
     // write some stats
     OPENMS_LOG_INFO << "Peptide hits passing enzyme filter: " << func.filter_passed << "\n"
-                    << "     ... rejected by enzyme filter: " << func.filter_rejected << std::endl;
+                    << "     ... rejected by enzyme filter: " << func.filter_rejected << '\n';
 
     if (count_j_proteins)
     {
       OPENMS_LOG_WARN << "PeptideIndexer found " << count_j_proteins << " protein sequences in your database containing the amino acid 'J'."
         << "To match 'J' in a protein, an ambiguous amino acid placeholder for I/L will be used.\n"
         << "This costs runtime and eats into the 'aaa_max' limit, leaving less opportunity for B/Z/X matches.\n"
-        << "If you want 'J' to be treated as unambiguous, enable '-IL_equivalent'!" << std::endl;
+        << "If you want 'J' to be treated as unambiguous, enable '-IL_equivalent'!\n";
     }
 
   } // end local scope
@@ -611,7 +613,8 @@ PeptideIndexing::ExitCodes PeptideIndexing::run_(FASTAContainer<T>& proteins, st
   //   do mapping 
   //
   // index existing proteins
-  std::map<String, Size> runid_to_runidx; // identifier to index
+  std::unordered_map<std::string, Size> runid_to_runidx; // identifier to index
+  runid_to_runidx.reserve(prot_ids.size());
   for (Size run_idx = 0; run_idx < prot_ids.size(); ++run_idx)
   {
     runid_to_runidx[prot_ids[run_idx].getIdentifier()] = run_idx;
@@ -625,8 +628,7 @@ PeptideIndexing::ExitCodes PeptideIndexing::run_(FASTAContainer<T>& proteins, st
   Size stats_count_m_d(0);    // match to Decoy DB
   Size stats_count_m_td(0);   // match to T+D DB
 
-  std::map<Size, std::set<Size> > runidx_to_protidx; // in which protID do appear which proteins (according to mapped peptides)
-
+  std::unordered_map<Size, std::set<Size> > runidx_to_protidx; // in which protID do appear which proteins (according to mapped peptides)
   Size pep_idx(0);
   Size func_hits_idx(0); ///< current position in func.pep_to_prot[] which has a stretch of matches for current pep_idx
   const Size func_hits_size = func.pep_to_prot.size(); 
@@ -662,7 +664,7 @@ PeptideIndexing::ExitCodes PeptideIndexing::run_(FASTAContainer<T>& proteins, st
           ++prot_count_of_current_pep;
         }
 
-        const String& accession = protein_accessions[pe.protein_index];
+        const std::string& accession = protein_accessions[pe.protein_index];
         it_hit->addPeptideEvidence(PeptideEvidence(accession, pe.position, pe.position + (int)it_hit->getSequence().size() - 1, pe.AABefore, pe.AAAfter));
 
         runidx_to_protidx[run_idx].insert(pe.protein_index); // fill protein hits
@@ -740,7 +742,7 @@ PeptideIndexing::ExitCodes PeptideIndexing::run_(FASTAContainer<T>& proteins, st
   OPENMS_LOG_INFO << "  mapping to proteins:\n";
   OPENMS_LOG_INFO << "    no match (to 0 protein)         : " << stats_unmatched << "\n";
   OPENMS_LOG_INFO << "    unique match (to 1 protein)     : " << stats_matched_unique << "\n";
-  OPENMS_LOG_INFO << "    non-unique match (to >1 protein): " << stats_matched_multi << std::endl;
+  OPENMS_LOG_INFO << "    non-unique match (to >1 protein): " << stats_matched_multi << '\n';
 
   /// for proteins --> peptides
   Size stats_matched_proteins(0), stats_matched_new_proteins(0), stats_orphaned_proteins(0), stats_proteins_target(0), stats_proteins_decoy(0);
@@ -756,8 +758,8 @@ PeptideIndexing::ExitCodes PeptideIndexing::run_(FASTAContainer<T>& proteins, st
       std::vector<ProteinHit> orphaned_hits;
       for (std::vector<ProteinHit>::iterator p_hit = phits.begin(); p_hit != phits.end(); ++p_hit)
       {
-        const String& acc = p_hit->getAccession();
-        if (acc_to_prot.find(acc) == acc_to_prot.end()) // acc_to_prot only contains found proteins from current run
+        const std::string& acc = p_hit->getAccession();
+        if (!acc_to_prot.contains(acc)) // acc_to_prot only contains found proteins from current run
         { // old hit is orphaned
           ++stats_orphaned_proteins;
           if (keep_unreferenced_proteins_)
@@ -819,8 +821,24 @@ PeptideIndexing::ExitCodes PeptideIndexing::run_(FASTAContainer<T>& proteins, st
     OPENMS_LOG_INFO << "  matched decoy proteins : " << stats_proteins_decoy << " (" << stats_proteins_decoy * 100 / stats_matched_proteins << " %)\n";
   }
   OPENMS_LOG_INFO << "  orphaned proteins      : " << stats_orphaned_proteins << (keep_unreferenced_proteins_ ? " (all kept)" : " (all removed)\n");
-  OPENMS_LOG_INFO << "-----------------------------------" << std::endl;
+  OPENMS_LOG_INFO << "-----------------------------------\n";
 
+  // Store PeptideIndexer settings in SearchParameters metavalues for documentation
+  for (Size run_idx = 0; run_idx < prot_ids.size(); ++run_idx)
+  {
+    ProteinIdentification::SearchParameters search_parameters = prot_ids[run_idx].getSearchParameters();
+    search_parameters.setMetaValue("PeptideIndexer:decoy_string", decoy_string_);
+    search_parameters.setMetaValue("PeptideIndexer:decoy_string_position", prefix_ ? "prefix" : "suffix");
+    search_parameters.setMetaValue("PeptideIndexer:enzyme", enzyme.getEnzymeName());
+    search_parameters.setMetaValue("PeptideIndexer:enzyme_specificity", EnzymaticDigestion::NamesOfSpecificity[enzyme.getSpecificity()]);
+    search_parameters.setMetaValue("PeptideIndexer:aaa_max", aaa_max_);
+    search_parameters.setMetaValue("PeptideIndexer:mismatches_max", mm_max_);
+    search_parameters.setMetaValue("PeptideIndexer:IL_equivalent", IL_equivalent_ ? "true" : "false");
+    search_parameters.setMetaValue("PeptideIndexer:allow_nterm_protein_cleavage", allow_nterm_protein_cleavage_ ? "true" : "false");
+    search_parameters.setMetaValue("PeptideIndexer:unmatched_action", names_of_unmatched[(Size)unmatched_action_]);
+    search_parameters.setMetaValue("PeptideIndexer:missing_decoy_action", names_of_missing_decoy[(Size)missing_decoy_action_]);
+    prot_ids[run_idx].setSearchParameters(search_parameters);
+  }
 
   /// exit if no peptides were matched to decoy
   bool has_error = false;
@@ -834,15 +852,15 @@ PeptideIndexing::ExitCodes PeptideIndexing::run_(FASTAContainer<T>& proteins, st
 
   if ((stats_count_m_d + stats_count_m_td) == 0)
   {
-    String msg("No peptides were matched to the decoy portion of the database! Did you provide the correct concatenated database? Are your 'decoy_string' (=" + decoy_string_ + ") and 'decoy_string_position' (=" + std::string(param_.getValue("decoy_string_position")) + ") settings correct?");
+    std::string msg("No peptides were matched to the decoy portion of the database! Did you provide the correct concatenated database? Are your 'decoy_string' (=" + decoy_string_ + ") and 'decoy_string_position' (=" + std::string(param_.getValue("decoy_string_position")) + ") settings correct?");
     if (missing_decoy_action_ == MissingDecoy::IS_ERROR)
     {
-      OPENMS_LOG_ERROR << "Error: " << msg << "\nSet 'missing_decoy_action' to 'warn' if you are sure this is ok!\nAborting ..." << std::endl;
+      OPENMS_LOG_ERROR << "Error: " << msg << "\nSet 'missing_decoy_action' to 'warn' if you are sure this is ok!\nAborting ...\n";
       has_error = true;
     }
     else if (missing_decoy_action_ == MissingDecoy::WARN)
     {
-      OPENMS_LOG_WARN << "Warn: " << msg << "\nSet 'missing_decoy_action' to 'error' if you want to elevate this to an error!" << std::endl;
+      OPENMS_LOG_WARN << "Warn: " << msg << "\nSet 'missing_decoy_action' to 'error' if you want to elevate this to an error!\n";
     }
     else // silent
     {
@@ -883,10 +901,10 @@ PeptideIndexing::ExitCodes PeptideIndexing::run_(FASTAContainer<T>& proteins, st
 
   if (has_error)
   {
-    OPENMS_LOG_ERROR << "Result files will be written, but PeptideIndexer will exit with an error code." << std::endl;
-    return UNEXPECTED_RESULT;
+    OPENMS_LOG_ERROR << "Result files will be written, but PeptideIndexer will exit with an error code.\n";
+    return ExitCodes::UNEXPECTED_RESULT;
   }
-  return EXECUTION_OK;
+  return ExitCodes::EXECUTION_OK;
 }
 
 /// @endcond

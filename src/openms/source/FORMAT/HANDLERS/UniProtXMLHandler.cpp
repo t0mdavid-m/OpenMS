@@ -17,14 +17,12 @@ namespace OpenMS::Internal
   namespace
   {
     /// Forward declaration: defined below xmlchToString().
-    std::string xmlchToString(const XMLCh* ch);
+    std::string xmlchToString(const char16_t* ch);
 
     /// Read a Xerces attribute by name (qname), return "" if absent.
-    std::string attrValue(const xercesc::Attributes& attrs, const char* name)
+    std::string attrValue(const XMLAttributes& attrs, const char* name)
     {
-      XMLCh* qname = xercesc::XMLString::transcode(name);
-      const XMLCh* value = attrs.getValue(qname);
-      xercesc::XMLString::release(&qname);
+      const char16_t* value = attrs.value(name);
       if (value == nullptr) return std::string();
       return xmlchToString(value);
     }
@@ -74,9 +72,7 @@ namespace OpenMS::Internal
     /// codepoints to '?' before the consumer has a chance to choose a different
     /// fallback. UniProt taxonomy names contain Greek letters (β, …) and accented
     /// Latin letters; we need both visible to the PEFF emitter's NFKD-style helper.
-    bool isEmpty(const XMLCh* ch) { return ch == nullptr || *ch == 0; }
-
-    std::string xmlchToString(const XMLCh* ch)
+    std::string xmlchToString(const char16_t* ch)
     {
       if (ch == nullptr) return std::string();
       std::string out;
@@ -97,7 +93,7 @@ namespace OpenMS::Internal
     }
 
     /// Append a Xerces UTF-16 character buffer (with explicit length) as UTF-8 to @p out.
-    void appendXmlchUtf8(std::string& out, const XMLCh* ch, std::size_t length)
+    void appendXmlchUtf8(std::string& out, const char16_t* ch, std::size_t length)
     {
       for (std::size_t i = 0; i < length; ++i)
       {
@@ -148,16 +144,14 @@ namespace OpenMS::Internal
     return static_cast<int>(value);
   }
 
-  void UniProtXMLHandler::startElement(const XMLCh* const /*uri*/, const XMLCh* const local_name,
-                                       const XMLCh* const qname, const xercesc::Attributes& attrs)
+  void UniProtXMLHandler::onStartElement(const char16_t* qname, const XMLAttributes& attrs)
   {
     ++depth_;
-    // Prefer local_name when the parser populates it (namespace-aware mode); fall back to
-    // qname otherwise. Real UniProtKB XML carries `xmlns="http://uniprot.org/uniprot"`, so
-    // a future switch to namespace-aware Xerces would deliver qname as `uniprot:entry` and
-    // local_name as `entry`; comparing against local_name keeps this handler working in both
-    // configurations.
-    const std::string tag = xmlchToString(isEmpty(local_name) ? qname : local_name);
+    // The SAX parser runs namespace-unaware (see XMLFile.cpp), so the element tag
+    // is delivered in qname (unprefixed). Real UniProtKB XML carries a default
+    // namespace (xmlns="http://uniprot.org/uniprot") with no prefixes, so qname
+    // equals the local name here.
+    const std::string tag = xmlchToString(qname);
 
     // Inside the alternative-products comment? swallow the whole subtree.
     if (alt_products_depth_ != 0) return;
@@ -305,7 +299,7 @@ namespace OpenMS::Internal
     }
   }
 
-  void UniProtXMLHandler::characters(const XMLCh* const chars, const XMLSize_t length)
+  void UniProtXMLHandler::onCharacters(const char16_t* chars, Size length)
   {
     if (capture_ == CaptureTarget::None) return;
     // Use the length-aware UTF-16 → UTF-8 helper so we don't depend on a
@@ -313,10 +307,9 @@ namespace OpenMS::Internal
     appendXmlchUtf8(char_buf_, chars, length);
   }
 
-  void UniProtXMLHandler::endElement(const XMLCh* const /*uri*/, const XMLCh* const local_name,
-                                     const XMLCh* const qname)
+  void UniProtXMLHandler::onEndElement(const char16_t* qname)
   {
-    const std::string tag = xmlchToString(isEmpty(local_name) ? qname : local_name);
+    const std::string tag = xmlchToString(qname);
 
     // Close the alt-products skip gate at its matching </comment>.
     if (alt_products_depth_ != 0)

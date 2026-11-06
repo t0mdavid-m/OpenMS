@@ -38,7 +38,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/DATASTRUCTURES/Param.h>
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 
 #include <map>
 #include <memory>
@@ -172,7 +172,7 @@ namespace OpenMS
     /// Case-insensitive. Returns {"b","y"} for HCD/CID, {"c","z"} for ETD,
     /// {"b","c","y","z"} for EThcD/ETciD, {"a","b","c","x","y","z"} for UVPD.
     /// Defaults to {"b","y"} for unknown methods.
-    static std::vector<std::string> getIonTypesForFragmentationMethod(const String& method);
+    static std::vector<std::string> getIonTypesForFragmentationMethod(const std::string& method);
 
     /// Build the FLASHTagger Param used by every FLASHIda tag-generation site.
     /// Starts from FLASHTaggerAlgorithm's own defaults and sets exactly ion_type, min_length,
@@ -196,7 +196,7 @@ namespace OpenMS
     /// ion (type, index = i+1), i.e. the 1-based ion index is the 0-based vector index + 1.
     /// Isoleucine is treated as leucine for the mass calculation. Behavior is identical
     /// to the formerly file-private helper this method was promoted from.
-    static void computePTMAdjustedFragmentMasses(const String& sequence,
+    static void computePTMAdjustedFragmentMasses(const std::string& sequence,
                                                  const std::vector<PTMSite>& ptm_sites,
                                                  const std::vector<std::string>& ion_types,
                                                  std::map<char, std::vector<double>>& fragment_masses_map);
@@ -249,7 +249,7 @@ namespace OpenMS
      * @param fragmentation_method fragmentation method name (default "HCD")
      * @return number of matches found (may be less than n)
      */
-    int getTopFragmentMatches(const String& protein_sequence,
+    int getTopFragmentMatches(const std::string& protein_sequence,
                               int n,
                               double* masses,
                               double* qscores,
@@ -260,7 +260,7 @@ namespace OpenMS
                               int* fragment_indices,
                               DeconvolvedSpectrum& stored_ms2,
                               ProteoformMatch& result,
-                              const String& fragmentation_method = "HCD",
+                              const std::string& fragmentation_method = "HCD",
                               double tolerance_ppm = 0.0,
                               FragmentScores* frag_scores = nullptr);
 
@@ -286,7 +286,7 @@ namespace OpenMS
      * @param fragmentation_method fragmentation method name (default "HCD")
      * @return number of results returned (may be < n)
      */
-    int getTerminalFragmentIons(const String& protein_sequence,
+    int getTerminalFragmentIons(const std::string& protein_sequence,
                                 int n,
                                 double* masses,
                                 double* qscores,
@@ -297,7 +297,7 @@ namespace OpenMS
                                 int* fragment_indices,
                                 DeconvolvedSpectrum& stored_ms2,
                                 ProteoformMatch& result,
-                                const String& fragmentation_method = "HCD",
+                                const std::string& fragmentation_method = "HCD",
                                 double tolerance_ppm = 0.0,
                                 FragmentScores* frag_scores = nullptr);
 
@@ -321,7 +321,7 @@ namespace OpenMS
      * @param fragmentation_method fragmentation method name (default "HCD")
      * @return number of enclosing ions found
      */
-    int getAmbiguityEnclosingIons(const String& protein_sequence,
+    int getAmbiguityEnclosingIons(const std::string& protein_sequence,
                                   int n,
                                   double* masses,
                                   double* qscores,
@@ -332,7 +332,7 @@ namespace OpenMS
                                   int* fragment_indices,
                                   DeconvolvedSpectrum& stored_ms2,
                                   ProteoformMatch& result,
-                                  const String& fragmentation_method = "HCD",
+                                  const std::string& fragmentation_method = "HCD",
                                   double tolerance_ppm = 0.0,
                                   FragmentScores* frag_scores = nullptr);
 
@@ -368,11 +368,11 @@ namespace OpenMS
      * @param fragmentation_method fragmentation method name (default "HCD")
      * @return number of matches found
      */
-    int runTagBasedFragmentMatching_(const String& protein_sequence,
+    int runTagBasedFragmentMatching_(const std::string& protein_sequence,
                                     std::vector<TagBasedFragmentMatch>& matches,
                                     DeconvolvedSpectrum& stored_ms2,
                                     ProteoformMatch& result,
-                                    const String& fragmentation_method = "HCD",
+                                    const std::string& fragmentation_method = "HCD",
                                     double tolerance_ppm = 0.0);
 
     /**
@@ -385,11 +385,11 @@ namespace OpenMS
      *
      * @return number of matches (explained ions)
      */
-    int runRefineMatching_(const String& protein_sequence,
+    int runRefineMatching_(const std::string& protein_sequence,
                            std::vector<TagBasedFragmentMatch>& matches,
                            DeconvolvedSpectrum& stored_ms2,
                            ProteoformMatch& result,
-                           const String& fragmentation_method = "HCD",
+                           const std::string& fragmentation_method = "HCD",
                            double tolerance_ppm = 0.0);
   };
 

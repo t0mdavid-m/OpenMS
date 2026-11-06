@@ -154,17 +154,24 @@ public:
       {}
 
       /**
-        Gets size of isotope distribution. @note Size is not smaller than
-        predefined @c SIZE.
+        Gets the number of accessible isotope peaks of this distribution.
 
-        @return Size of isotope distribution.
+        @note The returned value is clamped to the truncation length given by
+        the static member @c SIZE: it returns <tt>min(number of stored peaks,
+        SIZE)</tt>, i.e. size() is at most @c SIZE (NOT "not smaller than"
+        @c SIZE). @c SIZE is a shared static member; if it is left at its
+        default value of 0, size() returns 0 regardless of how many peaks are
+        actually stored, even though empty() (which checks the stored peaks
+        directly) may return false.
+
+        @return The number of accessible isotope peaks (clamped to @c SIZE).
       */
       size_type size() const { return std::min(peaks_.size(), SIZE); }
 
       /**
         Assignment operator.
 
-        @param distribution Isotope distribution to be assigned to this one.
+        @param[in] distribution Isotope distribution to be assigned to this one.
         @return Reference to this object.
       */
       IMSIsotopeDistribution & operator=(
@@ -193,7 +200,7 @@ public:
         @note Operator is unary, so result is stored in this
         object itself.
 
-        @param distribution Distribution to be folded with this one.
+        @param[in] distribution Distribution to be folded with this one.
         @return Reference to this object.
 
         @see IsotopeDistribution& operator *=(unsigned int)
@@ -205,7 +212,7 @@ public:
         Operator for folding this distribution with itself @c pow times.
         @note Operator is unary, so result is stored in this object itself.
 
-        @param pow Number of times this distribution is to be folded with
+        @param[in] pow Number of times this distribution is to be folded with
                                 itself.
         @return Reference to this object.
 
@@ -216,7 +223,7 @@ public:
       /**
         Gets a mass of isotope @c i.
 
-        @param i An index of isotope.
+        @param[in] i An index of isotope.
         @return Mass of isotope @c i.
       */
       mass_type getMass(size_type i) const
@@ -227,7 +234,7 @@ public:
       /**
         Gets an abundance of isotope @c i.
 
-        @param i An index of isotope.
+        @param[in] i An index of isotope.
         @return An abundance of isotope @c i.
       */
       abundance_type getAbundance(size_type i) const
@@ -252,7 +259,7 @@ public:
       /**
         Sets a nominal mass for distribution.
 
-        @param nominalMass The new nominal mass for the distribution.
+        @param[in] nominalMass The new nominal mass for the distribution.
       */
       void setNominalMass(nominal_mass_type nominalMass)
       {
@@ -301,8 +308,8 @@ private:
     /**
       Prints isotope distribution to the stream @c os.
 
-      @param os Output stream to which distribution is printed out.
-      @param distribution Distribution to be printed out.
+      @param[out] os Output stream to which distribution is printed out.
+      @param[in] distribution Distribution to be printed out.
     */
     OPENMS_DLLAPI std::ostream & operator<<(std::ostream & os,
                                             const IMSIsotopeDistribution & distribution);

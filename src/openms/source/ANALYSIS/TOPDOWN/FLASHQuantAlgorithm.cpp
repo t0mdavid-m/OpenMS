@@ -9,6 +9,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHQuantAlgorithm.h>
 #include <OpenMS/CONCEPT/LogStream.h>
 #include <OpenMS/DATASTRUCTURES/Matrix.h>
+#include <OpenMS/DATASTRUCTURES/MatrixEigen.h>
 #include <OpenMS/ML/NNLS/NonNegativeLeastSquaresSolver.h>
 #include <OpenMS/FEATUREFINDER/EGHTraceFitter.h>
 #include <OpenMS/FEATUREFINDER/MassTraceDetection.h>
@@ -1054,7 +1055,7 @@ namespace OpenMS
 
   void FLASHQuantAlgorithm::setOptionalDetailedOutput_()
   {
-    String out_path = output_file_path_.substr(0, output_file_path_.find_last_of(".")) + "_shared.tsv";
+    std::string out_path = output_file_path_.substr(0, output_file_path_.find_last_of(".")) + "_shared.tsv";
     shared_out_stream_.open(out_path, std::fstream::out);
     shared_out_stream_ << "FeatureGroupID\tTraceType\tMass\tCharge\tIsotopeIndex\tQuantValue\tCentroidMz\tTraceLabel\tRTs\tMZs\tIntensities\n"; // header
     // TraceType = 0 (not shared), 1 (true, before resolution), 2(true, after resolution), 3(theoretical shape)
@@ -1449,7 +1450,7 @@ namespace OpenMS
 
       /// 3.1 collecting all shared mts and features in this conflicting region
       std::unordered_map<Size, bool> shared_mts_in_this_region; // to track all detected shared mass traces. key = shared_mt_idx, value = visited?
-      std::set<String> visited_features_in_this_region; // to track all detected features. key = [FeatGroupID]&[CS]
+      std::set<std::string> visited_features_in_this_region; // to track all detected features. key = [FeatGroupID]&[CS]
       std::vector<Feature> conflicting_features;
       std::vector<Feature> features_not_for_resolution;
       std::vector<MassTrace> conflicting_mts; // collect shared traces for resolution (not FeatureSeed, but original MassTrace. FeatureSeed has conflicting information)
@@ -1469,7 +1470,7 @@ namespace OpenMS
           int cs_of_feat = feat.second;
 
           // check if FeatureElement is not created yet
-          String feat_label = std::to_string(feat.first) + '&' + std::to_string(cs_of_feat);
+          std::string feat_label = std::to_string(feat.first) + '&' + std::to_string(cs_of_feat);
           if (visited_features_in_this_region.find(feat_label) != visited_features_in_this_region.end())
           {
             continue;
@@ -2104,7 +2105,7 @@ namespace OpenMS
 
       if (this->shared_output_requested_)
       {
-        auto theo_vec = theo_matrix.getEigenMatrix().col(col);
+        auto theo_vec = eigenView(theo_matrix).col(col);
         std::vector<double> this_col(theo_vec.begin(), theo_vec.end());
         feat.setTheoreticalShapes(*lmt_ptr, this_col, calculated_ratio[col]);
       }
@@ -2197,7 +2198,7 @@ namespace OpenMS
     MassTrace new_trace(tmp_mt);
     new_trace.setSmoothedIntensities(smoothed_tmp);
     // set label as if it's a sub-trace
-    new_trace.setLabel(ref_trace.getLabel() + "_" + String(ratio));
+    new_trace.setLabel(ref_trace.getLabel() + "_" + StringUtils::toStr(ratio));
     if (use_smoothed_intensities_)
       new_trace.updateSmoothedMaxRT();
     new_trace.updateWeightedMeanMZ();
@@ -2392,7 +2393,7 @@ namespace OpenMS
       new_mt.setCentroidIM(mt.getCentroidIM());
       new_mt.fwhm_mz_avg = mt.fwhm_mz_avg;
       new_mt.fwhm_im_avg = mt.fwhm_im_avg;
-      new_mt.setLabel(mt.getLabel() + "." + String(min_idx + 1));
+      new_mt.setLabel(mt.getLabel() + "." + StringUtils::toStr(min_idx + 1));
       new_mt.updateSmoothedMaxRT();
       new_mt.updateWeightedMeanMZ();
       new_mt.updateWeightedMZsd();
@@ -2426,8 +2427,8 @@ namespace OpenMS
     iso_model_ = avg;
     // wall time of the steps, logged at the end
     auto clock_start = std::chrono::steady_clock::now();
-    std::vector<std::pair<String, double>> step_seconds;
-    const auto lap = [&clock_start, &step_seconds](const String& name) {
+    std::vector<std::pair<std::string, double>> step_seconds;
+    const auto lap = [&clock_start, &step_seconds](const std::string& name) {
       const auto now = std::chrono::steady_clock::now();
       step_seconds.emplace_back(name, std::chrono::duration<double>(now - clock_start).count());
       clock_start = now;
@@ -2800,7 +2801,7 @@ namespace OpenMS
                     << " features filled from their FeatureQuantity; wall time";
     for (const auto& [name, seconds] : step_seconds)
     {
-      OPENMS_LOG_INFO << " " << name << " " << String::number(seconds, 1) << " s";
+      OPENMS_LOG_INFO << " " << name << " " << StringUtils::number(seconds, 1) << " s";
     }
     OPENMS_LOG_INFO << std::endl;
     fd_seeded_ = false;

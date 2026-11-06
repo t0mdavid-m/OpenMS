@@ -12,18 +12,16 @@
 #include <OpenMS/CONCEPT/UniqueIdIndexer.h>
 #include <OpenMS/KERNEL/RangeManager.h>
 #include <OpenMS/KERNEL/ConsensusFeature.h>
-#include <OpenMS/KERNEL/MSExperiment.h>
 
 #include <OpenMS/METADATA/DocumentIdentifier.h>
 #include <OpenMS/METADATA/MetaInfoInterface.h>
 #include <OpenMS/METADATA/PeptideIdentificationList.h>
-#include <OpenMS/METADATA/PeptideIdentification.h>
+#include <OpenMS/METADATA/ProteinIdentification.h>
 #include <OpenMS/METADATA/ID/IdentificationData.h>
 
 #include <OpenMS/CONCEPT/Types.h>
-#include <OpenMS/CONCEPT/LogStream.h>
 #include <OpenMS/DATASTRUCTURES/ExposedVector.h>
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 #include <OpenMS/DATASTRUCTURES/Utils/MapUtilities.h>
 #include <OpenMS/OpenMSConfig.h>
 
@@ -37,6 +35,7 @@ namespace OpenMS
   class PeptideHit;
   class ProteinIdentification;
   class DataProcessing;
+  class MSExperiment;
   namespace Logger
   {
     class LogStream;
@@ -77,7 +76,7 @@ public:
     };
 
     /// Description of the columns in a consensus map
-    struct  ColumnHeader :
+    struct OPENMS_DLLAPI ColumnHeader :
       public MetaInfoInterface
     {
       /// Default constructor
@@ -90,10 +89,10 @@ public:
       ColumnHeader& operator=(const ColumnHeader&) = default;
 
       /// File name of the mzML file
-      String filename;
+      std::string filename;
 
       /// Label e.g. 'heavy' and 'light' for ICAT, or 'sample1' and 'sample2' for label-free quantitation
-      String label;
+      std::string label;
 
       /// @brief Number of elements (features, peaks, ...).
       /// This is e.g. used to check for correct element indices when writing a consensus map TODO fix that
@@ -102,7 +101,7 @@ public:
       /// Unique id of the file
       UInt64 unique_id = UniqueIdInterface::INVALID;
 
-      unsigned getLabelAsUInt(const String& experiment_type) const;
+      unsigned getLabelAsUInt(const std::string& experiment_type) const;
     };
 
     ///@name Type definitions
@@ -144,7 +143,7 @@ public:
 
       The number of columns (maximum map index) stays the same.
 
-      @param rhs The consensus map to be merged.
+      @param[in] rhs The consensus map to be merged.
     */
     ConsensusMap& appendRows(const ConsensusMap& rhs);
 
@@ -153,7 +152,7 @@ public:
 
       The number of columns (maximum map index) is the sum of both maps.
 
-      @param rhs The consensus map to be merged.
+      @param[in] rhs The consensus map to be merged.
     */
     ConsensusMap& appendColumns(const ConsensusMap& rhs);
 
@@ -161,7 +160,7 @@ public:
     /**
       @brief Clears all data and meta data
 
-      @param clear_meta_data If @em true, all meta data is cleared in addition to the data.
+      @param[in] clear_meta_data If @em true, all meta data is cleared in addition to the data.
     */
     void clear(bool clear_meta_data = true);
 
@@ -175,10 +174,10 @@ public:
     void setColumnHeaders(const ColumnHeaders& column_description);
 
     /// Non-mutable access to the experiment type
-    const String& getExperimentType() const;
+    const std::string& getExperimentType() const;
 
     /// Mutable access to the experiment type
-    void setExperimentType(const String& experiment_type);
+    void setExperimentType(const std::string& experiment_type);
 
     /**
       @name Sorting.
@@ -230,6 +229,12 @@ public:
     /// sets the protein identifications by moving
     void setProteinIdentifications(std::vector<ProteinIdentification>&& protein_identifications);
 
+    /// finds a protein identification by its identifier (returns nullptr if not found)
+    const ProteinIdentification* findProteinIdentification(const std::string& identifier) const;
+
+    /// finds a protein identification by its identifier (returns nullptr if not found)
+    ProteinIdentification* findProteinIdentification(const std::string& identifier);
+
     /// non-mutable access to the unassigned peptide identifications
     const PeptideIdentificationList& getUnassignedPeptideIdentifications() const;
 
@@ -253,8 +258,8 @@ public:
 
     /// set the file path to the primary MS run using the mzML annotated in the MSExperiment @p e.
     /// If it doesn't exist, fallback to @p s.
-    /// @param s Fallback if @p e does not have a primary MS runpath
-    /// @param e Use primary MS runpath from this mzML file
+    /// @param[in] s Fallback if @p e does not have a primary MS runpath
+    /// @param[in,out] e Use primary MS runpath from this mzML file
     void setPrimaryMSRunPath(const StringList& s, MSExperiment & e);
 
     /// returns the MS run path (stored in ColumnHeaders)
@@ -328,8 +333,19 @@ public:
 
      MetaValues of ConsensusFeatures can be copied to all FeatureMaps, just to the first or they can be ignored.
 
-     @param mode Decide what to do with the MetaValues annotated at the ConsensusFeatures.
-     @return FeatureMaps
+     The result holds one FeatureMap per column header (see getColumnHeaders()), ordered by map index: the k-th
+     FeatureMap corresponds to the k-th column header in key order. Map indices do not have to be contiguous, e.g.
+     for the column headers {0, 3} the second FeatureMap (position 1) holds the features of map index 3. For the
+     usual contiguous map indices 0..n-1 the position equals the map index.
+
+     @param[in] mode Decide what to do with the MetaValues annotated at the ConsensusFeatures.
+     @return FeatureMaps, one per column header, in key order of the column headers
+     @throws Exception::ElementNotFound if a FeatureHandle or the 'map_index' meta value of a PeptideIdentification
+             refers to a map index which is not a column header of this ConsensusMap (see isMapConsistent()).
+             Also thrown if there is no feature (or no column) with map index 0 although the data was processed by
+             the IsobaricAnalyzer or @p mode is SplitMeta::COPY_FIRST.
+     @throws Exception::MissingInformation if the data was not processed by the IsobaricAnalyzer and a
+             PeptideIdentification has no 'map_index' meta value
     */
     std::vector<FeatureMap> split(SplitMeta mode = SplitMeta::DISCARD) const;
 
@@ -356,7 +372,7 @@ public:
     ColumnHeaders column_description_;
 
     /// type of experiment (label-free, labeled_MS1, labeled_MS2)
-    String experiment_type_ = "label-free";
+    std::string experiment_type_ = "label-free";
 
     /// protein identifications
     std::vector<ProteinIdentification> protein_identifications_;

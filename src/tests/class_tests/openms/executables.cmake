@@ -1,11 +1,14 @@
 set(concept_executables_list
   ClassTest_test
+  ClassTestUtils_test
   Colorizer_test
   Exception_Base_test
   FuzzyStringComparator_test
   #GlobalExceptionHandler_test
+  PrecisionWrapper_test
+  ProgressLogger_test
+  RAIICleanup_test
   StreamHandler_test
-  Types_test
   VersionInfo_test
   LogConfigHandler_test
   LogStream_test
@@ -15,20 +18,14 @@ set(concept_executables_list
   UniqueIdInterface_test
 )
 set(qc_executables_list
-  Contaminants_test
   DBSuitability_test
-  FragmentMassError_test
-  FWHM_test
+  FeatureSummary_test
+  IdentificationSummary_test
   MissedCleavages_test
   Ms2IdentificationRate_test
-  Ms2SpectrumStats_test
-  MQEvidenceExporter_test
-  MQMsmsExporter_test
-  MzCalibration_test
-  PeptideMass_test
   PSMExplainedIonCurrent_test
   QCBase_test
-  RTAlignment_test
+  SpectrumCount_test
   TIC_test
 )
 
@@ -65,7 +62,9 @@ set(datastructures_executables_list
   MassExplainer_test
   MatchedIterator_test
   Matrix_test
+  MatrixEigen_test
   OPXLDataStructs_test
+  OSWData_test
   Param_test
   ParamValue_test
   QTCluster_test
@@ -75,6 +74,10 @@ set(datastructures_executables_list
   String_test
   #ToolDescription_test
 )
+
+if(WITH_ONNX)
+  list(APPEND datastructures_executables_list PeptDeepInference_test)
+endif()
 
 set(metadata_executables_list
   AcquisitionInfo_test
@@ -94,6 +97,7 @@ set(metadata_executables_list
   HPLC_test
   IdentificationData_test
   IdentificationDataConverter_test
+  IdentifiedMolecule_test
   InstrumentSettings_test
   Instrument_test
   IonDetector_test
@@ -101,9 +105,11 @@ set(metadata_executables_list
   MassAnalyzer_test
   MetaInfoDescription_test
   MetaInfoInterface_test
+  MS1LabelState_test
   MetaInfoInterfaceUtils_test
   MetaInfoRegistry_test
   MetaInfo_test
+  SpectrumNativeIDParser_test
   PeptideEvidence_test
   PeptideHit_test
   PeptideIdentification_test
@@ -112,6 +118,8 @@ set(metadata_executables_list
   Product_test
   ProteinHit_test
   ProteinIdentification_test
+  ProteinModificationSummary_test
+  IdentifierMSRunMapper_test
   Sample_test
   ScanWindow_test
   Software_test
@@ -119,16 +127,24 @@ set(metadata_executables_list
   SpectrumLookup_test
   SpectrumMetaDataLookup_test
   SpectrumSettings_test
+  USI_test
   )
 
 set(system_executables_list
+  BuildInfo_test
   ExternalProcess_test
   File_test
-  FileWatcher_test
+  Network_test
+  NetworkGetRequest_test
   JavaInfo_test
+  PathUtils_test
   PythonInfo_test
+  RWrapper_test
   StopWatch_test
   SysInfo_test
+  SystemSettings_test
+  TempFiles_test
+  UpdateCheck_test
 )
 
 set(kernel_executables_list
@@ -152,8 +168,10 @@ set(kernel_executables_list
   MRMTransitionGroup_test
   MSChromatogram_test
   MSExperiment_test
+  MSExperiment_rasterizeRTMZ_test
   OnDiscMSExperiment_test
   MSSpectrum_test
+  MSSpectrum_rasterizeIMFrame_test
   Peak1D_test
   Peak2D_test
   PeakIndex_test
@@ -161,11 +179,15 @@ set(kernel_executables_list
   RichPeak2D_test
   StandardTypes_test
   SpectrumHelper_test
+  SpectrumRangeManager_test
 )
 
 set(format_executables_list
   AbsoluteQuantitationStandardsFile_test
   Base64_test
+  BrukerTimsFile_test
+  BrukerTimsImagingFile_test
+  PASEFHillCentroider_test
   MSNumpressCoder_test
   Bzip2Ifstream_test
   Bzip2InputStream_test
@@ -182,8 +204,15 @@ set(format_executables_list
   FASTAFile_test
   FeatureFileOptions_test
   FeatureXMLFile_test
+  FLASHDeconvFeatureFile_test
+  # FLASHDeconvSpectrumFile_test  # OpenMS 3.6 test of 3.6's FLASHDeconvSpectrumFile API (ostream writers, other signatures); FDmerge has its own class
+  # FLASHHelperClasses_test       # OpenMS 3.6 test of 3.6's FLASHHelperClasses (std::hash specializations); FDmerge has its own class
   FileHandler_test
+  FileNameUtils_test
+  FileInfo_test
   FileTypes_test
+  GNPSMetaValueFile_test
+  GNPSQuantificationFile_test
   GzipIfstream_test
   GzipInputStream_test
   IBSpectraFile_test
@@ -199,6 +228,7 @@ set(format_executables_list
   MS2File_test
   MSPFile_test
   MSPGenericFile_test
+  MSstatsFile_test
   MascotGenericFile_test
   MascotRemoteQuery_test
   MascotXMLFile_test
@@ -209,7 +239,10 @@ set(format_executables_list
   MzIdentMLFile_test
   MzDataValidator_test
   MzIdentMLValidator_test
+  ThermoRawFileMetadata_test
   MzMLFile_test
+  ImzMLFile_test
+  ImzMLFile_all_modes_test
   MzMLSpectrumDecoder_test
   MzMLSqliteHandler_test
   MzMLSqliteSwathHandler_test
@@ -225,35 +258,44 @@ set(format_executables_list
   OMSSACSVFile_test
   OMSSAXMLFile_test
   OSWFile_test
+  OSWFileInference_test
   PTMXMLFile_test
   ParamCTDFile_test
   ParamJSONFile_test
   ParamXMLFile_test
+  ParquetFilter_test
+  PEFFFile_test
   PeakFileOptions_test
   PeakTypeEstimator_test
   PepNovoInfile_test
   PepNovoOutfile_test
   PepXMLFileMascot_test
   PepXMLFile_test
+  Percolator_test
+  Percolator_subprocess_parity_test
+  PercolatorAdapter_parity_test
   PercolatorInfile_test
   PercolatorOutfile_test
   ProtXMLFile_test
+  QcMLFile_test
   SVOutStream_test
   SemanticValidator_test
   SequestInfile_test
   SequestOutfile_test
   SpecArrayFile_test
   SqMassFile_test
+  SqliteConnector_test
+  MRMFile_test
+  ThermoRawFile_test
   SwathMapMassCorrection_test
   SwathFile_test
   SwathFileConsumer_test
   SwathWindowLoader_test
   TextFile_test
-  ToolDescriptionFile_test
+  TargetedDataFileLoader_test
   TraMLFile_test
   TransformationXMLFile_test
   UnimodXMLFile_test
-  UniProtXMLFile_test
   XMassFile_test
   XMLFile_test
   XMLHandler_test
@@ -262,6 +304,12 @@ set(format_executables_list
   XTandemInfile_test
   XTandemXMLFile_test
   ZlibCompression_test
+  ZstdCompression_test
+  Libzip_test
+  ZipArchiveFile_test
+  ZipIfstream_test
+  ZipInputStream_test
+  ZipRandomAccessFile_test
   # DATAACCESS
   MSDataCachedConsumer_test
   MSDataTransformingConsumer_test
@@ -270,36 +318,65 @@ set(format_executables_list
   MSDataAggregatingConsumer_test
   SpectrumAccessQuadMZTransforming_test
   SpectrumAccessSqMass_test
+  SpectrumAccessOpenMS_test
+  SpectrumAccessOpenMSInMemory_test
+  MRMFeatureAccessOpenMS_test
   SiriusFragmentAnnotation_test
 )
 
 if(WITH_HDF5)
   list(APPEND format_executables_list HDF5_test)
 endif()
-if(WITH_PARQUET)
-  list(APPEND format_executables_list Arrow_test QuantmsIO_test)
-endif()
+
+list(APPEND format_executables_list Arrow_test MSExperimentArrowExport_test ConsensusMapArrowExport_test
+  ProteinGroupArrowExport_test QPXFile_test QPXCollectionExport_test QPXValueValidation_test
+  QPXIdentity_test
+  MSChromatogramParquetConsumer_test
+  MobilogramParquetConsumer_test
+  XICParquetFile_test
+  XIMParquetFile_test
+  XIPMParquetConsumer_test
+  XIPMParquetRoundTrip_test
+  XIPMParquetFile_test
+  ParquetFile_test
+  ProteinIdentificationArrowIO_test
+  FeatureMapArrowIO_test
+  ConsensusMapArrowIO_test
+  PSMArrowIO_test
+  ModificationDefinitionIO_test
+  ArrowSchemaRegistry_test
+  ArrowIOHelpers_test
+  ParquetTableComparator_test)
 
 set(math_executables_list
   BasicStatistics_test
   BilinearInterpolation_test
   BSpline2d_test
+  BSplineSmoothingSpline_test
   CubicSpline2d_test
+  SplineBisection_test
   EmgGradientDescent_test
   GammaDistributionFitter_test
   GaussFitter_test
   GumbelDistributionFitter_test
+  GumbelMaxLikelihoodFitter_test
   GridSearch_test
   CrossValidation_test
   Histogram_test
+  KernelDensityEstimation_test
+  LevelContextInference_test
   LinearInterpolation_test
+  LinearResampling_test
   LinearRegression_test
+  LinearRegressionWithoutIntercept_test
   MathFunctions_test
+  MultipleTesting_test
   #MSNumpress_test
   NNLS_test
   NonNegativeLeastSquaresSolver_test
   PosteriorErrorProbabilityModel_test
   QuadraticRegression_test
+  RankData_test
   RANSAC_test
   RANSACModel_test
   RANSACModelLinear_test
@@ -309,6 +386,7 @@ set(math_executables_list
 )
 
 set(filtering_executables_list
+  Biosaur2Algorithm_test
   DataFilters_test
   Deisotoper_test
   ElutionPeakDetection_test
@@ -319,11 +397,11 @@ set(filtering_executables_list
   GaussFilterAlgorithm_test
   IDFilter_test
   InternalCalibration_test
-  LinearResampler_test
   LinearResamplerAlign_test
   LowessSmoothing_test
   MassTraceDetection_test
   MorphologicalFilter_test
+  ModifiedSincSmoother_test
   MultiplexClustering_test
   MultiplexDeltaMasses_test
   MultiplexDeltaMassesGenerator_test
@@ -332,6 +410,7 @@ set(filtering_executables_list
   MultiplexFiltering_test
   MultiplexFilteringCentroided_test
   MultiplexFilteringProfile_test
+  MultiplexResolverAlgorithm_test
   MultiplexIsotopicPeakPattern_test
   MultiplexSatelliteCentroided_test
   MultiplexSatelliteProfile_test
@@ -380,15 +459,21 @@ set(comparison_executables_list
 set(chemistry_executables_list
   AAIndex_test
   AASequence_test
+  AdductInfo_test
   CoarseIsotopeDistribution_test
   CrossLinksDB_test
   DecoyGenerator_test
+  DigestionEnzyme_test
   DigestionEnzymeProtein_test
+  DigestionEnzymeRNA_test
   ElementDB_test
   Element_test
   EmpiricalFormula_test
   EnzymaticDigestion_test
   FineIsotopeDistribution_test
+  GlycanStructure_test
+  HydrophobicityProfile_test
+  IsoelectricPoint_test
   IMSAlphabetParser_test
   IMSAlphabetTextParser_test
   IMSAlphabet_test
@@ -398,25 +483,33 @@ set(chemistry_executables_list
   IsoSpec_test
   IsotopeDistribution_test
   MassDecomposer_test
+  ModificationDataProvider_test
   ModificationDefinition_test
   ModificationDefinitionsSet_test
   ModificationsDB_test
-  ModifiedNASequenceGenerator_test
+  MonosaccharideDB_test
+  IonNaming_test
+  MzPAF_test
   NASequence_test
   NucleicAcidSpectrumGenerator_test
-        ProForma_test
+  DigestionEnzymeDataProvider_test
+  ProFormaParser_test
   ProteaseDB_test
   ProteaseDigestion_test
+  RNaseDB_test
   RNaseDigestion_test
   RealMassDecomposer_test
   ResidueDB_test
   ResidueModification_test
   Residue_test
   RibonucleotideDB_test
+  RibonucleotideDataProvider_test
   Ribonucleotide_test
+  SequenceCoverage_test
   SimpleTSGXLMS_test
   SpectrumAnnotator_test
   Tagger_test
+  TheoreticalGlycanSpectrumGenerator_test
   TheoreticalSpectrumGeneratorXLMS_test
   TheoreticalSpectrumGenerator_test
   Weights_test
@@ -448,70 +541,34 @@ set(analysis_executables_list
   ConsensusMapNormalizerAlgorithmQuantile_test
   ConsensusMapMergerAlgorithm_test
   #DataAccessHelper_test
-  # DeconvolvedSpectrum_test  # OpenMS data-structure unit test, out of FLASHIda scope;
-  #                           # superseded here by DeconvolvedSpectrum_OptimizationMetadata_test (D2)
-  DeconvolvedSpectrum_OptimizationMetadata_test
-  # Exception to the "offline FLASHDeconv units are out of scope" rule below: this locks the
-  # TopPIC *_ms2.feature layout, which TopPIC parses positionally and without bounds checks.
-  FLASHDeconvFeatureFile_test
-  FLASHIdaFAIMS_test
-  FLASHIdaQueueTracking_test
-  FLASHIda_ProcessScan_test
-  FLASHIda_ChargeModes_test
-  FLASHIda_CandidateAdmission_test
-  PlanUnit_test
-  FLASHIda_Replan_test
-  FLASHIda_DynamicTargets_test
-  ScanCommandLayout_test
-  FLASHIda_exploration_test
-  KineticModel_test
-  Refine_test
-  FLASHIda_LegacyConfig_test
-  ConfigSchemaParity_test
-  FLASHIda_Logging_test
-  FLASHIda_LoggingFields_test
-  MS3FragmentMatcher_test
-  MS3FragmentMatcher_identification_test
-  FragmentAnalysis_test
-  FragmentAnalysis_toProForma_test
-  ProteoformTracker_CEOptimization_test
-  ProteoformTracker_Trajectory_test
-  ProteoformTracker_Localization_test
-  ProteoformTracker_WinnerContext_test
-  ProteoformTracker_NonWinnerRematch_test
-  ProteoformTracker_Exhaustive_test
-  ProteoformTracker_Discriminating_test
-  ScanCommandQueue_Concurrent_test
-  ScanConfig_applyOverrides_test
-  Config_SchemaProjection_test
-  Quantification_test
+  # DeconvolvedSpectrum_test
   FalseDiscoveryRate_test
-  ProteoformDatabase_test
+  Scores_test
   FeatureDeconvolution_test
   FeatureDistance_test
+  FeatureMapping_test
   FeatureGroupingAlgorithmKD_test
   FeatureGroupingAlgorithmLabeled_test
   FeatureGroupingAlgorithmQT_test
   FeatureGroupingAlgorithmUnlabeled_test
   FeatureGroupingAlgorithm_test
+  PipEchoAlgorithm_test
+  PipEchoAlgorithm_realistic_test
   FeatureHandle_test
   FIAMSDataProcessor_test
-  # Intentionally excluded — out of FLASHIda real-time-bridge test scope (we test the IDA
-  # bridge, not OpenMS/offline-FLASHDeconv library units). See
-  # docs/superpowers/plans/2026-06-11-test-falsepass-mitigation.md (D2).
-  # FIAMSScheduler_test             # offline FIA-MS batch scheduler, not FLASHIda
-  # FLASHAnnotatorAlgorithm_test    # offline FLASHAnnotator tool, not the real-time IDA bridge
-  # FLASHDeconvAlgorithm_test       # offline FLASHDeconv tool, not the real-time IDA bridge
-  # FLASHDeconvHelperStructs_test   # OpenMS/FLASHDeconv helper-struct unit test, out of scope
-  # FLASHTaggerAlgorithm_test       # offline tagger; test is stale (hardcoded paths) - needs rewrite
-  # FLASHGappedTaggerAlgorithm_test  # offline FLASHTnT gapped tagger, not the real-time IDA bridge
-  FLASHTnTCandidateRanker_test
+  FIAMSScheduler_test
+  FLASHDeconvAlgorithm_test
+  FLASHDeconvHelperStructs_test
+  OpenSearchModificationAnalysis_test
   IDBoostGraph_test
+  IDDecoyProbability_test
   IDMapper_test
   IDMergerAlgorithm_test
   IDRipper_test
   IDScoreSwitcherAlgorithm_test
   ILPDCWrapper_test
+  IonIdentityMolecularNetworking_test
+  DDAWorkflowCommons_test
   IsotopeLabelingMDVs_test
   IncludeExcludeTarget_test
   IsobaricChannelExtractor_test
@@ -528,6 +585,8 @@ set(analysis_executables_list
   TMTElevenPlexQuantitationMethod_test
   TMTSixteenPlexQuantitationMethod_test
   TMTEighteenPlexQuantitationMethod_test
+  TMTThirtyTwoPlexQuantitationMethod_test
+  TMTThirtyFivePlexQuantitationMethod_test
   KDTreeFeatureMaps_test
   KDTreeFeatureNode_test
   LabeledPairFinder_test
@@ -535,6 +594,10 @@ set(analysis_executables_list
   TargetedExperimentHelper_test
   MRMFeaturePicker_test
   MRMMapping_test
+  MRMChromHandler_test
+  DefaultChromHandler_test
+  DIAChromHandler_test
+  ChromatogramProcessor_test
   MRMScoring_test
   MapAlignmentAlgorithmIdentification_test
   MapAlignmentAlgorithmKD_test
@@ -547,17 +610,16 @@ set(analysis_executables_list
   MassDecompositionAlgorithm_test
   MassDecomposition_test
   MassFeatureTrace_test
-  MassLadderAlgorithm_test
   MetaboliteFeatureDeconvolution_test
   MetaboliteSpectralMatching_test
   ModifiedPeptideGenerator_test
   NeedlemanWunsch_test
-  NeighborSeq_test
   PeptideIndexing_test
   PeptideAndProteinQuant_test
   PeptideProteinResolution_test
   PeakGroup_test
   PScore_test
+  FragmentIndex_test
   HyperScore_test
   MorpheusScore_test
   OpenPepXLAlgorithm_test
@@ -568,8 +630,7 @@ set(analysis_executables_list
   PrecursorPurity_test
   QTClusterFinder_test
   ReactionMonitoringTransition_test
-  NuXLModificationsGenerator_test
-  NuXLParameterParsing_test
+  ProSEAlgorithm_test
   SimpleSearchEngineAlgorithm_test
   SimpleSVM_test
   SpectralDeconvolution_test
@@ -585,13 +646,11 @@ set(analysis_executables_list
   XQuestScores_test
 )
 
+if(WITH_WNETALIGN)
+  list(APPEND analysis_executables_list FeatureGroupingAlgorithmWNet_test WNetMatcher_test)
+endif()
+
 set(applications_executables_list
-  INIUpdater_test
-  #MapAlignerBase_test
-  SearchEngineBase_test
-  TOPPBase_test
-  ToolHandler_test
-  ParameterInformation_test
   ConsoleUtils_test
 )
 
@@ -604,7 +663,7 @@ set(transformations_executables_list
   EmgFitter1D_test
   EmgModel_test
   ExtendedIsotopeFitter1D_test
-  ExtendedIsotopeModel_test  
+  ExtendedIsotopeModel_test
   FeatureFinderAlgorithmPickedHelperStructs_test
   FeatureFinderAlgorithmPicked_test
   FeatureFinderIdentificationAlgorithm_test
@@ -622,6 +681,7 @@ set(transformations_executables_list
   ModelDescription_test
   PeakPickerHiRes_test
   PeakPickerIterative_test
+  PeakPickerIM_test
   PeakWidthEstimator_test
   SeedListGenerator_test
   TraceFitter_test
@@ -637,7 +697,15 @@ endif(NOT DISABLE_OPENSWATH)
 set(ionmobility_executables_list
   FAIMSHelper_test
   IMDataConverter_test
+  IMDataArrayUtils_test
   IMTypes_test
+)
+
+set(imaging_executables_list
+  IonImage_test
+  MSImagingGeometry_test
+  MSImagingExperiment_test
+  MSImagingRegion_test
 )
 
 if(NOT DISABLE_OPENSWATH)
@@ -650,9 +718,14 @@ if(NOT DISABLE_OPENSWATH)
     TransitionPQPFile_test
     ChromatogramExtractor_test
     ChromatogramExtractorAlgorithm_test
+    PeakMapExtractor_test
     OpenSwathHelper_test
+    OpenSwathLibraryIDNormalizer_test
+    OpenSwathOSWWriter_test
+    TransitionListEvidenceFilter_test
     OpenSwathScoring_test
     OpenSwathScores_test
+    OpenSwathWorkflowScheduler_test
     PeakIntegrator_test
     PeakPickerChromatogram_test
     PeakPickerMobilogram_test
@@ -665,6 +738,7 @@ if(NOT DISABLE_OPENSWATH)
     TargetedSpectraExtractor_test
     OpenSwathSpectrumAccessOpenMS_test
     OpenSwathDataAccessHelper_test
+    CalibrationWorkflow_test
     MasstraceCorrelator_test
     MRMBatchFeatureSelector_test
     MRMFeatureScoring_test
@@ -672,6 +746,8 @@ if(NOT DISABLE_OPENSWATH)
     MRMFeatureFinderScoring_test
     MRMFeatureFilter_test
     MRMFeatureQC_test
+    OpenSwathExport_test
+    OpenSwathPercolatorScoring_test
     SpectrumHelpers_test
     StatsHelpers_test
     SwathQC_test
@@ -681,27 +757,57 @@ if(NOT DISABLE_OPENSWATH)
   )
 endif(NOT DISABLE_OPENSWATH)
 
-set(Boost_dependent_tests
-  DIAHelper_test
-  EmgModel_test
-  FASTAContainer_test
-  LogConfigHandler_test
-  LogStream_test
-  MRMDecoy_test
-  MRMFeatureFinderScoring_test
-  MRMTransitionGroupPicker_test
-  OpenSwathDataAccessHelper_test
-  OpenSwathHelper_test
-  OpenSwathMRMFeatureAccessOpenMS_test
-  OpenSwathSpectrumAccessOpenMS_test
-  PeakPickerChromatogram_test
-  PeakPickerMobilogram_test
-  SpectrumLookup_test
-  SpectrumMetaDataLookup_test
-  StatisticFunctions_test
-  String_test
-  TransitionTSVFile_test
-  TransitionPQPFile_test
+if(NOT DISABLE_OPENSWATH)
+  list(APPEND swath_executables_list TransitionParquetFile_test)
+  list(APPEND swath_executables_list OpenSwathOSWParquetReader_test)
+  list(APPEND swath_executables_list OpenSwathOSWParquetWriter_test)
+  list(APPEND swath_executables_list OpenSwathMatrixExporter_test)
+  list(APPEND format_executables_list OpenSwathOSWParquetRoundTrip_test)
+  list(APPEND swath_executables_list OpenSwathResultsExporter_test)
+  list(APPEND swath_executables_list OpenSwathParquetExporter_test)
+endif()
+
+### FDmerge: top-down class tests (FLASHTnT, FLASHIda, PEFF)
+set(topdown_executables_list
+  ConfigSchemaParity_test
+  Config_SchemaProjection_test
+  DeconvolvedSpectrum_OptimizationMetadata_test
+  FLASHIdaFAIMS_test
+  FLASHIdaQueueTracking_test
+  FLASHIda_CandidateAdmission_test
+  FLASHIda_ChargeModes_test
+  FLASHIda_DynamicTargets_test
+  FLASHIda_LegacyConfig_test
+  FLASHIda_LoggingFields_test
+  FLASHIda_Logging_test
+  FLASHIda_ProcessScan_test
+  FLASHIda_Replan_test
+  FLASHIda_exploration_test
+  FLASHTnTCandidateRanker_test
+  FragmentAnalysis_test
+  FragmentAnalysis_toProForma_test
+  KineticModel_test
+  MS3FragmentMatcher_identification_test
+  MS3FragmentMatcher_test
+  MassLadderAlgorithm_test
+  PlanUnit_test
+  ProteoformDatabase_test
+  ProteoformTracker_CEOptimization_test
+  ProteoformTracker_Discriminating_test
+  ProteoformTracker_Exhaustive_test
+  ProteoformTracker_Localization_test
+  ProteoformTracker_NonWinnerRematch_test
+  ProteoformTracker_Trajectory_test
+  ProteoformTracker_WinnerContext_test
+  Quantification_test
+  Refine_test
+  ScanCommandLayout_test
+  ScanCommandQueue_Concurrent_test
+  ScanConfig_applyOverrides_test
+  UniProtXMLFile_test
+  FLASHHelperClasses_ProForma_test
+  FLASHAnnotatorAlgorithm_test
+  FLASHTaggerAlgorithm_test
 )
 
 ### collect test executables
@@ -720,6 +826,8 @@ set(TEST_executables
     ${applications_executables_list}
     ${transformations_executables_list}
     ${ionmobility_executables_list}
+    ${imaging_executables_list}
     ${swath_executables_list}
     ${qc_executables_list}
+    ${topdown_executables_list}
 )

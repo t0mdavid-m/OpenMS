@@ -10,7 +10,7 @@
 
 #include <OpenMS/ANALYSIS/TARGETED/TargetedExperiment.h>
 #include <OpenMS/MATH/MathFunctions.h>
-#include <unordered_map>
+#include <map>
 
 // #define DEBUG_MRMIONSERIES
 
@@ -41,7 +41,7 @@ namespace OpenMS
   class OPENMS_DLLAPI MRMIonSeries
   {
 private:
-    TargetedExperiment::Interpretation annotationToCVTermList_(const String& annotation);
+    TargetedExperiment::Interpretation annotationToCVTermList_(const std::string& annotation);
 
     void annotationToCV_(ReactionMonitoringTransition& tr);
 
@@ -54,54 +54,54 @@ public:
     ~MRMIonSeries();
     //@}
 
-    typedef std::unordered_map<String, double> IonSeries; ///< An MRM ion series which maps: "ion_type" -> "fragment m/z"
+    typedef std::map<std::string, double> IonSeries; ///< An MRM ion series which maps: "ion_type" -> "fragment m/z"
 
     /**
       @brief Selects ion from IonSeries according to annotation string
 
-      @param ionseries the IonSeries from which to choose
-      @param ionid the annotation string of the query fragment ion
-      @return std::pair<String, double> the annotation and product m/z of
+      @param[in,out] ionseries the IonSeries from which to choose
+      @param[in] ionid the annotation string of the query fragment ion
+      @return std::pair<std::string, double> the annotation and product m/z of
       the queried fragment ion
 
     */
-    std::pair<String, double> getIon(IonSeries& ionseries, const String& ionid);
+    std::pair<std::string, double> getIon(IonSeries& ionseries, const std::string& ionid);
 
     /**
       @brief Selects ion from IonSeries according to product m/z
 
-      @param ionseries the IonSeries from which to choose
-      @param product_mz the product m/z of the queried fragment ion
-      @param mz_threshold the m/z threshold for annotation of the fragment ion
-      @return std::pair<String, double> the annotation and product m/z of
+      @param[in] ionseries the IonSeries from which to choose
+      @param[in] product_mz the product m/z of the queried fragment ion
+      @param[in] mz_threshold the m/z threshold for annotation of the fragment ion
+      @return std::pair<std::string, double> the annotation and product m/z of
       the queried fragment ion
 
     */
-    std::pair<String, double> annotateIon(const IonSeries& ionseries, const double product_mz, const double mz_threshold);
+    std::pair<std::string, double> annotateIon(const IonSeries& ionseries, const double product_mz, const double mz_threshold);
 
     /**
       @brief Annotates transition with CV terms
 
-      @param tr the transition to annotate
-      @param annotation the fragment ion annotation.
+      @param[in,out] tr the transition to annotate
+      @param[in] annotation the fragment ion annotation.
 
     */
-    void annotateTransitionCV(ReactionMonitoringTransition& tr, const String& annotation);
+    void annotateTransitionCV(ReactionMonitoringTransition& tr, const std::string& annotation);
 
     /**
       @brief Annotates transition
 
-      @param tr the transition to annotate
-      @param peptide the corresponding peptide
-      @param precursor_mz_threshold the m/z threshold for annotation of the precursor ion
-      @param product_mz_threshold the m/z threshold for annotation of the fragment ion
-      @param enable_reannotation whether the original (e.g. SpectraST)
+      @param[in,out] tr the transition to annotate
+      @param[in] peptide the corresponding peptide
+      @param[in] precursor_mz_threshold the m/z threshold for annotation of the precursor ion
+      @param[in] product_mz_threshold the m/z threshold for annotation of the fragment ion
+      @param[in] enable_reannotation whether the original (e.g. SpectraST)
       annotation should be used or reannotation should be conducted
-      @param fragment_types the fragment ion types for reannotation
-      @param fragment_charges the fragment ion charges for reannotation
-      @param enable_specific_losses whether specific neutral losses should be considered
-      @param enable_unspecific_losses whether unspecific neutral losses (H2O1, H3N1, C1H2N2, C1H2N1O1) should be considered
-      @param round_decPow round precursor and product m/z values to decimal power (default: -4)
+      @param[in] fragment_types the fragment ion types for reannotation
+      @param[in] fragment_charges the fragment ion charges for reannotation
+      @param[in] enable_specific_losses whether specific neutral losses should be considered
+      @param[in] enable_unspecific_losses whether unspecific neutral losses (H2O1, H3N1, C1H2N2, C1H2N1O1) should be considered
+      @param[in] round_decPow round precursor and product m/z values to decimal power (default: -4)
 
     */
     void annotateTransition(ReactionMonitoringTransition& tr,
@@ -109,7 +109,7 @@ public:
                             const double precursor_mz_threshold,
                             const double product_mz_threshold,
                             const bool enable_reannotation,
-                            const std::vector<String>& fragment_types,
+                            const std::vector<std::string>& fragment_types,
                             const std::vector<size_t>& fragment_charges,
                             const bool enable_specific_losses,
                             const bool enable_unspecific_losses,
@@ -118,18 +118,18 @@ public:
     /**
       @brief Computed theoretical fragment ion series
 
-      @param sequence the peptide amino acid sequence
-      @param precursor_charge the charge of the peptide precursor
-      @param fragment_types the fragment ion types for reannotation
-      @param fragment_charges the fragment ion charges for reannotation
-      @param enable_specific_losses whether specific neutral losses should be considered
-      @param enable_unspecific_losses whether unspecific neutral losses (H2O1, H3N1, C1H2N2, C1H2N1O1) should be considered
-      @param round_decPow round product m/z values to decimal power (default: -4)
+      @param[in] sequence the peptide amino acid sequence
+      @param[in] precursor_charge the charge of the peptide precursor
+      @param[in] fragment_types the fragment ion types for reannotation
+      @param[in] fragment_charges the fragment ion charges for reannotation
+      @param[in] enable_specific_losses whether specific neutral losses should be considered
+      @param[in] enable_unspecific_losses whether unspecific neutral losses (H2O1, H3N1, C1H2N2, C1H2N1O1) should be considered
+      @param[in] round_decPow round product m/z values to decimal power (default: -4)
       @return IonSeries the theoretical fragment ion series
     */
     IonSeries getIonSeries(const AASequence& sequence,
                            size_t precursor_charge,
-                           const std::vector<String>& fragment_types,
+                           const std::vector<std::string>& fragment_types,
                            const std::vector<size_t>& fragment_charges,
                            const bool enable_specific_losses,
                            const bool enable_unspecific_losses,

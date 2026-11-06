@@ -109,8 +109,14 @@ protected:
     // Docu in base class
     bool finishAdding_() override;
 
-    /// Collects fragment ion scans in the indicated RT/mz area and adds them to the menus
-    bool collectFragmentScansInArea_(const RangeType& range, QMenu* msn_scans, QMenu* msn_meta);
+    /// Collects fragment ion scans in the indicated RT/mz area and adds them to the menus.
+    /// Enumerates left and right from the center RT position.
+    /// @param range RT/mz area to search within
+    /// @param center_rt RT position to expand from (left and right)
+    /// @param msn_scans Menu to add scan actions to
+    /// @param msn_meta Menu to add metadata actions to
+    /// @param max_count Maximum number of MS2 scans to collect; 0 means unlimited.
+    bool collectFragmentScansInArea_(const RangeType& range, double center_rt, QMenu* msn_scans, QMenu* msn_meta, int max_count = 10);
 
     /// Draws the coordinates (or coordinate deltas) to the widget's upper left corner
     void drawCoordinates_(QPainter& painter, const PeakIndex& peak);
@@ -183,8 +189,8 @@ protected:
       Internally, this function makes use of the members 'canvas_coverage_min_' (giving the fraction (e.g. 20%) of area which should be covered by data)
       and 'pen_size_max_' (maximum allowed number of pixels per data point).
 
-      @param ratio_data2pixel The current ratio of # data points vs. # pixels of image
-      @param pen_size In/Out param: gives the initial pen size, and is increased (up to @p MAX_PEN_SIZE) to reach desired coverage given by 'canvas_coverage_min_'
+      @param[in] ratio_data2pixel The current ratio of # data points vs. # pixels of image
+      @param[in] pen_size In/Out param: gives the initial pen size, and is increased (up to @p MAX_PEN_SIZE) to reach desired coverage given by 'canvas_coverage_min_'
       @return The factor by which @p pen_size increased (gives a hint of how many data points should be merged to avoid overplotting)
     */
     double adaptPenScaling_(double ratio_data2pixel, double& pen_size) const;
@@ -198,8 +204,31 @@ protected:
     /// Returns the nearest peak to position @p pos
     PeakIndex findNearestPeak_(const QPoint& pos);
 
+    /**
+      @brief Finds the MS2-precursor marker nearest to the widget position @p pos.
+
+      Mirrors the precursor markers drawn by Painter2DPeak (only relevant when the
+      P_PRECURSORS layer flag is enabled). Detection is done at the MS2 precursor
+      position (RT of the MS/MS scan, precursor m/z).
+
+      @param[in] pos Mouse position in widget (pixel) coordinates.
+      @param[out] dist_sq Squared pixel distance of the returned precursor to @p pos (only valid if a precursor was found).
+      @return A PeakIndex referencing the MS/MS spectrum (@p spectrum) and its precursor (@p peak) if one was
+              found within a few pixels of @p pos; an invalid PeakIndex otherwise.
+    */
+    PeakIndex findNearestPrecursor_(const QPoint& pos, int& dist_sq);
+
+    /// Returns the XY position (in chart coordinates) of the precursor referenced by @p precursor. @throw Exception::InvalidRange for unsupported dimensions (e.g. ion mobility views)
+    PointXYType precursorIndexToXY_(const PeakIndex& precursor) const;
+
+    /// Highlights the precursor referenced by @p precursor (red circle), analogous to highlightPeak_()
+    void highlightPrecursor_(QPainter& painter, const PeakIndex& precursor);
+
+    /// Draws the coordinates (RT, m/z, charge) of the precursor referenced by @p precursor to the widget's upper left corner
+    void drawPrecursorCoordinates_(QPainter& painter, const PeakIndex& precursor);
+
     /// Paints a peak icon for feature and consensus feature peaks
-    void paintIcon_(const QPoint& pos, const QRgb& color, const String& icon, Size s, QPainter& p) const;
+    void paintIcon_(const QPoint& pos, const QRgb& color, const std::string& icon, Size s, QPainter& p) const;
 
     /// Translates the visible area by a given offset specified in fractions of current visible area
     void translateVisibleArea_(double x_axis_rel, double y_axis_rel);
@@ -208,8 +237,8 @@ protected:
       @brief Convert chart to widget coordinates
 
       Translates chart coordinates to widget coordinates.
-      @param x the chart coordinate x
-      @param y the chart coordinate y
+      @param[in] x the chart coordinate x
+      @param[in] y the chart coordinate y
       @return A point in widget coordinates
     */
     QPoint dataToWidget_(double x, double y) const
@@ -248,6 +277,8 @@ protected:
 
     /// the nearest peak/feature to the mouse cursor
     PeakIndex selected_peak_;
+    /// the nearest MS2 precursor marker to the mouse cursor (spectrum = MS/MS spectrum index, peak = precursor index); mutually exclusive with selected_peak_
+    PeakIndex selected_precursor_;
     /// start peak/feature of measuring mode
     PeakIndex measurement_start_;
 

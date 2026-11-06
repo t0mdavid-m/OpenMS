@@ -21,6 +21,8 @@
 
 #include <sstream>
 #include <map>
+#include <unordered_set>
+#include <functional>
 
 using namespace OpenMS;
 using namespace std;
@@ -46,7 +48,7 @@ START_SECTION(~EmpiricalFormula())
   delete e_ptr;
 END_SECTION
 
-START_SECTION(EmpiricalFormula(const String& rhs))
+START_SECTION(EmpiricalFormula(const std::string& rhs))
   // adding spaces and tabs to test sanitizeIfNotValidFormula.
   // test succeeds when sanitizeIfNotValidFormula has removed
   // all spaces, tabs and newlines from the provided formula
@@ -92,7 +94,7 @@ START_SECTION(const Element* getElement(UInt rounded_mass) const)
   TEST_EQUAL(e->getSymbol(), "C")
 END_SECTION
 
-START_SECTION(const Element* getElement(const String& name) const)
+START_SECTION(const Element* getElement(const std::string& name) const)
   const Element* e = db->getElement("C");
   TEST_EQUAL(e->getSymbol(), "C")
 END_SECTION
@@ -244,6 +246,41 @@ START_SECTION(bool isCharged() const)
   TEST_EQUAL(e_ptr->isCharged(), false)
 END_SECTION
 
+START_SECTION(EmpiricalFormula& addChargeAdduct(Int count, const std::string& adduct))
+  // adds 'count' adduct atoms and resets the charge to 0
+  EmpiricalFormula ef("C6H12O6");
+  EmpiricalFormula& ret = ef.addChargeAdduct(2);
+  TEST_EQUAL(&ret, &ef) // returns *this for chaining
+  TEST_EQUAL(ef.getCharge(), 0)
+  TEST_EQUAL(ef.getNumberOf(db->getElement("H")), 14) // 12 + 2 H added
+  TEST_EQUAL(ef, EmpiricalFormula("C6H14O6"))
+
+  // the mono weight after addChargeAdduct(q) matches a neutral formula with q extra H atoms,
+  // i.e. the composition the isotope generators used to build implicitly for a charge of q
+  EmpiricalFormula neutral("C6H12O6");
+  EmpiricalFormula explicitly_charged = neutral;
+  explicitly_charged.addChargeAdduct(2);
+  TEST_REAL_SIMILAR(explicitly_charged.getMonoWeight(), EmpiricalFormula("C6H14O6").getMonoWeight())
+
+  // non-default adduct and negative count (removing adducts)
+  EmpiricalFormula na("C6H12O6");
+  na.addChargeAdduct(1, "Na");
+  TEST_EQUAL(na.getNumberOf(db->getElement("Na")), 1)
+  TEST_EQUAL(na.getCharge(), 0)
+
+  EmpiricalFormula deprot("C6H12O6");
+  deprot.addChargeAdduct(-1); // remove one H (e.g. modeling a [M-H] type composition)
+  TEST_EQUAL(deprot.getNumberOf(db->getElement("H")), 11)
+
+  // migrating an already-charged formula: the charge is unconditionally reset to 0, so 'count'
+  // must be passed explicitly (typically getCharge()) to obtain a consistent neutral composition
+  EmpiricalFormula charged("C6H12O6");
+  charged.setCharge(2);
+  charged.addChargeAdduct(charged.getCharge()); // pass the existing charge explicitly
+  TEST_EQUAL(charged.getCharge(), 0)
+  TEST_EQUAL(charged.getNumberOf(db->getElement("H")), 14)
+END_SECTION
+
 START_SECTION(double getAverageWeight() const)
   EmpiricalFormula ef("C2");
   const Element* e = db->getElement("C");
@@ -340,11 +377,11 @@ START_SECTION(double getLightestIsotopeWeight() const)
   TEST_REAL_SIMILAR(ef.getLightestIsotopeWeight(), ef.getMonoWeight() - Constants::NEUTRON_MASS_U * 3)
 END_SECTION
 
-START_SECTION(String toString() const)
+START_SECTION(std::string toString() const)
   EmpiricalFormula ef("C2H5");
-  String str = ef.toString();
-  TEST_EQUAL(String(str).hasSubstring("H5"), true)
-  TEST_EQUAL(String(str).hasSubstring("C2"), true)
+  std::string str = ef.toString();
+  TEST_EQUAL(StringUtils::hasSubstring(std::string(str), "H5"), true)
+  TEST_EQUAL(StringUtils::hasSubstring(std::string(str), "C2"), true)
 END_SECTION
 
 START_SECTION((std::map<std::string, int> toMap() const))
@@ -358,8 +395,8 @@ START_SECTION([EXTRA](friend std::ostream& operator<<(std::ostream&, const Empir
   stringstream ss;
   EmpiricalFormula ef("C2H5");
   ss << ef;
-  TEST_EQUAL(String(ss.str()).hasSubstring("H5"), true);
-  TEST_EQUAL(String(ss.str()).hasSubstring("C2"), true);
+  TEST_EQUAL(StringUtils::hasSubstring(ss.str(), "H5"), true);
+  TEST_EQUAL(StringUtils::hasSubstring(ss.str(), "C2"), true);
 END_SECTION
 
 START_SECTION(bool operator!=(const EmpiricalFormula& rhs) const)
@@ -383,7 +420,7 @@ END_SECTION
 
 START_SECTION(ConstIterator begin() const)
   EmpiricalFormula ef("C6H12O6");
-  std::map<String, SignedSize> formula;
+  std::map<std::string, SignedSize> formula;
   formula["C"] = 6;
   formula["H"] = 12;
   formula["O"] = 6;
@@ -612,6 +649,46 @@ START_SECTION((static EmpiricalFormula hydrogen(int n_atoms = 1)))
   EmpiricalFormula f("H2O");
   EmpiricalFormula w = EmpiricalFormula::water();
   TEST_EQUAL(f, w);
+}
+END_SECTION
+
+START_SECTION(([EXTRA] std::hash<EmpiricalFormula>))
+{
+  // Test that equal formulas have equal hashes
+  EmpiricalFormula ef1("C6H12O6");
+  EmpiricalFormula ef2("C6H12O6");
+  EmpiricalFormula ef3("H12C6O6");  // Same formula, different order
+
+  std::hash<EmpiricalFormula> hasher;
+  TEST_EQUAL(hasher(ef1), hasher(ef2))
+  TEST_EQUAL(hasher(ef1), hasher(ef3))  // Order shouldn't matter
+
+  // Test that different formulas have different hashes (most likely)
+  EmpiricalFormula ef4("C6H12O7");  // Different formula
+  TEST_NOT_EQUAL(hasher(ef1), hasher(ef4))
+
+  // Test formulas with charges
+  EmpiricalFormula ef5("C6H12O6+");
+  EmpiricalFormula ef6("C6H12O6+");
+  EmpiricalFormula ef7("C6H12O6-");
+  TEST_EQUAL(hasher(ef5), hasher(ef6))
+  TEST_NOT_EQUAL(hasher(ef5), hasher(ef7))  // Different charge
+  TEST_NOT_EQUAL(hasher(ef1), hasher(ef5))  // Same formula, different charge
+
+  // Test empty formula
+  EmpiricalFormula ef_empty1;
+  EmpiricalFormula ef_empty2;
+  TEST_EQUAL(hasher(ef_empty1), hasher(ef_empty2))
+
+  // Test that formulas work in unordered_set
+  std::unordered_set<EmpiricalFormula> formula_set;
+  formula_set.insert(ef1);
+  formula_set.insert(ef2);  // Duplicate, should not increase size
+  formula_set.insert(ef4);  // Different formula
+  TEST_EQUAL(formula_set.size(), 2)
+  TEST_EQUAL(formula_set.count(ef1), 1)
+  TEST_EQUAL(formula_set.count(ef3), 1)  // Same as ef1
+  TEST_EQUAL(formula_set.count(ef4), 1)
 }
 END_SECTION
 

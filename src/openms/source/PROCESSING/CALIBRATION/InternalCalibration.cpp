@@ -7,6 +7,7 @@
 // --------------------------------------------------------------------------
 
 
+#include <OpenMS/DATASTRUCTURES/ListUtils.h>
 #include <OpenMS/PROCESSING/CALIBRATION/InternalCalibration.h>
 
 #include <OpenMS/FORMAT/SVOutStream.h>
@@ -14,9 +15,10 @@
 #include <OpenMS/MATH/StatisticFunctions.h>
 #include <OpenMS/MATH/MathFunctions.h>
 #include <OpenMS/SYSTEM/File.h>
+#include <OpenMS/SYSTEM/TempFiles.h>
 #include <OpenMS/SYSTEM/RWrapper.h>
 
-#include <QtCore/QStringList>
+#include <vector>
 
 #include <cstdio>
 
@@ -154,7 +156,7 @@ namespace OpenMS
     {
       OPENMS_LOG_INFO << "  " << its->first << " [of " << ref_masses.size() << "] lock masses: " << its->second << "x\n";
     }
-    OPENMS_LOG_INFO << std::endl;
+    OPENMS_LOG_INFO << '\n';
 
     // sort CalData by RT
     cal_data_.sortByRT();
@@ -186,7 +188,7 @@ namespace OpenMS
     // unassigned peptide IDs
     fillIDs_(fm.getUnassignedPeptideIdentifications(), tol_ppm, stats);
 
-    OPENMS_LOG_INFO << "Found " << cal_data_.size() << " calibrants (incl. unassigned) in FeatureMap." << std::endl;
+    OPENMS_LOG_INFO << "Found " << cal_data_.size() << " calibrants (incl. unassigned) in FeatureMap.\n";
     stats.print();
 
     // sort CalData by RT
@@ -261,7 +263,7 @@ namespace OpenMS
     CalibrantStats_ stats(tol_ppm);
     stats.cnt_total = pep_ids.size();
     fillIDs_(pep_ids, tol_ppm, stats);
-    OPENMS_LOG_INFO << "Found " << cal_data_.size() << " calibrants in peptide IDs." << std::endl;
+    OPENMS_LOG_INFO << "Found " << cal_data_.size() << " calibrants in peptide IDs.\n";
     stats.print();
 
     // sort CalData by RT
@@ -282,13 +284,13 @@ namespace OpenMS
                                       bool use_RANSAC,
                                       double post_ppm_median,
                                       double post_ppm_MAD,
-                                      const String& file_models,
-                                      const String& file_models_plot,
-                                      const String& file_residuals,
-                                      const String& file_residuals_plot,
-                                      const String& rscript_executable_)
+                                      const std::string& file_models,
+                                      const std::string& file_models_plot,
+                                      const std::string& file_residuals,
+                                      const std::string& file_residuals_plot,
+                                      const std::string& rscript_executable_)
   {
-    QString rscript_executable = rscript_executable_.toQString();
+    std::string rscript_executable = rscript_executable_;
 
     // ensure sorting; required for finding RT ranges and lock masses
     if (!exp.isSorted(true))
@@ -304,7 +306,7 @@ namespace OpenMS
     bool global_model = (rt_chunk < 0);
     if (global_model)
     { // build one global modal
-      OPENMS_LOG_INFO << "Building a global model..." << std::endl;
+      OPENMS_LOG_INFO << "Building a global model...\n";
       tms.emplace_back();
       tms[0].train(cal_data_, model_type, use_RANSAC);
       if (MZTrafoModel::isValidModel(tms[0]))
@@ -356,7 +358,7 @@ namespace OpenMS
         // 2nd attempt to calibrate spectra using neighboring models
         // (will not be entered for global model since could_not_cal is empty)
         OPENMS_LOG_INFO << "\nCalibration failed on " << invalid_models.size() << "/" << tms.size() << " [" <<  invalid_models.size() * 100 / tms.size() << " %] spectra. "
-          << "Using the closest successful model on these." << std::endl;
+          << "Using the closest successful model on these.\n";
 
         std::vector<MZTrafoModel> tms_new = tms; // will contain corrected models (this wastes a bit of memory)
         for (std::map<Size, Size>::const_iterator it = invalid_models.begin(); it != invalid_models.end(); ++it)
@@ -394,7 +396,7 @@ namespace OpenMS
         {
           if (!MZTrafoModel::isValidModel(tms[j]))
           {
-            throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "InternalCalibration::calibrate(): Internal error. Not all models are valid!", String(j));
+            throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "InternalCalibration::calibrate(): Internal error. Not all models are valid!",StringUtils::toStr(j));
           }
         }
       }
@@ -406,7 +408,7 @@ namespace OpenMS
     {
       if (!RWrapper::findR(rscript_executable, true))
       {
-        OPENMS_LOG_ERROR << "The R interpreter is required to create PNG plot files. To avoid the error, either do not request 'quality_control:*_plot' (not recommended) or fix your R installation." << std::endl;
+        OPENMS_LOG_ERROR << "The R interpreter is required to create PNG plot files. To avoid the error, either do not request 'quality_control:*_plot' (not recommended) or fix your R installation.\n";
         return false;
       }
     }
@@ -416,9 +418,9 @@ namespace OpenMS
     //
     if (!file_models.empty() || !file_models_plot.empty())
     {
-      String out_table = File::getTemporaryFile(file_models);
+      std::string out_table = TempFiles::getTemporaryFile(file_models);
       { // we need this scope, to ensure that SVOutStream writes its cache, before we call RWrapper!
-        SVOutStream sv(out_table, ", ", ", ", String::NONE);
+        SVOutStream sv(out_table, ", ", ", ", OpenMS::QuotingMethod::NONE);
 
         sv << "# model parameters (for all successfully trained models)" << nl
           << "RT" << "A (offset)" << "B (slope)" << "C (power)" << "source" << nl;
@@ -429,7 +431,7 @@ namespace OpenMS
           {
             sv << "invalid"; // this only happens if ALL models are invalid (since otherwise they would use 'neighbour')
           }
-          else if (invalid_models.count(i) > 0)
+          else if (invalid_models.contains(i))
           {
             sv << "neighbor";
           }
@@ -444,9 +446,9 @@ namespace OpenMS
       // plot it
       if (!file_models_plot.empty())
       {
-        if (!RWrapper::runScript("InternalCalibration_Models.R", QStringList() << out_table.toQString() << file_models_plot.toQString(), rscript_executable))
+        if (!RWrapper::runScript("InternalCalibration_Models.R", {out_table, file_models_plot}, rscript_executable))
         {
-          OPENMS_LOG_ERROR << "R script failed. To avoid the error, either disable the creation of 'quality_control:models_plot' (not recommended) or fix your R installation." << std::endl;
+          OPENMS_LOG_ERROR << "R script failed. To avoid the error, either disable the creation of 'quality_control:models_plot' (not recommended) or fix your R installation.\n";
           return false;
         }
       }
@@ -458,11 +460,11 @@ namespace OpenMS
     // go through Calibration data points
     //
     SVOutStream* sv = nullptr;      
-    String out_table_residuals;
+    std::string out_table_residuals;
     if (!file_residuals.empty() || !file_residuals_plot.empty())
     {
-      out_table_residuals = File::getTemporaryFile(file_residuals);
-      sv = new SVOutStream(out_table_residuals, ", ", ", ", String::NONE);
+      out_table_residuals = TempFiles::getTemporaryFile(file_residuals);
+      sv = new SVOutStream(out_table_residuals, ", ", ", ", OpenMS::QuotingMethod::NONE);
     }
 
     std::vector<double> vec_ppm_before, vec_ppm_after;
@@ -507,9 +509,9 @@ namespace OpenMS
     // plot it
     if (!file_residuals_plot.empty())
     {
-      if (!RWrapper::runScript("InternalCalibration_Residuals.R", QStringList() << out_table_residuals.toQString() << file_residuals_plot.toQString(), rscript_executable))
+      if (!RWrapper::runScript("InternalCalibration_Residuals.R", {out_table_residuals, file_residuals_plot}, rscript_executable))
       {
-        OPENMS_LOG_ERROR << "R script failed. To avoid the error, either disable the creation of 'quality_control:residuals_plot' (not recommended) or fix your R installation." << std::endl;
+        OPENMS_LOG_ERROR << "R script failed. To avoid the error, either disable the creation of 'quality_control:residuals_plot' (not recommended) or fix your R installation.\n";
         return false;
       }
     }
@@ -517,10 +519,10 @@ namespace OpenMS
 
     if (!hasValidModels)
     { // QC tables are done; quit
-      OPENMS_LOG_ERROR << "Error: Could not build a single local calibration model! Check your calibrants and/or extend the search window!" << std::endl;
+      OPENMS_LOG_ERROR << "Error: Could not build a single local calibration model! Check your calibrants and/or extend the search window!\n";
       if (use_RANSAC)
       {
-        OPENMS_LOG_ERROR << "       Since you are using RANSAC, check the parameters as well and test different setups." << std::endl;
+        OPENMS_LOG_ERROR << "       Since you are using RANSAC, check the parameters as well and test different setups.\n";
       }
       return false;
     }
@@ -537,12 +539,12 @@ namespace OpenMS
     // check desired limits
     if (post_ppm_median < fabs(median_ppm_after))
     {
-      OPENMS_LOG_INFO << "Post calibration median threshold (" << post_ppm_median << " ppm) not reached (median = |" << median_ppm_after << "| ppm). Failed to calibrate!" << std::endl;
+      OPENMS_LOG_INFO << "Post calibration median threshold (" << post_ppm_median << " ppm) not reached (median = |" << median_ppm_after << "| ppm). Failed to calibrate!\n";
       return false;
     }
     if (post_ppm_MAD < fabs(MAD_ppm_after))
     {
-      OPENMS_LOG_INFO << "Post calibration MAD threshold (" << post_ppm_MAD << " ppm) not reached (MAD = |" << MAD_ppm_after << "| ppm). Failed to calibrate!" << std::endl;
+      OPENMS_LOG_INFO << "Post calibration MAD threshold (" << post_ppm_MAD << " ppm) not reached (MAD = |" << MAD_ppm_after << "| ppm). Failed to calibrate!\n";
       return false;
     }
 

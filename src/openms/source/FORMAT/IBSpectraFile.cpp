@@ -18,6 +18,7 @@
 #include <OpenMS/ANALYSIS/QUANTITATION/ItraqFourPlexQuantitationMethod.h>
 #include <OpenMS/ANALYSIS/QUANTITATION/ItraqEightPlexQuantitationMethod.h>
 #include <OpenMS/ANALYSIS/QUANTITATION/TMTSixPlexQuantitationMethod.h>
+#include <OpenMS/DATASTRUCTURES/ListUtils.h>
 
 // we use the TextFile for writing out the content
 #include <OpenMS/FORMAT/TextFile.h>
@@ -31,27 +32,27 @@ namespace OpenMS
   */
   struct IdCSV
   {
-    String accession; // Protein AC
-    String peptide; // Peptide sequence
-    String modif; // Peptide modification string
+    std::string accession; // Protein AC
+    std::string peptide; // Peptide sequence
+    std::string modif; // Peptide modification string
     Int charge{0}; // Charge state
     double theo_mass{-1.}; // Theoretical peptide mass
     double exp_mass{-1.}; // Experimentally observed mass
     double parent_intens{-1.}; // Parent intensity
     double retention_time{-1.}; // Retention time
-    String spectrum; // Spectrum identifier
-    String search_engine; // Protein search engine and score
+    std::string spectrum; // Spectrum identifier
+    std::string search_engine; // Protein search engine and score
 
     void toStringList(StringList& target_list) const
     {
       target_list.push_back(accession);
       target_list.push_back(peptide);
       target_list.push_back(modif);
-      target_list.push_back(charge);
-      target_list.push_back(theo_mass);
-      target_list.push_back(exp_mass);
-      target_list.push_back(parent_intens);
-      target_list.push_back(retention_time);
+      target_list.push_back(StringUtils::toStr(charge));
+      target_list.push_back(StringUtils::toStr(theo_mass));
+      target_list.push_back(StringUtils::toStr(exp_mass));
+      target_list.push_back(StringUtils::toStr(parent_intens));
+      target_list.push_back(StringUtils::toStr(retention_time));
       target_list.push_back(spectrum);
       target_list.push_back(search_engine);
     }
@@ -75,7 +76,7 @@ namespace OpenMS
 
   IBSpectraFile& IBSpectraFile::operator=(const IBSpectraFile& /* rhs */) = default;
 
-  boost::shared_ptr<IsobaricQuantitationMethod> IBSpectraFile::guessExperimentType_(const ConsensusMap& cm)
+  std::shared_ptr<IsobaricQuantitationMethod> IBSpectraFile::guessExperimentType_(const ConsensusMap& cm)
   {
     if (cm.getExperimentType() != "labeled_MS2" && cm.getExperimentType() != "itraq")
     {
@@ -88,15 +89,15 @@ namespace OpenMS
     // we take the map count as approximation
     if (cm.getColumnHeaders().size() == 4)
     {
-      return boost::shared_ptr<IsobaricQuantitationMethod>(new ItraqFourPlexQuantitationMethod);
+      return std::shared_ptr<IsobaricQuantitationMethod>(new ItraqFourPlexQuantitationMethod);
     }
     else if (cm.getColumnHeaders().size() == 6)
     {
-      return boost::shared_ptr<IsobaricQuantitationMethod>(new TMTSixPlexQuantitationMethod);
+      return std::shared_ptr<IsobaricQuantitationMethod>(new TMTSixPlexQuantitationMethod);
     }
     else if (cm.getColumnHeaders().size() == 8)
     {
-      return boost::shared_ptr<IsobaricQuantitationMethod>(new ItraqEightPlexQuantitationMethod);
+      return std::shared_ptr<IsobaricQuantitationMethod>(new ItraqEightPlexQuantitationMethod);
     }
     else
     {
@@ -128,22 +129,22 @@ namespace OpenMS
          it != quantMethod.getChannelInformation().end();
          ++it)
     {
-      header.push_back("X" + String(int(it->center)) +  "_mass");
+      header.push_back("X" + StringUtils::toStr(int(it->center)) +  "_mass");
     }
 
     for (IsobaricQuantitationMethod::IsobaricChannelList::const_iterator it = quantMethod.getChannelInformation().begin();
          it != quantMethod.getChannelInformation().end();
          ++it)
     {
-      header.push_back("X" + String(int(it->center)) +  "_ions");
+      header.push_back("X" + StringUtils::toStr(int(it->center)) +  "_ions");
     }
 
     return header;
   }
 
-  String IBSpectraFile::getModifString_(const AASequence& sequence)
+  std::string IBSpectraFile::getModifString_(const AASequence& sequence)
   {
-    String modif = sequence.getNTerminalModificationName();
+    std::string modif = sequence.getNTerminalModificationName();
     for (AASequence::ConstIterator aa_it = sequence.begin();
          aa_it != sequence.end(); ++aa_it)
     {
@@ -157,7 +158,7 @@ namespace OpenMS
     return modif;
   }
 
-  void IBSpectraFile::store(const String& filename, const ConsensusMap& cm)
+  void IBSpectraFile::store(const std::string& filename, const ConsensusMap& cm)
   {
     // typdefs for shorter code
     typedef std::vector<ProteinHit>::iterator ProtHitIt;
@@ -172,7 +173,7 @@ namespace OpenMS
 
 
     // guess experiment type
-    boost::shared_ptr<IsobaricQuantitationMethod> quantMethod = guessExperimentType_(cm);
+    std::shared_ptr<IsobaricQuantitationMethod> quantMethod = guessExperimentType_(cm);
 
     // we need the protein identifications to reference the protein names
     ProteinIdentification protIdent;
@@ -204,13 +205,13 @@ namespace OpenMS
       {
         // protein name:
         const PeptideHit& peptide_hit = cFeature.getPeptideIdentifications()[0].getHits()[0];
-        std::set<String> protein_accessions = peptide_hit.extractProteinAccessionsSet();
+        std::set<std::string> protein_accessions = peptide_hit.extractProteinAccessionsSet();
         if (protein_accessions.size() != 1)
         {
           if (!allow_non_unique) continue; // we only want unique peptides
         }
 
-        for (std::set<String>::const_iterator prot_ac = protein_accessions.begin(); prot_ac != protein_accessions.end(); ++prot_ac)
+        for (std::set<std::string>::const_iterator prot_ac = protein_accessions.begin(); prot_ac != protein_accessions.end(); ++prot_ac)
         {
           IdCSV entry;
           entry.charge = cFeature.getPeptideIdentifications()[0].getHits()[0].getCharge();
@@ -247,7 +248,7 @@ namespace OpenMS
         // set parent intensity
         entry->parent_intens = cFeature.getIntensity();
         entry->retention_time = cFeature.getRT();
-        entry->spectrum = cFeature.getUniqueId();
+        entry->spectrum = StringUtils::toStr(cFeature.getUniqueId());
         entry->exp_mass = cFeature.getMZ();
 
         // create output line
@@ -258,7 +259,7 @@ namespace OpenMS
 
         // extract channel intensities and positions
         std::map<Int, double> intensityMap;
-        ConsensusFeature::HandleSetType features = cFeature.getFeatures();
+        const ConsensusFeature::HandleSetType& features = cFeature.getFeatures();
 
         for (ConsensusFeature::HandleSetType::const_iterator fIt = features.begin();
              fIt != features.end();
@@ -270,13 +271,13 @@ namespace OpenMS
              it != quantMethod->getChannelInformation().end();
              ++it)
         {
-          currentLine.push_back(String(it->center));
+          currentLine.push_back(StringUtils::toStr(it->center));
         }
         for (IsobaricQuantitationMethod::IsobaricChannelList::const_iterator it = quantMethod->getChannelInformation().begin();
              it != quantMethod->getChannelInformation().end();
              ++it)
         {
-          currentLine.push_back(String(intensityMap[int(it->center)]));
+          currentLine.push_back(StringUtils::toStr(intensityMap[int(it->center)]));
         }
 
         textFile.addLine(ListUtils::concatenate(currentLine, "\t"));

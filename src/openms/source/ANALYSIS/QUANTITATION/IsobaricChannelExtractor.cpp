@@ -12,9 +12,11 @@
 #include <OpenMS/ANALYSIS/QUANTITATION/TMTTenPlexQuantitationMethod.h>
 #include <OpenMS/ANALYSIS/QUANTITATION/TMTElevenPlexQuantitationMethod.h>
 #include <OpenMS/CONCEPT/LogStream.h>
+#include <OpenMS/DATASTRUCTURES/ListUtils.h>
 #include <OpenMS/KERNEL/RangeUtils.h>
 #include <OpenMS/KERNEL/ConsensusFeature.h>
 #include <OpenMS/KERNEL/ConsensusMap.h>
+#include <OpenMS/KERNEL/MSExperiment.h>
 #include <OpenMS/MATH/StatisticFunctions.h>
 
 // #define ISOBARIC_CHANNEL_EXTRACTOR_DEBUG
@@ -115,7 +117,7 @@ namespace OpenMS
     defaults_.setValue("select_activation", "auto", "Operate only on MSn scans where any of its precursors features a certain activation method. Setting to \"auto\" uses HCD and HCID spectra. Set to empty string if you want to disable filtering.");
     std::vector<std::string> activation_list;
     activation_list.emplace_back("auto");
-    activation_list.insert(activation_list.end(), Precursor::NamesOfActivationMethod, Precursor::NamesOfActivationMethod + Precursor::SIZE_OF_ACTIVATIONMETHOD - 1);
+    activation_list.insert(activation_list.end(), Precursor::NamesOfActivationMethod, Precursor::NamesOfActivationMethod + static_cast<size_t>(Precursor::ActivationMethod::SIZE_OF_ACTIVATIONMETHOD) - 1);
     activation_list.emplace_back("any"); // allow disabling this
 
     defaults_.setValidStrings("select_activation", activation_list);
@@ -246,7 +248,7 @@ namespace OpenMS
       if (min_diff < max_precursor_isotope_deviation_)
       {
 #ifdef ISOBARIC_CHANNEL_EXTRACTOR_DEBUG
-        std::cerr << "Mark peak as isotopic peak POS: " << precursor_spec[min_idx] << " (diff: " << min_diff << " vs " << max_precursor_isotope_deviation_ << ")" << std::endl;
+        std::cerr << "Mark peak as isotopic peak POS: " << precursor_spec[min_idx] << " (diff: " << min_diff << " vs " << max_precursor_isotope_deviation_ << ")\n";
 #endif
         if (np_it->getMZ() > strict_lower_mz)
         {
@@ -265,7 +267,7 @@ namespace OpenMS
       else
       {
 #ifdef ISOBARIC_CHANNEL_EXTRACTOR_DEBUG
-        std::cerr << "No matching isotopic peak for expected pos: " << expected_next_mz << " (min reached diff: " << min_diff << " vs " << max_precursor_isotope_deviation_ << ")" << std::endl;
+        std::cerr << "No matching isotopic peak for expected pos: " << expected_next_mz << " (min reached diff: " << min_diff << " vs " << max_precursor_isotope_deviation_ << ")\n";
 #endif
         // update expected_next_mz with theoretical position
         expected_next_mz -= charge_dist;
@@ -304,7 +306,7 @@ namespace OpenMS
       if (min_diff < max_precursor_isotope_deviation_)
       {
 #ifdef ISOBARIC_CHANNEL_EXTRACTOR_DEBUG
-        std::cerr << "Mark peak as isotopic peak POS: " << precursor_spec[min_idx] << " (diff: " << min_diff << " vs " << max_precursor_isotope_deviation_ << ")" << std::endl;
+        std::cerr << "Mark peak as isotopic peak POS: " << precursor_spec[min_idx] << " (diff: " << min_diff << " vs " << max_precursor_isotope_deviation_ << ")\n";
 #endif
         if (np_it->getMZ() < strict_upper_mz)
         {
@@ -323,7 +325,7 @@ namespace OpenMS
       else
       {
 #ifdef ISOBARIC_CHANNEL_EXTRACTOR_DEBUG
-        std::cerr << "No matching isotopic peak for expected pos: " << expected_next_mz << " (min reached diff: " << min_diff << " vs " << max_precursor_isotope_deviation_ << ")" << std::endl;
+        std::cerr << "No matching isotopic peak for expected pos: " << expected_next_mz << " (min reached diff: " << min_diff << " vs " << max_precursor_isotope_deviation_ << ")\n";
 #endif
         // update expected_next_mz with theoretical position
         expected_next_mz += charge_dist;
@@ -377,7 +379,7 @@ namespace OpenMS
     else
     {
 #ifdef ISOBARIC_CHANNEL_EXTRACTOR_DEBUG
-      std::cerr << "------------------ analyzing " << ms2_spec->getNativeID() << std::endl;
+      std::cerr << "------------------ analyzing " << ms2_spec->getNativeID() << '\n';
 #endif
 
       // compute purity of preceding ms1 scan
@@ -422,47 +424,101 @@ namespace OpenMS
     consensus_map.setExperimentType("labeled_MS2");
 
     // create predicate for spectrum checking
-    OPENMS_LOG_INFO << "Selecting scans with activation mode: " << selected_activation_ << std::endl;
+    OPENMS_LOG_INFO << "Selecting scans with activation mode: " << selected_activation_ << '\n';
     
     // Select the two possible HCD activation modes according to PSI-MS ontology: HCID and HCD
     if (selected_activation_ == "auto") 
     {
-      selected_activation_ = Precursor::NamesOfActivationMethod[Precursor::HCID] + "," + Precursor::NamesOfActivationMethod[Precursor::HCD];
+      selected_activation_ = Precursor::NamesOfActivationMethod[static_cast<size_t>(Precursor::ActivationMethod::HCID)] + "," + Precursor::NamesOfActivationMethod[static_cast<size_t>(Precursor::ActivationMethod::HCD)];
     }
 
-    HasActivationMethod<PeakMap::SpectrumType> isValidActivation(ListUtils::create<String>(selected_activation_));
+    HasActivationMethod<PeakMap::SpectrumType> isValidActivation(ListUtils::create<std::string>(selected_activation_));
 
-    // walk through spectra and count the number of scans with valid activation method per MS-level
-    // only the highest level will be used for quantification (e.g. MS3, if present)
-    std::map<UInt, UInt> ms_level;
-    std::map<String, int> activation_modes;
+    // Walk through the spectra and count, per MS-level, the total number of MSn scans, the number of
+    // scans passing the activation-method filter, and a per-level breakdown of the activation modes
+    // encountered (used for diagnostics below).
+    //
+    // The MS level used for quantification is the *highest* MS level present in the data (e.g. MS3 for
+    // SPS-MS3 experiments, otherwise MS2). This is deliberately decided based on the MS-level structure
+    // alone and NOT on the activation filter: for SPS-MS3 the reporter ions are contained in the MS3
+    // scans, so quantifying a lower level would yield wrong results. The activation filter is only used
+    // to select the scans *within* the chosen quantification level. See OpenMS issue #7165.
+    std::map<UInt, UInt> ms_level_total;                            // all MSn scans per level
+    std::map<UInt, UInt> ms_level_pass;                             // scans passing the activation filter per level
+    std::map<UInt, std::map<std::string, UInt>> level_activation_modes;  // per-level activation-mode counts
     for (PeakMap::ConstIterator it = ms_exp_data.begin(); it != ms_exp_data.end(); ++it)
     {
       if (it->getMSLevel() == 1) continue; // never report MS1
-      ++activation_modes[getActivationMethod_(*it)]; // count HCD, CID, ...
+      const UInt lvl = it->getMSLevel();
+      ++ms_level_total[lvl];
+      ++level_activation_modes[lvl][getActivationMethod_(*it)]; // count HCD, CID, ... per level
       if (selected_activation_ == "any" || isValidActivation(*it))
       {
-        ++ms_level[it->getMSLevel()];
+        ++ms_level_pass[lvl];
       }
     }
-    if (ms_level.empty())
+
+    // helper to format the activation-mode breakdown of a given MS level, e.g. "HCD (106), CID (3)"
+    auto formatActivationModes = [&level_activation_modes](UInt lvl) -> std::string
     {
-      OPENMS_LOG_WARN << "Filtering by MS/MS(/MS) and activation mode: no spectra pass activation mode filter!\n"
-               << "Activation modes found:\n";
-      for (std::map<String, int>::const_iterator it = activation_modes.begin(); it != activation_modes.end(); ++it)
+      const auto lvl_it = level_activation_modes.find(lvl);
+      if (lvl_it == level_activation_modes.end()) return "<none>";
+      std::string s;
+      bool first = true;
+      for (const auto& am : lvl_it->second)
       {
-        OPENMS_LOG_WARN << "  mode " << (it->first.empty() ? "<none>" : it->first) << ": " << it->second << " scans\n";
+        if (!first) s += ", ";
+        s += (am.first.empty() ? "<none>" : am.first) + " (" + StringUtils::toStr(am.second) + ")";
+        first = false;
       }
-      OPENMS_LOG_WARN << "Result will be empty!" << std::endl;
+      return s;
+    };
+
+    if (ms_level_total.empty())
+    { // only MS1 (or no MSn) scans present
+      OPENMS_LOG_WARN << "No MS/MS(/MS) spectra found in the input. Result will be empty!\n";
       return;
     }
-    OPENMS_LOG_INFO << "Filtering by MS/MS(/MS) and activation mode:\n";
-    for (std::map<UInt, UInt>::const_iterator it = ms_level.begin(); it != ms_level.end(); ++it)
-    {
-      OPENMS_LOG_INFO << "  level " << it->first << ": " << it->second << " scans\n";
+
+    if (ms_level_pass.empty())
+    { // no scan at any MS level passes the activation filter
+      OPENMS_LOG_WARN << "Filtering by MS/MS(/MS) and activation mode '" << selected_activation_ << "': no spectra pass the activation mode filter!\n"
+               << "Activation modes found:\n";
+      for (const auto& lvl : level_activation_modes)
+      {
+        OPENMS_LOG_WARN << "  MS" << lvl.first << ": " << formatActivationModes(lvl.first) << "\n";
+      }
+      OPENMS_LOG_WARN << "Set 'select_activation' to 'auto', 'any', or a matching activation method. Result will be empty!\n";
+      return;
     }
-    UInt quant_ms_level = ms_level.rbegin()->first;
-    OPENMS_LOG_INFO << "Using MS-level " << quant_ms_level << " for quantification." << std::endl;
+
+    OPENMS_LOG_INFO << "Filtering by MS/MS(/MS) and activation mode '" << selected_activation_ << "':\n";
+    for (const auto& lvl : ms_level_total)
+    {
+      const UInt passed = ms_level_pass.count(lvl.first) ? ms_level_pass[lvl.first] : 0;
+      OPENMS_LOG_INFO << "  MS" << lvl.first << ": " << passed << "/" << lvl.second << " scans pass [activation modes: " << formatActivationModes(lvl.first) << "]\n";
+    }
+
+    // quantify on the highest MS level present in the data (see comment above)
+    const UInt quant_ms_level = ms_level_total.rbegin()->first;
+    const UInt passing_at_quant = ms_level_pass.count(quant_ms_level) ? ms_level_pass[quant_ms_level] : 0;
+
+    if (passing_at_quant == 0)
+    { // The highest MS level (used for quantification) contains scans, but none of them match the
+      // selected activation, while a lower MS level does. Silently quantifying the lower level would
+      // produce nonsensical results (e.g. SPS-MS3, where the reporter ions reside in the MS3 scans).
+      // Fail loudly instead of silently returning wrong quantities. See OpenMS issue #7165.
+      throw Exception::InvalidParameter(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
+        "None of the " + StringUtils::toStr(ms_level_total[quant_ms_level]) + " MS" + StringUtils::toStr(quant_ms_level) +
+        " scans (the highest MS level present, which is used for isobaric quantification) match the selected activation '" +
+        selected_activation_ + "', but lower MS-level scans do. For SPS-MS" + StringUtils::toStr(quant_ms_level) +
+        " experiments the reporter ions reside in the MS" + StringUtils::toStr(quant_ms_level) + " scans; quantifying a lower MS level "
+        "would give wrong results. Activation modes of the MS" + StringUtils::toStr(quant_ms_level) + " scans: " + formatActivationModes(quant_ms_level) +
+        ". Please set 'select_activation' to 'auto' (HCD/HCID), 'any' (disable filtering), or the activation method matching your MS" +
+        StringUtils::toStr(quant_ms_level) + " scans.");
+    }
+
+    OPENMS_LOG_INFO << "Using MS-level " << quant_ms_level << " for quantification.\n";
 
     // now we have picked data
     // --> assign peaks to channels
@@ -499,7 +555,7 @@ namespace OpenMS
       // check precursor constraints
       if (!isValidPrecursor_(it->getPrecursors()[0]))
       {
-        OPENMS_LOG_DEBUG << "Skip spectrum " << it->getNativeID() << ": Precursor doesn't fulfill all constraints." << std::endl;
+        OPENMS_LOG_DEBUG << "Skip spectrum " << it->getNativeID() << ": Precursor doesn't fulfill all constraints.\n";
         continue;
       }
 
@@ -511,13 +567,13 @@ namespace OpenMS
         // check if purity is high enough
         if (precursor_purity < min_precursor_purity_)
         {
-          OPENMS_LOG_DEBUG << "Skip spectrum " << it->getNativeID() << ": Precursor purity is below the threshold. [purity = " << precursor_purity << "]" << std::endl;
+          OPENMS_LOG_DEBUG << "Skip spectrum " << it->getNativeID() << ": Precursor purity is below the threshold. [purity = " << precursor_purity << "]\n";
           continue;
         }
       }
       else
       {
-        OPENMS_LOG_INFO << "No precursor available for spectrum: " << it->getNativeID() << std::endl;
+        OPENMS_LOG_INFO << "No precursor available for spectrum: " << it->getNativeID() << '\n';
       }
 
       if (it->getMSLevel() == 3)
@@ -528,7 +584,7 @@ namespace OpenMS
 
         if (it_last_MS2 == ms_exp_data.end())
         { // this only happens if an MS3 spec does not have a preceding MS2
-          throw Exception::MissingInformation(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, String("No MS2 precursor information given for MS3 scan native ID ") + it->getNativeID() + " with RT " + String(it->getRT()));
+          throw Exception::MissingInformation(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,std::string("No MS2 precursor information given for MS3 scan native ID ") + it->getNativeID() + " with RT " + StringUtils::toStr(it->getRT()));
         }
       }
       else
@@ -539,7 +595,7 @@ namespace OpenMS
       // check if MS1 precursor info is available
       if (it_last_MS2->getPrecursors().empty())
       {
-        throw Exception::MissingInformation(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, String("No precursor information given for scan native ID ") + it->getNativeID() + " with RT " + String(it->getRT()));
+        throw Exception::MissingInformation(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,std::string("No precursor information given for scan native ID ") + it->getNativeID() + " with RT " + StringUtils::toStr(it->getRT()));
       }
 
       // store RT of MS2 scan and MZ of MS1 precursor ion as centroid of ConsensusFeature
@@ -617,7 +673,7 @@ namespace OpenMS
       // check featureHandles are not empty
       if (overall_intensity <= 0)
       {
-        cf.setMetaValue("all_empty", String("true"));
+        cf.setMetaValue("all_empty",std::string("true"));
       }
       // add purity information if we could compute it
       if (precursor_purity > 0.0)
@@ -649,7 +705,7 @@ namespace OpenMS
     registerChannelsInOutputMap(consensus_map);
   }
 
-  void IsobaricChannelExtractor::registerChannelsInOutputMap(ConsensusMap& consensus_map, const String& filename)
+  void IsobaricChannelExtractor::registerChannelsInOutputMap(ConsensusMap& consensus_map, const std::string& filename)
   {
     // register the individual channels in the output consensus map
     Int index = 0;
@@ -693,7 +749,7 @@ namespace OpenMS
 
       if (quant_spec.empty())
       {
-        OPENMS_LOG_WARN << "Quant. spectrum " << quant_spec.getNativeID() << " is empty. Skipping extraction." << std::endl;
+        OPENMS_LOG_WARN << "Quant. spectrum " << quant_spec.getNativeID() << " is empty. Skipping extraction.\n";
         return result;
       }
 
@@ -702,13 +758,13 @@ namespace OpenMS
       /*const auto& reporter_region_end = ++quant_spec.MZEnd(quant_method_->getChannelInformation().back().center + qc_dist_mz);
 
       const auto& reporter_region_start = quant_spec.MZBegin(quant_spec.begin(), quant_method_->getChannelInformation().front().center - qc_dist_mz, reporter_region_end);
-      std::cout << "reporter_region_start: " << reporter_region_start->getMZ() << std::endl;
+      std::cout << "reporter_region_start: " << reporter_region_start->getMZ() << '\n';
 
       if (reporter_region_end != quant_spec.end())
       {
-        std::cout << "reporter_region_end: " << reporter_region_end->getMZ() << std::endl;
+        std::cout << "reporter_region_end: " << reporter_region_end->getMZ() << '\n';
       } else {
-        std::cout << "reporter_region_end: " << "end" << std::endl;
+        std::cout << "reporter_region_end: " << "end\n";
         return result;
       }*/
 
@@ -753,7 +809,7 @@ namespace OpenMS
           // pass user threshold
           if (fabs(mz_delta) < reporter_mass_shift_)
           {
-            //std::cout << "reporter_mz: " << reporter_mz << std::endl;
+            //std::cout << "reporter_mz: " << reporter_mz << '\n';
             result[map_index] = idx_nearest->getIntensity();
           }
         }
@@ -779,8 +835,10 @@ namespace OpenMS
       cl_it != quant_method_->getChannelInformation().end();
       ++cl_it)
     {
-      OPENMS_LOG_INFO << "  ch " << String(cl_it->name).fillRight(' ', 4) << " (~" << String(cl_it->center).substr(0, 7).fillRight(' ', 7) << "): ";
-      if (stats.find(cl_it->name) != stats.end())
+      { std::string ch_n = cl_it->name; StringUtils::fillRight(ch_n, ' ', 4);
+        std::string ch_c = StringUtils::toStr(cl_it->center).substr(0, 7); StringUtils::fillRight(ch_c, ' ', 7);
+        OPENMS_LOG_INFO << "  ch " << ch_n << " (~" << ch_c << "): "; }
+      if (stats.contains(cl_it->name))
       {
         // sort
         double median = Math::median(stats[cl_it->name].mz_deltas.begin(), stats[cl_it->name].mz_deltas.end(), false);
@@ -808,7 +866,7 @@ namespace OpenMS
     }
     if (impurities_found) OPENMS_LOG_INFO << "\nImpurities within the allowed reporter mass shift " << reporter_mass_shift_ << " Th have been found." 
                                    << "They can be ignored if the spectra are m/z calibrated (see above), since only the peak closest to the theoretical position is used for quantification!";
-    OPENMS_LOG_INFO << std::endl;
+    OPENMS_LOG_INFO << '\n';
   }
 
   void IsobaricChannelExtractor::printStatsWithMissing(std::vector<ChannelQC>& stats) const
@@ -822,7 +880,9 @@ namespace OpenMS
       cl_it != quant_method_->getChannelInformation().end();
       ++cl_it)
     {
-      OPENMS_LOG_INFO << "  ch " << String(cl_it->name).fillRight(' ', 4) << " (~" << String(cl_it->center).substr(0, 7).fillRight(' ', 7) << "): ";
+      { std::string ch_n = cl_it->name; StringUtils::fillRight(ch_n, ' ', 4);
+        std::string ch_c = StringUtils::toStr(cl_it->center).substr(0, 7); StringUtils::fillRight(ch_c, ' ', 7);
+        OPENMS_LOG_INFO << "  ch " << ch_n << " (~" << ch_c << "): "; }
       auto& cur_deltas = stats[channel_nr].mz_deltas;
       Size old_size = cur_deltas.size();
       // filter out NaN in mz_deltas
@@ -859,7 +919,7 @@ namespace OpenMS
     }
     if (impurities_found) OPENMS_LOG_INFO << "\nImpurities within the allowed reporter mass shift " << reporter_mass_shift_ << " m/z have been found." 
                                    << "They can be ignored if the spectra are m/z calibrated (see above), since only the peak closest to the theoretical position is used for quantification!";
-    OPENMS_LOG_INFO << std::endl;
+    OPENMS_LOG_INFO << '\n';
   }
 
   /**

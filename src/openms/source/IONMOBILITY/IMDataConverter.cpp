@@ -9,9 +9,11 @@
 #include <OpenMS/IONMOBILITY/IMDataConverter.h>
 
 #include <OpenMS/METADATA/DataArrays.h>
+#include <OpenMS/CONCEPT/Constants.h>
 #include <OpenMS/CONCEPT/Exception.h>
 #include <OpenMS/CONCEPT/LogStream.h>
 #include <OpenMS/IONMOBILITY/FAIMSHelper.h>
+#include <OpenMS/IONMOBILITY/IMDataArrayUtils.h>
 #include <OpenMS/FORMAT/ControlledVocabulary.h>
 #include <OpenMS/KERNEL/MSExperiment.h>
 
@@ -22,51 +24,45 @@
 
 namespace OpenMS
 {
-  std::vector<PeakMap> IMDataConverter::splitByFAIMSCV(PeakMap&& exp)
+  std::vector<std::pair<double, MSExperiment>> IMDataConverter::splitByFAIMSCV(PeakMap&& exp)
   {
-    std::vector<PeakMap> split_peakmap;
+    std::vector<std::pair<double, MSExperiment>> result;
 
-    // TODO test with any random PeakMap without FAIMS data.
-    // What breaks, how should it break?
     std::set<double> CVs = FAIMSHelper::getCompensationVoltages(exp);
 
     if (CVs.empty())
     {
-      throw Exception::MissingInformation(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Not FAIMS data!");
+      OPENMS_LOG_INFO << "Not FAIMS compensation voltages found in the data. Returning PeakMap as CV NaN." << std::endl;
+      // Represent "no FAIMS" as a single-element group that carries the original experiment.
+      result.emplace_back(std::numeric_limits<double>::quiet_NaN(), std::move(exp));
+      return result;
     }
 
-    // create map to easily turn a CV value into a PeakMap index
-    std::map<double, size_t> cv2index;
-    size_t counter(0);
+    // use a map internally to accumulate per-CV experiments in ascending CV order
+    std::map<double, MSExperiment> split_peakmap;
     for (double cv : CVs)
     {
-      cv2index[cv] = counter;
-      counter++;
-    }
-
-    // make as many PeakMaps as there are different CVs and fill their Meta Data
-    split_peakmap.resize(CVs.size());
-    for (auto& spec : split_peakmap)
-    {
-      spec.getExperimentalSettings() = exp.getExperimentalSettings();
+      MSExperiment pm;
+      pm.getExperimentalSettings() = exp.getExperimentalSettings();
+      split_peakmap.emplace(cv, std::move(pm));
     }
 
     // fill up the PeakMaps by moving spectra from the input PeakMap
-    // Keep MS2 spectra which might not carry a FAIMS CV by assigning them to the last seen FAIMS CV (nearest previous in run order)
+    // Keep MS2 spectra which might not carry a FAIMS CV (typically they do) by assigning them to the last seen FAIMS CV (nearest previous in run order)
     double last_faims_cv = std::numeric_limits<double>::quiet_NaN();
     for (MSSpectrum& spec : exp)
     {
       if (spec.getDriftTimeUnit() == DriftTimeUnit::FAIMS_COMPENSATION_VOLTAGE)
       {
         last_faims_cv = spec.getDriftTime();
-        if (const auto idx_it = cv2index.find(last_faims_cv); idx_it == cv2index.end())
+        if (const auto map_it = split_peakmap.find(last_faims_cv); map_it == split_peakmap.end())
         {
           OPENMS_LOG_WARN << "Encountered spectrum with unexpected FAIMS CV (not in detected set): " << last_faims_cv << std::endl;
           continue;
         }
         else
         {
-          split_peakmap[idx_it->second].addSpectrum(std::move(spec));
+          map_it->second.addSpectrum(std::move(spec));
         }
         continue;
       }
@@ -74,9 +70,9 @@ namespace OpenMS
       // No FAIMS CV on spectrum: if it's MS2+ and we have a prior FAIMS CV context, assign it to that bin
       if (!std::isnan(last_faims_cv) && spec.getMSLevel() > 1)
       {
-        if (const auto idx_it = cv2index.find(last_faims_cv); idx_it != cv2index.end())
+        if (const auto map_it = split_peakmap.find(last_faims_cv); map_it != split_peakmap.end())
         {
-          split_peakmap[idx_it->second].addSpectrum(std::move(spec));
+          map_it->second.addSpectrum(std::move(spec));
           continue;
         }
       }
@@ -86,7 +82,14 @@ namespace OpenMS
     }
     
     exp.clear(true);
-    return split_peakmap;
+
+    // move from map (sorted by CV) into vector of (CV, MSExperiment) pairs
+    result.reserve(split_peakmap.size());
+    for (auto& kv : split_peakmap)
+    {
+      result.emplace_back(kv.first, std::move(kv.second));
+    }
+    return result;
   }
 
   MSExperiment IMDataConverter::reshapeIMFrameToMany(MSSpectrum im_frame)
@@ -140,7 +143,19 @@ namespace OpenMS
       }
       last_spec->push_back(im_frame[i]);// copy the m/z of the peak
     }
-    out.sortSpectra(true);
+    // Only the per-spectrum m/z sort is wanted here. sortSpectra() would also sort the
+    // spectra by RT, and every spectrum emitted above carries the frame's retention time
+    // (see addSpectrum), so that sort runs on an all-equal key. MSExperiment::sortSpectra
+    // uses std::sort, which is not stable, so it would permute the spectra arbitrarily and
+    // destroy the ascending ion-mobility order the loop above just established and asserts.
+    // Downstream that axis becomes the x axis of mass traces (PeakPickerIM reinterprets the
+    // drift time as RT), and mass-trace detection walks spectrum indices, so a permutation
+    // silently builds traces from unrelated peaks and makes the output depend on the
+    // standard-library implementation (#10051).
+    for (auto& s : out)
+    {
+      s.sortByPosition();
+    }
     out.updateRanges();
     return out;
   }
@@ -153,11 +168,11 @@ namespace OpenMS
   {
     if (number_of_bins == 0)
     {
-      throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Cannot split into 0 bins.", String(number_of_bins));
+      throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Cannot split into 0 bins.",StringUtils::toStr(number_of_bins));
     }
     if (bin_extension_abs < 0)
     {
-      throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Overlap must not be negative.", String(bin_extension_abs));
+      throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Overlap must not be negative.",StringUtils::toStr(bin_extension_abs));
     }
     std::vector<MSExperiment> results(number_of_bins);
     in.updateRanges();
@@ -165,7 +180,7 @@ namespace OpenMS
     const auto range_IM = RangeMobility(in.spectrumRanges());
     if (range_IM.getSpan() / number_of_bins < bin_extension_abs * 2)
     {
-      throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, String("Bin size (") + String(range_IM.getSpan() / number_of_bins) + ") is smaller than the overlap.", String(bin_extension_abs*2));
+      throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,"Bin size (" + StringUtils::toStr(range_IM.getSpan() / number_of_bins) + ") is smaller than the overlap.",StringUtils::toStr(bin_extension_abs*2));
     }
 
     // compute the bins
@@ -179,7 +194,7 @@ namespace OpenMS
     const auto ms_levels = in.getMSLevels();
     p.setValue("block_method:ms_levels", IntList(ms_levels.begin(), ms_levels.end())); // merge all MS levels
     p.setValue("mz_binning_width", mz_binning_width);
-    p.setValue("mz_binning_width_unit", String(MZ_UNIT_NAMES[(int)mz_binning_width_unit]));
+    p.setValue("mz_binning_width_unit",std::string(MZ_UNIT_NAMES[(int)mz_binning_width_unit]));
     p.setValue("block_method:rt_block_size", INT_MAX);
     p.setValue("block_method:rt_max_length", 10e10);
 
@@ -237,7 +252,7 @@ namespace OpenMS
          term = &cv.getTerm("MS:1003008");
         break;
       default:
-        throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Unit cannot be converted into CV term.", toString(unit));
+        throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Unit cannot be converted into CV term.", driftTimeUnitToString(unit));
     }
     fda.setName(term->name);
   }
@@ -286,7 +301,7 @@ namespace OpenMS
     {
       // copy non-IM or already framed spectra
       // throws Exception if spec has mixed IM format
-      if (IMTypes::determineIMFormat(spec) != IMFormat::MULTIPLE_SPECTRA)
+      if (IMTypes::determineIMFormat(spec) != IMFormat::IM_SPECTRUM)
       {
         processDriftTimeStack(stack, result); // clear current stack
         result.getSpectra().push_back(spec);
@@ -309,63 +324,12 @@ namespace OpenMS
 
   void IMDataConverter::setIMUnit(DataArrays::FloatDataArray& fda, const DriftTimeUnit unit)
   {
-    const auto& cv = ControlledVocabulary::getPSIMSCV();
-    switch (unit)
-    {
-      case DriftTimeUnit::MILLISECOND: 
-        fda.setName(cv.getTerm("MS:1002816").name); // MS:1002816 ! mean ion mobility array
-        return;
-      case DriftTimeUnit::VSSC:
-        fda.setName(cv.getTerm("MS:1003008").name); // MS:1003008 ! raw inverse reduced ion mobility array
-        return;
-      default:
-        // invalid enum ...
-        // There is no CV term which can be used to describe the FDA
-        throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Unit is not a valid IM unit for float data arrays", toString(unit));
-    }
+    IMDataArrayUtils::setIMUnit(fda, unit);
   }
 
   bool IMDataConverter::getIMUnit(const DataArrays::FloatDataArray& fda, DriftTimeUnit& unit)
   {
-    const auto& cv = ControlledVocabulary::getPSIMSCV();
-    if (fda.getName().hasPrefix("Ion Mobility"))
-    { // fallback for non-standard IM arrays (as created by Mobi-DIK)
-      if (fda.getName().hasSubstring("MS:1002815"))
-      {
-        unit = DriftTimeUnit::VSSC;
-      }
-      else
-      {
-        unit = DriftTimeUnit::MILLISECOND;
-      }
-      return true;
-    }
-    try
-    {
-      const auto& cv_term = cv.getTermByName(fda.getName()); // may throw if term is unknown
-
-      if (cv.isChildOf(cv_term.id, "MS:1002893")) // is child of generic 'ion mobility array'?
-      {
-        if (cv_term.units.find("MS:1002814") != cv_term.units.end())
-        { // MS:1002814 ! volt-second per square centimeter
-          unit = DriftTimeUnit::VSSC;
-        }
-        else if (cv_term.units.find("UO:0000028") != cv_term.units.end())
-        { // UO:0000028 ! millisecond
-          unit = DriftTimeUnit::MILLISECOND;
-        }
-        else
-        { // fallback
-          OPENMS_LOG_WARN << "Warning: FloatDataArray for IonMobility data '" << cv_term.id << " " << cv_term.name << "' does not contain proper units!" << std::endl;
-          unit = DriftTimeUnit::NONE;
-        }
-        return true;
-      }
-    }
-    catch (...)
-    {
-    }
-    return false;
+    return IMDataArrayUtils::getIMUnit(fda, unit);
   }
 
 }  //end namespace OpenMS

@@ -31,7 +31,7 @@ namespace OpenMS
     precursor_(),
     product_(),
     data_processing_(),
-    type_(MASS_CHROMATOGRAM)
+    type_(ChromatogramType::MASS_CHROMATOGRAM)
   {
   }
 
@@ -61,12 +61,12 @@ namespace OpenMS
     return !(operator==(rhs));
   }
 
-  const String & ChromatogramSettings::getComment() const
+  const std::string & ChromatogramSettings::getComment() const
   {
     return comment_;
   }
 
-  void ChromatogramSettings::setComment(const String & comment)
+  void ChromatogramSettings::setComment(const std::string & comment)
   {
     comment_ = comment;
   }
@@ -153,12 +153,12 @@ namespace OpenMS
     return os;
   }
 
-  const String & ChromatogramSettings::getNativeID() const
+  const std::string & ChromatogramSettings::getNativeID() const
   {
     return native_id_;
   }
 
-  void ChromatogramSettings::setNativeID(const String & native_id)
+  void ChromatogramSettings::setNativeID(const std::string & native_id)
   {
     native_id_ = native_id;
   }
@@ -183,7 +183,7 @@ namespace OpenMS
     return data_processing_;
   }
 
-  const std::vector< boost::shared_ptr<const DataProcessing > > ChromatogramSettings::getDataProcessing() const 
+  const std::vector< std::shared_ptr<const DataProcessing > > ChromatogramSettings::getDataProcessing() const 
   {
     return OpenMS::Helpers::constifyPointerVector(data_processing_);
   }

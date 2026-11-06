@@ -8,6 +8,8 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/Qvalue.h>
+#include <OpenMS/DATASTRUCTURES/MatrixEigen.h>
+#include <Eigen/QR>
 #include <algorithm>
 #include <cmath>
 
@@ -111,17 +113,17 @@ namespace OpenMS
         left.setValue(r, 0, score_dist_noise_decoy.getValue(r, 0));
       }
 
-      auto calculated_vec = left.completeOrthogonalDecomposition().pseudoInverse() * score_dist_target;
+      auto calculated_vec = eigenView(left).completeOrthogonalDecomposition().pseudoInverse() * eigenView(score_dist_target);
       double noise_weight = calculated_vec.row(0)[0];
 
       if (calculated_vec.row(1)[0] < 0)
       {
-        auto calculated_vec_non_negative = score_dist_noise_decoy.completeOrthogonalDecomposition().pseudoInverse() * score_dist_target;
+        auto calculated_vec_non_negative = eigenView(score_dist_noise_decoy).completeOrthogonalDecomposition().pseudoInverse() * eigenView(score_dist_target);
         noise_weight = calculated_vec_non_negative.row(0)[0];
       }
 
       // an empty fit window (no noise decoy between the bounds, e.g. the top signal decoy below 0.3) leaves no evidence: weight 1
-      if (std::isnan(noise_weight) || score_dist_noise_decoy.sum() == 0) noise_weight = 1.0;
+      if (std::isnan(noise_weight) || eigenView(score_dist_noise_decoy).sum() == 0) noise_weight = 1.0;
       noise_weight = std::max(noise_weight, 0.01);
       noise_weights[ms_level] = noise_weight;
       std::sort(scores_target.rbegin(), scores_target.rend());

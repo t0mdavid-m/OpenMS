@@ -11,6 +11,7 @@
 
 #include <OpenMS/SYSTEM/File.h>
 #include <OpenMS/VISUAL/DIALOGS/TOPPASInputFileDialog.h>
+#include <OpenMS/VISUAL/MISC/Qt5Port.h>
 
 #include <QtWidgets/QFileDialog>
 #include <QApplication>
@@ -37,10 +38,10 @@ namespace OpenMS
       ui_(new Ui::InputFileList)
     {
       ui_->setupUi(this);
-      connect(ui_->add_button, SIGNAL(clicked()), this, SLOT(showFileDialog()));
-      connect(ui_->edit_button, SIGNAL(clicked()), this, SLOT(editCurrentItem()));
-      connect(ui_->remove_button, SIGNAL(clicked()), this, SLOT(removeSelected()));
-      connect(ui_->remove_all_button, SIGNAL(clicked()), this, SLOT(removeAll()));
+      connect(ui_->add_button, &QPushButton::clicked, this, &InputFileList::showFileDialog);
+      connect(ui_->edit_button, &QPushButton::clicked, this, &InputFileList::editCurrentItem);
+      connect(ui_->remove_button, &QPushButton::clicked, this, &InputFileList::removeSelected);
+      connect(ui_->remove_all_button, &QPushButton::clicked, this, &InputFileList::removeAll);
     }
 
     InputFileList::~InputFileList()
@@ -140,7 +141,7 @@ namespace OpenMS
       StringList files;
       for (int i = 0; i < nr_files; ++i)
       {
-        files.push_back(ui_->input_file_list->item(i)->text());
+        files.push_back(fromQString(ui_->input_file_list->item(i)->text()));
       }
       return files;
     }
@@ -191,7 +192,7 @@ namespace OpenMS
       if (!files.isEmpty())
       {
         ui_->input_file_list->addItems(files);
-        setCWD(File::path(files.back()).toQString()); // emit the signal
+        setCWD(toQString(File::path(fromQString(files.back())))); // emit the signal
       }
     }
 

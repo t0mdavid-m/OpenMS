@@ -37,11 +37,11 @@ public:
 
     /**
       @brief Load the content of the xquest.xml file into the provided data structures.
-      @param filename Filename of the file which is to be loaded.
-      @param pep_ids Where the spectra with identifications of the input file will be loaded to.
-      @param prot_ids Where the protein identification of the input file will be loaded to.
+      @param[in] filename Filename of the file which is to be loaded.
+      @param[in] pep_ids Where the spectra with identifications of the input file will be loaded to.
+      @param[in] prot_ids Where the protein identification of the input file will be loaded to.
      */
-    void load(const String & filename,
+    void load(const std::string & filename,
               PeptideIdentificationList & pep_ids,
               std::vector< ProteinIdentification > & prot_ids
             );
@@ -51,7 +51,7 @@ public:
 
         @exception Exception::UnableToCreateFile is thrown if the file could not be created
     */
-    void store(const String& filename,
+    void store(const std::string& filename,
                const std::vector<ProteinIdentification>& poid,
                const PeptideIdentificationList& peid) const;
 
@@ -75,15 +75,15 @@ public:
 
      /**
       * @brief Writes spec.xml output containing matching peaks between heavy and light spectra after comparing and filtering
-       @param out_file Path and filename for the output file
-       @param base_name The base_name should be the name of the input spectra file without the file ending. Used as part of an identifier string for the spectra.
-       @param preprocessed_pair_spectra The preprocessed spectra after comparing and filtering
-       @param spectrum_pairs Indices of spectrum pairs in the input map
-       @param all_top_csms CrossLinkSpectrumMatches, from which the IDs were generated. Only spectra with matches are written out.
-       @param spectra The spectra, that were searched as a PeakMap. The indices in spectrum_pairs correspond to spectra in this map.
-       @param test_mode Skip base64 encoding in test mode
+       @param[out] out_file Path and filename for the output file
+       @param[in] base_name The base_name should be the name of the input spectra file without the file ending. Used as part of an identifier string for the spectra.
+       @param[in] preprocessed_pair_spectra The preprocessed spectra after comparing and filtering
+       @param[in] spectrum_pairs Indices of spectrum pairs in the input map
+       @param[out] all_top_csms CrossLinkSpectrumMatches, from which the IDs were generated. Only spectra with matches are written out.
+       @param[in] spectra The spectra, that were searched as a PeakMap. The indices in spectrum_pairs correspond to spectra in this map.
+       @param[in] test_mode Skip base64 encoding in test mode
       */
-    static void writeXQuestXMLSpec(const String& out_file, const String& base_name,
+    static void writeXQuestXMLSpec(const std::string& out_file, const std::string& base_name,
                                    const OPXLDataStructs::PreprocessedPairSpectra& preprocessed_pair_spectra,
                                    const std::vector< std::pair<Size, Size> >& spectrum_pairs,
                                    const std::vector< std::vector< OPXLDataStructs::CrossLinkSpectrumMatch > >& all_top_csms,
@@ -91,13 +91,13 @@ public:
 
      /**
        @brief Writes spec.xml output containing spectra for visualization. This version of the function is meant to be used for label-free linkers.
-       @param out_file Path and filename for the output file
-       @param base_name The base_name should be the name of the input spectra file without the file ending. Used as part of an identifier string for the spectra.
-       @param all_top_csms CrossLinkSpectrumMatches, from which the IDs were generated. Only spectra with matches are written out.
-       @param spectra The spectra, that were searched as a PeakMap.
-       @param test_mode Skip base64 encoding in test mode
+       @param[out] out_file Path and filename for the output file
+       @param[in] base_name The base_name should be the name of the input spectra file without the file ending. Used as part of an identifier string for the spectra.
+       @param[out] all_top_csms CrossLinkSpectrumMatches, from which the IDs were generated. Only spectra with matches are written out.
+       @param[in] spectra The spectra, that were searched as a PeakMap.
+       @param[in] test_mode Skip base64 encoding in test mode
       */
-    static void writeXQuestXMLSpec(const String& out_file, const String& base_name,
+    static void writeXQuestXMLSpec(const std::string& out_file, const std::string& base_name,
                                    const std::vector< std::vector< OPXLDataStructs::CrossLinkSpectrumMatch > >& all_top_csms,
                                    const PeakMap& spectra, const bool& test_mode = false);
 
@@ -107,19 +107,19 @@ private:
 
      /**
       * @brief Transforms a PeakSpectrum into a base64 encoded string, which is the format used in spec.xml for xQuest.
-      * @param spec The spectrum
-      * @param header A header for the spectrum, build using the base_name parameter for writeXQuestXMLSpec and the index of the spectrum.
-      * @param test_mode Skip base64 encoding in test mode
+      * @param[in] spec The spectrum
+      * @param[in] header A header for the spectrum, build using the base_name parameter for writeXQuestXMLSpec and the index of the spectrum.
+      * @param[in] test_mode Skip base64 encoding in test mode
       */
-      static String getxQuestBase64EncodedSpectrum_(const PeakSpectrum& spec, const String& header, const bool& test_mode = false);
+      static std::string getxQuestBase64EncodedSpectrum_(const PeakSpectrum& spec, const std::string& header, const bool& test_mode = false);
 
      /**
       * @brief A helper function, that takes one string containing one line and wraps it into several lines of a given width
-      * @param input The string as one line
-      * @param width The preferred line width
-      * @param output String in which the output is written
+      * @param[in] input The string as one line
+      * @param[in] width The preferred line width
+      * @param[out] output std::string in which the output is written
       */
-      static void wrap_(const String& input, Size width, String& output);
+      static void wrap_(const std::string& input, Size width, std::string& output);
 
     int n_hits_; ///< Total number of hits within the result file
     double min_score_; ///< Minimum score encountered in file

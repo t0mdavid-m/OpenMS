@@ -19,6 +19,9 @@
 #include <string>
 #include <cstring>
 #include <cstdio>
+#include <ctime>
+#include <mutex>
+#include <vector>
 #include <algorithm>    // std::min
 #include <OpenMS/CONCEPT/Colorizer.h>
 #include <OpenMS/CONCEPT/LogStream.h>
@@ -31,6 +34,39 @@
 
 using namespace std;
 
+namespace
+{
+  /// Global mutex that serializes the final sink writes in
+  /// OpenMS::Logger::LogStreamBuf::distribute_(). Multiple thread-local
+  /// LogStreamBuf instances legitimately share the same destination ostream
+  /// (e.g. std::cerr/std::cout) AND the same global Colorizer
+  /// (yellow/red/magenta), so both the stream writes and the Colorizer's
+  /// internal state mutation must be serialized across threads (issue #9515).
+  /// Intentionally heap-allocated and never freed so it stays valid even while
+  /// the global LogStream objects are destroyed during static teardown; unlike
+  /// the former OpenMP critical section, a plain std::mutex does not depend on
+  /// the OpenMP runtime.
+  std::mutex& logSinkMutex_()
+  {
+    static std::mutex* instance = new std::mutex();
+    return *instance;
+  }
+
+  /// Thread-safe local-time conversion. std::localtime returns a pointer to a
+  /// single process-wide static std::tm, which races across threads; the
+  /// reentrant localtime_r/localtime_s write into a caller-provided struct.
+  std::tm toLocalTime_(std::time_t t)
+  {
+    std::tm out{};
+#ifdef OPENMS_WINDOWSPLATFORM
+    localtime_s(&out, &t);
+#else
+    localtime_r(&t, &out);
+#endif
+    return out;
+  }
+}
+
 namespace OpenMS
 {
   namespace Logger
@@ -39,7 +75,7 @@ namespace OpenMS
     const time_t LogStreamBuf::MAX_TIME = numeric_limits<time_t>::max();
     const std::string LogStreamBuf::UNKNOWN_LOG_LEVEL = "UNKNOWN_LOG_LEVEL";
 
-    LogStreamBuf::LogStreamBuf(const std::string& log_level, Colorizer* col) 
+    LogStreamBuf::LogStreamBuf(const std::string& log_level, Colorizer* col)
       : std::streambuf(),
         level_(log_level),
         colorizer_(col)
@@ -48,9 +84,37 @@ namespace OpenMS
       std::streambuf::setp(pbuf_, pbuf_ + BUFFER_LENGTH - 1);
     }
 
+    LogStreamBuf::LogStreamBuf(LogStreamBuf* source_buf, Colorizer* col)
+      : std::streambuf(),
+        level_(source_buf ? source_buf->level_ : UNKNOWN_LOG_LEVEL),
+        colorizer_(col)
+    {
+      pbuf_ = new char[BUFFER_LENGTH];
+      std::streambuf::setp(pbuf_, pbuf_ + BUFFER_LENGTH - 1);
+      // Copy the stream_list_ from the source buffer
+      if (source_buf)
+      {
+        stream_list_ = source_buf->stream_list_;
+      }
+    }
+
+    std::list<LogStreamBuf::StreamStruct>& LogStreamBuf::getStreamList_()
+    {
+      return stream_list_;
+    }
+
+    const std::list<LogStreamBuf::StreamStruct>& LogStreamBuf::getStreamList_() const
+    {
+      return stream_list_;
+    }
+
     LogStreamBuf::~LogStreamBuf()
     {
-      // Prevent issue on OSX with OpenMP: destructors of global objects seem to be called after tearing down the OpenMP context, we therefore cannot use any locks here.
+      // Flush whatever is left. distribute_() serializes on a global std::mutex
+      // that is intentionally leaked (never destroyed), so it stays valid while
+      // the global LogStream objects are torn down at static destruction. Unlike
+      // the former OpenMP critical section, a std::mutex does not depend on the
+      // OpenMP runtime, so locking here during teardown is safe (issue #9515).
       syncLF_();
       {
         clearCache();
@@ -120,7 +184,7 @@ namespace OpenMS
     bool LogStreamBuf::isInCache_(std::string const & line)
     {
       //cout << "LogCache (count)" << log_cache_.count(line) << endl;
-      if (log_cache_.count(line) == 0)
+      if (!log_cache_.contains(line))
       {
         return false;
       }
@@ -142,7 +206,7 @@ namespace OpenMS
 
     std::string LogStreamBuf::addToCache_(std::string const & line)
     {
-      std::string extra_message = "";
+      std::string extra_message;
       if (log_cache_.size() > 1) // check if we need to remove one of the entries
       {
         // get smallest key
@@ -191,28 +255,44 @@ namespace OpenMS
 
     void LogStreamBuf::distribute_(const std::string& outstring)
     {
-      // if there are any streams in our list, we
-      // copy the line into that streams, too and flush them
-      std::list<StreamStruct>::iterator list_it = stream_list_.begin();
-      for (; list_it != stream_list_.end(); ++list_it)
+      // Serialize the final writes across threads. Multiple thread-local
+      // LogStreamBuf instances legitimately share the same destination ostream
+      // (e.g. std::cerr/std::cout) AND the same global Colorizer
+      // (yellow/red/magenta), so both the stream writes and the Colorizer's
+      // internal state mutation must be serialized (issue #9515). Notifier
+      // callbacks are collected and invoked AFTER releasing the lock so that a
+      // notifier which itself logs cannot deadlock on this non-recursive mutex.
+      std::vector<LogStreamNotifier*> to_notify;
       {
-        if (colorizer_) 
-        {
-          *(list_it->stream) << (*colorizer_)(); // enable color
-        }        
+        std::lock_guard<std::mutex> lock(logSinkMutex_());
 
-        *(list_it->stream) << expandPrefix_(list_it->prefix, time(nullptr))
-                           << outstring;
-        if (colorizer_)
+        // if there are any streams in our list, we
+        // copy the line into that streams, too and flush them
+        for (StreamStruct& s : stream_list_)
         {
-          *(list_it->stream) << (*colorizer_).undo(); // disable color
-        }
-        *(list_it->stream) << std::endl;
+          if (colorizer_)
+          {
+            *(s.stream) << (*colorizer_)(); // enable color
+          }
 
-        if (list_it->target != nullptr)
-        {
-          list_it->target->logNotify();
+          *(s.stream) << expandPrefix_(s.prefix, time(nullptr)) << outstring;
+
+          if (colorizer_)
+          {
+            *(s.stream) << (*colorizer_).undo(); // disable color
+          }
+          *(s.stream) << std::endl;
+
+          if (s.target != nullptr)
+          {
+            to_notify.push_back(s.target);
+          }
         }
+      }
+
+      for (LogStreamNotifier* target : to_notify)
+      {
+        target->logNotify();
       }
     }
 
@@ -228,8 +308,6 @@ namespace OpenMS
           char *line_start = pbase();
           char *line_end = pbase();
 
-          static char buf[BUFFER_LENGTH];
-
           while (line_end < pptr())
           {
             // search for the first end of line
@@ -239,31 +317,23 @@ namespace OpenMS
 
             if (line_end >= pptr())
             {
-              // Copy the incomplete line to the incomplete_line_ buffer
-              size_t length = line_end - line_start;
-              length = std::min(length, (size_t) (BUFFER_LENGTH - 1));
-              strncpy(&(buf[0]), line_start, length);
-
-              // if length was too large, we copied one byte less than BUFFER_LENGTH to have
-              // room for the final \0
-              buf[length] = '\0';
-
-              incomplete_line_ += &(buf[0]);
+              // No newline yet: stash the partial line for the next flush.
+              // Appending straight into incomplete_line_ (a std::string) avoids
+              // the former shared function-local 'static' scratch buffer, which
+              // is raced on by concurrent thread-local LogStreamBufs (issue #9515).
+              incomplete_line_.append(line_start, (size_t) (line_end - line_start));
 
               // mark everything as read
               line_end = pptr() + 1;
             }
             else
             {
-              // note: pptr() - pbase() should be bounded by BUFFER_LENGTH, so this should always work
-              memcpy(&(buf[0]), line_start, line_end - line_start + 1);
-              buf[line_end - line_start] = '\0';
-
-              // assemble the string to be written
-              // (consider leftovers of the last buffer from incomplete_line_)
+              // A full line ends at line_end (the '\n'); [line_start, line_end) is
+              // its content without the newline. Assemble the string to be written,
+              // prepending any leftover from the previous flush (incomplete_line_).
               std::string outstring;
               std::swap(outstring, incomplete_line_); // init outstring, while resetting incomplete_line_
-              outstring += &(buf[0]);
+              outstring.append(line_start, (size_t) (line_end - line_start));
 
               // avoid adding empty lines to the cache
               if (outstring.empty())
@@ -311,12 +381,12 @@ namespace OpenMS
       Size copied_index = 0;
       string result;
 
-      while ((index = prefix.find('%', index)) != String::npos)
+      while ((index = prefix.find('%', index)) != std::string::npos)
       {
         // append any constant parts of the string to the result
         if (copied_index < index)
         {
-          result.append(prefix.substr(copied_index, index - copied_index));
+          result.append(StringUtils::substr(prefix, copied_index, index - copied_index));
           copied_index = (SignedSize)index;
         }
 
@@ -324,6 +394,8 @@ namespace OpenMS
         {
           char    buffer[64] = "";
           char * buf = &(buffer[0]);
+          // reentrant local-time; std::localtime would share a static std::tm
+          [[maybe_unused]] std::tm tmv = toLocalTime_(time);
 
           switch (prefix[index + 1])
           {
@@ -336,32 +408,32 @@ namespace OpenMS
             break;
 
           case 'T':           // time: HH:MM:SS
-            strftime(buf, 64, "%H:%M:%S", localtime(&time));
+            strftime(buf, 64, "%H:%M:%S", &tmv);
             result.append(buf);
             break;
 
           case 't':           // time: HH:MM
-            strftime(buf, 64, "%H:%M", localtime(&time));
+            strftime(buf, 64, "%H:%M", &tmv);
             result.append(buf);
             break;
 
           case 'D':           // date: DD.MM.YYYY
-            strftime(buf, 64, "%Y/%m/%d", localtime(&time));
+            strftime(buf, 64, "%Y/%m/%d", &tmv);
             result.append(buf);
             break;
 
           case 'd':           // date: DD.MM.
-            strftime(buf, 64, "%m/%d", localtime(&time));
+            strftime(buf, 64, "%m/%d", &tmv);
             result.append(buf);
             break;
 
           case 'S':           // time+date: DD.MM.YYYY, HH:MM:SS
-            strftime(buf, 64, "%Y/%m/%d, %H:%M:%S", localtime(&time));
+            strftime(buf, 64, "%Y/%m/%d, %H:%M:%S", &tmv);
             result.append(buf);
             break;
 
           case 's':           // time+date: DD.MM., HH:MM
-            strftime(buf, 64, "%m/%d, %H:%M", localtime(&time));
+            strftime(buf, 64, "%m/%d, %H:%M", &tmv);
             result.append(buf);
             break;
 
@@ -375,7 +447,7 @@ namespace OpenMS
 
       if (copied_index < prefix.size())
       {
-        result.append(prefix.substr(copied_index, prefix.size() - copied_index));
+        result.append(StringUtils::substr(prefix, copied_index, prefix.size() - copied_index));
       }
 
       return result;
@@ -469,6 +541,20 @@ namespace OpenMS
         return;
 
       rdbuf()->sync();
+      // Distribute any incomplete line before clearing streams
+      if (!rdbuf()->incomplete_line_.empty())
+      {
+        rdbuf()->distribute_(rdbuf()->incomplete_line_);
+        rdbuf()->incomplete_line_.clear();
+      }
+      // Flush all streams before clearing the list
+      for (auto& stream_struct : rdbuf()->stream_list_)
+      {
+        if (stream_struct.stream != nullptr)
+        {
+          stream_struct.stream->flush();
+        }
+      }
       rdbuf()->stream_list_.clear();
     }
 
@@ -544,18 +630,95 @@ namespace OpenMS
       std::ostream::flush();
     }
 
+    bool LogStream::hasStream(std::ostream & stream)
+    {
+      if (!bound_())
+      {
+        return false;
+      }
+      return hasStream_(stream);
+    }
+
+    void LogStream::flushIncomplete()
+    {
+      if (!bound_())
+        return;
+
+      rdbuf()->sync();
+      // Distribute any incomplete line (text not terminated by newline)
+      if (!rdbuf()->incomplete_line_.empty())
+      {
+        rdbuf()->distribute_(rdbuf()->incomplete_line_);
+        rdbuf()->incomplete_line_.clear();
+      }
+    }
+
   }   // namespace Logger
 
 
   // global StreamHandler
   OPENMS_DLLAPI StreamHandler STREAM_HANDLER;
 
-  // global default logstream
-  OPENMS_DLLAPI Logger::LogStream OpenMS_Log_fatal(new Logger::LogStreamBuf("FATAL_ERROR", &red), true, &cerr);
-  OPENMS_DLLAPI Logger::LogStream OpenMS_Log_error(new Logger::LogStreamBuf("ERROR", &red), true, &cerr);
-  OPENMS_DLLAPI Logger::LogStream OpenMS_Log_warn(new Logger::LogStreamBuf("WARNING", &yellow), true, &cout);
-  OPENMS_DLLAPI Logger::LogStream OpenMS_Log_info(new Logger::LogStreamBuf("INFO", nullptr), true, &cout);
-  // OPENMS_LOG_DEBUG is disabled by default, but will be enabled in TOPPAS.cpp or TOPPBase.cpp if started in debug mode (--debug or -debug X)
-  OPENMS_DLLAPI Logger::LogStream OpenMS_Log_debug(new Logger::LogStreamBuf("DEBUG", &magenta), false); // last param should be 'true', but segfaults...
+  // Internal (static) global log streams - not directly accessible from outside this file.
+  // Use getGlobalLog*() accessor functions for configuration purposes.
+  // Use OPENMS_LOG_* macros (which use thread-local streams) for actual logging.
+  namespace
+  {
+    Logger::LogStream g_log_fatal(new Logger::LogStreamBuf("FATAL_ERROR", &red), true, &cerr);
+    Logger::LogStream g_log_error(new Logger::LogStreamBuf("ERROR", &red), true, &cerr);
+    Logger::LogStream g_log_warn(new Logger::LogStreamBuf("WARNING", &yellow), true, &cerr);
+    Logger::LogStream g_log_info(new Logger::LogStreamBuf("INFO", nullptr), true, &cout);
+    // OPENMS_LOG_DEBUG is disabled by default, but will be enabled in TOPPAS.cpp or TOPPBase.cpp if started in debug mode (--debug or -debug X)
+    Logger::LogStream g_log_debug(new Logger::LogStreamBuf("DEBUG", &magenta), false); // last param should be 'true', but segfaults...
+  }
+
+  //
+  // Global log stream accessor functions (for configuration purposes)
+  // WARNING: Direct logging to these streams is NOT thread-safe.
+  // Use OPENMS_LOG_* macros for actual logging.
+  //
+  Logger::LogStream& getGlobalLogFatal() { return g_log_fatal; }
+  Logger::LogStream& getGlobalLogError() { return g_log_error; }
+  Logger::LogStream& getGlobalLogWarn() { return g_log_warn; }
+  Logger::LogStream& getGlobalLogInfo() { return g_log_info; }
+  Logger::LogStream& getGlobalLogDebug() { return g_log_debug; }
+
+  //
+  // Thread-local log stream accessors
+  // Each thread gets its own LogStream instance with a private buffer. The list of output
+  // destinations is *copied* from the global instance on first access, not shared with it:
+  // reconfiguring a global stream afterwards (insert()/remove()/LogSinkGuard) leaves already
+  // created thread-local streams untouched, so configure the thread-local stream returned here
+  // when the goal is to redirect or suppress what OPENMS_LOG_* actually writes.
+  //
+  Logger::LogStream& getThreadLocalLogFatal()
+  {
+    thread_local Logger::LogStream tls(new Logger::LogStreamBuf(g_log_fatal.rdbuf(), &red), true);
+    return tls;
+  }
+
+  Logger::LogStream& getThreadLocalLogError()
+  {
+    thread_local Logger::LogStream tls(new Logger::LogStreamBuf(g_log_error.rdbuf(), &red), true);
+    return tls;
+  }
+
+  Logger::LogStream& getThreadLocalLogWarn()
+  {
+    thread_local Logger::LogStream tls(new Logger::LogStreamBuf(g_log_warn.rdbuf(), &yellow), true);
+    return tls;
+  }
+
+  Logger::LogStream& getThreadLocalLogInfo()
+  {
+    thread_local Logger::LogStream tls(new Logger::LogStreamBuf(g_log_info.rdbuf(), nullptr), true);
+    return tls;
+  }
+
+  Logger::LogStream& getThreadLocalLogDebug()
+  {
+    thread_local Logger::LogStream tls(new Logger::LogStreamBuf(g_log_debug.rdbuf(), &magenta), true);
+    return tls;
+  }
 
 } // namespace OpenMS

@@ -41,20 +41,20 @@ namespace OpenMS
   {
     if (!isEditable())
     {
-      fillComboBox_(type_, &temp_.NamesOfType[temp_.getType()], 1);
-      fillComboBox_(ac_mode_, &temp_.NamesOfAcquisitionMode[temp_.getAcquisitionMode()], 1);
+      fillComboBox_(type_, &temp_.NamesOfType[static_cast<size_t>(temp_.getType())], 1);
+      fillComboBox_(ac_mode_, &temp_.NamesOfAcquisitionMode[static_cast<size_t>(temp_.getAcquisitionMode())], 1);
     }
     else
     {
-      fillComboBox_(type_, temp_.NamesOfType, IonDetector::SIZE_OF_TYPE);
-      fillComboBox_(ac_mode_, temp_.NamesOfAcquisitionMode, IonDetector::SIZE_OF_ACQUISITIONMODE);
-      type_->setCurrentIndex(temp_.getType());
-      ac_mode_->setCurrentIndex(temp_.getAcquisitionMode());
+      fillComboBox_(type_, temp_.NamesOfType, static_cast<int>(IonDetector::Type::SIZE_OF_TYPE));
+      fillComboBox_(ac_mode_, temp_.NamesOfAcquisitionMode, static_cast<int>(IonDetector::AcquisitionMode::SIZE_OF_ACQUISITIONMODE));
+      type_->setCurrentIndex(static_cast<int>(temp_.getType()));
+      ac_mode_->setCurrentIndex(static_cast<int>(temp_.getAcquisitionMode()));
     }
 
-    order_->setText(String(temp_.getOrder()).c_str());
-    res_->setText(String(temp_.getResolution()).c_str());
-    freq_->setText(String(temp_.getADCSamplingFrequency()).c_str());
+    order_->setText(StringUtils::toStr(temp_.getOrder()).c_str());
+    res_->setText(StringUtils::toStr(temp_.getResolution()).c_str());
+    freq_->setText(StringUtils::toStr(temp_.getADCSamplingFrequency()).c_str());
   }
 
   void IonDetectorVisualizer::store()

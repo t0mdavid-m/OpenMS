@@ -142,9 +142,9 @@ protected:
 
   ExitCodes main_(int, const char**) override
   {
-    String model_path = getStringOption_("model");
-    String input_path = getStringOption_("in");
-    String output_path = getStringOption_("out");
+    std::string model_path = getStringOption_("model");
+    std::string input_path = getStringOption_("in");
+    std::string output_path = getStringOption_("out");
 
     DLModel model;
     int result = model.run(model_path, input_path, output_path);

@@ -4,15 +4,18 @@ set(directory source/SYSTEM)
 ### list all filenames of the directory here
 set(sources_list
 BuildInfo.cpp
+CurlInit.cpp
 ExternalProcess.cpp
 File.cpp
-FileWatcher.cpp
 JavaInfo.cpp
+Network.cpp
 NetworkGetRequest.cpp
 PythonInfo.cpp
 RWrapper.cpp
 StopWatch.cpp
 SysInfo.cpp
+SystemSettings.cpp
+TempFiles.cpp
 UpdateCheck.cpp
 )
 
@@ -27,4 +30,3 @@ set(OpenMS_sources ${OpenMS_sources} ${sources})
 
 ### source group definition
 source_group("Source Files\\SYSTEM" FILES ${sources})
-

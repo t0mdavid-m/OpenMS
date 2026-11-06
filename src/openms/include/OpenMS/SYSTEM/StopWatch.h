@@ -11,7 +11,7 @@
 #include <OpenMS/config.h>
 
 #include <OpenMS/CONCEPT/Types.h>
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 
 #ifdef OPENMS_HAS_SYS_TIME_H
 #include <sys/time.h>
@@ -123,7 +123,7 @@ public:
             Return <b>true</b> if two stop watches are equal, i.e. they contain exactly
             the same time intervals for clock, user and system time and have the
             same running status.
-            @param stop_watch the stop watch to compare with
+            @param[in] stop_watch the stop watch to compare with
             @return bool <b>true</b> on equality, <b>false</b> otherwise
     */
     bool operator==(const StopWatch & stop_watch) const;
@@ -132,7 +132,7 @@ public:
             Return <b>false</b> if two stop watches differ in any way, i.e. they differ
             in either the clock, user, or system time or have a different
             running status.
-            @param stop_watch the stop watch to compare with
+            @param[in] stop_watch the stop watch to compare with
             @return bool <b>true</b> on inequality, <b>false</b> otherwise
     */
     bool operator!=(const StopWatch & stop_watch) const;
@@ -140,7 +140,7 @@ public:
     /**	Lesser than operator.
             Return true, if the stop watch is in all timings lesser than the
             stop watch to be compared with (clock, user and system time).
-            @param stop_watch the stop watch to compare with
+            @param[in] stop_watch the stop watch to compare with
             @return bool <b>true</b> if all times are lesser
     */
     bool operator<(const StopWatch & stop_watch) const;
@@ -148,7 +148,7 @@ public:
     /**	Lesser or equal operator.
             Return true, if the stop watch is in all timings lesser or equal than the
             stop watch to be compared with (clock, user and system time).
-            @param stop_watch the stop watch to compare with
+            @param[in] stop_watch the stop watch to compare with
             @return bool <b>true</b> if all times are lesser or equal
     */
     bool operator<=(const StopWatch & stop_watch) const;
@@ -156,7 +156,7 @@ public:
     /**	Greater or equal operator.
             Return true, if the stop watch is in all timings greater or equal than the
             stop watch to be compared with (clock, user and system time).
-            @param stop_watch the stop watch to compare with
+            @param[in] stop_watch the stop watch to compare with
             @return bool <b>true</b> if all times are greater or equal
     */
     bool operator>=(const StopWatch & stop_watch) const;
@@ -164,7 +164,7 @@ public:
     /**	Greater operator.
             Return true, if the stop watch is in all timings greater than the
             stop watch to be compared with (clock, user and system time).
-            @param stop_watch the stop watch to compare with
+            @param[in] stop_watch the stop watch to compare with
             @return bool <b>true</b> if all times are greater
     */
     bool operator>(const StopWatch & stop_watch) const;
@@ -178,12 +178,12 @@ public:
       2.10 s (wall), 1.67 s (CPU), 0.12 s (system), 1.54 s (user)
       
     */
-    String toString() const;
+    std::string toString() const;
 
     /**
       custom string formatting of time, using only the minimal number of units required (e.g., does not report hours when seconds suffice).
     */
-    static String toString(const double time_in_seconds);
+    static std::string toString(const double time_in_seconds);
 
 private:
   #ifdef OPENMS_WINDOWSPLATFORM

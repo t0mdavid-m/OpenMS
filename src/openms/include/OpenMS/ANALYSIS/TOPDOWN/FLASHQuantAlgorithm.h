@@ -107,7 +107,7 @@ namespace OpenMS
                          std::vector<MassAbundance>& abundances);
 
     // test purpose
-    String output_file_path_;
+    std::string output_file_path_;
     std::vector<double> rts_from_org_scans_;
 
   protected:

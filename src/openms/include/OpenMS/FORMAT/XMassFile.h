@@ -50,14 +50,14 @@ public:
     /**
         @brief Loads a spectrum from a XMass file.
 
-@param filename Name of the XMass file which should be loaded.
-@param spectrum Spectrum in which the data loaded from the file should be stored.
+@param[in] filename Name of the XMass file which should be loaded.
+@param[out] spectrum Spectrum in which the data loaded from the file should be stored.
 
         @exception Exception::FileNotFound is thrown if the file could not be read
     */
-    void load(const String & filename, MSSpectrum & spectrum)
+    void load(const std::string & filename, MSSpectrum & spectrum)
     {
-      Internal::AcqusHandler acqus(filename.prefix(filename.length() - 3) + String("acqus"));
+      Internal::AcqusHandler acqus(StringUtils::prefix(filename, filename.length() - 3) + std::string("acqus"));
 
       Internal::FidHandler fid(filename);
       if (!fid)
@@ -95,25 +95,25 @@ public:
       spectrum.setRT(0.0);
       spectrum.setMSLevel(1);
       spectrum.setName("Xmass analysis file " + acqus.getParam("$ID_raw"));
-      spectrum.setType(SpectrumSettings::PROFILE);
-      spectrum.setNativeID("spectrum=xsd:" + acqus.getParam("$ID_raw").remove('<').remove('>'));
+      spectrum.setType(SpectrumSettings::SpectrumType::PROFILE);
+      spectrum.setNativeID("spectrum=xsd:" + [](std::string s){ StringUtils::remove(s, '<'); StringUtils::remove(s, '>'); return s; }(acqus.getParam("$ID_raw")));
       spectrum.setComment("no comment");
 
       InstrumentSettings instrument_settings;
-      instrument_settings.setScanMode(InstrumentSettings::MASSSPECTRUM);
+      instrument_settings.setScanMode(InstrumentSettings::ScanMode::MASSSPECTRUM);
       instrument_settings.setZoomScan(false);
 
       if (acqus.getParam(".IONIZATION MODE") == "LD+")
       {
-        instrument_settings.setPolarity(IonSource::POSITIVE);
+        instrument_settings.setPolarity(IonSource::Polarity::POSITIVE);
       }
       else if (acqus.getParam(".IONIZATION MODE") == "LD-")
       {
-        instrument_settings.setPolarity(IonSource::NEGATIVE);
+        instrument_settings.setPolarity(IonSource::Polarity::NEGATIVE);
       }
       else
       {
-        instrument_settings.setPolarity(IonSource::POLNULL);
+        instrument_settings.setPolarity(IonSource::Polarity::POLNULL);
       }
       spectrum.setInstrumentSettings(instrument_settings);
 
@@ -123,7 +123,7 @@ public:
 
       SourceFile source_file;
       source_file.setNameOfFile("fid");
-      source_file.setPathToFile(filename.prefix(filename.length() - 3));
+      source_file.setPathToFile(StringUtils::prefix(filename, filename.length() - 3));
       source_file.setFileSize(4.0 * acqus.getSize() / 1024 / 1024);   // 4 bytes / point
       source_file.setFileType("Xmass analysis file (fid)");
       spectrum.setSourceFile(source_file);
@@ -131,17 +131,17 @@ public:
       DataProcessing data_processing;
       Software software;
       software.setName("FlexControl");
-      String fc_ver = acqus.getParam("$FCVer");   // FlexControlVersion
-      if (fc_ver.hasPrefix("<flexControl "))
+      std::string fc_ver = acqus.getParam("$FCVer");   // FlexControlVersion
+      if (StringUtils::hasPrefix(fc_ver, "<flexControl "))
       {
-        fc_ver = fc_ver.suffix(' ');
+        fc_ver = StringUtils::suffix(fc_ver, ' ');
       }
-      if (fc_ver.hasSuffix(">"))
+      if (StringUtils::hasSuffix(fc_ver, ">"))
       {
-        fc_ver = fc_ver.prefix('>');
+        fc_ver = StringUtils::prefix(fc_ver, '>');
       }
       software.setVersion(fc_ver);
-      software.setMetaValue("Acquisition method", DataValue(acqus.getParam("$ACQMETH").remove('<').remove('>')));
+      software.setMetaValue("Acquisition method", DataValue([](std::string s){ StringUtils::remove(s, '<'); StringUtils::remove(s, '>'); return s; }(acqus.getParam("$ACQMETH"))));
       data_processing.setSoftware(software);
       std::set<DataProcessing::ProcessingAction> actions;
       actions.insert(DataProcessing::SMOOTHING);
@@ -150,55 +150,55 @@ public:
       data_processing.setProcessingActions(actions);
       data_processing.setCompletionTime(DateTime::now());
 
-      std::vector< boost::shared_ptr< DataProcessing> > data_processing_vector;
-      data_processing_vector.push_back( boost::shared_ptr< DataProcessing>(new DataProcessing(data_processing)) );
+      std::vector< std::shared_ptr< DataProcessing> > data_processing_vector;
+      data_processing_vector.push_back( std::shared_ptr< DataProcessing>(new DataProcessing(data_processing)) );
       spectrum.setDataProcessing(data_processing_vector);
     }
 
     /**
         @brief Import settings from a XMass file.
 
-        @param filename File from which the experimental settings should be loaded.
-        @param exp MSExperiment where the experimental settings will be stored.
+        @param[in] filename File from which the experimental settings should be loaded.
+        @param[out] exp MSExperiment where the experimental settings will be stored.
 
         @exception Exception::FileNotFound is thrown if the file could not be opened.
     */
-    void importExperimentalSettings(const String & filename, PeakMap & exp)
+    void importExperimentalSettings(const std::string & filename, PeakMap & exp)
     {
-      Internal::AcqusHandler acqus(filename.prefix(filename.length() - 3) + String("acqus"));
+      Internal::AcqusHandler acqus(StringUtils::prefix(filename, filename.length() - 3) + std::string("acqus"));
 
       ExperimentalSettings & experimental_settings = exp.getExperimentalSettings();
 
       Instrument & instrument = experimental_settings.getInstrument();
       instrument.setName(acqus.getParam("SPECTROMETER/DATASYSTEM"));
       instrument.setVendor(acqus.getParam("ORIGIN"));
-      instrument.setModel(acqus.getParam("$InstrID").remove('<').remove('>'));
+      instrument.setModel([](std::string s){ StringUtils::remove(s, '<'); StringUtils::remove(s, '>'); return s; }(acqus.getParam("$InstrID")));
 
       std::vector<IonSource> & ionSourceList = instrument.getIonSources();
       ionSourceList.clear();
       ionSourceList.resize(1);
       if (acqus.getParam(".INLET") == "DIRECT")
       {
-        ionSourceList[0].setInletType(IonSource::DIRECT);
+        ionSourceList[0].setInletType(IonSource::InletType::DIRECT);
       }
       else
       {
-        ionSourceList[0].setInletType(IonSource::INLETNULL);
-        ionSourceList[0].setIonizationMethod(IonSource::MALDI);
+        ionSourceList[0].setInletType(IonSource::InletType::INLETNULL);
+        ionSourceList[0].setIonizationMethod(IonSource::IonizationMethod::MALDI);
       }
       if (acqus.getParam(".IONIZATION MODE") == "LD+")
       {
-        ionSourceList[0].setPolarity(IonSource::POSITIVE);
+        ionSourceList[0].setPolarity(IonSource::Polarity::POSITIVE);
       }
       else if (acqus.getParam(".IONIZATION MODE") == "LD-")
       {
-        ionSourceList[0].setPolarity(IonSource::NEGATIVE);
+        ionSourceList[0].setPolarity(IonSource::Polarity::NEGATIVE);
       }
       else
       {
-        ionSourceList[0].setPolarity(IonSource::POLNULL);
+        ionSourceList[0].setPolarity(IonSource::Polarity::POLNULL);
       }
-      ionSourceList[0].setMetaValue("MALDI target reference", DataValue(acqus.getParam("$TgIDS").remove('<').remove('>')));
+      ionSourceList[0].setMetaValue("MALDI target reference", DataValue([](std::string s){ StringUtils::remove(s, '<'); StringUtils::remove(s, '>'); return s; }(acqus.getParam("$TgIDS"))));
       ionSourceList[0].setOrder(0);
 
       std::vector<MassAnalyzer> & massAnalyzerList = instrument.getMassAnalyzers();
@@ -206,15 +206,15 @@ public:
       massAnalyzerList.resize(1);
       if (acqus.getParam(".SPECTROMETER TYPE") == "TOF")
       {
-        massAnalyzerList[0].setType(MassAnalyzer::TOF);
+        massAnalyzerList[0].setType(MassAnalyzer::AnalyzerType::TOF);
       }
       else
       {
-        massAnalyzerList[0].setType(MassAnalyzer::ANALYZERNULL);
+        massAnalyzerList[0].setType(MassAnalyzer::AnalyzerType::ANALYZERNULL);
       }
 
       DateTime date;
-      date.set(acqus.getParam("$AQ_DATE").remove('<').remove('>'));
+      date.set([](std::string s){ StringUtils::remove(s, '<'); StringUtils::remove(s, '>'); return s; }(acqus.getParam("$AQ_DATE")));
       experimental_settings.setDateTime(date);
     }
 
@@ -223,7 +223,7 @@ public:
 
         @exception Exception::FileNotWritable is thrown
     */
-    void store(const String & /*filename*/, const MSSpectrum & /*spectrum*/)
+    void store(const std::string & /*filename*/, const MSSpectrum & /*spectrum*/)
     {
       throw Exception::NotImplemented(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION);
     }

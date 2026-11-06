@@ -13,6 +13,9 @@
 #include <OpenMS/ANALYSIS/MRM/ReactionMonitoringTransition.h>
 ///////////////////////////
 
+#include <unordered_set>
+#include <unordered_map>
+
 using namespace OpenMS;
 using namespace std;
 
@@ -40,7 +43,7 @@ END_SECTION
 OpenMS::ReactionMonitoringTransition transition = ReactionMonitoringTransition();
 
 CVTerm charge_cv;
-String charge_cv_acc = "MS:1000041";
+std::string charge_cv_acc = "MS:1000041";
 charge_cv.setCVIdentifierRef("MS");
 charge_cv.setAccession(charge_cv_acc);
 charge_cv.setName("charge state");
@@ -141,7 +144,7 @@ START_SECTION((ReactionMonitoringTransition& operator=(const ReactionMonitoringT
 END_SECTION
 
 
-START_SECTION((void setName(const String &name)))
+START_SECTION((void setName(const std::string &name)))
 {
   OpenMS::ReactionMonitoringTransition tr = ReactionMonitoringTransition();
   tr.setName("test_tr");
@@ -150,13 +153,13 @@ START_SECTION((void setName(const String &name)))
 }
 END_SECTION
 
-START_SECTION((const String& getName() const ))
+START_SECTION((const std::string& getName() const ))
 {
   TEST_EQUAL(transition.getName(), "")
 }
 END_SECTION
 
-START_SECTION((void setPeptideRef(const String &peptide_ref)))
+START_SECTION((void setPeptideRef(const std::string &peptide_ref)))
 {
   OpenMS::ReactionMonitoringTransition tr = ReactionMonitoringTransition();
   tr.setPeptideRef("test_ref");
@@ -165,13 +168,13 @@ START_SECTION((void setPeptideRef(const String &peptide_ref)))
 }
 END_SECTION
 
-START_SECTION((const String& getPeptideRef() const ))
+START_SECTION((const std::string& getPeptideRef() const ))
 {
   TEST_EQUAL(transition.getPeptideRef(), "")
 }
 END_SECTION
 
-START_SECTION((void setCompoundRef(const String &compound_ref)))
+START_SECTION((void setCompoundRef(const std::string &compound_ref)))
 {
   OpenMS::ReactionMonitoringTransition tr = ReactionMonitoringTransition();
   tr.setCompoundRef("test_ref");
@@ -180,7 +183,7 @@ START_SECTION((void setCompoundRef(const String &compound_ref)))
 }
 END_SECTION
 
-START_SECTION((const String& getCompoundRef() const ))
+START_SECTION((const std::string& getCompoundRef() const ))
 {
   TEST_EQUAL(transition.getCompoundRef(), "")
 }
@@ -356,6 +359,115 @@ START_SECTION((bool operator!=(const ReactionMonitoringTransition &rhs) const ))
 
   tr1.addPrecursorCVTerm(charge_cv);
   TEST_FALSE(tr1 == tr2)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// Hash function tests
+/////////////////////////////////////////////////////////////
+
+START_SECTION(([EXTRA] std::hash<ReactionMonitoringTransition>))
+{
+  // Test that equal objects have equal hashes
+  ReactionMonitoringTransition tr1, tr2;
+  std::hash<ReactionMonitoringTransition> hasher;
+
+  // Default constructed objects should have equal hashes
+  TEST_EQUAL(hasher(tr1), hasher(tr2))
+
+  // Modify both identically and verify hashes still match
+  tr1.setName("test_transition");
+  tr2.setName("test_transition");
+  TEST_EQUAL(hasher(tr1), hasher(tr2))
+
+  tr1.setPeptideRef("peptide_ref_1");
+  tr2.setPeptideRef("peptide_ref_1");
+  TEST_EQUAL(hasher(tr1), hasher(tr2))
+
+  tr1.setPrecursorMZ(500.0);
+  tr2.setPrecursorMZ(500.0);
+  TEST_EQUAL(hasher(tr1), hasher(tr2))
+
+  tr1.setProductMZ(250.0);
+  tr2.setProductMZ(250.0);
+  TEST_EQUAL(hasher(tr1), hasher(tr2))
+
+  // Test with CV terms
+  CVTerm cv_term;
+  cv_term.setCVIdentifierRef("MS");
+  cv_term.setAccession("MS:1000041");
+  cv_term.setName("charge state");
+  cv_term.setValue(2);
+  tr1.addPrecursorCVTerm(cv_term);
+  tr2.addPrecursorCVTerm(cv_term);
+  TEST_EQUAL(hasher(tr1), hasher(tr2))
+
+  // Test with prediction
+  ReactionMonitoringTransition::Prediction pred;
+  pred.contact_ref = "contact_1";
+  pred.software_ref = "software_1";
+  tr1.setPrediction(pred);
+  tr2.setPrediction(pred);
+  TEST_EQUAL(hasher(tr1), hasher(tr2))
+
+  // Test with transition flags
+  tr1.setDetectingTransition(false);
+  tr2.setDetectingTransition(false);
+  TEST_EQUAL(hasher(tr1), hasher(tr2))
+
+  tr1.setIdentifyingTransition(true);
+  tr2.setIdentifyingTransition(true);
+  TEST_EQUAL(hasher(tr1), hasher(tr2))
+
+  // Test that different objects have different hashes (not guaranteed but expected)
+  ReactionMonitoringTransition tr3;
+  tr3.setName("different_name");
+  TEST_NOT_EQUAL(hasher(tr1), hasher(tr3))
+
+  ReactionMonitoringTransition tr4;
+  tr4.setPrecursorMZ(999.0);
+  TEST_NOT_EQUAL(hasher(tr1), hasher(tr4))
+
+  // Test use in unordered_set
+  std::unordered_set<ReactionMonitoringTransition> transition_set;
+  transition_set.insert(tr1);
+  transition_set.insert(tr2); // Should not insert (equal to tr1)
+  transition_set.insert(tr3);
+  transition_set.insert(tr4);
+  TEST_EQUAL(transition_set.size(), 3) // tr1 and tr2 are equal, so only 3 unique
+
+  // Test use in unordered_map
+  std::unordered_map<ReactionMonitoringTransition, int> transition_map;
+  transition_map[tr1] = 1;
+  transition_map[tr2] = 2; // Should overwrite value for tr1
+  transition_map[tr3] = 3;
+  TEST_EQUAL(transition_map.size(), 2)
+  TEST_EQUAL(transition_map[tr1], 2) // Value should be 2 (overwritten)
+  TEST_EQUAL(transition_map[tr3], 3)
+
+  // Test lookup
+  TEST_EQUAL(transition_set.count(tr1), 1)
+  TEST_EQUAL(transition_set.count(tr2), 1) // Equal to tr1
+  TEST_EQUAL(transition_set.count(tr3), 1)
+
+  ReactionMonitoringTransition tr5;
+  tr5.setName("not_in_set");
+  TEST_EQUAL(transition_set.count(tr5), 0)
+}
+END_SECTION
+
+START_SECTION((const Prediction& getPrediction() const))
+{
+  ReactionMonitoringTransition tr;
+  TEST_EQUAL(tr.hasPrediction(), false)
+  // no Prediction set: must throw instead of dereferencing a null pointer (regression)
+  TEST_EXCEPTION(Exception::MissingInformation, tr.getPrediction())
+
+  ReactionMonitoringTransition::Prediction p;
+  p.contact_ref = "dummy";
+  tr.setPrediction(p);
+  TEST_EQUAL(tr.hasPrediction(), true)
+  TEST_EQUAL(tr.getPrediction().contact_ref, "dummy")
 }
 END_SECTION
 

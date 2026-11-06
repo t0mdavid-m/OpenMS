@@ -145,7 +145,7 @@ namespace OpenMS
     }
   } // namespace
 
-  Refine::Ladder Refine::ladder(const String& sequence, const std::vector<std::string>& ion_types)
+  Refine::Ladder Refine::ladder(const std::string& sequence, const std::vector<std::string>& ion_types)
   {
     std::string prefix_type, suffix_type;
     for (const auto& ion : ion_types)
@@ -837,7 +837,7 @@ namespace OpenMS
   // The MS3 piece test (ADR-0049 decision 8): the pieces MS3FragmentMatcher predicts for a target under each path
   // ======================================================================================================================
 
-  Refine::PieceVerdict Refine::pieceTest(const DeconvolvedSpectrum& ms3, const String& sequence, const Path& a, const Path& b,
+  Refine::PieceVerdict Refine::pieceTest(const DeconvolvedSpectrum& ms3, const std::string& sequence, const Path& a, const Path& b,
                                          const Discriminating& target, double loose_ppm, double tight_ppm)
   {
     using TM = MS3FragmentMatcher::TheoreticalMass;

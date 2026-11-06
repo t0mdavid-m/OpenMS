@@ -27,7 +27,7 @@ namespace OpenMS
   MultiplexFiltering::MultiplexFiltering(const MSExperiment& exp_centroided, const std::vector<MultiplexIsotopicPeakPattern>& patterns,
                                          int isotopes_per_peptide_min, int isotopes_per_peptide_max, double intensity_cutoff, double rt_band,
                                          double mz_tolerance, bool mz_tolerance_unit, double peptide_similarity, double averagine_similarity,
-                                         double averagine_similarity_scaling, String averagine_type) :
+                                         double averagine_similarity_scaling, std::string averagine_type) :
   patterns_(patterns), isotopes_per_peptide_min_(isotopes_per_peptide_min), isotopes_per_peptide_max_(isotopes_per_peptide_max),
   intensity_cutoff_(intensity_cutoff), rt_band_(rt_band), mz_tolerance_(mz_tolerance), mz_tolerance_unit_in_ppm_(mz_tolerance_unit),
   peptide_similarity_(peptide_similarity), averagine_similarity_(averagine_similarity),
@@ -324,7 +324,7 @@ namespace OpenMS
     for (const auto &it : satellites)
     {
       size_t idx_masstrace = it.first;    // mass trace index i.e. the index within the peptide multiplet pattern
-      if (rt_boundaries.find(idx_masstrace) == rt_boundaries.end())
+      if (!rt_boundaries.contains(idx_masstrace))
       {
         // That's the first satellite within this mass trace.
         rt_boundaries[idx_masstrace] = std::make_pair((it.second).getRTidx(), (it.second).getRTidx());
@@ -483,7 +483,7 @@ namespace OpenMS
       // Calculate Pearson and Spearman rank correlations
       if ((intensities_model.size() < isotopes_per_peptide_min_) || (intensities_data.size() < isotopes_per_peptide_min_))
       {
-        throw Exception::InvalidSize(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, 0);
+        throw Exception::InvalidSize(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, 0, "intensity vectors too small for correlation calculation");
       }
       double correlation_Pearson = OpenMS::Math::pearsonCorrelationCoefficient(intensities_model.begin(), intensities_model.end(), intensities_data.begin(), intensities_data.end());
       double correlation_Spearman = OpenMS::Math::rankCorrelationCoefficient(intensities_model.begin(), intensities_model.end(), intensities_data.begin(), intensities_data.end());

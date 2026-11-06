@@ -14,9 +14,6 @@
 #include <OpenMS/CONCEPT/Constants.h>
 #include <OpenMS/FORMAT/FileHandler.h>
 #include <OpenMS/FORMAT/MzMLFile.h>
-#ifdef WITH_THERMO_RAW
-#include <OpenMS/FORMAT/ThermoRawFile.h>
-#endif
 #include <OpenMS/INTERFACES/IMSDataConsumer.h>
 #include <OpenMS/METADATA/ExperimentalSettings.h>
 #include <OpenMS/METADATA/SpectrumLookup.h>
@@ -306,12 +303,12 @@ void FLASHAnnotatorAlgorithm::updateMembers_()
   }
 }
 
-const std::vector<String>& FLASHAnnotatorAlgorithm::getIonTypes() const
+const std::vector<std::string>& FLASHAnnotatorAlgorithm::getIonTypes() const
 {
   return ion_types_;
 }
 
-const std::vector<String>& FLASHAnnotatorAlgorithm::getInternalIonTypes() const
+const std::vector<std::string>& FLASHAnnotatorAlgorithm::getInternalIonTypes() const
 {
   return internal_ion_types_;
 }
@@ -451,7 +448,7 @@ void FLASHAnnotatorAlgorithm::toPeakArrays(const MSSpectrum& spec, PeakArrays& p
   peaks.indexBuckets();
 }
 
-double FLASHAnnotatorAlgorithm::getProteoformMass(const String& sequence, const std::vector<Modification>& modifications)
+double FLASHAnnotatorAlgorithm::getProteoformMass(const std::string& sequence, const std::vector<Modification>& modifications)
 {
   static const double water = Residue::getInternalToFull().getMonoWeight();
   const auto& aa = residueMasses();
@@ -1094,7 +1091,7 @@ void FLASHAnnotatorAlgorithm::annotateOne_(const PeakArrays& spec, const std::ve
 
 std::set<std::pair<int, int>> FLASHAnnotatorAlgorithm::annotateInternal_(const PeakArrays& spec, const PeakOccupancy& occupancy,
                                                                          const std::vector<double>& sorted_intensities,
-                                                                         const InternalPieces& pieces, const String& sequence,
+                                                                         const InternalPieces& pieces, const std::string& sequence,
                                                                          const std::vector<char>& terminal_peaks, double cal_factor, double shift,
                                                                          bool record, int extension_min_run, const std::vector<char>& given_authentic,
                                                                          std::vector<Envelope>& envelopes, std::vector<char>& authentic) const
@@ -1372,8 +1369,8 @@ namespace
     void consumeSpectrum(SpectrumType& spec) override
     {
       const int index = read_count_++;
-      std::vector<String> native_ids;
-      spec.getNativeID().split(",", native_ids);
+      std::vector<std::string> native_ids;
+      StringUtils::split(spec.getNativeID(), ",", native_ids);
       int scan = native_ids.empty() ? -1 : SpectrumLookup::extractScanNumber(native_ids.back(), type_accession_);
       if (scan < 0)
       {
@@ -1400,29 +1397,27 @@ namespace
     const std::set<int>& needed_scans_;
     bool scan_from_index_;
     std::map<int, MSSpectrum>& out_;
-    String type_accession_ = "MS:1000768";
+    std::string type_accession_ = "MS:1000768";
     int read_count_ = 0;
     bool without_scan_number_ = false;
   };
 } // namespace
 
-Size FLASHAnnotatorAlgorithm::loadSpectra(const String& mzml_file, const std::set<int>& scans, std::map<int, MSSpectrum>& spectra)
+Size FLASHAnnotatorAlgorithm::loadSpectra(const std::string& mzml_file, const std::set<int>& scans, std::map<int, MSSpectrum>& spectra)
 {
   if (FileHandler::getTypeByFileName(mzml_file) == FileTypes::RAW)
   {
 #ifdef WITH_THERMO_RAW
-    // a Thermo .raw file, streamed with Thermo's peak picking (centroided), as FLASHHelperClasses::loadExperiment reads it; its native
-    // IDs always hold the scan number
-    ThermoRawFile raw;
-    raw.setLogType(ProgressLogger::NONE);
-    ThermoRawFile::Options raw_options = raw.getOptions();
-    raw_options.centroid = true;
-    raw_options.checksum = false;
-    raw_options.skip_chromatograms = true;
-    raw_options.ms_levels = {2, 3, 4, 5};
-    raw.setOptions(raw_options);
+    // a Thermo .raw file, read with Thermo's peak picking (centroided) as FLASHHelperClasses::loadExperiment reads it, MSn spectra only;
+    // its native IDs always hold the scan number
+    PeakMap map;
+    FileHandler file_handler;
+    PeakFileOptions options = file_handler.getOptions();
+    options.setMSLevels({2, 3, 4, 5});
+    file_handler.setOptions(options);
+    file_handler.loadExperiment(mzml_file, map, {FileTypes::RAW}, ProgressLogger::NONE);
     NeededSpectraConsumer consumer(scans, false, spectra);
-    raw.transform(mzml_file, &consumer);
+    for (auto& spec : map) consumer.consumeSpectrum(spec);
     return consumer.readCount();
 #else
     throw Exception::InvalidParameter(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
@@ -1485,7 +1480,7 @@ static void keepMostIntensePeaks_(FLASHAnnotatorAlgorithm::PeakArrays& peaks)
 
 bool FLASHAnnotatorAlgorithm::toCentroidedPeakArrays(const MSSpectrum& spec, PeakArrays& peaks)
 {
-  if (spec.getType(true) == SpectrumSettings::PROFILE)
+  if (spec.getType(true) == SpectrumSettings::SpectrumType::PROFILE)
   {
     PeakPickerHiRes picker;
     MSSpectrum picked;

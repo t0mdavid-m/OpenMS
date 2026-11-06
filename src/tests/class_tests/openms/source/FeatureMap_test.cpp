@@ -171,7 +171,7 @@ END_SECTION
 
 START_SECTION((FeatureMap(const FeatureMap &source)))
   FeatureMap map1;
-  map1.setMetaValue("meta",String("value"));
+  map1.setMetaValue("meta",std::string("value"));
   map1.push_back(feature1);
   map1.push_back(feature2);
   map1.push_back(feature3);
@@ -194,7 +194,7 @@ END_SECTION
 
 START_SECTION((FeatureMap& operator = (const FeatureMap& rhs)))
 	FeatureMap map1;
-    map1.setMetaValue("meta",String("value"));
+    map1.setMetaValue("meta",std::string("value"));
 	map1.push_back(feature1);
 	map1.push_back(feature2);
 	map1.push_back(feature3);
@@ -225,6 +225,41 @@ START_SECTION((FeatureMap& operator = (const FeatureMap& rhs)))
   TEST_EQUAL(map2.getDataProcessing().size(),0)
 	TEST_EQUAL(map2.getProteinIdentifications().size(),0);
 	TEST_EQUAL(map2.getUnassignedPeptideIdentifications().size(),0);
+END_SECTION
+
+START_SECTION((FeatureMap& operator=(FeatureMap&& rhs)))
+  FeatureMap map1;
+  map1.setMetaValue("meta", std::string("value"));
+  map1.push_back(feature1);
+  map1.push_back(feature2);
+  map1.push_back(feature3);
+  map1.updateRanges();
+  map1.setIdentifier("lsid");
+  map1.getDataProcessing().resize(1);
+  map1.getProteinIdentifications().resize(1);
+  map1.getUnassignedPeptideIdentifications().resize(1);
+
+  // move assignment
+  FeatureMap map2;
+  map2 = std::move(map1);
+
+  TEST_EQUAL(map2.size(), 3);
+  TEST_EQUAL(map2.getMetaValue("meta").toString(), "value")
+  TEST_REAL_SIMILAR(map2.getMaxIntensity(), 1.0)
+  TEST_STRING_EQUAL(map2.getIdentifier(), "lsid")
+  TEST_EQUAL(map2.getDataProcessing().size(), 1)
+  TEST_EQUAL(map2.getProteinIdentifications().size(), 1);
+  TEST_EQUAL(map2.getUnassignedPeptideIdentifications().size(), 1);
+
+  // move assignment of empty object
+  map2 = FeatureMap();
+
+  TEST_EQUAL(map2.size(), 0);
+  TEST_EQUAL(map2.hasRange() == HasRangeType::NONE, true)
+  TEST_STRING_EQUAL(map2.getIdentifier(), "")
+  TEST_EQUAL(map2.getDataProcessing().size(), 0)
+  TEST_EQUAL(map2.getProteinIdentifications().size(), 0);
+  TEST_EQUAL(map2.getUnassignedPeptideIdentifications().size(), 0);
 END_SECTION
 
 START_SECTION((bool operator == (const FeatureMap& rhs) const))
@@ -664,31 +699,31 @@ START_SECTION((AnnotationStatistics getAnnotationStatistics() const))
 
   fm.push_back(feature1); // single hit
   stats = fm.getAnnotationStatistics();
-  ++res.states[BaseFeature::FEATURE_ID_SINGLE];
+  ++res.states[static_cast<size_t>(BaseFeature::AnnotationState::FEATURE_ID_SINGLE)];
   std::cout << res;
   TEST_TRUE(stats == res)
 
   fm.push_back(feature4); // single hit + no hit
   stats = fm.getAnnotationStatistics();
-  ++res.states[BaseFeature::FEATURE_ID_NONE];
+  ++res.states[static_cast<size_t>(BaseFeature::AnnotationState::FEATURE_ID_NONE)];
   std::cout << res;
   TEST_TRUE(stats == res)
 
   fm.push_back(feature4); // single hit + 2x no hit
   stats = fm.getAnnotationStatistics();
-  ++res.states[BaseFeature::FEATURE_ID_NONE];
+  ++res.states[static_cast<size_t>(BaseFeature::AnnotationState::FEATURE_ID_NONE)];
   std::cout << res;
   TEST_TRUE(stats == res)
 
   fm.push_back(feature2); // single hit + 2x no hit + multi-hit (same)
   stats = fm.getAnnotationStatistics();
-  ++res.states[BaseFeature::FEATURE_ID_MULTIPLE_SAME];
+  ++res.states[static_cast<size_t>(BaseFeature::AnnotationState::FEATURE_ID_MULTIPLE_SAME)];
   std::cout << res;
   TEST_TRUE(stats == res)
 
   fm.push_back(feature3); // single hit + 2x no hit + multi-hit (same) + multi (divergent)
   stats = fm.getAnnotationStatistics();
-  ++res.states[BaseFeature::FEATURE_ID_MULTIPLE_DIVERGENT];
+  ++res.states[static_cast<size_t>(BaseFeature::AnnotationState::FEATURE_ID_MULTIPLE_DIVERGENT)];
   std::cout << res;
   std::cout << stats;
   TEST_TRUE(stats == res)

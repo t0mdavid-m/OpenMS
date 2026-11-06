@@ -7,6 +7,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/OPENSWATH/PeakPickerChromatogram.h>
+#include <OpenMS/CONCEPT/LogStream.h>
 
 namespace OpenMS
 {
@@ -33,6 +34,9 @@ namespace OpenMS
     defaults_.setValue("sn_bin_count", 30, "Signal to noise bin count.");
     defaults_.setValue("write_sn_log_messages", "false", "Write out log messages of the signal-to-noise estimator in case of sparse windows or median in rightmost histogram bin");
     defaults_.setValidStrings("write_sn_log_messages", {"true","false"});
+
+    defaults_.setValue("report_sn", "false", "Also report the apex signal-to-noise ratio for each picked peak (as an additional 'SN' FloatDataArray on the picked chromatogram). Forces initialization of the S/N estimator even if 'signal_to_noise' is 0.");
+    defaults_.setValidStrings("report_sn", {"true","false"});
 
     defaults_.setValue("remove_overlapping_peaks", "false", "Try to remove overlapping peaks during peak picking");
     defaults_.setValidStrings("remove_overlapping_peaks", {"false","true"});
@@ -78,7 +82,7 @@ namespace OpenMS
     {
         OPENMS_LOG_DEBUG << " ====  Picking chromatogram " << chromatogram.getNativeID() << 
         " with " << chromatogram.size() << " peaks (start at RT " << chromatogram[0].getRT() << " to RT " << chromatogram.back().getRT() << ") "
-        "using method \'" << method_ << "\'" << std::endl;
+        "using method \'" << method_ << "\'\n";
     }
     picked_chrom.clear(true);
     // Crawdad has its own methods, so we can call the wrapper directly
@@ -101,7 +105,7 @@ namespace OpenMS
 
     // Find initial seeds (peak picking)
     pp_.pick(smoothed_chrom, picked_chrom);
-    OPENMS_LOG_DEBUG << "Picked " << picked_chrom.size() << " chromatographic peaks." << std::endl;
+    OPENMS_LOG_DEBUG << "Picked " << picked_chrom.size() << " chromatographic peaks.\n";
 
     if (method_ == "legacy")
     {
@@ -132,16 +136,19 @@ namespace OpenMS
     picked_chrom.getFloatDataArrays()[IDX_ABUNDANCE].setName("IntegratedIntensity");
     picked_chrom.getFloatDataArrays()[IDX_LEFTBORDER].setName("leftWidth");
     picked_chrom.getFloatDataArrays()[IDX_RIGHTBORDER].setName("rightWidth");
+    picked_chrom.getFloatDataArrays()[IDX_SN].setName("SN");
     // just copy FWHM from initial peak picking
 
     picked_chrom.getFloatDataArrays()[IDX_ABUNDANCE].reserve(picked_chrom.size());
     picked_chrom.getFloatDataArrays()[IDX_LEFTBORDER].reserve(picked_chrom.size());
     picked_chrom.getFloatDataArrays()[IDX_RIGHTBORDER].reserve(picked_chrom.size());
+    picked_chrom.getFloatDataArrays()[IDX_SN].reserve(picked_chrom.size());
     for (Size i = 0; i < picked_chrom.size(); i++)
     {
       picked_chrom.getFloatDataArrays()[IDX_ABUNDANCE].push_back(integrated_intensities_[i]);
       picked_chrom.getFloatDataArrays()[IDX_LEFTBORDER].push_back((float)chromatogram[left_width_[i]].getRT());
       picked_chrom.getFloatDataArrays()[IDX_RIGHTBORDER].push_back((float)chromatogram[right_width_[i]].getRT());
+      picked_chrom.getFloatDataArrays()[IDX_SN].push_back((float)apex_sn_[i]);
     }
   }
 
@@ -151,11 +158,15 @@ namespace OpenMS
     integrated_intensities_.clear();
     left_width_.clear();
     right_width_.clear();
+    apex_sn_.clear();
     integrated_intensities_.reserve(picked_chrom.size());
     left_width_.reserve(picked_chrom.size());
     right_width_.reserve(picked_chrom.size());
+    apex_sn_.reserve(picked_chrom.size());
 
-    if (signal_to_noise_ > 0.0)
+    // report_sn_ forces initialization even if the boundary-extension threshold is off
+    const bool sn_available = (signal_to_noise_ > 0.0 || report_sn_);
+    if (sn_available)
     {
       snt_.init(chromatogram);
     }
@@ -165,6 +176,9 @@ namespace OpenMS
       const double central_peak_rt = picked_chrom[i].getRT();
       current_peak = findClosestPeak_(chromatogram, central_peak_rt, current_peak);
       const Size min_i = current_peak;
+
+      // record the apex S/N (not used for extension below, purely for reporting)
+      apex_sn_.push_back(sn_available ? snt_.getSignalToNoise(min_i) : -1.0);
 
       // peak core found, now extend it to the left
       Size k = 2;
@@ -204,7 +218,7 @@ namespace OpenMS
 #ifdef WITH_CRAWDAD
   void PeakPickerChromatogram::pickChromatogramCrawdad_(const MSChromatogram& chromatogram, MSChromatogram& picked_chrom)
   {
-    OPENMS_LOG_DEBUG << "Picking chromatogram using crawdad " << std::endl;
+    OPENMS_LOG_DEBUG << "Picking chromatogram using crawdad \n";
 
     // copy meta data of the input chromatogram
     picked_chrom.clear(true);
@@ -259,7 +273,7 @@ namespace OpenMS
   void PeakPickerChromatogram::removeOverlappingPeaks_(const MSChromatogram& chromatogram, MSChromatogram& picked_chrom)
   {
     if (picked_chrom.empty()) {return; }
-    OPENMS_LOG_DEBUG << "Remove overlapping peaks now (size " << picked_chrom.size() << ")" << std::endl;
+    OPENMS_LOG_DEBUG << "Remove overlapping peaks now (size " << picked_chrom.size() << ")\n";
     Size current_peak = 0;
     // Find overlapping peaks
     for (Size i = 0; i < picked_chrom.size() - 1; i++)
@@ -273,8 +287,8 @@ namespace OpenMS
         const int current_right_idx = right_width_[i];
         const int next_left_idx = left_width_[i + 1];
         const int next_right_idx = right_width_[i + 1];
-        OPENMS_LOG_DEBUG << " Found overlapping " << i << " : " << current_left_idx << " " << current_right_idx << std::endl;
-        OPENMS_LOG_DEBUG << "                   -- with  " << i + 1 << " : " << next_left_idx << " " << next_right_idx << std::endl;
+        OPENMS_LOG_DEBUG << " Found overlapping " << i << " : " << current_left_idx << " " << current_right_idx << '\n';
+        OPENMS_LOG_DEBUG << "                   -- with  " << i + 1 << " : " << next_left_idx << " " << next_right_idx << '\n';
 
         // Find the peak width and best RT
         double central_peak_rt = picked_chrom[i].getPos();
@@ -301,7 +315,7 @@ namespace OpenMS
         // assert that the peaks are now not overlapping any more ...
         if (new_left_border < new_right_border)
         {
-          std::cerr << "Something went wrong, peaks are still overlapping!" << " - new left border " << new_left_border << " vs " << new_right_border << " -- will take the mean" << std::endl;
+          OPENMS_LOG_ERROR << "Something went wrong, peaks are still overlapping!" << " - new left border " << new_left_border << " vs " << new_right_border << " -- will take the mean\n";
           new_left_border = (new_left_border + new_right_border) / 2;
           new_right_border = (new_left_border + new_right_border) / 2;
 
@@ -309,10 +323,10 @@ namespace OpenMS
 
         OPENMS_LOG_DEBUG << "New peak l: " << chromatogram[current_left_idx].getPos() 
           << " " << chromatogram[new_right_border].getPos() 
-          << " int " << integrated_intensities_[i] << std::endl;
+          << " int " << integrated_intensities_[i] << '\n';
         OPENMS_LOG_DEBUG << "New peak r: " << chromatogram[new_left_border].getPos() 
           << " " << chromatogram[next_right_idx].getPos() 
-          << " int " << integrated_intensities_[i + 1] << std::endl;
+          << " int " << integrated_intensities_[i + 1] << '\n';
 
 
         right_width_[i] = new_right_border;
@@ -373,7 +387,8 @@ namespace OpenMS
     use_gauss_ = (bool)param_.getValue("use_gauss").toBool();
     remove_overlapping_ = (bool)param_.getValue("remove_overlapping_peaks").toBool();
     write_sn_log_messages_ = (bool)param_.getValue("write_sn_log_messages").toBool();
-    method_ = (String)param_.getValue("method").toString();
+    report_sn_ = (bool)param_.getValue("report_sn").toBool();
+    method_ = param_.getValue("method").toString();
 
     if (method_ != "crawdad" && method_ != "corrected" && method_ != "legacy")
     {

@@ -8,13 +8,15 @@
 
 #pragma once
 
+#include <OpenMS/ANALYSIS/OPENSWATH/OpenSwathLibraryIDNormalizer.h>
 #include <OpenMS/ANALYSIS/OPENSWATH/TransitionTSVFile.h>
 
 namespace OpenMS
 {
+  class SqliteConnector;
 
   /**
-      @brief This class supports reading and writing of PQP files. 
+      @brief This class supports reading and writing of PQP files.
 
       The PQP files are SQLite databases consisting of several tables
       representing the data contained in TraML files. For another file format that stores transitions, see also
@@ -192,19 +194,57 @@ namespace OpenMS
 
 private:
 
+    /// Holds information about a PQP SQL query and optional column availability
+    struct PQPSqlQueryInfo
+    {
+      std::string select_sql;      ///< The complete SQL SELECT query
+      bool drift_time_exists;      ///< Whether LIBRARY_DRIFT_TIME column exists
+      bool gene_exists;            ///< Whether GENE table exists
+      bool compound_exists;        ///< Whether compound mappings exist
+      bool peptidoforms_exists;    ///< Whether transition-to-peptide mappings exist
+    };
+
+    /** @brief Build the SQL query for reading PQP transitions
+     *
+     * This helper builds the SQL query used by both readPQPInput_ and
+     * streamPQPToLightTargetedExperiment_ to avoid code duplication.
+     *
+     * @param[in] conn Open SQLite connection (SQLite-type-free; the native handle is
+     *                 resolved in the .cpp via SqliteConnector_impl.h)
+     * @param[in] legacy_traml_id Whether to use legacy TraML IDs
+     * @param[in] stable_order Whether to apply the legacy deterministic row order
+     * @return PQPSqlQueryInfo containing the query and column availability flags
+     */
+    PQPSqlQueryInfo buildPQPSelectQuery_(SqliteConnector& conn, bool legacy_traml_id, bool stable_order) const;
+
     /** @brief Read PQP SQLite file
      *
-     * @param filename The input file
-     * @param transition_list The output list of transitions
-     * @param legacy_traml_id Should legacy TraML IDs be used (boolean)?
+     * @param[in] filename The input file
+     * @param[out] transition_list The output list of transitions
+     * @param[in] legacy_traml_id Should legacy TraML IDs be used (boolean)?
      *
     */
     void readPQPInput_(const char* filename, std::vector<TSVTransition>& transition_list, bool legacy_traml_id = false);
 
+    /** @brief Stream PQP directly to LightTargetedExperiment (memory-efficient)
+     *
+     * This function reads the PQP file and directly populates the
+     * LightTargetedExperiment without creating an intermediate vector<TSVTransition>.
+     * This reduces peak memory usage by ~5x for large files.
+     *
+     * @param[in] filename The input file
+     * @param[out] exp The output LightTargetedExperiment
+     * @param[in] legacy_traml_id If false (default), use canonical PQP PRECURSOR.ID /
+     * TRANSITION.ID values for OpenSWATH processing. If true, restore legacy TRAML_ID
+     * values for compatibility/conversion workflows.
+     *
+    */
+    void streamPQPToLightTargetedExperiment_(const char* filename, OpenSwath::LightTargetedExperiment& exp, bool legacy_traml_id = false);
+
     /** @brief Write a TargetedExperiment to a file
      *
-     * @param filename Name of the output file
-     * @param targeted_exp The data structure to be written to the file
+     * @param[in] filename Name of the output file
+     * @param[out] targeted_exp The data structure to be written to the file
     */
     void writePQPOutput_(const char* filename, OpenMS::TargetedExperiment& targeted_exp);
 
@@ -220,36 +260,80 @@ public:
 
     /** @brief Write out a targeted experiment (TraML structure) into a PQP file
      *
-      @param filename The output file
-      @param targeted_exp The targeted experiment
+      @param[in] filename The output file
+      @param[out] targeted_exp The targeted experiment
      *
     */
     void convertTargetedExperimentToPQP(const char* filename, OpenMS::TargetedExperiment& targeted_exp);
 
+    /** @brief Write a canonical LightTargetedExperiment into a PQP file.
+     *
+     * PRECURSOR.ID and TRANSITION.ID are preserved exactly from LightCompound.id and
+     * LightTransition.transition_name, including zero and sparse values. The input must
+     * already satisfy OpenSwathLibraryIDNormalizer::validateCanonicalIDs().
+     *
+      @param[in] filename The output file
+      @param[in] targeted_exp The canonical targeted experiment (Light structure)
+     *
+    */
+    /// Compatibility overload: preserves canonical input as-is, otherwise canonicalizes a source-style Light experiment once before writing.
+    void convertLightTargetedExperimentToPQP(
+      const char* filename,
+      const OpenSwath::LightTargetedExperiment& targeted_exp);
+
+    /** @brief Write a canonical LightTargetedExperiment into a PQP file with optional source precursor provenance.
+     *
+     * @param[in] filename The output file
+     * @param[in] targeted_exp The canonical targeted experiment (Light structure)
+     * @param[in] source_ids Optional source-ID provenance. When supplied, PRECURSOR.TRAML_ID
+     *            stores the original/source identifier while PRECURSOR.ID remains canonical.
+     */
+    void convertLightTargetedExperimentToPQP(
+      const char* filename,
+      const OpenSwath::LightTargetedExperiment& targeted_exp,
+      const OpenSwathLibraryIDNormalizer::SourceIDMapping* source_ids);
+
     /** @brief Read in a PQP file and construct a targeted experiment (TraML structure)
      *
-      @param filename The input file
-      @param targeted_exp The output targeted experiment
-      @param legacy_traml_id Should legacy TraML IDs be used (boolean)?
+      @param[out] filename The input file
+      @param[out] targeted_exp The output targeted experiment
+      @param[in] legacy_traml_id Should legacy TraML IDs be used (boolean)?
      *
     */
     void convertPQPToTargetedExperiment(const char* filename, OpenMS::TargetedExperiment& targeted_exp, bool legacy_traml_id = false);
 
     /** @brief Read in a PQP file and construct a targeted experiment (Light transition structure)
      *
-     * @param filename The input file
-     * @param targeted_exp The output targeted experiment
-     * @param legacy_traml_id Should legacy TraML IDs be used (boolean)?
+     * @param[out] filename The input file
+     * @param[out] targeted_exp The output targeted experiment
+     * @param[in] legacy_traml_id If false (default), use canonical PQP PRECURSOR.ID /
+     * TRANSITION.ID values for OpenSWATH processing. If true, restore legacy TRAML_ID
+     * values for compatibility/conversion workflows.
      *
     */
     void convertPQPToTargetedExperiment(const char* filename, OpenSwath::LightTargetedExperiment& targeted_exp, bool legacy_traml_id = false);
 
-    /** @brief Creates an undordered map between the traml_id and the pqp id
-     * 
-     * @param filename The input file
-     * @param tableName The name of the table (can be "PRECURSOR" or "TRANSITION" since theses are the only tables that have a TRAML_ID)
+    /** @brief Creates an unordered map between the TRAML_ID and the persistent PQP ID.
+     *
+     * @param[in] filename The input file
+     * @param[in] tableName The table to query; must be @c PRECURSOR or @c TRANSITION
+     * @throws Exception::IllegalArgument If @p tableName is not @c PRECURSOR or @c TRANSITION
      */
     std::unordered_map<std::string, std::string> getPQPIDToTraMLIDMap(const char* filename, std::string tableName);
+
+    /** @brief Return persistent PQP IDs mapped to their source TRAML_ID values.
+     *
+     * Unlike getPQPIDToTraMLIDMap(), this direction is keyed by the persistent
+     * numeric ID and therefore preserves provenance for duplicate source transition
+     * identifiers. Empty TRAML_ID values are returned as empty strings.
+     *
+     * @param[in] filename The input file
+     * @param[in] tableName The table to query; must be @c PRECURSOR or @c TRANSITION
+     * @throws Exception::IllegalArgument If @p tableName is not @c PRECURSOR or @c TRANSITION
+     */
+    std::unordered_map<std::string, std::string> getPQPCurrentIDToTraMLIDMap(
+      const char* filename,
+      const std::string& tableName);
 
   };
 }

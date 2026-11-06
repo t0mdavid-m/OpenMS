@@ -12,6 +12,7 @@ DIATreeTab.h
 EnhancedTabBar.h
 EnhancedTabBarWidgetInterface.h
 EnhancedWorkspace.h
+FileWatcher.h
 FilterList.h
 GUIProgressLoggerImpl.h
 HistogramWidget.h
@@ -51,7 +52,6 @@ RecentFilesMenu.h
 SequenceVisualizer.h
 SpectraTreeTab.h
 SpectraIDViewTab.h
-SwathLibraryStats.h
 TableView.h
 TOPPASEdge.h
 TOPPASInputFileListVertex.h
@@ -82,11 +82,8 @@ foreach(i ${sources_list_h})
 	list(APPEND sources_h ${directory}/${i})
 endforeach(i)
 
-### treat as source files, for autoMOC'ing instead of manually calling QT5_WRAP_CPP()
-set(OpenMSVisual_sources ${OpenMSVisual_sources} ${sources_h})
 ### pass header file list to the upper instance
 set(OpenMSVisual_sources_h ${OpenMSVisual_sources_h} ${sources_h})
 
 ### header group definition for IDE's
 source_group("Header Files\\OpenMS\\VISUAL" FILES ${sources_h})
-

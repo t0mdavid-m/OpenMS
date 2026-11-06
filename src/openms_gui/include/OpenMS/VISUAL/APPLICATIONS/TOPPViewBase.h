@@ -16,7 +16,7 @@
 #include <OpenMS/DATASTRUCTURES/DefaultParamHandler.h>
 #include <OpenMS/VISUAL/EnhancedTabBar.h>
 #include <OpenMS/VISUAL/EnhancedWorkspace.h>
-#include <OpenMS/SYSTEM/FileWatcher.h>
+#include <OpenMS/VISUAL/FileWatcher.h>
 #include <OpenMS/VISUAL/FilterList.h>
 #include <OpenMS/VISUAL/RecentFilesMenu.h>
 #include <OpenMS/VISUAL/PlotCanvas.h>
@@ -167,31 +167,31 @@ public:
 
       Loads the data and adds it to the application by calling addData_()
 
-      @param filename The file to open
-      @param show_options If the options dialog should be shown (otherwise the defaults are used)
-      @param caption Sets the layer name and window caption of the data. If unset the file name is used.
-      @param add_to_recent If the file should be added to the recent files after opening
-      @param window_id in which window the file is opened if opened as a new layer (0 or default equals current window).
-      @param spectrum_id determines the spectrum to show in 1D view.
+      @param[in] filename The file to open
+      @param[in] show_options If the options dialog should be shown (otherwise the defaults are used)
+      @param[in] caption Sets the layer name and window caption of the data. If unset the file name is used.
+      @param[in] add_to_recent If the file should be added to the recent files after opening
+      @param[in] window_id in which window the file is opened if opened as a new layer (0 or default equals current window).
+      @param[in] spectrum_id determines the spectrum to show in 1D view.
     */
-    LOAD_RESULT addDataFile(const String& filename, bool show_options, bool add_to_recent, String caption = "", UInt window_id = 0, Size spectrum_id = 0);
+    LOAD_RESULT addDataFile(const std::string& filename, bool show_options, bool add_to_recent, std::string caption = "", UInt window_id = 0, Size spectrum_id = 0);
 
     /**
       @brief Adds a peak or feature map to the viewer
 
-      @param feature_map The feature data (empty if not feature data)
-      @param consensus_map The consensus feature data (empty if not consensus feature data)
-      @param peptides The peptide identifications (empty if not ID data)
-      @param peak_map The peak data (empty if not peak data)
-      @param on_disc_peak_map The peak data managed on disc (empty if not peak data)
-      @param data_type Type of the data
-      @param show_as_1d Force dataset to be opened in 1D mode (even if it contains several spectra)
-      @param show_options If the options dialog should be shown (otherwise the defaults are used)
-      @param as_new_window Open the layer in a new window within TOPPView (ignored if 'window_id' is set)
-      @param filename source file name (if the data came from a file)
-      @param caption Sets the layer name and window caption of the data. If unset the file name is used. If set, the file is not monitored for changes.
-      @param window_id in which window the file is opened if opened as a new layer (0 will open a new window).
-      @param spectrum_id determines the spectrum to show in 1D view.
+      @param[in] feature_map The feature data (empty if not feature data)
+      @param[in] consensus_map The consensus feature data (empty if not consensus feature data)
+      @param[in] peptides The peptide identifications (empty if not ID data)
+      @param[in] peak_map The peak data (empty if not peak data)
+      @param[in] on_disc_peak_map The peak data managed on disc (empty if not peak data)
+      @param[in] data_type Type of the data
+      @param[in] show_as_1d Force dataset to be opened in 1D mode (even if it contains several spectra)
+      @param[in] show_options If the options dialog should be shown (otherwise the defaults are used)
+      @param[in] as_new_window Open the layer in a new window within TOPPView (ignored if 'window_id' is set)
+      @param[in] filename source file name (if the data came from a file)
+      @param[in] caption Sets the layer name and window caption of the data. If unset the file name is used. If set, the file is not monitored for changes.
+      @param[in] window_id in which window the file is opened if opened as a new layer (0 will open a new window).
+      @param[in] spectrum_id determines the spectrum to show in 1D view.
     */
     void addData(const FeatureMapSharedPtrType& feature_map,
                  const ConsensusMapSharedPtrType& consensus_map,
@@ -202,8 +202,8 @@ public:
                  bool show_as_1d,
                  bool show_options,
                  bool as_new_window = true,
-                 const String& filename = "",
-                 const String& caption = "",
+                 const std::string& filename = "",
+                 const std::string& caption = "",
                  UInt window_id = 0,
                  Size spectrum_id = 0);
 
@@ -215,7 +215,7 @@ public:
 
       If the filename is empty, the application name + ".ini" is used as filename
     */
-    void loadPreferences(String filename = "");
+    void loadPreferences(std::string filename = "");
 
     /// Stores the preferences (used when this window is closed)
     void savePreferences();
@@ -258,7 +258,7 @@ public slots:
     /// changes the current path according to the currently active window/layer
     void updateCurrentPath();
     /// shows the file dialog for opening files (a starting directory, e.g. for the example files can be provided; otherwise, uses the current_path_)
-    void openFilesByDialog(const String& initial_directory = "");
+    void openFilesByDialog(const std::string& initial_directory = "");
     /// shows the DB dialog for opening files
     void showGoToDialog() const;
     /// shows the preferences dialog
@@ -301,7 +301,7 @@ public slots:
     */
     void showStatusMessage(const std::string& msg, OpenMS::UInt time);
     /// shows X/Y axis mouse values in the status bar
-    void showCursorStatus(const String& x, const String& y);
+    void showCursorStatus(const std::string& x, const std::string& y);
     /// Apply TOPP tool
     void showTOPPDialog();
     /// Annotates current layer with ID data from AccurateMassSearch
@@ -346,12 +346,11 @@ public slots:
     void changeLabel(QAction*);
     void changeUnassigned(QAction*);
     void resetZoom() const;
-    void toggleProjections();
     //@}
 
     /// list of the recently opened files
     /// called when RecentFileMenu items is clicked
-    void openFile(const String& filename);
+    void openFile(const std::string& filename);
 
     /// Enables/disables the data filters for the current layer
     void layerFilterVisibilityChange(bool) const;
@@ -382,7 +381,7 @@ protected slots:
     void updateProcessLog();
 
     /// Called if a data file has been externally changed
-    void fileChanged_(const String&);
+    void fileChanged_(const std::string&);
 protected:
     /// Initializes the default parameters on TOPPView construction.
     void initializeDefaultParameters_();
@@ -390,7 +389,7 @@ protected:
     /**
         @brief Shows a dialog where the user can select files
     */
-    QStringList chooseFilesDialog_(const String& path_overwrite = "");
+    QStringList chooseFilesDialog_(const std::string& path_overwrite = "");
 
     ///@name dock widgets
     //@{
@@ -485,7 +484,7 @@ protected:
     /// @name Recent files
     //@{
     /// adds a Filename to the recent files
-    void addRecentFile_(const String& filename);
+    void addRecentFile_(const std::string& filename);
 
     //@}
 
@@ -498,13 +497,13 @@ protected:
     struct
     {
       Param param;
-      String tool;
-      String in;
-      String out;
-      String file_name;
-      String file_name_in;
-      String file_name_out;
-      String layer_name;
+      std::string tool;
+      std::string in;
+      std::string out;
+      std::string file_name;
+      std::string file_name_in;
+      std::string file_name_out;
+      std::string layer_name;
       UInt window_id;
       Size spectrum_id;
       QProcess* process = nullptr;
@@ -528,11 +527,11 @@ protected:
 
     /// The current path (used for loading and storing).
     /// Depending on the preferences this is static or changes with the current window/layer.
-    String current_path_;
+    std::string current_path_;
 
 private:
     /// Suffix appended to caption of tabs when layer is shown in 3D
-    static const String CAPTION_3D_SUFFIX_;
+    static const std::string CAPTION_3D_SUFFIX_;
 
     /// This dialog is a member so that its settings can be perserved upon closing.
     TheoreticalSpectrumGenerationDialog spec_gen_dialog_;

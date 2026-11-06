@@ -36,7 +36,7 @@ namespace OpenMS
 
     /// write the features in regular file output; with @p abundances (feature index -> abundance and the number of raw mass traces it is
     /// summed over, FLASHDeconv -quant), the two columns are appended to each row (nan and 0 for a feature without an entry)
-    static void writeFeatures(const std::vector<FLASHHelperClasses::MassFeature>& mass_features, const String& file_name, std::fstream& fs, bool report_decoy = false,
+    static void writeFeatures(const std::vector<FLASHHelperClasses::MassFeature>& mass_features, const std::string& file_name, std::fstream& fs, bool report_decoy = false,
                               const std::map<uint, std::pair<double, Size>>* abundances = nullptr);
 
     /**
@@ -50,7 +50,7 @@ namespace OpenMS
      */
 
     static void writeTopFDFeatures(std::vector<DeconvolvedSpectrum>& deconvolved_spectra, const std::vector<FLASHHelperClasses::MassFeature>& mass_features,
-                                   const std::map<int, double>& scan_rt_map, const String& file_name, std::fstream& fs, uint ms_level);
+                                   const std::map<int, double>& scan_rt_map, const std::string& file_name, std::fstream& fs, uint ms_level);
 
   };
 } // namespace OpenMS

@@ -263,13 +263,13 @@ namespace OpenMS
   //     former direct matcher calls. They take the caller's FragmentAnalysis& because they also run in
   //     const helpers (computeFragmentMatch_) and where no tracker instance exists (initiateNextLevel).
 
-  int ProteoformTracker::identifyExplorationFragments(FragmentAnalysis& frag, const String& protein_sequence, int n,
+  int ProteoformTracker::identifyExplorationFragments(FragmentAnalysis& frag, const std::string& protein_sequence, int n,
                                                       double* masses, double* qscores, int* charges,
                                                       double* window_starts, double* window_ends,
                                                       char* ion_types, int* fragment_indices,
                                                       DeconvolvedSpectrum& stored_ms2,
                                                       FragmentAnalysis::ProteoformMatch& result,
-                                                      const String& fragmentation_method,
+                                                      const std::string& fragmentation_method,
                                                       double tolerance_ppm,
                                                       FragmentAnalysis::FragmentScores* frag_scores)
   {
@@ -279,13 +279,13 @@ namespace OpenMS
   }
 
   int ProteoformTracker::selectNextLevelTargets(FragmentAnalysis& frag, SelectionMetric selection,
-                                                const String& protein_sequence, int n,
+                                                const std::string& protein_sequence, int n,
                                                 double* masses, double* qscores, int* charges,
                                                 double* window_starts, double* window_ends,
                                                 char* ion_types, int* fragment_indices,
                                                 DeconvolvedSpectrum& stored_ms2,
                                                 FragmentAnalysis::ProteoformMatch& result,
-                                                const String& fragmentation_method,
+                                                const std::string& fragmentation_method,
                                                 double tolerance_ppm,
                                                 FragmentAnalysis::FragmentScores* frag_scores)
   {
@@ -1157,7 +1157,7 @@ namespace OpenMS
 
     // Pool: a path is supported by this mass once ANY of its scans' pieces fit (decision 8).
     const std::vector<Refine::Path>& c = st.candidates->assemble.candidates;
-    const Refine::PieceVerdict v = Refine::pieceTest(ms3, String(m.proteoform_sequence), c[0], c[1], rec->target, loose_ppm, tight_ppm);
+    const Refine::PieceVerdict v = Refine::pieceTest(ms3, std::string(m.proteoform_sequence), c[0], c[1], rec->target, loose_ppm, tight_ppm);
     rec->fits_a = rec->fits_a || v.fits_a;
     rec->fits_b = rec->fits_b || v.fits_b;
     rec->returned = true;
@@ -1561,8 +1561,8 @@ namespace OpenMS
     // winner mods -- the same region_seq + computePTMAdjustedFragmentMasses that narrowModifications_
     // uses (:751-792). Ambiguous mods enter at their range boundary, so a BRACKETING ion carries the
     // "mod OUT" value in `base`; "mod IN" = base + shift, tested per bracketed mod below.
-    const String region_seq =
-      (m.region_start < 0) ? String(m.proteoform_sequence) : String(m.proteoform_sequence).substr(ws, L);
+    const std::string region_seq =
+      (m.region_start < 0) ? std::string(m.proteoform_sequence) : StringUtils::substr(std::string(m.proteoform_sequence), ws, L);
 
     // Ion types produced by THIS scan's fragmentation. A CE-sweep variant shares the winner's
     // activation string (only collision energy differs); getIonTypesForFragmentationMethod lower-cases
@@ -1777,8 +1777,8 @@ namespace OpenMS
     if (L <= 0) return;
 
     // The winner-region substring all theoreticals are computed on.
-    const String region_seq =
-      (m.region_start < 0) ? String(m.proteoform_sequence) : String(m.proteoform_sequence).substr(ws, L);
+    const std::string region_seq =
+      (m.region_start < 0) ? std::string(m.proteoform_sequence) : StringUtils::substr(std::string(m.proteoform_sequence), ws, L);
 
     // Distinct ion-type chars actually observed in the mapped fragments (as strings), for Part A.
     std::vector<std::string> ion_types;

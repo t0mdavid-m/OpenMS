@@ -59,7 +59,7 @@ namespace
 {
   /// Get ion type mass shift for N-terminal (prefix) ions
   /// Uses Residue class methods for consistency with FLASHTnT
-  inline double getPrefixIonShift(const String& ion_type)
+  inline double getPrefixIonShift(const std::string& ion_type)
   {
     if (ion_type == "b") return Residue::getInternalToBIon().getMonoWeight();
     if (ion_type == "a") return Residue::getInternalToAIon().getMonoWeight();
@@ -69,7 +69,7 @@ namespace
 
   /// Get ion type mass shift for C-terminal (suffix) ions
   /// Uses Residue class methods for consistency with FLASHTnT
-  inline double getSuffixIonShift(const String& ion_type)
+  inline double getSuffixIonShift(const std::string& ion_type)
   {
     if (ion_type == "y") return Residue::getInternalToYIon().getMonoWeight();
     if (ion_type == "x") return Residue::getInternalToXIon().getMonoWeight();
@@ -89,7 +89,7 @@ namespace
   /// Calculate theoretical fragment masses with PTM adjustments from FLASHExtender
   /// For each PTM at positions [start, end], fragments containing that region get the PTM mass added
   void calculatePTMAdjustedFragmentMasses(
-      const String& sequence,
+      const std::string& sequence,
       const std::vector<PTMSite>& ptm_sites,
       double b_ion_shift,
       double y_ion_shift,
@@ -97,7 +97,7 @@ namespace
       std::vector<double>& suffix_masses)
   {
     // Clean sequence (replace I with L for mass calculation)
-    String clean_seq = sequence;
+    std::string clean_seq = sequence;
     std::replace(clean_seq.begin(), clean_seq.end(), 'I', 'L');
 
     int seq_len = static_cast<int>(clean_seq.size());
@@ -177,9 +177,9 @@ namespace
 } // anonymous namespace
 
 
-  std::vector<std::string> FragmentAnalysis::getIonTypesForFragmentationMethod(const String& method)
+  std::vector<std::string> FragmentAnalysis::getIonTypesForFragmentationMethod(const std::string& method)
   {
-    String lower_method = method;
+    std::string lower_method = method;
     std::transform(lower_method.begin(), lower_method.end(), lower_method.begin(), ::tolower);
 
     if (lower_method == "hcd") return {"b", "y"};
@@ -226,7 +226,7 @@ namespace
   /// @param ion_types vector of ion type strings (e.g., {"a", "b", "c", "x", "y", "z"})
   /// @param fragment_masses_map output: map from ion type char to vector of masses
   void FragmentAnalysis::computePTMAdjustedFragmentMasses(
-      const String& sequence,
+      const std::string& sequence,
       const std::vector<PTMSite>& ptm_sites,
       const std::vector<std::string>& ion_types,
       std::map<char, std::vector<double>>& fragment_masses_map)
@@ -234,7 +234,7 @@ namespace
     fragment_masses_map.clear();
 
     // Clean sequence (replace I with L for mass calculation)
-    String clean_seq = sequence;
+    std::string clean_seq = sequence;
     std::replace(clean_seq.begin(), clean_seq.end(), 'I', 'L');
     int seq_len = static_cast<int>(clean_seq.size());
 
@@ -398,11 +398,11 @@ namespace
     return output_idx;
   }
 
-  int FragmentAnalysis::runTagBasedFragmentMatching_(const String& protein_sequence,
+  int FragmentAnalysis::runTagBasedFragmentMatching_(const std::string& protein_sequence,
                                                      std::vector<TagBasedFragmentMatch>& matches,
                                                      DeconvolvedSpectrum& stored_ms2,
                                                      ProteoformMatch& result,
-                                                     const String& fragmentation_method,
+                                                     const std::string& fragmentation_method,
                                                      double tolerance_ppm)
   {
     matches.clear();
@@ -446,7 +446,7 @@ namespace
     std::cout << "tags" << std::endl;
 
     // 3. Create ProteinHit with proper metadata for matching
-    String clean_seq = protein_sequence;
+    std::string clean_seq = protein_sequence;
     std::replace(clean_seq.begin(), clean_seq.end(), 'I', 'L');
 
     ProteinHit hit(0.0, 0, "input_protein", protein_sequence);
@@ -458,9 +458,9 @@ namespace
     std::set<int> tag_indices_set;
     for (Size i = 0; i < tags.size(); ++i)
     {
-      String tag_seq = tags[i].getUppercaseSequence();
+      std::string tag_seq = tags[i].getUppercaseSequence();
       Size pos = clean_seq.find(tag_seq);
-      if (pos != String::npos)
+      if (pos != std::string::npos)
       {
         tag_positions.push_back(static_cast<int>(pos));
         tag_indices_set.insert(static_cast<int>(i));
@@ -484,9 +484,9 @@ namespace
     std::set<int> n_flanking_masses_set, c_flanking_masses_set;
     for (Size i = 0; i < tags.size(); ++i)
     {
-      String tag_seq = tags[i].getUppercaseSequence();
+      std::string tag_seq = tags[i].getUppercaseSequence();
       Size pos = clean_seq.find(tag_seq);
-      if (pos != String::npos)
+      if (pos != std::string::npos)
       {
         double n_mass = 0;
         for (Size j = 0; j < pos; ++j)
@@ -597,8 +597,8 @@ namespace
     if (start_pos >= 0 && end_pos >= 0 && end_pos > start_pos)
     {
       // Truncated proteoform detected by FLASHExtender
-      String truncated_seq = protein_sequence.substr(start_pos, end_pos - start_pos);
-      String display_seq = truncated_seq.size() > 30
+      std::string truncated_seq = StringUtils::substr(protein_sequence, start_pos, end_pos - start_pos);
+      std::string display_seq = truncated_seq.size() > 30
           ? truncated_seq.substr(0, 27) + "..."
           : truncated_seq;
       std::cout << "[runTagBasedFragmentMatching_] Matched proteoform: " << display_seq
@@ -608,7 +608,7 @@ namespace
     else
     {
       // Full sequence (no truncation detected)
-      String display_seq = protein_sequence.size() > 30
+      std::string display_seq = protein_sequence.size() > 30
           ? protein_sequence.substr(0, 15) + "..." + protein_sequence.substr(protein_sequence.size() - 12)
           : protein_sequence;
       std::cout << "[runTagBasedFragmentMatching_] Matched proteoform: " << display_seq
@@ -638,7 +638,7 @@ namespace
     {
       int idx_start = std::max(0, mod_starts[i] - 1);
       int idx_end = std::min(static_cast<int>(protein_sequence.size()), mod_ends[i]);
-      String subseq = protein_sequence.substr(idx_start, idx_end - idx_start);
+      std::string subseq = StringUtils::substr(protein_sequence, idx_start, idx_end - idx_start);
       std::cout << "  Residue " << mod_starts[i] << "-" << mod_ends[i] << ": "
                 << std::showpos << mod_masses[i] << std::noshowpos << " Da "
                 << "\"" << subseq << "\"" << std::endl;
@@ -669,12 +669,12 @@ namespace
     }
 
     // 9. Handle truncation: use truncated sequence if FLASHExtender detected it
-    String matching_sequence = protein_sequence;
+    std::string matching_sequence = protein_sequence;
 
     if (start_pos >= 0 && end_pos > start_pos)
     {
       // Use truncated sequence for fragment matching
-      matching_sequence = protein_sequence.substr(start_pos, end_pos - start_pos);
+      matching_sequence = StringUtils::substr(protein_sequence, start_pos, end_pos - start_pos);
 
       // Adjust PTM positions to be relative to truncated sequence
       for (auto& site : local_ptm_sites)
@@ -791,11 +791,11 @@ namespace
 
   // Refine's MS2 match (ADR-0049): the sibling of runTagBasedFragmentMatching_, chosen by characterization.method. Nothing
   // here reaches into FLASHTnT; the ladder's residue arithmetic is computePTMAdjustedFragmentMasses (via Refine::ladder).
-  int FragmentAnalysis::runRefineMatching_(const String& protein_sequence,
+  int FragmentAnalysis::runRefineMatching_(const std::string& protein_sequence,
                                            std::vector<TagBasedFragmentMatch>& matches,
                                            DeconvolvedSpectrum& stored_ms2,
                                            ProteoformMatch& result,
-                                           const String& fragmentation_method,
+                                           const std::string& fragmentation_method,
                                            double tolerance_ppm)
   {
     matches.clear();
@@ -928,7 +928,7 @@ namespace
     return static_cast<int>(matches.size());
   }
 
-  int FragmentAnalysis::getTopFragmentMatches(const String& protein_sequence,
+  int FragmentAnalysis::getTopFragmentMatches(const std::string& protein_sequence,
                                               int n,
                                               double* masses,
                                               double* qscores,
@@ -939,7 +939,7 @@ namespace
                                               int* fragment_indices,
                                               DeconvolvedSpectrum& stored_ms2,
                                               ProteoformMatch& result,
-                                              const String& fragmentation_method,
+                                              const std::string& fragmentation_method,
                                               double tolerance_ppm,
                                               FragmentScores* frag_scores)
   {
@@ -974,7 +974,7 @@ namespace
     return output_idx;
   }
 
-  int FragmentAnalysis::getAmbiguityEnclosingIons(const String& protein_sequence,
+  int FragmentAnalysis::getAmbiguityEnclosingIons(const std::string& protein_sequence,
                                                   int n,
                                                   double* masses,
                                                   double* qscores,
@@ -985,7 +985,7 @@ namespace
                                                   int* fragment_indices,
                                                   DeconvolvedSpectrum& stored_ms2,
                                                   ProteoformMatch& result,
-                                                  const String& fragmentation_method,
+                                                  const std::string& fragmentation_method,
                                                   double tolerance_ppm,
                                                   FragmentScores* frag_scores)
   {
@@ -1012,7 +1012,7 @@ namespace
     {
       int start_idx = std::max(0, site.start_position - 1);
       int end_idx = std::min(static_cast<int>(protein_sequence.size()), site.end_position);
-      String subsequence = protein_sequence.substr(start_idx, end_idx - start_idx);
+      std::string subsequence = StringUtils::substr(protein_sequence, start_idx, end_idx - start_idx);
       bool is_ambiguous = site.start_position != site.end_position;
       std::cout << "  PTM [" << site.start_position << "-" << site.end_position << "] "
                 << "\"" << subsequence << "\" "
@@ -1241,7 +1241,7 @@ namespace
   }
 
   int FragmentAnalysis::getTerminalFragmentIons(
-      const String& protein_sequence,
+      const std::string& protein_sequence,
       int n,
       double* masses,
       double* qscores,
@@ -1252,7 +1252,7 @@ namespace
       int* fragment_indices,
       DeconvolvedSpectrum& stored_ms2,
       ProteoformMatch& result,
-      const String& fragmentation_method,
+      const std::string& fragmentation_method,
       double tolerance_ppm,
       FragmentScores* frag_scores)
   {

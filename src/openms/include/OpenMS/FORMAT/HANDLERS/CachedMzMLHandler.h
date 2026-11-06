@@ -71,23 +71,23 @@ public:
     //@{
 
     /// Write complete spectra as a dump to the disk
-    void writeMemdump(const MapType& exp, const String& out) const;
+    void writeMemdump(const MapType& exp, const std::string& out) const;
 
     /// Write only the meta data of an MSExperiment
-    void writeMetadata(MapType exp, const String& out_meta, bool addCacheMetaValue=false);
+    void writeMetadata(MapType exp, const std::string& out_meta, bool addCacheMetaValue=false);
 
     /// Write only the meta data of an MSExperiment
-    void writeMetadata_x(const MapType& exp, const String& out_meta, bool addCacheMetaValue=false);
+    void writeMetadata_x(const MapType& exp, const std::string& out_meta, bool addCacheMetaValue=false);
 
     /// Read all spectra from a dump from the disk
-    void readMemdump(MapType& exp_reading, const String& filename) const;
+    void readMemdump(MapType& exp_reading, const std::string& filename) const;
     //@}
 
     /** @name Access and creation of the binary indices
     */
     //@{
     /// Create an index on the location of all the spectra and chromatograms
-    void createMemdumpIndex(const String& filename);
+    void createMemdumpIndex(const std::string& filename);
 
     /// Access to a constant copy of the binary spectra index
     const std::vector<std::streampos>& getSpectraIndex() const;
@@ -105,7 +105,7 @@ public:
 
       @param[out] data1 First data array (m/z)
       @param[out] data2 Second data array (Intensity)
-      @param ifs Input file stream (moved to the correct position)
+      @param[in] ifs Input file stream (moved to the correct position)
       @param[out] ms_level Output parameter to store the MS level of the spectrum (1, 2, 3 ...)
       @param[out] rt Output parameter to store the retention time of the spectrum
 
@@ -125,9 +125,9 @@ public:
     /**
       @brief Fast access to a spectrum
 
-      @param ifs Input file stream (moved to the correct position)
-      @param ms_level Output parameter to store the MS level of the spectrum (1, 2, 3 ...)
-      @param rt Output parameter to store the retention time of the spectrum
+      @param[in] ifs Input file stream (moved to the correct position)
+      @param[out] ms_level Output parameter to store the MS level of the spectrum (1, 2, 3 ...)
+      @param[out] rt Output parameter to store the retention time of the spectrum
 
       @throws Exception::ParseError is thrown if the spectrum cannot be read
     */
@@ -136,9 +136,9 @@ public:
     /**
       @brief Fast access to a chromatogram
 
-      @param data1 First data array (RT)
-      @param data2 Second data array (Intensity)
-      @param ifs Input file stream (moved to the correct position)
+      @param[in] data1 First data array (RT)
+      @param[in] data2 Second data array (Intensity)
+      @param[in] ifs Input file stream (moved to the correct position)
 
       @throws Exception::ParseError is thrown if the chromatogram size cannot be read
     */
@@ -153,7 +153,7 @@ public:
     /**
       @brief Fast access to a chromatogram
 
-      @param ifs Input file stream (moved to the correct position)
+      @param[in] ifs Input file stream (moved to the correct position)
 
       @throws Exception::ParseError is thrown if the chromatogram size cannot be read
     */
@@ -163,8 +163,8 @@ public:
     /**
       @brief Read a single spectrum directly into an OpenMS MSSpectrum (assuming file is already at the correct position)
 
-      @param spectrum Output spectrum
-      @param ifs Input file stream (moved to the correct position)
+      @param[out] spectrum Output spectrum
+      @param[in] ifs Input file stream (moved to the correct position)
 
       @throws Exception::ParseError is thrown if the chromatogram size cannot be read
     */
@@ -173,8 +173,8 @@ public:
     /**
       @brief Read a single chromatogram directly into an OpenMS MSChromatogram (assuming file is already at the correct position)
 
-      @param chromatogram Output chromatogram
-      @param ifs Input file stream (moved to the correct position)
+      @param[out] chromatogram Output chromatogram
+      @param[in] ifs Input file stream (moved to the correct position)
 
       @throws Exception::ParseError is thrown if the chromatogram size cannot be read
     */

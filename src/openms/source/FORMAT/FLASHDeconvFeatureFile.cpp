@@ -50,7 +50,7 @@ namespace OpenMS
     fs.flush();
   }
 
-  void FLASHDeconvFeatureFile::writeFeatures(const std::vector<FLASHHelperClasses::MassFeature>& mass_features, const String& file_name, std::fstream& fs, bool report_decoy,
+  void FLASHDeconvFeatureFile::writeFeatures(const std::vector<FLASHHelperClasses::MassFeature>& mass_features, const std::string& file_name, std::fstream& fs, bool report_decoy,
                                              const std::map<uint, std::pair<double, Size>>* abundances)
   {
     // the row of a feature
@@ -149,7 +149,7 @@ namespace OpenMS
   }
 
   void FLASHDeconvFeatureFile::writeTopFDFeatures(std::vector<DeconvolvedSpectrum>& deconvolved_spectra, const std::vector<FLASHHelperClasses::MassFeature>& mass_features,
-                                                  const std::map<int, double>& scan_rt_map, const String& file_name, std::fstream& fs, uint ms_level)
+                                                  const std::map<int, double>& scan_rt_map, const std::string& file_name, std::fstream& fs, uint ms_level)
   {
     std::stringstream ss;
 

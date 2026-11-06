@@ -130,7 +130,7 @@ namespace OpenMS
     int spectra_with_window_decoys_ = 0, decoy_precursors_by_fragments_ = 0, decoy_precursors_ = 0;
 
     /// the FLASHIda acquisition's scan_commands.tsv (ADR-0046); empty = no coupling
-    String scan_commands_file_;
+    std::string scan_commands_file_;
 
     /// mass tolerances, and minimum cosine scores per MS level
     DoubleList tols_, min_cos_;
@@ -149,33 +149,33 @@ namespace OpenMS
     /// ADR-0046: the commanded MS2 scans by scan number, each naming the survey its command was decided from
     std::map<int, ScanCommandJoin::Located> located_by_scan_;
     /// a map from native ID to precursor peak
-    std::map<String, Precursor> native_id_precursor_peak_map_;
+    std::map<std::string, Precursor> native_id_precursor_peak_map_;
     /// a map from native ID to precursor peak group
-    std::map<String, PeakGroup> native_id_precursor_peak_group_map_;
+    std::map<std::string, PeakGroup> native_id_precursor_peak_group_map_;
     /// per MSn native id, every target mass in the isolation window: its peak group and its precursor ion (the most intense peak of the
     /// mass in the window, at the charge the window implies). The candidates among which precursor_by_fragments chooses; kept only with
     /// precursor_by_fragments and several masses in the window
-    std::map<String, std::vector<std::pair<PeakGroup, Precursor>>> native_id_window_candidates_;
+    std::map<std::string, std::vector<std::pair<PeakGroup, Precursor>>> native_id_window_candidates_;
     /// per MSn native id, every MS1 decoy mass in the isolation window as FLASHDeconv generated it (with a peak at the charge the window
     /// implies), and whether it is a noise decoy: the challengers of the chosen precursor for the decoy precursor; kept only with
     /// report_FDR and precursor_by_fragments
-    std::map<String, std::vector<std::pair<double, bool>>> native_id_window_decoys_;
+    std::map<std::string, std::vector<std::pair<double, bool>>> native_id_window_decoys_;
     /// per MSn spectrum: the precursor score (2D Qscore) of each window decoy mass, as scored when the window was scanned
-    std::map<String, std::map<double, double>> native_id_window_decoy_qscores_;
+    std::map<std::string, std::map<double, double>> native_id_window_decoy_qscores_;
     /// and its Qscore in that survey scan alone (1D)
-    std::map<String, std::map<double, double>> native_id_window_decoy_qscores1d_;
+    std::map<std::string, std::map<double, double>> native_id_window_decoy_qscores1d_;
     /// precursor score of the decoy precursor of each MSn spectrum (refined after the feature tracing, updatePrecursorQScores_)
-    std::map<String, double> native_id_decoy_precursor_qscore_map_;
+    std::map<std::string, double> native_id_decoy_precursor_qscore_map_;
     /// and its 1D Qscore
-    std::map<String, double> native_id_decoy_precursor_qscore1d_map_;
+    std::map<std::string, double> native_id_decoy_precursor_qscore1d_map_;
     /// per MSn native id, the decoy precursor mass (with report_FDR). With precursor_by_fragments, the decoy mass of the isolation window
     /// that beat the chosen precursor by the fragments (no entry if none did); otherwise the decoy mass of the window of the highest charge
     /// SNR
-    std::map<String, double> native_id_decoy_precursor_mass_map_;
+    std::map<std::string, double> native_id_decoy_precursor_mass_map_;
     /// per MSn native id, whether that decoy precursor is a noise decoy (weighted by the noise decoy weight in an FDR)
-    std::map<String, bool> native_id_decoy_precursor_noise_map_;
+    std::map<std::string, bool> native_id_decoy_precursor_noise_map_;
     /// a map from native ID to precursor mass - intensity pair (within isolation window)
-    std::map<String, std::vector<std::tuple<double, double>>> native_id_precursor_mass_intensity_map_;
+    std::map<std::string, std::vector<std::tuple<double, double>>> native_id_precursor_mass_intensity_map_;
     /// the features of the minimum MS level when they were traced during the wave of the next (last) MS level, or the error of that
     /// tracing (runSpectralDeconvolution_); taken by runFeatureFinding_
     std::optional<std::vector<FLASHHelperClasses::MassFeature>> min_level_features_;

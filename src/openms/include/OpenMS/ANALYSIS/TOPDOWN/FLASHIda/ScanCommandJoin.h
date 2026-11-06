@@ -37,7 +37,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/LogCell.h>
 #include <OpenMS/CONCEPT/Constants.h>
 #include <OpenMS/CONCEPT/Exception.h>
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 
 #include <cmath>
 #include <fstream>
@@ -154,7 +154,7 @@ namespace OpenMS
       {
         if (col.find(name) == col.end())
         {
-          throw Exception::ParseError(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, path, String("the scan_commands file has no '") + name + "' column");
+          throw Exception::ParseError(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, path, std::string("the scan_commands file has no '") + name + "' column");
         }
       }
 
@@ -168,7 +168,7 @@ namespace OpenMS
         if (cell.size() != header.size())
         {
           throw Exception::ParseError(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, path,
-                                      String("line ") + line_no + " has " + cell.size() + " cells, the header has " + header.size());
+                                      std::string("line ") + line_no + " has " + cell.size() + " cells, the header has " + header.size());
         }
         Row r;
         r.tracking_id = unquoteLogId(cell[col["tracking_id"]]);
@@ -178,26 +178,26 @@ namespace OpenMS
         if (decision_col != col.end()) { r.decision_survey_id = unquoteLogId(cell[decision_col->second]); }
         try
         {
-          r.ms_level = String(cell[col["ms_level"]]).toInt();
+          r.ms_level = StringUtils::toInt32(cell[col["ms_level"]]);
           if (r.ms_level == 2)
           {
-            r.mono_mass = String(cell[col["mono_mass"]]).toDouble();
-            r.charge = String(anchorOf_(cell[col["charge"]])).toInt();
-            r.precursor_mz = String(anchorOf_(cell[col["precursor_mz"]])).toDouble();
-            r.qscore = String(cell[col["qscore"]]).toDouble();
-            r.charge_cos = String(cell[col["charge_cos"]]).toDouble();
-            r.charge_snr = String(cell[col["charge_snr"]]).toDouble();
-            r.iso_cos = String(cell[col["iso_cos"]]).toDouble();
-            r.snr = String(cell[col["snr"]]).toDouble();
-            r.charge_score = String(cell[col["charge_score"]]).toDouble();
-            r.ppm_error = String(cell[col["ppm_error"]]).toDouble();
-            r.precursor_intensity = String(cell[col["precursor_intensity"]]).toDouble();
-            r.peakgroup_intensity = String(cell[col["peakgroup_intensity"]]).toDouble();
+            r.mono_mass = StringUtils::toDouble(cell[col["mono_mass"]]);
+            r.charge = StringUtils::toInt32(anchorOf_(cell[col["charge"]]));
+            r.precursor_mz = StringUtils::toDouble(anchorOf_(cell[col["precursor_mz"]]));
+            r.qscore = StringUtils::toDouble(cell[col["qscore"]]);
+            r.charge_cos = StringUtils::toDouble(cell[col["charge_cos"]]);
+            r.charge_snr = StringUtils::toDouble(cell[col["charge_snr"]]);
+            r.iso_cos = StringUtils::toDouble(cell[col["iso_cos"]]);
+            r.snr = StringUtils::toDouble(cell[col["snr"]]);
+            r.charge_score = StringUtils::toDouble(cell[col["charge_score"]]);
+            r.ppm_error = StringUtils::toDouble(cell[col["ppm_error"]]);
+            r.precursor_intensity = StringUtils::toDouble(cell[col["precursor_intensity"]]);
+            r.peakgroup_intensity = StringUtils::toDouble(cell[col["peakgroup_intensity"]]);
           }
         }
         catch (const Exception::ConversionError& e)
         {
-          throw Exception::ParseError(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, path, String("line ") + line_no + ": " + e.what());
+          throw Exception::ParseError(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, path, std::string("line ") + line_no + ": " + e.what());
         }
         if (!rows.emplace(r.tracking_id, r).second)
         {
@@ -226,7 +226,7 @@ namespace OpenMS
         if (!ins.second)
         {
           throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
-                                        String("scans ") + ins.first->second->scan_number + " and " + s.scan_number + " carry the same tracking id", tid);
+                                        std::string("scans ") + ins.first->second->scan_number + " and " + s.scan_number + " carry the same tracking id", tid);
         }
       }
       if (scan_of.empty())
@@ -234,11 +234,11 @@ namespace OpenMS
         throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
                                       "no spectrum carries a tracking id found in the scan_commands file: either the converter dropped the "
                                       "'scan description' of each spectrum (msconvert keeps it) or the file belongs to another run",
-                                      String(rows.size()) + " rows");
+                                      StringUtils::toStr(rows.size()) + " rows");
       }
 
       std::map<int, Located> located;
-      String offenders;
+      std::string offenders;
       Size n_offenders = 0;
       for (const auto& entry : scan_of)
       {
@@ -254,9 +254,9 @@ namespace OpenMS
         {
           if (n_offenders++ < 5)
           {
-            offenders += String("\n  scan ") + s.scan_number + " (tracking id " + entry.first + "): the row says MS" + r.ms_level + " at m/z "
+            offenders += std::string("\n  scan ") + s.scan_number + " (tracking id " + entry.first + "): the row says MS" + r.ms_level + " at m/z "
                        + r.precursor_mz + ", the spectrum is MS" + s.ms_level + " isolating "
-                       + (s.isolation_targets.empty() ? String("nothing") : String(s.isolation_targets.front()));
+                       + (s.isolation_targets.empty() ? std::string("nothing") : StringUtils::toStr(s.isolation_targets.front()));
           }
           continue;
         }
@@ -269,10 +269,10 @@ namespace OpenMS
       if (n_offenders > 0)
       {
         throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
-                                      String("this scan_commands file does not belong to this data file: ") + n_offenders + " of " + scan_of.size()
+                                      std::string("this scan_commands file does not belong to this data file: ") + n_offenders + " of " + scan_of.size()
                                         + " joined scans disagree with their rows. Tracking ids restart in every run, so a foreign file joins "
                                           "every scan; first offenders:" + offenders,
-                                      String(n_offenders));
+                                      StringUtils::toStr(n_offenders));
       }
       return located;
     }

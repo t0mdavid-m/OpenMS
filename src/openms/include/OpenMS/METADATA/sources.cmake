@@ -14,21 +14,25 @@ ChromatogramSettings.h
 ContactPerson.h
 DataArrays.h
 DataProcessing.h
+DataProcessingUtils.h
 DocumentIdentifier.h
 ExperimentalDesign.h
 ExperimentalSettings.h
 Gradient.h
 HPLC.h
+IdentifierMSRunMapper.h
 Instrument.h
 InstrumentSettings.h
 IonDetector.h
 IonSource.h
+MS1LabelState.h
 MassAnalyzer.h
 MetaInfo.h
 MetaInfoDescription.h
 MetaInfoInterface.h
 MetaInfoInterfaceUtils.h
 MetaInfoRegistry.h
+SpectrumNativeIDParser.h
 PeptideEvidence.h
 PeptideHit.h
 PeptideIdentification.h
@@ -45,6 +49,7 @@ SourceFile.h
 SpectrumLookup.h
 SpectrumMetaDataLookup.h
 SpectrumSettings.h
+USI.h
 )
 
 ### add path to the filenames
@@ -57,4 +62,3 @@ endforeach(i)
 source_group("Header Files\\OpenMS\\METADATA" FILES ${sources_h})
 
 set(OpenMS_sources_h ${OpenMS_sources_h} ${sources_h})
-

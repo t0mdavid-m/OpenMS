@@ -61,7 +61,7 @@ namespace OpenMS
     */
     static void writeDeconvolvedMasses(DeconvolvedSpectrum& dspec,
                                        std::fstream& fs,
-                                       const String& file_name,
+                                       const std::string& file_name,
                                        const FLASHHelperClasses::PrecalculatedAveragine& avg,
                                        const FLASHHelperClasses::PrecalculatedAveragine& decoy_avg,
                                        double tol,
@@ -72,8 +72,8 @@ namespace OpenMS
     /// writeDeconvolvedMasses for every spectrum of @p spectra whose MS level has a file in @p out_files (open in @p streams), in input order and
     /// with the same bytes; the spectra are formatted in parallel (with @p report_decoy, the noise-decoy carries are replayed serially up front; @p noise_decoy_weights by MS level - 1).
     /// @p abundances (FLASHDeconv -quant) is indexed by the position of a spectrum in @p spectra, then of the mass in it
-    static void writeDeconvolvedMasses(std::vector<DeconvolvedSpectrum>& spectra, std::vector<std::fstream>& streams, const std::vector<String>& out_files,
-                                       const String& file_name, const FLASHHelperClasses::PrecalculatedAveragine& avg,
+    static void writeDeconvolvedMasses(std::vector<DeconvolvedSpectrum>& spectra, std::vector<std::fstream>& streams, const std::vector<std::string>& out_files,
+                                       const std::string& file_name, const FLASHHelperClasses::PrecalculatedAveragine& avg,
                                        const FLASHHelperClasses::PrecalculatedAveragine& decoy_avg, const std::vector<double>& tols, bool write_detail,
                                        bool report_decoy, const std::vector<double>& noise_decoy_weights,
                                        const std::vector<std::vector<std::pair<double, Size>>>* abundances = nullptr);
@@ -89,8 +89,8 @@ namespace OpenMS
      */
     static void writeMzML(const MSExperiment& map,
                           std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
-                          const String& deconvolved_mzML_file,
-                          const String& annotated_mzML_file,
+                          const std::string& deconvolved_mzML_file,
+                          const std::string& annotated_mzML_file,
                           int mzml_charge, DoubleList tols);
 
     /// The deconvolved map writeMzML stores as the deconvolved mzML (the experimental settings of @p map and one spectrum per non-empty,
@@ -116,7 +116,7 @@ namespace OpenMS
       @param qval_threshold qvalue threshold to filter out high qvalue precursors.
       @param min_ms_level min ms level of the dataset
     */
-    static void writeTopFD(DeconvolvedSpectrum& dspec, std::fstream& fs, const String& filename,
+    static void writeTopFD(DeconvolvedSpectrum& dspec, std::fstream& fs, const std::string& filename,
                            const double qval_threshold = 1.0,
                            const uint min_ms_level = 1);
 

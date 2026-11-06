@@ -10,6 +10,7 @@
 #include <OpenMS/CONCEPT/LogStream.h>
 #include <OpenMS/FORMAT/ParamXMLFile.h>
 #include <OpenMS/SYSTEM/File.h>
+#include <OpenMS/VISUAL/MISC/Qt5Port.h>
 
 #include <QtWidgets/QToolBar>
 #include <QtCore/QString>
@@ -44,24 +45,24 @@ namespace OpenMS
 
     QMenu* file = new QMenu("&File", this);
     menuBar()->addMenu(file);
-    file->addAction("&Open", this, SLOT(openFile()), Qt::CTRL | Qt::Key_O);
+    file->addAction("&Open", this, [this]() { openFile(); })->setShortcut(Qt::CTRL | Qt::Key_O);
     file->addSeparator();
-    file->addAction("&Save", this, SLOT(saveFile()), Qt::CTRL | Qt::Key_S);
-    file->addAction("Save &As", this, SLOT(saveFileAs()));
+    file->addAction("&Save", this, &INIFileEditorWindow::saveFile)->setShortcut(Qt::CTRL | Qt::Key_S);
+    file->addAction("Save &As", this, &INIFileEditorWindow::saveFileAs);
     file->addSeparator();
-    file->addAction("&Quit", this, SLOT(close()));
+    file->addAction("&Quit", this, &QWidget::close);
 
     // we connect the "changes state"(changes made/no changes) signal from the ParamEditor to the window title updating slot
-    connect(editor_, SIGNAL(modified(bool)), this, SLOT(updateWindowTitle(bool)));
+    connect(editor_, &ParamEditor::modified, this, &INIFileEditorWindow::updateWindowTitle);
 
     setMinimumSize(600, 600);
   }
 
-  bool INIFileEditorWindow::openFile(const String& filename)
+  bool INIFileEditorWindow::openFile(const std::string& filename)
   {
     if (filename.empty())
     {
-      filename_ = QFileDialog::getOpenFileName(this, tr("Open ini file"), current_path_.toQString(), tr("ini files (*.ini);; all files (*.*)"));
+      filename_ = QFileDialog::getOpenFileName(this, tr("Open ini file"), toQString(current_path_), tr("ini files (*.ini);; all files (*.*)"));
     }
     else
     {
@@ -111,7 +112,7 @@ namespace OpenMS
 
   bool INIFileEditorWindow::saveFileAs()
   {
-    filename_ = QFileDialog::getSaveFileName(this, tr("Save ini file"), current_path_.toQString(), tr("ini files (*.ini)"));
+    filename_ = QFileDialog::getSaveFileName(this, tr("Save ini file"), toQString(current_path_), tr("ini files (*.ini)"));
     if (!filename_.isEmpty())
     {
       if (!filename_.endsWith(".ini"))
@@ -163,15 +164,15 @@ namespace OpenMS
     //update window title
     if (update)
     {
-      setWindowTitle((File::basename(filename_) + " * - INIFileEditor").toQString());
+      setWindowTitle(toQString((File::basename(fromQString(filename_)) + " * - INIFileEditor")));
     }
     else
     {
-      setWindowTitle((File::basename(filename_) + " - INIFileEditor").toQString());
+      setWindowTitle(toQString((File::basename(fromQString(filename_)) + " - INIFileEditor")));
     }
 
     //update last path as well
-    current_path_ = File::path(filename_);
+    current_path_ = File::path(fromQString(filename_));
   }
 
 }

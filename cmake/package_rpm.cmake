@@ -8,22 +8,26 @@
 
 
 
-set(CPACK_RPM_PACKAGE_VENDOR "OpenMS developers <open-ms-general@lists.sourceforge.net>")
+set(CPACK_RPM_PACKAGE_VENDOR "OpenMS Inc <info@openms.de>")
 if((DEFINED ENV{CPACK_PACKAGE_FILE_NAME}) AND (NOT "$ENV{CPACK_PACKAGE_FILE_NAME}" STREQUAL ""))
   set(CPACK_PACKAGE_FILE_NAME "$ENV{CPACK_PACKAGE_FILE_NAME}")
 else()
-  if (OPENMS_64BIT_ARCHITECTURE)
-    set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${OPENMS_PACKAGE_VERSION_FULLSTRING}-RedHat-Linux-x86_64")
-  else()
-    set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${OPENMS_PACKAGE_VERSION_FULLSTRING}-RedHat-Linux-x86")
-  endif()
+  # Use CMAKE_SYSTEM_PROCESSOR to detect actual architecture
+  set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${OPENMS_PACKAGE_VERSION_FULLSTRING}-RedHat-Linux-${CMAKE_SYSTEM_PROCESSOR}")
 endif()
 
 ## Debug for now.
 set(CPACK_RPM_PACKAGE_DEBUG ON)
 
 ## TODO also install headers? make a dev package configuration?
-set(CPACK_COMPONENTS_ALL applications doc library share ${THIRDPARTY_COMPONENT_GROUP})
+## The libraries come in layers (cmake/install_macros.cmake): library (core),
+## library_cli (TOPP tool framework, needed by the TOPP tools) and library_gui.
+## 'Applications' as install_tool() registers it: CPack installs a component by
+## name and a mismatch would package none of the TOPP tools.
+set(CPACK_COMPONENTS_ALL Applications doc library library_cli share ${THIRDPARTY_COMPONENT_GROUP})
+if(WITH_GUI)
+  list(APPEND CPACK_COMPONENTS_ALL library_gui)
+endif()
 
 SET(CPACK_RPM_PACKAGE_LICENSE "BSD clause 3")
 #SET(CPACK_RPM_PACKAGE_AUTOREQ ON)

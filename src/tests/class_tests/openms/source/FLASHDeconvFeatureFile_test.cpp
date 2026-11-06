@@ -50,9 +50,9 @@ namespace
 {
   /// Split on tabs WITHOUT dropping trailing empties: N tabs must always yield N+1 fields, or a
   /// truncated row would tokenize one column short and read as well-formed.
-  std::vector<String> splitTabs(const String& line)
+  std::vector<std::string> splitTabs(const std::string& line)
   {
-    std::vector<String> out;
+    std::vector<std::string> out;
     std::string cur;
     for (char c : line)
     {
@@ -68,15 +68,15 @@ namespace
     return out;
   }
 
-  std::vector<String> readLines(const String& path)
+  std::vector<std::string> readLines(const std::string& path)
   {
-    std::vector<String> lines;
+    std::vector<std::string> lines;
     std::ifstream in(path.c_str());
     std::string l;
     while (std::getline(in, l))
     {
       if (! l.empty() && l.back() == '\r') l.pop_back();
-      if (! l.empty()) lines.push_back(String(l));
+      if (! l.empty()) lines.push_back(std::string(l));
     }
     return lines;
   }
@@ -189,7 +189,7 @@ std::map<int, double> scan_rt_map;
 scan_rt_map[kMs1Scan] = kMs1Rt;
 
 /// ---- drive the writer, MS1 first (that pass mints) ------------------------------------------
-String ms1_out;
+std::string ms1_out;
 NEW_TMP_FILE(ms1_out)
 {
   std::fstream fs;
@@ -199,7 +199,7 @@ NEW_TMP_FILE(ms1_out)
   fs.close();
 }
 
-String ms2_out;
+std::string ms2_out;
 NEW_TMP_FILE(ms2_out)
 {
   std::fstream fs;
@@ -209,13 +209,13 @@ NEW_TMP_FILE(ms2_out)
   fs.close();
 }
 
-std::vector<String> ms1_lines = readLines(ms1_out);
-std::vector<String> ms2_lines = readLines(ms2_out);
+std::vector<std::string> ms1_lines = readLines(ms1_out);
+std::vector<std::string> ms2_lines = readLines(ms2_out);
 
 START_SECTION((static void writeTopFDFeatureHeader(std::fstream& fs, uint ms_level)))
 {
   ABORT_IF(ms2_lines.empty())
-  std::vector<String> h2 = splitTabs(ms2_lines[0]);
+  std::vector<std::string> h2 = splitTabs(ms2_lines[0]);
   // TopPIC 1.8.x reads strs[16]; 16 columns is the crash.
   TEST_EQUAL(h2.size(), 17)
   ABORT_IF(h2.size() != 17)
@@ -231,7 +231,7 @@ START_SECTION((static void writeTopFDFeatureHeader(std::fstream& fs, uint ms_lev
 }
 END_SECTION
 
-START_SECTION((static void writeTopFDFeatures(std::vector<DeconvolvedSpectrum>& deconvolved_spectra, const std::vector<FLASHHelperClasses::MassFeature>& mass_features, const std::map<int, double>& scan_rt_map, const String& file_name, std::fstream& fs, uint ms_level)))
+START_SECTION((static void writeTopFDFeatures(std::vector<DeconvolvedSpectrum>& deconvolved_spectra, const std::vector<FLASHHelperClasses::MassFeature>& mass_features, const std::map<int, double>& scan_rt_map, const std::string& file_name, std::fstream& fs, uint ms_level)))
 {
   // 2 traced MS1 targets + 1 minted synthetic row; f3 is MSn and is never written here
   TEST_EQUAL(ms1_lines.size(), 1 + 3)
@@ -252,24 +252,24 @@ END_SECTION
 START_SECTION([EXTRA] a minted precursor reports its OWN payload rather than mass_features[id - 1])
 {
   ABORT_IF(ms2_lines.size() != 3)
-  std::vector<String> traced = splitTabs(ms2_lines[1]);
-  std::vector<String> minted = splitTabs(ms2_lines[2]);
+  std::vector<std::string> traced = splitTabs(ms2_lines[1]);
+  std::vector<std::string> minted = splitTabs(ms2_lines[2]);
   ABORT_IF(traced.size() != 17 || minted.size() != 17)
 
   // Minting starts above EVERY feature (3), not above the MS1-target max (2).
-  TEST_EQUAL(traced[6].toInt(), 1)
-  TEST_EQUAL(minted[6].toInt(), 4)
+  TEST_EQUAL(StringUtils::toInt32(traced[6]), 1)
+  TEST_EQUAL(StringUtils::toInt32(minted[6]), 4)
 
   // The payload must come from the precursor peak group itself. The old writer took branch A and
   // reported f3 here: mass 9999.0 and apex time 3010/60 = 50.166667 min.
-  TEST_REAL_SIMILAR(minted[12].toDouble(), 2450.0)
-  TEST_REAL_SIMILAR(minted[11].toDouble(), kMs1Rt / 60.0)
-  TEST_EQUAL(minted[15].toInt(), 3)
+  TEST_REAL_SIMILAR(StringUtils::toDouble(minted[12]), 2450.0)
+  TEST_REAL_SIMILAR(StringUtils::toDouble(minted[11]), kMs1Rt / 60.0)
+  TEST_EQUAL(StringUtils::toInt32(minted[15]), 3)
 
   // The traced row still resolves through mass_features[0].
-  TEST_REAL_SIMILAR(traced[12].toDouble(), 5000.0)
-  TEST_REAL_SIMILAR(traced[11].toDouble(), 110.0 / 60.0)
-  TEST_EQUAL(traced[15].toInt(), 5)
+  TEST_REAL_SIMILAR(StringUtils::toDouble(traced[12]), 5000.0)
+  TEST_REAL_SIMILAR(StringUtils::toDouble(traced[11]), 110.0 / 60.0)
+  TEST_EQUAL(StringUtils::toInt32(traced[15]), 5)
 }
 END_SECTION
 
@@ -278,25 +278,25 @@ START_SECTION([EXTRA] precursor mass/mz identity and isotope ordering)
   ABORT_IF(ms2_lines.size() != 3)
   for (Size i = 1; i < ms2_lines.size(); ++i)
   {
-    std::vector<String> f = splitTabs(ms2_lines[i]);
+    std::vector<std::string> f = splitTabs(ms2_lines[i]);
     ABORT_IF(f.size() != 17)
-    const int z = f[15].toInt();
+    const int z = StringUtils::toInt32(f[15]);
     TEST_NOT_EQUAL(z, 0)
     // TopPIC's own invariant: col 14 is col 13 expressed as an m/z at col 16's charge.
-    TEST_REAL_SIMILAR(f[13].toDouble(), f[12].toDouble() / z + Constants::PROTON_MASS_U)
+    TEST_REAL_SIMILAR(StringUtils::toDouble(f[13]), StringUtils::toDouble(f[12]) / z + Constants::PROTON_MASS_U)
   }
 
   // Traced row: Precursor_average_mz is the feature's average mass as an m/z, protons included,
   // and therefore sits ABOVE the monoisotopic m/z. Without the proton it sat below it on every row.
-  std::vector<String> traced = splitTabs(ms2_lines[1]);
-  TEST_REAL_SIMILAR(traced[14].toDouble(), (5000.0 + 0.6) / 5 + Constants::PROTON_MASS_U)
-  TEST_EQUAL(traced[14].toDouble() > traced[13].toDouble(), true)
+  std::vector<std::string> traced = splitTabs(ms2_lines[1]);
+  TEST_REAL_SIMILAR(StringUtils::toDouble(traced[14]), (5000.0 + 0.6) / 5 + Constants::PROTON_MASS_U)
+  TEST_EQUAL(StringUtils::toDouble(traced[14]) > StringUtils::toDouble(traced[13]), true)
 
   // _ms1.feature's Rep_average_mz is the same quantity and moves with it.
   ABORT_IF(ms1_lines.size() < 2)
-  std::vector<String> f1_row = splitTabs(ms1_lines[1]);
+  std::vector<std::string> f1_row = splitTabs(ms1_lines[1]);
   ABORT_IF(f1_row.size() != 18)
-  TEST_REAL_SIMILAR(f1_row[15].toDouble(), (5000.0 + 0.6) / 5 + Constants::PROTON_MASS_U)
+  TEST_REAL_SIMILAR(StringUtils::toDouble(f1_row[15]), (5000.0 + 0.6) / 5 + Constants::PROTON_MASS_U)
 }
 END_SECTION
 

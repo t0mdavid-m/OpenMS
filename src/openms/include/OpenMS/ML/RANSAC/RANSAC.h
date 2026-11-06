@@ -13,7 +13,7 @@
 #include <OpenMS/ML/RANSAC/RANSACModel.h>
 
 #include <OpenMS/CONCEPT/Exception.h>
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 #include <OpenMS/ML/RANSAC/RANSACModelLinear.h>
 #include <OpenMS/MATH/MathFunctions.h>
 
@@ -42,7 +42,7 @@ namespace OpenMS
       {
         if (relative_d)
         {
-          if (d >= 100) throw Exception::Precondition(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, String("RANSAC: Relative 'd' >= 100% given. Use a lower value; the more outliers you expect, the lower it should be."));
+          if (d >= 100) throw Exception::Precondition(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,std::string("RANSAC: Relative 'd' >= 100% given. Use a lower value; the more outliers you expect, the lower it should be."));
         }
       }
 
@@ -109,14 +109,14 @@ public:
         then setting d=60, relative_d=true (i.e. 60% inliers with some margin for error) is a good bet for a larger input set.
         (Consider that 2-3 data points will be used for the initial model already -- they cannot possibly become inliers).
 
-        @param pairs Input data (paired data of type <dim1, dim2>)
-        @param n The minimum number of data points required to fit the model
-        @param k The maximum number of iterations allowed in the algorithm 
-        @param t Threshold value for determining when a data point fits a
+        @param[in] pairs Input data (paired data of type <dim1, dim2>)
+        @param[in] n The minimum number of data points required to fit the model
+        @param[in] k The maximum number of iterations allowed in the algorithm
+        @param[in] t Threshold value for determining when a data point fits a
          model. Corresponds to the maximal squared deviation in units of the
          _second_ dimension (dim2).
-        @param d The number of close data values (according to 't') required to assert that a model fits well to data
-        @param relative_d Should 'd' be interpreted as percentages (0-100) of data input size
+        @param[in] d The number of close data values (according to 't') required to assert that a model fits well to data
+        @param[in] relative_d Should 'd' be interpreted as percentages (0-100) of data input size
 
         @return A vector of pairs fitting the model well; data will be unsorted
       */
@@ -131,7 +131,7 @@ public:
         // translate relative percentages into actual numbers
         if (relative_d)
         {
-          if (d >= 100) throw Exception::Precondition(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, String("RANSAC: Relative 'd' >= 100% given. Use a lower value; the more outliers you expect, the lower it should be."));
+          if (d >= 100) throw Exception::Precondition(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,std::string("RANSAC: Relative 'd' >= 100% given. Use a lower value; the more outliers you expect, the lower it should be."));
           d = pairs.size() * d / 100;
         }
 
@@ -140,7 +140,7 @@ public:
         if (pairs.size() <= n)
         {
           throw Exception::Precondition(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
-                                        String("RANSAC: Number of total data points (") + String(pairs.size()) + ") must be larger than number of initial points (n=" + String(n) + ").");
+                                        "RANSAC: Number of total data points (" + StringUtils::toStr(pairs.size()) + ") must be larger than number of initial points (n=" + StringUtils::toStr(n) + ").");
         }
 
         TModelType model;

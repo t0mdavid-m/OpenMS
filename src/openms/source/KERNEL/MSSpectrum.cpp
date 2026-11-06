@@ -8,24 +8,80 @@
 
 #include <OpenMS/config.h>
 #include <OpenMS/CONCEPT/LogStream.h>
+#include <OpenMS/CONCEPT/Macros.h>
 
 #include <OpenMS/KERNEL/MSSpectrum.h>
 
-#include <OpenMS/CONCEPT/LogStream.h>
-#include <OpenMS/FORMAT/ControlledVocabulary.h>
-#include <OpenMS/FORMAT/PeakTypeEstimator.h>
-#include <OpenMS/IONMOBILITY/IMDataConverter.h>
+#include <OpenMS/KERNEL/PeakTypeEstimator.h>
+#include <OpenMS/IONMOBILITY/IMDataArrayUtils.h>
 
 namespace OpenMS
 {
-  MSSpectrum &MSSpectrum::select(const std::vector<Size> &indices)
+  void MSSpectrum::checkDataArraySizes_() const
   {
-    Size snew = indices.size();
-    ContainerType tmp;
-    tmp.reserve(indices.size());
+    const Size peaks = size();
+    auto check = [peaks](const auto& arrays, const char* what)
+    {
+      for (Size i = 0; i < arrays.size(); ++i)
+      {
+        if (!arrays[i].empty() && arrays[i].size() != peaks)
+        {
+          throw Exception::Precondition(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
+                                        std::string(what) + "[" + StringUtils::toStr(i) + "] size (" + StringUtils::toStr(arrays[i].size()) +
+                                          ") does not match spectrum size (" + StringUtils::toStr(peaks) + ")");
+        }
+      }
+    };
+    check(float_data_arrays_, "FloatDataArray");
+    check(string_data_arrays_, "StringDataArray");
+    check(integer_data_arrays_, "IntegerDataArray");
+  }
 
+  MSSpectrum& MSSpectrum::select(const std::vector<Size>& indices)
+  {
+    // The range check is the guarantee of this entry point (and of the Python binding): an
+    // out-of-range index is rejected before any storage is touched, so the spectrum is left
+    // unchanged. selectUnchecked() then performs the actual reordering.
     const Size peaks_old = size();
+    for (Size i = 0; i < indices.size(); ++i)
+    {
+      if (indices[i] >= peaks_old)
+      {
+        throw Exception::Precondition(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
+                                      "Index " + StringUtils::toStr(indices[i]) + " is out of range for a spectrum of size " +
+                                        StringUtils::toStr(peaks_old));
+      }
+    }
+    return selectUnchecked(indices);
+  }
 
+  MSSpectrum& MSSpectrum::selectUnchecked(const std::vector<Size>& indices)
+  {
+    const Size snew = indices.size();
+
+    // Cheap and independent of the indices: guards a mis-sized data array from being indexed out
+    // of bounds during the reorder below. Deliberately re-checked here even though sort() already
+    // checks before its stable_sort(): selectUnchecked() is public and callable directly, so this is
+    // not dead code -- the two calls guard different windows (the predicate vs. the reorder loops).
+    checkDataArraySizes_();
+
+    // Duplicate indices are undefined behaviour: every element is moved, so a repeated index would
+    // read a moved-from value. Assert uniqueness (and in-range) in debug builds only; release builds
+    // pay nothing for it.
+#ifdef OPENMS_ASSERTIONS
+    {
+      std::vector<bool> seen(size(), false);
+      for (Size i = 0; i < snew; ++i)
+      {
+        OPENMS_PRECONDITION(indices[i] < seen.size() && !seen[indices[i]],
+                            "selectUnchecked(): indices must be in range and duplicate-free");
+        seen[indices[i]] = true;
+      }
+    }
+#endif
+
+    ContainerType tmp;
+    tmp.reserve(snew);
     for (Size i = 0; i < snew; ++i)
     {
       tmp.push_back(std::move(ContainerType::operator[](indices[i])));
@@ -39,14 +95,8 @@ namespace OpenMS
       {
         continue;
       }
-      if (float_data_arrays_[i].size() != peaks_old)
-      {
-        throw Exception::Precondition(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "FloatDataArray[" + String(i) + "] size (" +
-                                                                                  String(float_data_arrays_[i].size()) + ") does not match spectrum size (" + String(peaks_old) + ")");
-      }
-
       mda_tmp_float.clear();
-      mda_tmp_float.reserve(float_data_arrays_[i].size());
+      mda_tmp_float.reserve(snew);
       for (Size j = 0; j < snew; ++j)
       {
         mda_tmp_float.push_back(std::move(float_data_arrays_[i][indices[j]]));
@@ -54,21 +104,15 @@ namespace OpenMS
       std::swap(float_data_arrays_[i], mda_tmp_float);
     }
 
-    std::vector<String> mda_tmp_str;
+    std::vector<std::string> mda_tmp_str;
     for (Size i = 0; i < string_data_arrays_.size(); ++i)
     {
       if (string_data_arrays_[i].empty())
       {
         continue;
       }
-      if (string_data_arrays_[i].size() != peaks_old)
-      {
-        throw Exception::Precondition(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "StringDataArray[" + String(i) + "] size (" +
-                                                                                  String(string_data_arrays_[i].size()) + ") does not match spectrum size (" + String(peaks_old) + ")");
-      }
-
       mda_tmp_str.clear();
-      mda_tmp_str.reserve(string_data_arrays_[i].size());
+      mda_tmp_str.reserve(snew);
       for (Size j = 0; j < snew; ++j)
       {
         mda_tmp_str.push_back(std::move(string_data_arrays_[i][indices[j]]));
@@ -83,14 +127,8 @@ namespace OpenMS
       {
         continue;
       }
-      if (integer_data_arrays_[i].size() != peaks_old)
-      {
-        throw Exception::Precondition(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "IntegerDataArray[" + String(i) + "] size (" +
-                                                                                  String(integer_data_arrays_[i].size()) + ") does not match spectrum size (" + String(peaks_old) + ")");
-      }
-
       mda_tmp_int.clear();
-      mda_tmp_int.reserve(integer_data_arrays_[i].size());
+      mda_tmp_int.reserve(snew);
       for (Size j = 0; j < snew; ++j)
       {
         mda_tmp_int.push_back(std::move(integer_data_arrays_[i][indices[j]]));
@@ -105,7 +143,7 @@ namespace OpenMS
   {
     SpectrumSettings::SpectrumType t = SpectrumSettings::getType();
     // easy case: type is known
-    if (t != SpectrumSettings::UNKNOWN)
+    if (t != SpectrumSettings::SpectrumType::UNKNOWN)
     {
       return t;
     }
@@ -115,7 +153,7 @@ namespace OpenMS
     {
       if (dp->getProcessingActions().count(DataProcessing::PEAK_PICKING) == 1)
       {
-        return SpectrumSettings::CENTROID;
+        return SpectrumSettings::SpectrumType::CENTROID;
       }
     }
 
@@ -123,7 +161,7 @@ namespace OpenMS
     {
       return PeakTypeEstimator::estimateType(begin(), end());
     }
-    return SpectrumSettings::UNKNOWN;
+    return SpectrumSettings::SpectrumType::UNKNOWN;
   }
 
   MSSpectrum::ConstIterator MSSpectrum::getBasePeak() const
@@ -398,7 +436,8 @@ namespace OpenMS
 
       rec(0, chunks.size() - 1);
 
-      select(select_indices);
+      // select_indices is a permutation of [0, size): in range and duplicate-free by construction.
+      selectUnchecked(select_indices);
     }
   }
 
@@ -475,8 +514,10 @@ namespace OpenMS
   bool MSSpectrum::operator==(const MSSpectrum &rhs) const
   {
     //name_ can differ => it is not checked, range is not checked
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wfloat-equal"
+#ifdef __clang__
+  #pragma clang diagnostic push
+  #pragma clang diagnostic ignored "-Wfloat-equal"
+#endif
     return std::operator==(*this, rhs) &&
            SpectrumSettings::operator==(rhs) &&
            retention_time_ == rhs.retention_time_ &&
@@ -487,7 +528,9 @@ namespace OpenMS
            string_data_arrays_ == rhs.string_data_arrays_ &&
            integer_data_arrays_ == rhs.integer_data_arrays_;
 
-#pragma clang diagnostic pop
+#ifdef __clang__
+  #pragma clang diagnostic pop
+#endif
   }
 
   MSSpectrum &MSSpectrum::operator=(const MSSpectrum &source)
@@ -592,7 +635,7 @@ namespace OpenMS
     return drift_time_unit_;
   }
 
-  String MSSpectrum::getDriftTimeUnitAsString() const
+  std::string MSSpectrum::getDriftTimeUnitAsString() const
   {
     return NamesOfDriftTimeUnit[(size_t)drift_time_unit_];
   }
@@ -622,12 +665,12 @@ namespace OpenMS
     ms_level_ = ms_level;
   }
 
-  const String &MSSpectrum::getName() const
+  const std::string &MSSpectrum::getName() const
   {
     return name_;
   }
 
-  void MSSpectrum::setName(const String &name)
+  void MSSpectrum::setName(const std::string &name)
   {
     name_ = name;
   }
@@ -766,7 +809,7 @@ namespace OpenMS
   {
     for (index = 0; index < fdas.size(); ++index)
     {
-      if (IMDataConverter::getIMUnit(fdas[index], unit))
+      if (IMDataArrayUtils::getIMUnit(fdas[index], unit))
       {
         return true;
       }
@@ -792,7 +835,7 @@ namespace OpenMS
       throw Exception::MissingInformation(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
                                           "Cannot get ion mobility data. No float array with the correct name available."
                                           " Number of float arrays: " +
-                                              String(this->getFloatDataArrays().size()));
+                                              StringUtils::toStr(this->getFloatDataArrays().size()));
     }
 
     return {index, unit };
@@ -810,5 +853,116 @@ namespace OpenMS
     }
     return {unit, this->getFloatDataArrays()[index]};
   }
-  
+
+  void MSSpectrum::rasterizeIMFrame(
+    float* output,
+    Size im_bins,
+    Size mz_bins,
+    CoordinateType min_im,
+    CoordinateType max_im,
+    CoordinateType min_mz,
+    CoordinateType max_mz,
+    RasterAggregation aggregation) const
+  {
+    // Runtime checks
+    if (output == nullptr)
+    {
+      throw Exception::NullPointer(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION);
+    }
+    if (im_bins == 0)
+    {
+      throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
+        "Number of IM bins must be positive",StringUtils::toStr(im_bins));
+    }
+    if (mz_bins == 0)
+    {
+      throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
+        "Number of m/z bins must be positive",StringUtils::toStr(mz_bins));
+    }
+    if (min_im >= max_im)
+    {
+      throw Exception::InvalidRange(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION);
+    }
+    if (min_mz >= max_mz)
+    {
+      throw Exception::InvalidRange(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION);
+    }
+
+    // Check for IM data - this will throw if not present
+    auto [im_data_index, im_unit] = getIMData();
+    const auto& im_data = getFloatDataArrays()[im_data_index];
+
+    const Size total_pixels = im_bins * mz_bins;
+
+    // Zero-initialize the output buffer
+    std::fill(output, output + total_pixels, 0.0f);
+
+    // If spectrum is empty, return early
+    if (this->empty())
+    {
+      return;
+    }
+
+    // Verify IM data array size matches peak count
+    if (im_data.size() != this->size())
+    {
+      throw Exception::Precondition(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
+        "IM data array size (" + StringUtils::toStr(im_data.size()) +
+        ") does not match spectrum size (" + StringUtils::toStr(this->size()) + ")");
+    }
+
+    // Precompute bin sizes for mapping coordinates to pixel indices
+    const double im_range = max_im - min_im;
+    const double mz_range = max_mz - min_mz;
+    const double im_scale = static_cast<double>(im_bins) / im_range;
+    const double mz_scale = static_cast<double>(mz_bins) / mz_range;
+
+    const Int64 im_bins_minus_one = static_cast<Int64>(im_bins) - 1;
+    const Int64 mz_bins_minus_one = static_cast<Int64>(mz_bins) - 1;
+
+    // Process all peaks - IM frame data is typically NOT sorted by m/z
+    // so we iterate through all peaks linearly
+    for (Size peak_idx = 0; peak_idx < this->size(); ++peak_idx)
+    {
+      const double mz = (*this)[peak_idx].getMZ();
+      const double im = im_data[peak_idx];
+
+      // Skip peaks outside the requested ranges
+      if (mz < min_mz || mz > max_mz || im < min_im || im > max_im)
+      {
+        continue;
+      }
+
+      // Compute bin indices
+      Int64 mz_bin = static_cast<Int64>((mz - min_mz) * mz_scale);
+      Int64 im_bin = static_cast<Int64>((im - min_im) * im_scale);
+
+      // Clamp to valid range: values exactly at max should go in last bin
+      if (mz_bin > mz_bins_minus_one)
+      {
+        mz_bin = mz_bins_minus_one;
+      }
+      if (im_bin > im_bins_minus_one)
+      {
+        im_bin = im_bins_minus_one;
+      }
+
+      // Row-major order: mz_bin * im_bins + im_bin
+      const Size pixel_idx = static_cast<Size>(mz_bin) * im_bins + static_cast<Size>(im_bin);
+      const float intensity = (*this)[peak_idx].getIntensity();
+
+      if (aggregation == RasterAggregation::SUM)
+      {
+        output[pixel_idx] += intensity;
+      }
+      else // MAX aggregation
+      {
+        if (intensity > output[pixel_idx])
+        {
+          output[pixel_idx] = intensity;
+        }
+      }
+    }
+  }
+
 } // namespace OpenMS

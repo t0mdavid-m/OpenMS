@@ -7,6 +7,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
+#include <OpenMS/DATASTRUCTURES/ListUtils.h>
 #include <OpenMS/PROCESSING/SPECTRAMERGING/SpectraMerger.h>
 #include <OpenMS/FORMAT/FileHandler.h>
 #include <OpenMS/KERNEL/MSExperiment.h>
@@ -68,17 +69,17 @@ protected:
   void registerOptionsAndFlags_() override
   {
     registerInputFile_("in", "<file>", "", "Input mzML file.");
-    setValidFormats_("in", ListUtils::create<String>("mzML"));
+    setValidFormats_("in", ListUtils::create<std::string>("mzML"));
     registerOutputFile_("out", "<file>", "", "Output mzML file with merged spectra.");
-    setValidFormats_("out", ListUtils::create<String>("mzML"));
+    setValidFormats_("out", ListUtils::create<std::string>("mzML"));
 
     registerStringOption_("merging_method", "<method>", "average_gaussian", "Method of merging which should be used.", false);
-    setValidStrings_("merging_method", ListUtils::create<String>("average_gaussian,average_tophat,precursor_method,block_method"));
+    setValidStrings_("merging_method", ListUtils::create<std::string>("average_gaussian,average_tophat,precursor_method,block_method"));
 
     registerSubsection_("algorithm", "Algorithm section for merging spectra");
   }
 
-  Param getSubsectionDefaults_(const String & /*section*/) const override
+  Param getSubsectionDefaults_(const std::string & /*section*/) const override
   {
     return SpectraMerger().getParameters();
   }
@@ -88,9 +89,9 @@ protected:
     //-------------------------------------------------------------
     // parsing parameters
     //-------------------------------------------------------------
-    String in(getStringOption_("in"));
-    String out(getStringOption_("out"));
-    String merging_method(getStringOption_("merging_method"));
+    std::string in(getStringOption_("in"));
+    std::string out(getStringOption_("out"));
+    std::string merging_method(getStringOption_("merging_method"));
 
     //-------------------------------------------------------------
     // reading input
@@ -105,7 +106,7 @@ protected:
     exp.updateRanges();
 
     auto levels = exp.getMSLevels();
-    if (levels.empty()) throw Exception::InvalidSize(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, levels.size());
+    if (levels.empty()) throw Exception::InvalidSize(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, levels.size(), "experiment has no MS levels");
     int min_ms_level = levels.front();
     int max_ms_level = levels.back();
     //-------------------------------------------------------------

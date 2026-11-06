@@ -12,9 +12,11 @@
 ///////////////////////////
 
 #include <string>
+#include <unordered_set>
+#include <unordered_map>
 
 #include <OpenMS/METADATA/ProteinHit.h>
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 
 ///////////////////////////
 
@@ -29,9 +31,9 @@ using namespace std;
 
 float score = 4.4f;
 UInt rank = 3;
-String sequence = "ARRAY";
-String accession = "PROOE34";
-String description = "class II antigen";
+std::string sequence = "ARRAY";
+std::string accession = "PROOE34";
+std::string description = "class II antigen";
 
 ProteinHit* ptr = nullptr;	
 ProteinHit* nullPointer = nullptr;
@@ -44,7 +46,7 @@ START_SECTION(~ProteinHit())
   delete ptr;
 END_SECTION
 
-START_SECTION((ProteinHit(double score, UInt rank, String accession, String sequence)))
+START_SECTION((ProteinHit(double score, UInt rank, std::string accession, std::string sequence)))
 	ProteinHit hit(score, rank, accession, sequence);
 	TEST_EQUAL(hit.getScore(), score)
 	TEST_EQUAL(hit.getRank(), rank)
@@ -167,18 +169,18 @@ START_SECTION(bool operator != (const ProteinHit& rhs) const)
 	hit = hit2;		
 END_SECTION
 
-START_SECTION(const String& getAccession() const)
+START_SECTION(const std::string& getAccession() const)
 	ProteinHit hit(score, rank, accession, sequence);
 	TEST_EQUAL(hit.getAccession(), accession)
 END_SECTION
 
-START_SECTION(const String& getDescription() const)
+START_SECTION(const std::string& getDescription() const)
 	ProteinHit hit(score, rank, accession, sequence);
   hit.setDescription(description);
 	TEST_EQUAL(hit.getDescription(), description)
 END_SECTION
 
-START_SECTION(const String& getSequence() const)
+START_SECTION(const std::string& getSequence() const)
 	ProteinHit hit(score, rank, accession, sequence);
 	TEST_EQUAL(hit.getSequence(), sequence)
 END_SECTION
@@ -214,19 +216,19 @@ START_SECTION(void setScore(const double score))
 	TEST_EQUAL(hit.getScore(), score);
 END_SECTION
 
-START_SECTION(void setSequence(const String& sequence))
+START_SECTION(void setSequence(const std::string& sequence))
 	ProteinHit hit;
 	hit.setSequence(sequence);
 	TEST_EQUAL(hit.getSequence(), sequence)
 END_SECTION
 
-START_SECTION(void setAccession(const String& accession))
+START_SECTION(void setAccession(const std::string& accession))
 	ProteinHit hit;
 	hit.setAccession(accession);
 	TEST_EQUAL(hit.getAccession(), accession)
 END_SECTION
 
-START_SECTION(void setDescription(const String& description))
+START_SECTION(void setDescription(const std::string& description))
 	ProteinHit hit;
 	hit.setDescription(description);
 	TEST_EQUAL(hit.getDescription(), description)
@@ -328,6 +330,63 @@ START_SECTION((TargetDecoyType getTargetDecoyType() const))
   // Test after removing meta value (should return UNKNOWN)
   hit.removeMetaValue("target_decoy");
   TEST_EQUAL(hit.getTargetDecoyType(), ProteinHit::TargetDecoyType::UNKNOWN);
+}
+END_SECTION
+
+START_SECTION(([EXTRA] std::hash<ProteinHit>))
+{
+  // Test that equal ProteinHits have equal hashes
+  ProteinHit hit1(4.5, 1, "ACC123", "PEPTIDE");
+  hit1.setCoverage(45.5);
+
+  ProteinHit hit2(4.5, 1, "ACC123", "PEPTIDE");
+  hit2.setCoverage(45.5);
+
+  TEST_EQUAL(hit1 == hit2, true)
+  TEST_EQUAL(std::hash<ProteinHit>{}(hit1), std::hash<ProteinHit>{}(hit2))
+
+  // Test that different ProteinHits have different hashes (not guaranteed but expected)
+  ProteinHit hit3(4.5, 1, "ACC456", "PEPTIDE");
+  hit3.setCoverage(45.5);
+  TEST_NOT_EQUAL(std::hash<ProteinHit>{}(hit1), std::hash<ProteinHit>{}(hit3))
+
+  // Test different scores
+  ProteinHit hit4(5.5, 1, "ACC123", "PEPTIDE");
+  hit4.setCoverage(45.5);
+  TEST_NOT_EQUAL(std::hash<ProteinHit>{}(hit1), std::hash<ProteinHit>{}(hit4))
+
+  // Test different rank
+  ProteinHit hit5(4.5, 2, "ACC123", "PEPTIDE");
+  hit5.setCoverage(45.5);
+  TEST_NOT_EQUAL(std::hash<ProteinHit>{}(hit1), std::hash<ProteinHit>{}(hit5))
+
+  // Test different sequence
+  ProteinHit hit6(4.5, 1, "ACC123", "PROTEIN");
+  hit6.setCoverage(45.5);
+  TEST_NOT_EQUAL(std::hash<ProteinHit>{}(hit1), std::hash<ProteinHit>{}(hit6))
+
+  // Test different coverage
+  ProteinHit hit7(4.5, 1, "ACC123", "PEPTIDE");
+  hit7.setCoverage(50.0);
+  TEST_NOT_EQUAL(std::hash<ProteinHit>{}(hit1), std::hash<ProteinHit>{}(hit7))
+
+  // Test use in unordered_set
+  std::unordered_set<ProteinHit> hit_set;
+  hit_set.insert(hit1);
+  hit_set.insert(hit2); // Should not add duplicate
+  hit_set.insert(hit3); // Should add (different accession)
+  TEST_EQUAL(hit_set.size(), 2)
+  TEST_EQUAL(hit_set.count(hit1), 1)
+  TEST_EQUAL(hit_set.count(hit3), 1)
+
+  // Test use in unordered_map
+  std::unordered_map<ProteinHit, std::string> hit_map;
+  hit_map[hit1] = "first";
+  hit_map[hit3] = "second";
+  TEST_EQUAL(hit_map.size(), 2)
+  TEST_EQUAL(hit_map[hit1], "first")
+  TEST_EQUAL(hit_map[hit2], "first") // hit2 == hit1, so should get same value
+  TEST_EQUAL(hit_map[hit3], "second")
 }
 END_SECTION
 

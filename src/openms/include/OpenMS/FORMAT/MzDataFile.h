@@ -54,7 +54,7 @@ public:
         @exception Exception::FileNotFound is thrown if the file could not be opened
         @exception Exception::ParseError is thrown if an error occurs during parsing
     */
-    void load(const String & filename, MapType & map);
+    void load(const std::string & filename, MapType & map);
 
     /**
         @brief Stores a map in a MzData file.
@@ -63,18 +63,18 @@ public:
 
         @exception Exception::UnableToCreateFile is thrown if the file could not be created
     */
-    void store(const String & filename, const MapType & map) const;
+    void store(const std::string & filename, const MapType & map) const;
 
     /**
         @brief Checks if a file is valid with respect to the mapping file and the controlled vocabulary.
 
-        @param filename File name of the file to be checked.
-        @param errors Errors during the validation are returned in this output parameter.
-        @param warnings Warnings during the validation are returned in this output parameter.
+        @param[in] filename File name of the file to be checked.
+        @param[out] errors Errors during the validation are returned in this output parameter.
+        @param[out] warnings Warnings during the validation are returned in this output parameter.
 
         @exception Exception::FileNotFound is thrown if the file could not be opened
     */
-    bool isSemanticallyValid(const String & filename, StringList & errors, StringList & warnings);
+    bool isSemanticallyValid(const std::string & filename, StringList & errors, StringList & warnings);
 
 private:
 

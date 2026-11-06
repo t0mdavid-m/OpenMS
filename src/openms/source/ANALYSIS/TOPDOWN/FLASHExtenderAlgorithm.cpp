@@ -136,7 +136,7 @@ namespace OpenMS
       if (it == cache.end())
       {
         std::map<double, std::vector<ResidueModification>> mod_map;
-        std::vector<String> mod_strs;
+        std::vector<std::string> mod_strs;
         inst->getAllSearchModifications(mod_strs);
         for (const auto & mod_str : mod_strs)
         {
@@ -192,21 +192,21 @@ namespace OpenMS
       cleavage_before_[1][r] = cz_before[i];
       cleavage_after_[1][r] = cz_after[i];
     }
-    const String file = param_.getValue("cleavage_table").toString();
+    const std::string file = param_.getValue("cleavage_table").toString();
     if (file.empty()) return;
     std::ifstream in(file);
     if (! in.good()) throw Exception::FileNotFound(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, file);
-    String line;
+    std::string line;
     while (std::getline(in, line))
     {
-      line.trim();
-      if (line.empty() || line.hasPrefix("#")) continue;
-      std::vector<String> f;
-      line.split('\t', f);
+      StringUtils::trim(line);
+      if (line.empty() || StringUtils::hasPrefix(line, "#")) continue;
+      std::vector<std::string> f;
+      StringUtils::split(line, '\t', f);
       if (f.size() < 4 || f[2].size() != 1 || f[2][0] < 'A' || f[2][0] > 'Z' || (f[0] != "by" && f[0] != "cz") || (f[1] != "before" && f[1] != "after"))
         throw Exception::ParseError(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, line, "expected: by|cz <tab> before|after <tab> residue <tab> log2 ratio");
       const int series = f[0] == "by" ? 0 : 1;
-      (f[1] == "before" ? cleavage_before_ : cleavage_after_)[series][f[2][0] - 'A'] = f[3].toDouble();
+      (f[1] == "before" ? cleavage_before_ : cleavage_after_)[series][f[2][0] - 'A'] = StringUtils::toDouble(f[3]);
     }
   }
 
@@ -218,7 +218,7 @@ namespace OpenMS
 
     for (const auto& name : param_.getValue("var_mod").toStringVector())
     {
-      String spec = String(name).trim();
+      std::string spec = StringUtils::trimmed(name);
       if (spec.empty()) continue;
       // a name or a Unimod accession, with its site; a modification that Unimod has at any N-terminus only (e.g. Gln->pyro-Glu (N-term Q))
       // restricted to the protein N-terminus by that site, "Gln->pyro-Glu (Protein N-term Q)", as Acetyl (Protein N-term)
@@ -228,7 +228,7 @@ namespace OpenMS
       vm.name = mod->getId();
       vm.mass = mod->getDiffMonoMass();
       const char origin = mod->getOrigin();
-      vm.residues = (origin == 'X' || origin == '\0' || origin == '.') ? String("") : String(1, origin);
+      vm.residues = (origin == 'X' || origin == '\0' || origin == '.') ? std::string("") : std::string(1, origin);
       const auto term = mod->getTermSpecificity();
       vm.position = protein_n_term ? 3
                     : term == ResidueModification::N_TERM ? 1 : term == ResidueModification::PROTEIN_N_TERM ? 3
@@ -237,31 +237,31 @@ namespace OpenMS
       var_mod_list_.push_back(vm);
     }
 
-    const String file = param_.getValue("var_mod_file").toString();
+    const std::string file = param_.getValue("var_mod_file").toString();
     if (! file.empty())
     {
       std::ifstream in(file);
       if (! in.good()) throw Exception::FileNotFound(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, file);
-      String line;
+      std::string line;
       while (std::getline(in, line))
       {
-        line.trim();
-        if (line.empty() || line.hasPrefix("#")) continue;
-        std::vector<String> f;
-        line.split(',', f);
+        StringUtils::trim(line);
+        if (line.empty() || StringUtils::hasPrefix(line, "#")) continue;
+        std::vector<std::string> f;
+        StringUtils::split(line, ',', f);
         if (f.size() < 4) throw Exception::ParseError(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, line, "expected name,mass,residues,position[,unimod]");
         VariableModification vm;
-        vm.name = f[0].trim();
-        vm.mass = f[1].toDouble();
-        vm.residues = f[2].trim() == "*" ? String("") : f[2].trim();
+        vm.name = StringUtils::trim(f[0]);
+        vm.mass = StringUtils::toDouble(f[1]);
+        vm.residues = StringUtils::trim(f[2]) == "*" ? std::string("") : StringUtils::trim(f[2]);
         if (vm.residues.size() == 2 && vm.residues[0] == vm.residues[1]) // e.g. CC: a disulfide needs two cysteines
         {
           vm.residues = vm.residues.substr(0, 1);
           vm.sites = 2;
         }
-        const String pos = String(f[3]).trim().toLower();
-        vm.position = pos.hasSubstring("protein n-term") ? 3 : pos.hasSubstring("n-term") ? 1 : pos.hasSubstring("c-term") ? 2 : 0;
-        if (f.size() > 4 && ! f[4].trim().empty()) vm.unimod = f[4].toInt();
+        const std::string pos = StringUtils::toLowered(StringUtils::trimmed(f[3]));
+        vm.position = StringUtils::hasSubstring(pos, "protein n-term") ? 3 : StringUtils::hasSubstring(pos, "n-term") ? 1 : StringUtils::hasSubstring(pos, "c-term") ? 2 : 0;
+        if (f.size() > 4 && ! StringUtils::trim(f[4]).empty()) vm.unimod = StringUtils::toInt32(f[4]);
         var_mod_list_.push_back(vm);
       }
     }
@@ -309,7 +309,7 @@ namespace OpenMS
               [](const VariableModificationCombination& a, const VariableModificationCombination& b) { return a.mass < b.mass || (a.mass == b.mass && a.mods < b.mods); });
   }
 
-  bool FLASHExtenderAlgorithm::combinationFits_(const VariableModificationCombination& combination, const String& seq, int from, int to, int n_site,
+  bool FLASHExtenderAlgorithm::combinationFits_(const VariableModificationCombination& combination, const std::string& seq, int from, int to, int n_site,
                                                 int c_site, const std::uint8_t* occupied) const
   {
     // called in the innermost loop of the extension: no allocation
@@ -361,10 +361,10 @@ namespace OpenMS
     return false;
   }
 
-  String FLASHExtenderAlgorithm::variableModificationNames_(double mass, double tol, const String& seq, int from, int to, int n_site, int c_site,
-                                                            String& accessions, int& site, double& theoretical_mass, const std::uint8_t* occupied) const
+  std::string FLASHExtenderAlgorithm::variableModificationNames_(double mass, double tol, const std::string& seq, int from, int to, int n_site, int c_site,
+                                                            std::string& accessions, int& site, double& theoretical_mass, const std::uint8_t* occupied) const
   {
-    String names;
+    std::string names;
     accessions = "";
     site = -1;
     int fitting = 0;
@@ -381,7 +381,7 @@ namespace OpenMS
       {
         const auto& vm = var_mod_list_[iter->mods[k]];
         names += (k ? "+" : "") + vm.name;
-        accessions += (k ? String("+") : String("")) + (vm.unimod >= 0 ? String(vm.unimod) : String("-"));
+        accessions += (k ? std::string("+") : std::string("")) + (vm.unimod >= 0 ? StringUtils::toStr(vm.unimod) : std::string("-"));
       }
       names += ",";
       accessions += ",";
@@ -677,7 +677,7 @@ namespace OpenMS
 
     auto seq = hit.getSequence();
 
-    if (mode == 0) seq = seq.reverse();
+    if (mode == 0) seq = StringUtils::reverse(seq);
     if (fixed == nullptr || fixed->empty())
     {
       for (const auto& aa : seq)
@@ -791,14 +791,14 @@ namespace OpenMS
   }
 
 
-  void FLASHExtenderAlgorithm::keepFixedConsistentPlacements_(const String& seq, const FLASHHelperClasses::Tag& tag,
+  void FLASHExtenderAlgorithm::keepFixedConsistentPlacements_(const std::string& seq, const FLASHHelperClasses::Tag& tag,
                                                               const std::vector<std::pair<int, double>>& fixed, std::vector<int>& positions) const
   {
     // A tag is placed by its letters. On an entry with fixed modifications, its masses must also span the residues it is placed on, the
     // fixed masses included: a de novo tag (residue masses only) is not placed across a fixed residue, and a ladder or gapped tag built
     // across one (residue sums with the fixed masses) not where the same letters carry none. The span of the masses is within the sum of
     // their tolerances of the residues' (the steps of a tag telescope); fixed masses are about 1 Da or more.
-    const String& tag_seq = tag.getUppercaseSequence();
+    const std::string& tag_seq = tag.getUppercaseSequence();
     const int length = (int)tag_seq.size();
     const bool lower_case = std::any_of(tag.getSequence().begin(), tag.getSequence().end(), ::islower);
     auto masses = tag.getMzs();
@@ -1005,7 +1005,7 @@ namespace OpenMS
     alternatives = 0;
     std::vector<std::vector<int>> tag_edges(4); // pro start end indices and node start end indices
     std::set<Size> sinks;
-    std::set<String> upper_case_seqs;
+    std::set<std::string> upper_case_seqs;
 
     for (const auto& tag : matched_tags)
     {
@@ -1027,7 +1027,7 @@ namespace OpenMS
     hi.cur_pro_masses_ = &pro_masses;
     hi.cur_tol_spec_ = &hi.tol_spec_map_[hi.mode_];
     hi.cur_oriented_seq_ = hit.getSequence();
-    if (hi.mode_ == 0) hi.cur_oriented_seq_.reverse();
+    if (hi.mode_ == 0) StringUtils::reverse(hi.cur_oriented_seq_);
     hi.cur_node_series_ = &hi.node_series_map_[hi.mode_];
     hi.cur_occupied_.clear();
     if (hi.occupancy_ != nullptr)
@@ -1070,7 +1070,7 @@ namespace OpenMS
     }
     {
       // weight of a matched mass at protein index k (the bond after k residues in this mode's orientation)
-      const String& os = hi.cur_oriented_seq_;
+      const std::string& os = hi.cur_oriented_seq_;
       const int L = (int)os.size();
       for (int sr = 0; sr < 2; sr++)
       {
@@ -1091,7 +1091,7 @@ namespace OpenMS
                                       * (1 + max_path_score_ - min_path_score_));
 
     bool tag_found = false;
-    const String& seq = hit.getSequence();
+    const std::string& seq = hit.getSequence();
 
     for (Size t = 0; t < matched_tags.size(); t++)
     {
@@ -1388,7 +1388,7 @@ namespace OpenMS
         std::vector<int> mod_starts, mod_ends;
         std::vector<double> mod_masses, mod_tols;
         std::vector<int> mod_vars;                 // 1: the modification is a variable one (named in mod_var_names), 0: blind
-        std::vector<String> mod_var_names, mod_var_accs;
+        std::vector<std::string> mod_var_names, mod_var_accs;
         int max_nterm_index = 0, max_cterm_rindex = 0;
 
         std::map<int, std::map<int, std::vector<Size>>> all_path_map; // mode, num_mod, path
@@ -1431,7 +1431,7 @@ namespace OpenMS
         // terminus outside the window in 136 of 194). Where a tag lands gives the shift at its terminus exactly, and the precursor
         // mass (P - H2O: the residue sum between the termini, up to a blind shift) the shift at the other one.
         {
-          const String& seq = hit.getSequence();
+          const std::string& seq = hit.getSequence();
           std::vector<double> pre, suf;
           getProMasses_(hit, pre, 1, hi.fixed_);
           getProMasses_(hit, suf, 0, hi.fixed_);
@@ -1477,7 +1477,7 @@ namespace OpenMS
         int terminal_score = 0;
         std::vector<int> terminal_used_mode, terminal_mod_starts, terminal_mod_ends, terminal_mod_vars;
         std::vector<double> terminal_mod_masses, terminal_mod_tols;
-        std::vector<String> terminal_mod_var_names, terminal_mod_var_accs;
+        std::vector<std::string> terminal_mod_var_names, terminal_mod_var_accs;
         std::map<int, std::set<int>> terminal_matched_position_map, terminal_matched_mass_map;
         int terminal_start = -1, terminal_end = -1;
         // suffix fragment masses matched on the suffix path before its first shift, i.e. measured from where that path starts
@@ -1658,8 +1658,8 @@ namespace OpenMS
 
             double prev_mass_shift = 0;
             int prev_mod_count = 0, prev_var_count = 0;
-            String oriented_seq = hit.getSequence();
-            if (m == 0) oriented_seq.reverse();
+            std::string oriented_seq = hit.getSequence();
+            if (m == 0) StringUtils::reverse(oriented_seq);
             // the kinds of the fixed modifications per residue in this orientation, as cur_occupied_ in the DAG (empty: none)
             std::vector<std::uint8_t> oriented_occupied;
             if (hi.occupancy_ != nullptr)
@@ -1724,7 +1724,7 @@ namespace OpenMS
 
                 const double mod_tol = hi.tol_spec_map_[m][node_index].getIntensity();
                 bool is_var = var_count != prev_var_count;
-                String var_names, var_accs;
+                std::string var_names, var_accs;
                 double var_mass = mod_mass; // a variable modification: the mass of its combination (not the shift as measured)
                 if (is_var)
                 {
@@ -1970,7 +1970,7 @@ namespace OpenMS
             mod_var_accs.erase(mod_var_accs.begin() + k);
           }
         }
-        std::vector<String> mod_ids, mod_accs;
+        std::vector<std::string> mod_ids, mod_accs;
 
         for (int k = 0; k < (int)mod_masses.size(); k++)
         {
@@ -1981,8 +1981,8 @@ namespace OpenMS
             continue;
           }
           auto mod_mass = mod_masses[k];
-          String mod_id = "";
-          String mod_acc = "";
+          std::string mod_id = "";
+          std::string mod_acc = "";
           std::set<int> mod_int_acc;
           for (Size b = blindModLowerBound_(mod_mass - mod_tols[k]); b < blind_mod_masses_.size(); b++)
           {
@@ -2060,10 +2060,10 @@ namespace OpenMS
               {
                 std::vector<int> positions;
                 std::vector<double> masses;
-                String seq = hit.getSequence();
+                std::string seq = hit.getSequence();
 
-                if (hi.protein_end_position_ >= 0) seq = seq.substr(0, hi.protein_end_position_);
-                if (hi.protein_start_position_ >= 0) seq = seq.substr(hi.protein_start_position_);
+                if (hi.protein_end_position_ >= 0) seq = StringUtils::substr(seq, 0, hi.protein_end_position_);
+                if (hi.protein_start_position_ >= 0) seq = StringUtils::substr(seq, hi.protein_start_position_);
                 // the fixed modifications of the proteoform's residues, as positions in seq
                 std::vector<std::pair<int, double>> seq_fixed;
                 if (hi.fixed_ != nullptr)
@@ -2104,7 +2104,7 @@ namespace OpenMS
         hit.setMetaValue(mi_modification_variable, mod_vars); // 1: a variable (searched) modification, 0: a blind shift
         {
           // the variable modification names of the path ("A+B," per shift, alternatives separated by ",")
-          std::vector<String> var_entries;
+          std::vector<std::string> var_entries;
           for (Size k = 0; k < mod_vars.size(); k++)
           {
             if (mod_vars[k]) var_entries.push_back(mod_var_names[k]);

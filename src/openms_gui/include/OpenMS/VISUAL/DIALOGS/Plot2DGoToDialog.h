@@ -24,7 +24,6 @@ namespace Ui
 namespace OpenMS
 {
 
-  class String;
 
   /**
       @brief GoTo dialog used to zoom to a m/z and retention time range or to a feature.
@@ -40,9 +39,9 @@ public:
     using AreaXYType = PlotCanvas::AreaXYType;
 
     ///Constructor
-    /// @param parent Parent widget
-    /// @param x_name Name of the x_axis dimension
-    /// @param y_name Name of the y_axis dimension
+    /// @param[in] parent Parent widget
+    /// @param[in] x_name Name of the x_axis dimension
+    /// @param[in] y_name Name of the y_axis dimension
     Plot2DGoToDialog(QWidget* parent, std::string_view x_name, std::string_view y_name);
     ///Destructor
     ~Plot2DGoToDialog() override;
@@ -67,7 +66,7 @@ public:
     ///@name Methods for feature numbers
     //@{
     ///Returns the selected feature numbers. If a number is returned, the feature rather than the range should be displayed.
-    String getFeatureNumber() const;
+    std::string getFeatureNumber() const;
     ///Disables the feature number field
     void enableFeatureNumber(bool);
     //@}

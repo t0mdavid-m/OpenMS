@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 
 #include <iterator>
 #include <ostream>
@@ -22,8 +22,8 @@ namespace OpenMS
   /**
     @brief Output stream operator for std::vectors.
 
-    @param os The target stream.
-    @param v The vector to write to stream.
+    @param[in,out] os The target stream.
+    @param[in] v The vector to write to stream.
   */
   template <typename T>
   inline std::ostream& operator<<(std::ostream& os, const std::vector<T>& v)
@@ -33,11 +33,11 @@ namespace OpenMS
     if (!v.empty())
     {
       for (auto it = v.begin(); it < v.end() - 1; ++it)
-      { // convert to String manually, since this is much faster than ostream build-in conversion; 
+      { // convert to std::string manually, since this is much faster than ostream build-in conversion; 
         // If T is a String, the compiler will (hopefully) elide the copy
-        os << String(*it) << ", ";
+        os << StringUtils::toStr(*it) << ", ";
       }
-      os << String(v.back());
+      os << StringUtils::toStr(v.back());
     }
 
     os << "]";
@@ -60,10 +60,10 @@ namespace OpenMS
     if (!v.empty())
     {
       for (auto it = v.begin(); it < v.end() - 1; ++it)
-      { // convert to String manually, since this is much faster than ostreams build-in conversion; 
-        os << String(*it, false) << ", ";
+      { // convert to std::string manually, since this is much faster than ostreams build-in conversion; 
+        os << StringUtils::toStr(*it, false) << ", ";
       }
-      os << String(v.back(), false);
+      os << StringUtils::toStr(v.back(), false);
     }
 
     os << "]";
@@ -72,7 +72,7 @@ namespace OpenMS
 
   /// Operator for appending entries with less code
   template <typename TString>
-  inline std::vector<String>& operator<<(std::vector<String>& sl, const TString& string)
+  inline std::vector<std::string>& operator<<(std::vector<std::string>& sl, const TString& string)
   {
     sl.push_back(string);
     return sl;

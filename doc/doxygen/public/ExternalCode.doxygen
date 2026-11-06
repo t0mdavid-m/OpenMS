@@ -48,8 +48,8 @@ cmake -G "<generator>" .
 
 @section development_external_ship Shipping your external code to a new machine
 
-  If you've modified %OpenMS itself and not used an external project you can just use our installer scripts,
-	to build your own %OpenMS installer for your platform (see our internal FAQ which is built using "make doc_internal") and ship that to a client machine.
+  If you've modified %OpenMS itself and not used an external project you can just use our installer scripts
+	to build your own %OpenMS installer for your platform and ship that to a client machine.
 	
 	If you've used an external project and have a new executable (+ an optional new library), you can use the 
 	installer approach as well, and manually copy the new executable to the TOPP binary directory (e.g. on
@@ -65,7 +65,8 @@ cmake -G "<generator>" .
 	<li>copy the %OpenMS/share/%OpenMS directory to the client machine (e.g. <client/my_dir>/share) and set the environment variable @em OPENMS_DATA_PATH to this directory
 	<li>copy the %OpenMS library (%OpenMS.dll for Windows or %OpenMS.so/.dylib for Linux/Mac) to <client/my_dir>/bin
 	<li>copy all Qt4 libraries to the client <client/my_dir>/bin or on Linux/Mac make sure you have installed the Qt4 package
-	<li>[Windows only] copy Xerces dll (see contrib/lib) to <client/my_dir>/bin
+	<li>[Windows only] if you built without vcpkg and linked third-party libraries (e.g. Xerces-C) as DLLs, copy those DLLs to <client/my_dir>/bin as well.
+	    A vcpkg build links them statically, so nothing needs to be copied for them.
 	<li>[Windows only] install the VS redistributable package (see Microsoft Homepage) on the client machine which corresponds to the VS version 
 		  that was used to compile your code (use the correct redistributable package! , i.e. architecture 32|64bit, VS version, VS Service Pack	version).
 			If you choose the wrong redistributable package, you will get "Application failed to initialize properly..." error messages.

@@ -9,7 +9,7 @@
 #pragma once
 
 #include <OpenMS/CONCEPT/Types.h>
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 
 namespace OpenMS
 {
@@ -26,11 +26,11 @@ namespace OpenMS
     /// the options of the UniPEFF tool
     struct Options
     {
-      String ptmlist;                             ///< UniProt ptmlist.txt; empty: the bundled snapshot
-      String psimod_obo;                          ///< PSI-MOD.obo for canonical names; empty: the bundled one
-      String unimod_obo;                          ///< optional unimod.obo for canonical Unimod names
-      String prefix;                              ///< one PEFF prefix for every entry; empty: sp/tr from the UniProt dataset
-      String dbversion = "unknown";               ///< value of the '# DbVersion=' header line
+      std::string ptmlist;                             ///< UniProt ptmlist.txt; empty: the bundled snapshot
+      std::string psimod_obo;                          ///< PSI-MOD.obo for canonical names; empty: the bundled one
+      std::string unimod_obo;                          ///< optional unimod.obo for canonical Unimod names
+      std::string prefix;                              ///< one PEFF prefix for every entry; empty: sp/tr from the UniProt dataset
+      std::string dbversion = "unknown";               ///< value of the '# DbVersion=' header line
       bool annotation_identifiers = false;        ///< PEFF Option B: annotation ids and \DisulfideBond connectivity
       bool omit_molecular_processing = false;     ///< no \Processed annotations
       bool omit_amino_acid_modifications = false; ///< no \ModResPsi / \ModResUnimod / \ModRes / \DisulfideBond
@@ -45,6 +45,6 @@ namespace OpenMS
       @exception Exception::UnableToCreateFile the output or a temporary spool file cannot be written, or @p out_peff is compressed
       @exception Exception::ParseError the input holds no writable entry
     */
-    static Size convert(const String& in_xml, const String& out_peff, const Options& options);
+    static Size convert(const std::string& in_xml, const std::string& out_peff, const Options& options);
   };
 } // namespace OpenMS

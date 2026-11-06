@@ -17,7 +17,6 @@
 
 namespace OpenMS
 {
-  class String;
   class MSSpectrum;
   class ExperimentalSettings;
 
@@ -44,9 +43,9 @@ namespace OpenSwath
 
     /**
       @brief CTor with arguments
-      
-      @param cd_spectra Number of MS spectra to inspect for charge distribution estimation
-      @param decon_ms1_mz_tol m/z tolerance for isotope deconvolution
+
+      @param[in] cd_spectra Number of MS spectra to inspect for charge distribution estimation
+      @param[in] decon_ms1_mz_tol m/z tolerance for isotope deconvolution
     */
     SwathQC(const size_t cd_spectra, const double decon_ms1_mz_tol);
 
@@ -89,7 +88,7 @@ namespace OpenSwath
     /**
       @brief Save all internally collected data to a JSON file.
     */
-    void storeJSON(const OpenMS::String& filename);
+    void storeJSON(const std::string& filename);
 
     /**
       @brief returns the charge distribution which was internally computed by applying getSpectraProcessingFunc() externally

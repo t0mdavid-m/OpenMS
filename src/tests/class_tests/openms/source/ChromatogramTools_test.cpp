@@ -49,7 +49,7 @@ START_SECTION(template <typename ExperimentType> void convertChromatogramsToSpec
 {
   PeakMap exp;
 	MSChromatogram chrom1, chrom2;
-	chrom1.setChromatogramType(ChromatogramSettings::SELECTED_REACTION_MONITORING_CHROMATOGRAM);
+	chrom1.setChromatogramType(ChromatogramSettings::ChromatogramType::SELECTED_REACTION_MONITORING_CHROMATOGRAM);
 	Precursor pre1, pre2;
 	pre1.setMZ(100.1);
 	pre2.setMZ(100.2);
@@ -64,7 +64,7 @@ START_SECTION(template <typename ExperimentType> void convertChromatogramsToSpec
 	chrom2.setPrecursor(pre2);
 	chrom2.setProduct(pro2);		
 
-	chrom2.setChromatogramType(ChromatogramSettings::SELECTED_REACTION_MONITORING_CHROMATOGRAM);
+	chrom2.setChromatogramType(ChromatogramSettings::ChromatogramType::SELECTED_REACTION_MONITORING_CHROMATOGRAM);
 	ChromatogramPeak peak1, peak2, peak3;
 	peak1.setRT(0.1);
 	peak2.setRT(0.2);
@@ -95,11 +95,11 @@ END_SECTION
 START_SECTION(template <typename ExperimentType> void convertSpectraToChromatograms(ExperimentType& exp, bool remove_spectra = false))
 {
   PeakSpectrum spec1, spec2, spec3, spec4, spec5;
-	spec1.getInstrumentSettings().setScanMode(InstrumentSettings::SRM);
-	spec2.getInstrumentSettings().setScanMode(InstrumentSettings::SRM);
-	spec3.getInstrumentSettings().setScanMode(InstrumentSettings::SRM);
-	spec4.getInstrumentSettings().setScanMode(InstrumentSettings::SRM);
-	spec5.getInstrumentSettings().setScanMode(InstrumentSettings::MASSSPECTRUM);
+	spec1.getInstrumentSettings().setScanMode(InstrumentSettings::ScanMode::SRM);
+	spec2.getInstrumentSettings().setScanMode(InstrumentSettings::ScanMode::SRM);
+	spec3.getInstrumentSettings().setScanMode(InstrumentSettings::ScanMode::SRM);
+	spec4.getInstrumentSettings().setScanMode(InstrumentSettings::ScanMode::SRM);
+	spec5.getInstrumentSettings().setScanMode(InstrumentSettings::ScanMode::MASSSPECTRUM);
 
 	Precursor prec1, prec2;
 	prec1.setMZ(500.1);
@@ -152,6 +152,33 @@ START_SECTION(template <typename ExperimentType> void convertSpectraToChromatogr
 	TEST_EQUAL(exp2.size(), 1)
 	TEST_EQUAL(exp2.getChromatograms().size(), 2)
 
+}
+END_SECTION
+
+START_SECTION([EXTRA] forced conversion of MS1 spectra gives every XIC chromatogram its own native ID)
+{
+  // targeted MS1 (e.g. GC-MS SIM) data: no precursor, one XIC chromatogram per m/z
+  PeakMap exp;
+  for (int s = 0; s < 2; ++s)
+  {
+    PeakSpectrum spec;
+    spec.setRT(10.0 + s);
+    for (double mz : {217.0, 218.0})
+    {
+      Peak1D p;
+      p.setMZ(mz);
+      p.setIntensity(100.0f + s);
+      spec.push_back(p);
+    }
+    exp.addSpectrum(spec);
+  }
+  ChromatogramTools().convertSpectraToChromatograms(exp, false, true);
+  TEST_EQUAL(exp.getChromatograms().size(), 2)
+  ABORT_IF(exp.getChromatograms().size() != 2)
+  // mzML requires unique chromatogram ids; they used to be empty
+  TEST_STRING_EQUAL(exp.getChromatograms()[0].getNativeID(), "XIC mz=" + StringUtils::toStr(217.0))
+  TEST_STRING_EQUAL(exp.getChromatograms()[1].getNativeID(), "XIC mz=" + StringUtils::toStr(218.0))
+  TEST_EQUAL(exp.getChromatograms()[0].size(), 2)
 }
 END_SECTION
 

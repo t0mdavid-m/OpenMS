@@ -59,38 +59,38 @@ public:
     /**
        @brief Calculates the FDR of two runs, a forward run and a decoy run on peptide level
 
-       @param fwd_ids forward peptide identifications
-       @param rev_ids reverse peptide identifications
+       @param[in,out] fwd_ids forward peptide identifications
+       @param[in,out] rev_ids reverse peptide identifications
     */
     void apply(PeptideIdentificationList& fwd_ids, PeptideIdentificationList& rev_ids) const;
 
     /**
-    @brief Calculates the FDR of one run from a concatenated sequence DB search.    
+    @brief Calculates the FDR of one run from a concatenated sequence DB search.
 
-    @param id peptide identifications, containing target and decoy hits
-    @param annotate_peptide_fdr adds the peptide q-value or peptide fdr meta value to each PSM. Calculation uses best PSM per peptide.
+    @param[in,out] id peptide identifications, containing target and decoy hits
+    @param[in] annotate_peptide_fdr adds the peptide q-value or peptide fdr meta value to each PSM. Calculation uses best PSM per peptide.
     */
     void apply(PeptideIdentificationList& id, bool annotate_peptide_fdr = false) const;
 
     /**
     @brief Calculates the FDR of two runs, a forward run and decoy run on protein level
 
-    @param fwd_ids forward protein identifications
-    @param rev_ids reverse protein identifications
+    @param[in,out] fwd_ids forward protein identifications
+    @param[in,out] rev_ids reverse protein identifications
     */
     void apply(std::vector<ProteinIdentification>& fwd_ids, std::vector<ProteinIdentification>& rev_ids) const;
 
     /**
     @brief Calculate the FDR of one run from a concatenated sequence db search
 
-    @param ids protein identifications, containing target and decoy hits
+    @param[in,out] ids protein identifications, containing target and decoy hits
     */
     void apply(std::vector<ProteinIdentification>& ids) const;
 
     /**
     @brief Calculate the FDR based on PEPs or PPs (if present) and modifies the IDs inplace
 
-    @param ids protein identifications, containing PEP scores (not necessarily) annotated with target decoy.
+    @param[in,out] ids protein identifications, containing PEP scores (not necessarily) annotated with target decoy.
     */
     void applyEstimated(std::vector<ProteinIdentification>& ids) const;
 
@@ -98,20 +98,20 @@ public:
     @brief Calculate a linear combination of the area of the difference in estimated vs. empirical (TD) FDR
      and the ROC-N value (AUC up to first N false positives).
 
-    @param ids protein identifications, containing PEP scores annotated with target decoy. Only first run will be evaluated.
-    @param pepCutoff up to which PEP should the differences between the two FDRs be calculated
-    @param fpCutoff up to which nr. of false positives should the target-decoy AUC be evaluated
-    @param diffWeight which weight should the difference get. The ROC-N value gets 1 - this weight.
+    @param[in] ids protein identifications, containing PEP scores annotated with target decoy. Only first run will be evaluated.
+    @param[in] pepCutoff up to which PEP should the differences between the two FDRs be calculated
+    @param[in] fpCutoff up to which nr. of false positives should the target-decoy AUC be evaluated
+    @param[in] diffWeight which weight should the difference get. The ROC-N value gets 1 - this weight.
     */
     double applyEvaluateProteinIDs(const std::vector<ProteinIdentification>& ids, double pepCutoff = 1.0, UInt fpCutoff = 50, double diffWeight = 0.2) const;
     /**
     @brief Calculate a linear combination of the area of the difference in estimated vs. empirical (TD) FDR
      and the ROC-N value (AUC up to first N false positives).
 
-    @param ids protein identifications, containing PEP scores annotated with target decoy.
-    @param pepCutoff up to which PEP should the differences between the two FDRs be calculated
-    @param fpCutoff up to which nr. of false positives should the target-decoy AUC be evaluated
-    @param diffWeight which weight should the difference get. The ROC-N value gets 1 - this weight.
+    @param[in] ids protein identifications, containing PEP scores annotated with target decoy.
+    @param[in] pepCutoff up to which PEP should the differences between the two FDRs be calculated
+    @param[in] fpCutoff up to which nr. of false positives should the target-decoy AUC be evaluated
+    @param[in] diffWeight which weight should the difference get. The ROC-N value gets 1 - this weight.
     */
     double applyEvaluateProteinIDs(const ProteinIdentification& ids, double pepCutoff = 1.0, UInt fpCutoff = 50, double diffWeight = 0.2) const;
 
@@ -119,10 +119,10 @@ public:
     @brief Calculate a linear combination of the area of the difference in estimated vs. empirical (TD) FDR
      and the ROC-N value (AUC up to first N false positives).
 
-    @param score_to_tgt_dec_fraction_pairs extracted scores of protein(group) identifications, containing PEP scores annotated with target decoy fractions. Simple case target=1, decoy=0.
-    @param pepCutoff up to which PEP should the differences between the two FDRs be calculated
-    @param fpCutoff up to which nr. of false positives should the target-decoy AUC be evaluated
-    @param diffWeight which weight should the difference get. The ROC-N value gets 1 - this weight.
+    @param[in,out] score_to_tgt_dec_fraction_pairs extracted scores of protein(group) identifications, containing PEP scores annotated with target decoy fractions. Simple case target=1, decoy=0.
+    @param[in] pepCutoff up to which PEP should the differences between the two FDRs be calculated
+    @param[in] fpCutoff up to which nr. of false positives should the target-decoy AUC be evaluated
+    @param[in] diffWeight which weight should the difference get. The ROC-N value gets 1 - this weight.
     */
     double applyEvaluateProteinIDs(ScoreToTgtDecLabelPairs& score_to_tgt_dec_fraction_pairs, double pepCutoff = 1.0, UInt fpCutoff = 50, double diffWeight = 0.2) const;
 
@@ -130,7 +130,7 @@ public:
     void applyBasic(const std::vector<ProteinIdentification> & run_info, PeptideIdentificationList & ids);
 
     /// simpler reimplementation of the apply function above for PSMs or peptides.
-    void applyBasic(PeptideIdentificationList & ids, bool higher_score_better, int charge = 0, String identifier = "", bool only_best_per_pep = false);
+    void applyBasic(PeptideIdentificationList & ids, bool higher_score_better, int charge = 0, std::string identifier = "", bool only_best_per_pep = false);
     /// like applyBasic with "only_best_per_peptide" but it assigns a score to EVERY PSM sharing the peptide sequence with the
     /// best representative. Useful if all hits need to have a peptide score (e.g., for mzTab report). No support for specific charges, runs etc. yet
     void applyBasicPeptideLevel(PeptideIdentificationList & ids);
@@ -151,7 +151,7 @@ public:
      * @p groups_too decides if also a (indistinguishable) group-level FDR will be calculated. Here a group score
      * will be taken if not ALL proteins in the group were picked already. Targets preferred.
      */
-    void applyPickedProteinFDR(ProteinIdentification& id, String decoy_string = "", bool prefix = true, bool groups_too = true);
+    void applyPickedProteinFDR(ProteinIdentification& id, std::string decoy_string = "", bool prefix = true, bool groups_too = true);
 
     /// calculates the AUC until the first fp_cutoff False positive pep IDs (currently only takes all runs together)
     /// if fp_cutoff = 0, it will calculate the full AUC
@@ -159,7 +159,7 @@ public:
 
     /// calculates the AUC until the first fp_cutoff False positive pep IDs (currently only takes all runs together)
     /// if fp_cutoff = 0, it will calculate the full AUC. Restricted to IDs from a specific ID run.
-    double rocN(const PeptideIdentificationList& ids, Size fp_cutoff, const String& identifier) const;
+    double rocN(const PeptideIdentificationList& ids, Size fp_cutoff, const std::string& identifier) const;
 
     /// calculates the AUC until the first @p fp_cutoff False positive pep IDs (takes all runs together)
     /// if fp_cutoff = 0, it will calculate the full AUC
@@ -167,7 +167,7 @@ public:
 
     /// calculates the AUC until the first @p fp_cutoff False positive pep IDs.
     /// if fp_cutoff = 0, it will calculate the full AUC. Restricted to IDs from a specific ID run with @p identifier.
-    double rocN(const ConsensusMap& ids, Size fp_cutoff, const String& identifier, bool include_unassigned_peptides = false) const;
+    double rocN(const ConsensusMap& ids, Size fp_cutoff, const std::string& identifier, bool include_unassigned_peptides = false) const;
 
     //TODO the next two methods could potentially be merged for speed (they iterate over the same structure)
     //But since they have different cutoff types and it is more generic, I leave it like this.
@@ -181,8 +181,8 @@ public:
     /**
        @brief Calculate FDR on the level of observation matches (e.g. peptide-spectrum matches) for "general" identification data
 
-       @param id_data Identification data
-       @param score_ref Key of the score to use for FDR calculation
+       @param[in,out] id_data Identification data
+       @param[in] score_ref Key of the score to use for FDR calculation
 
        @return Key of the FDR score
     */
@@ -200,14 +200,14 @@ public:
       struct Result
       {
         bool success; ///< did more than 30% of proteins have the *same* prefix or suffix
-        String name; ///< on success, what was the decoy string?
+        std::string name; ///< on success, what was the decoy string?
         bool is_prefix; ///< on success, was it a prefix or suffix
       };
 
       /**
        * @brief Finds the most common decoy string in the accessions of @p proteins. Checks for suffix and prefix and
        * some common decoy strings. Only successful if more than 30% had a common string.
-       * @param proteins Input proteins with accessions
+       * @param[in] proteins Input proteins with accessions
        * @return A @struct Result
        */
       static Result findDecoyString(const ProteinIdentification& proteins);

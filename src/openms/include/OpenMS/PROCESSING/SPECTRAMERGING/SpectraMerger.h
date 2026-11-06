@@ -221,7 +221,7 @@ public:
           // keep the first Precursor
           if (pcs.empty())
           {
-            throw Exception::MissingInformation(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, String("Scan #") + String(i) + " does not contain any precursor information! Unable to cluster!");
+            throw Exception::MissingInformation(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,"Scan #" + StringUtils::toStr(i) + " does not contain any precursor information! Unable to cluster!");
           }
           if (pcs.size() > 1)
           {
@@ -288,10 +288,10 @@ public:
     /**
      * @brief check if the first and second mzs might be from the same mass
      *
-     * @param mz1 the first m/z value
-     * @param mz2 the second m/z value
-     * @param tol_ppm tolerance in ppm
-     * @param max_c maximum possible charge value
+     * @param[in] mz1 the first m/z value
+     * @param[in] mz2 the second m/z value
+     * @param[in] tol_ppm tolerance in ppm
+     * @param[in] max_c maximum possible charge value
      */
     static bool areMassesMatched(double mz1, double mz2, double tol_ppm, int max_c)
     {
@@ -340,12 +340,12 @@ public:
     /**
      * @brief average over neighbouring spectra
      *
-     * @param exp experimental data to be averaged
-     * @param average_type averaging type to be used ("gaussian" or "tophat")
-     * @param ms_level target MS level. If it is -1, ms_level will be determined by the '&lt;average_type&gt;ms_level' parameter of the DefaultParamHandler
+     * @param[in,out] exp experimental data to be averaged
+     * @param[in] average_type averaging type to be used ("gaussian" or "tophat")
+     * @param[in] ms_level target MS level. If it is -1, ms_level will be determined by the '&lt;average_type&gt;ms_level' parameter of the DefaultParamHandler
      */
     template <typename MapType>
-    void average(MapType& exp, const String& average_type, int ms_level = -1)
+    void average(MapType& exp, const std::string& average_type, int ms_level = -1)
     {
       // MS level to be averaged
       if (ms_level < 0)
@@ -537,11 +537,11 @@ public:
       }
       else if (spectrum_type == "profile")
       {
-        type = SpectrumSettings::PROFILE;
+        type = SpectrumSettings::SpectrumType::PROFILE;
       }
       else if (spectrum_type == "centroid")
       {
-        type = SpectrumSettings::CENTROID;
+        type = SpectrumSettings::SpectrumType::CENTROID;
       }
       else
       {
@@ -549,7 +549,7 @@ public:
       }
 
       // generate new spectra
-      if (type == SpectrumSettings::CENTROID)
+      if (type == SpectrumSettings::SpectrumType::CENTROID)
       {
         averageCentroidSpectra_(exp, spectra_to_average_over, ms_level);
       }
@@ -624,7 +624,7 @@ protected:
 
         count_peaks_overall += consensus_spec.size();
 
-        String consensus_native_id = consensus_spec.getNativeID();
+        std::string consensus_native_id = consensus_spec.getNativeID();
 
         // block elements
         for (auto sit = it->second.begin(); sit != it->second.end(); ++sit)
@@ -731,16 +731,16 @@ protected:
       }
 
       char buffer[200];
-      sprintf(buffer, "%d/%d (%.2f %%) of blocked spectra", (int)count_peaks_aligned,
+      std::snprintf(buffer, sizeof(buffer), "%d/%d (%.2f %%) of blocked spectra", (int)count_peaks_aligned,
               (int)count_peaks_overall, float(count_peaks_aligned) / float(count_peaks_overall) * 100.);
-      OPENMS_LOG_INFO << "Number of merged peaks: " << String(buffer) << "\n";
+      OPENMS_LOG_INFO << "Number of merged peaks: " << std::string(buffer) << "\n";
 
       // remove all spectra that were within a cluster
       typename MapType::SpectrumType empty_spec;
       MapType exp_tmp;
       for (Size i = 0; i < exp.size(); ++i)
       {
-        if (merged_indices.count(i) == 0) // save unclustered ones
+        if (!merged_indices.contains(i)) // save unclustered ones
         {
           exp_tmp.addSpectrum(exp[i]);
           exp[i] = empty_spec;
@@ -774,9 +774,9 @@ protected:
      * original spectra. The exact m/z position is not crucial, since not the
      * original intensities but the spline-interpolated intensities are used.
      *
-     * @param exp   experimental data to be averaged
-     * @param spectra_to_average_over    mapping of spectral index to set of spectra to average over with corresponding weights
-     * @param ms_level    MS level of spectra to be averaged
+     * @param[in,out] exp   experimental data to be averaged
+     * @param[in] spectra_to_average_over    mapping of spectral index to set of spectra to average over with corresponding weights
+     * @param[in] ms_level    MS level of spectra to be averaged
      */
     template <typename MapType>
     void averageProfileSpectra_(MapType& exp, const AverageBlocks& spectra_to_average_over, const UInt ms_level)
@@ -883,9 +883,9 @@ protected:
      * (2) m/z positions closer than mz_binning_width are combined to a single
      *     peak. The m/z are averaged and the corresponding intensities summed.
      *
-     * @param exp   experimental data to be averaged
-     * @param spectra_to_average_over    mapping of spectral index to set of spectra to average over with corresponding weights
-     * @param ms_level    MS level of spectra to be averaged
+     * @param[in,out] exp   experimental data to be averaged
+     * @param[in] spectra_to_average_over    mapping of spectral index to set of spectra to average over with corresponding weights
+     * @param[in] ms_level    MS level of spectra to be averaged
      */
     template <typename MapType>
     void averageCentroidSpectra_(MapType& exp, const AverageBlocks& spectra_to_average_over, const UInt ms_level)

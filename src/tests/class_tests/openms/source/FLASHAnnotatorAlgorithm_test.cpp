@@ -81,7 +81,7 @@ START_SECTION((static double binomialTailScore(int n, int k, double p)))
 }
 END_SECTION
 
-START_SECTION((static double getProteoformMass(const String& sequence, const std::vector<Modification>& modifications)))
+START_SECTION((static double getProteoformMass(const std::string& sequence, const std::vector<Modification>& modifications)))
 {
   TOLERANCE_ABSOLUTE(1e-3)
   std::vector<FLASHAnnotatorAlgorithm::Modification> mods;
@@ -92,7 +92,7 @@ START_SECTION((static double getProteoformMass(const String& sequence, const std
 }
 END_SECTION
 
-const String sequence = "AEIYNKDGNKVDLYGKAVGLHYFSKGNGENSYGGNGDMTY"; // 40 residues
+const std::string sequence = "AEIYNKDGNKVDLYGKAVGLHYFSKGNGENSYGGNGDMTY"; // 40 residues
 FLASHAnnotatorAlgorithm::PrSM prsm;
 prsm.sequence = sequence;
 prsm.precursor_charge = 3;

@@ -25,13 +25,13 @@ public:
      */
     //@{
     /// Mutable iterator
-    typedef std::vector<String>::iterator Iterator;
+    typedef std::vector<std::string>::iterator Iterator;
     /// Non-mutable iterator
-    typedef std::vector<String>::const_iterator ConstIterator;
+    typedef std::vector<std::string>::const_iterator ConstIterator;
     /// Mutable reverse iterator
-    typedef std::vector<String>::reverse_iterator ReverseIterator;
+    typedef std::vector<std::string>::reverse_iterator ReverseIterator;
     /// Non-mutable reverse iterator
-    typedef std::vector<String>::const_reverse_iterator ConstReverseIterator;
+    typedef std::vector<std::string>::const_reverse_iterator ConstReverseIterator;
     //@}
 
 
@@ -44,51 +44,53 @@ public:
     /**
       @brief Constructor with filename
 
-      @param filename The input file name
-      @param trim_lines Whether or not the lines are trimmed when reading them from file
-      @param first_n If set, only @p first_n lines the lines from the beginning of the file are read
-      @param skip_empty_lines Should empty lines be skipped? If used in conjunction with @p trim_lines, also lines with only whitespace will be skipped. Skipped lines do not count towards the total number of read lines.
-      @param comment_symbol Lines prefixed with this string are skipped. Comment lines do not count towards the total number of read lines.
+      @param[in] filename The input file name
+      @param[in] trim_lines Whether or not the lines are trimmed when reading them from file
+      @param[in] first_n If set, only @p first_n lines the lines from the beginning of the file are read
+      @param[in] skip_empty_lines Should empty lines be skipped? If used in conjunction with @p trim_lines, also lines with only whitespace will be skipped. Skipped lines do not count towards the total number of read lines.
+      @param[in] comment_symbol Lines prefixed with this string are skipped. Comment lines do not count towards the total number of read lines.
       @exception Exception::FileNotFound is thrown if the file could not be opened.
     */
-    TextFile(const String& filename, bool trim_lines = false, Int first_n = -1, bool skip_empty_lines = false, const String& comment_symbol = "");
+    TextFile(const std::string& filename, bool trim_lines = false, Int first_n = -1, bool skip_empty_lines = false, const std::string& comment_symbol = "");
 
     /**
       @brief Loads data from a text file into the internal buffer.
 
       Retrieve the data using begin() and end().
 
-      @param filename The input file name
-      @param trim_lines Whether or not the lines are trimmed when reading them from file
-      @param first_n If set, only @p first_n lines the lines from the beginning of the file are read
-      @param skip_empty_lines Should empty lines be skipped? If used in conjunction with @p trim_lines, also lines with only whitespace will be skipped. Skipped lines do not count towards the total number of read lines.
-      @param comment_symbol Lines prefixed with this string are skipped. Comment lines do not count towards the total number of read lines.
+      @param[in] filename The input file name
+      @param[in] trim_lines Whether or not the lines are trimmed when reading them from file
+      @param[in] first_n If set, only @p first_n lines the lines from the beginning of the file are read
+      @param[in] skip_empty_lines Should empty lines be skipped? If used in conjunction with @p trim_lines, also lines with only whitespace will be skipped. Skipped lines do not count towards the total number of read lines.
+      @param[in] comment_symbol Lines prefixed with this string are skipped. Comment lines do not count towards the total number of read lines.
 
       @exception Exception::FileNotFound is thrown if the file could not be opened.
     */
-    void load(const String& filename, bool trim_lines = false, Int first_n = -1, bool skip_empty_lines = false, const String& comment_symbol = "");
+    void load(const std::string& filename, bool trim_lines = false, Int first_n = -1, bool skip_empty_lines = false, const std::string& comment_symbol = "");
 
     /**
       @brief Writes the data to a file
+
+      @param[in] filename The output file name
 
       @note This function uses platform-dependent line breaks
 
       @exception Exception::UnableToCreateFile is thrown if the file could not be created
     */
-    void store(const String& filename);
+    void store(const std::string& filename);
 
     /// Operator for appending entries with less code
     template <typename StringType>
     TextFile& operator<<(const StringType& string)
     {
-      buffer_.push_back(static_cast<String>(string));
+      buffer_.push_back(static_cast<std::string>(string));
       return *this;
     }
 
     template <typename StringType>
     void addLine(const StringType& line)
     {
-      buffer_.push_back(static_cast<String>(line));
+      buffer_.push_back(static_cast<std::string>(line));
     }
 
     /**
@@ -114,7 +116,7 @@ public:
 
 protected:
     /// Internal buffer storing the lines before writing them to the file.
-    std::vector<String> buffer_;
+    std::vector<std::string> buffer_;
   };
 
 } // namespace OpenMS

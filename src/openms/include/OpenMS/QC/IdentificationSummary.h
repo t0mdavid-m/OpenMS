@@ -54,8 +54,8 @@ namespace OpenMS
     /**
    @brief computes a summary of an idXML file
 
-   @param prot_ids vector with ProteinIdentifications
-   @param pep_ids vector with PeptideIdentifications
+   @param[in] prot_ids vector with ProteinIdentifications
+   @param[in] pep_ids vector with PeptideIdentifications
    @return result object with summary values:
            total number of PSM (peptide_spectrum_matches),
            number of identified peptides with given FDR threshold (unique_peptides),
@@ -67,11 +67,11 @@ namespace OpenMS
    **/
     Result compute(std::vector<ProteinIdentification>& prot_ids, PeptideIdentificationList& pep_ids);
 
-    const String& getName() const override;
+    const std::string& getName() const override;
 
     QCBase::Status requirements() const override;
 
   private:
-    const String name_ = "Summary of detected Proteins and Peptides from idXML file";
+    const std::string name_ = "Summary of detected Proteins and Peptides from idXML file";
   };
 } // namespace OpenMS

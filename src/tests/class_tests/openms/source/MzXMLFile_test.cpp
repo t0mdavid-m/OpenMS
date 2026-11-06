@@ -7,6 +7,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/CONCEPT/ClassTest.h>
+#include <OpenMS/TestFileValidation.h>
 #include <OpenMS/test_config.h>
 
 ///////////////////////////
@@ -98,7 +99,7 @@ START_SECTION(PeakFileOptions& getOptions())
 }
 END_SECTION
 
-START_SECTION((template<typename MapType> void load(const String& filename, MapType& map) ))
+START_SECTION((template<typename MapType> void load(const std::string& filename, MapType& map) ))
 {
   TOLERANCE_ABSOLUTE(0.01)
 
@@ -166,12 +167,12 @@ START_SECTION((template<typename MapType> void load(const String& filename, MapT
   TEST_STRING_EQUAL(e.getSourceFiles()[0].getPathToFile(), "");
   TEST_STRING_EQUAL(e.getSourceFiles()[0].getFileType(), "RAWData");
   TEST_STRING_EQUAL(e.getSourceFiles()[0].getChecksum(), "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12");
-  TEST_EQUAL(e.getSourceFiles()[0].getChecksumType(),SourceFile::SHA1)
+  TEST_EQUAL(e.getSourceFiles()[0].getChecksumType(),SourceFile::ChecksumType::SHA1)
     TEST_STRING_EQUAL(e.getSourceFiles()[1].getNameOfFile(), "File_test_2.raw");
   TEST_STRING_EQUAL(e.getSourceFiles()[1].getPathToFile(), "");
   TEST_STRING_EQUAL(e.getSourceFiles()[1].getFileType(), "processedData");
   TEST_STRING_EQUAL(e.getSourceFiles()[1].getChecksum(), "2fd4e1c67a2d28fced849ee1bb76e7391b93eb13");
-  TEST_EQUAL(e.getSourceFiles()[1].getChecksumType(),SourceFile::SHA1)
+  TEST_EQUAL(e.getSourceFiles()[1].getChecksumType(),SourceFile::ChecksumType::SHA1)
 
     //---------------------------------------------------------------------------
     // data processing (assigned to each spectrum)
@@ -212,21 +213,21 @@ START_SECTION((template<typename MapType> void load(const String& filename, MapT
     TEST_EQUAL(inst.getName(), "")
     TEST_EQUAL(inst.getCustomizations(), "")
     TEST_EQUAL(inst.getIonSources().size(),1)
-    TEST_EQUAL(inst.getIonSources()[0].getIonizationMethod(), IonSource::ESI)
-    TEST_EQUAL(inst.getIonSources()[0].getInletType(), IonSource::INLETNULL)
-    TEST_EQUAL(inst.getIonSources()[0].getPolarity(), IonSource::POLNULL)
+    TEST_EQUAL(inst.getIonSources()[0].getIonizationMethod(), IonSource::IonizationMethod::ESI)
+    TEST_EQUAL(inst.getIonSources()[0].getInletType(), IonSource::InletType::INLETNULL)
+    TEST_EQUAL(inst.getIonSources()[0].getPolarity(), IonSource::Polarity::POLNULL)
     TEST_EQUAL(inst.getIonDetectors().size(),1)
-    TEST_EQUAL(inst.getIonDetectors()[0].getType(), IonDetector::FARADAYCUP)
+    TEST_EQUAL(inst.getIonDetectors()[0].getType(), IonDetector::Type::FARADAYCUP)
     TEST_REAL_SIMILAR(inst.getIonDetectors()[0].getResolution(), 0.0f)
     TEST_REAL_SIMILAR(inst.getIonDetectors()[0].getADCSamplingFrequency(), 0.0f)
-    TEST_EQUAL(inst.getIonDetectors()[0].getAcquisitionMode(), IonDetector::ACQMODENULL)
+    TEST_EQUAL(inst.getIonDetectors()[0].getAcquisitionMode(), IonDetector::AcquisitionMode::ACQMODENULL)
     TEST_EQUAL(inst.getMassAnalyzers().size(), 1)
-    TEST_EQUAL(inst.getMassAnalyzers()[0].getType(), MassAnalyzer::PAULIONTRAP)
-    TEST_EQUAL(inst.getMassAnalyzers()[0].getResolutionMethod(), MassAnalyzer::FWHM)
-    TEST_EQUAL(inst.getMassAnalyzers()[0].getResolutionType(), MassAnalyzer::RESTYPENULL)
-    TEST_EQUAL(inst.getMassAnalyzers()[0].getScanDirection(), MassAnalyzer::SCANDIRNULL)
-    TEST_EQUAL(inst.getMassAnalyzers()[0].getScanLaw(), MassAnalyzer::SCANLAWNULL)
-    TEST_EQUAL(inst.getMassAnalyzers()[0].getReflectronState(), MassAnalyzer::REFLSTATENULL)
+    TEST_EQUAL(inst.getMassAnalyzers()[0].getType(), MassAnalyzer::AnalyzerType::PAULIONTRAP)
+    TEST_EQUAL(inst.getMassAnalyzers()[0].getResolutionMethod(), MassAnalyzer::ResolutionMethod::FWHM)
+    TEST_EQUAL(inst.getMassAnalyzers()[0].getResolutionType(), MassAnalyzer::ResolutionType::RESTYPENULL)
+    TEST_EQUAL(inst.getMassAnalyzers()[0].getScanDirection(), MassAnalyzer::ScanDirection::SCANDIRNULL)
+    TEST_EQUAL(inst.getMassAnalyzers()[0].getScanLaw(), MassAnalyzer::ScanLaw::SCANLAWNULL)
+    TEST_EQUAL(inst.getMassAnalyzers()[0].getReflectronState(), MassAnalyzer::ReflectronState::REFLSTATENULL)
     TEST_EQUAL(inst.getMassAnalyzers()[0].getResolution(), 0.0f)
     TEST_EQUAL(inst.getMassAnalyzers()[0].getAccuracy(), 0.0f)
     TEST_EQUAL(inst.getMassAnalyzers()[0].getScanRate(), 0.0f)
@@ -255,7 +256,7 @@ START_SECTION((template<typename MapType> void load(const String& filename, MapT
     //---------------------------------------------------------------------------
     TEST_EQUAL(e.getSample().getName(), "")
     TEST_EQUAL(e.getSample().getNumber(), "")
-    TEST_EQUAL(e.getSample().getState(), Sample::SAMPLENULL)
+    TEST_EQUAL(e.getSample().getState(), Sample::SampleState::SAMPLENULL)
     TEST_EQUAL(e.getSample().getMass(), 0.0f)
     TEST_EQUAL(e.getSample().getVolume(), 0.0f)
     TEST_EQUAL(e.getSample().getConcentration(), 0.0f)
@@ -566,7 +567,7 @@ START_SECTION(([EXTRA] load/store for nested scans))
 }
 END_SECTION
 
-START_SECTION((template<typename MapType> void store(const String& filename, const MapType& map) const ))
+START_SECTION((template<typename MapType> void store(const std::string& filename, const MapType& map) const ))
 {
   std::string tmp_filename;
   PeakMap e1, e2;
@@ -582,7 +583,7 @@ START_SECTION((template<typename MapType> void store(const String& filename, con
 }
 END_SECTION
 
-START_SECTION([EXTRA] static bool isValid(const String& filename))
+START_SECTION([EXTRA] static bool isValid(const std::string& filename))
 {
   std::string tmp_filename;
   MzXMLFile f;
@@ -598,12 +599,12 @@ START_SECTION([EXTRA] static bool isValid(const String& filename))
 }
 END_SECTION
 
-START_SECTION(void transform(const String& filename_in, Interfaces::IMSDataConsumer * consumer, bool skip_full_count = false))
+START_SECTION(void transform(const std::string& filename_in, Interfaces::IMSDataConsumer * consumer, bool skip_full_count = false))
 {
   // Create the consumer, set output file name, transform
   TICConsumer consumer;
   MzXMLFile f;
-  String in = OPENMS_GET_TEST_DATA_PATH("MzXMLFile_1.mzXML");
+  std::string in = OPENMS_GET_TEST_DATA_PATH("MzXMLFile_1.mzXML");
 
   PeakFileOptions opt = f.getOptions();
   opt.setFillData(true); // whether to actually load any data
@@ -619,13 +620,13 @@ START_SECTION(void transform(const String& filename_in, Interfaces::IMSDataConsu
 }
 END_SECTION
 
-START_SECTION(void transform(const String& filename_in, Interfaces::IMSDataConsumer * consumer, MapType& map, bool skip_full_count = false) )
+START_SECTION(void transform(const std::string& filename_in, Interfaces::IMSDataConsumer * consumer, MapType& map, bool skip_full_count = false) )
 {
   // Create the consumer, set output file name, transform
   TICConsumer consumer;
   MzXMLFile f;
   PeakMap map;
-  String in = OPENMS_GET_TEST_DATA_PATH("MzXMLFile_1.mzXML");
+  std::string in = OPENMS_GET_TEST_DATA_PATH("MzXMLFile_1.mzXML");
 
   PeakFileOptions opt = f.getOptions();
   opt.setFillData(true); // whether to actually load any data
@@ -645,4 +646,7 @@ END_SECTION
 
 /////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////
+/// check the temporary files written above against their XML schema (types without a validator are skipped)
+VALIDATE_TMP_FILES
+
 END_TEST

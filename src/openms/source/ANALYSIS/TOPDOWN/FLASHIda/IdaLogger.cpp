@@ -1005,7 +1005,7 @@ namespace OpenMS
     pooled_stream_.flush();
   }
 
-  std::map<int, std::vector<std::vector<float>>> IdaLogger::parseFLASHIdaLog(const String& in_log_file)
+  std::map<int, std::vector<std::vector<float>>> IdaLogger::parseFLASHIdaLog(const std::string& in_log_file)
   {
     std::map<int, std::vector<std::vector<float>>>
       precursor_map_for_real_time_acquisition; // ms1 scan -> mass, charge ,score, mz range, precursor int, mass int, color
@@ -1024,7 +1024,7 @@ namespace OpenMS
     std::ifstream instream(in_log_file);
     if (instream.good())
     {
-      String line;
+      std::string line;
       int scan = -1;   // no MS1 header seen yet; a Mass= line before one is not attributable
       float mass, charge, w1, w2, qscore, pint, mint, z1, z2;
       float features[6];
@@ -1036,11 +1036,11 @@ namespace OpenMS
         // carries eight "- 10 targets" headers and one "- 20 targets". Each was silently dropped,
         // and its Mass= rows then landed under the PREVIOUS header's scan key.
         if (line.find(" 0 targets") != line.npos) { continue; }
-        if (line.hasPrefix("MS1"))
+        if (StringUtils::hasPrefix(line, "MS1"))
         {
           Size st = line.find("MS1 Scan# ") + 10;
           Size ed = line.find(' ', st);
-          String n = line.substr(st, ed);
+          std::string n = line.substr(st, ed);
           scan = atoi(n.c_str());
           precursor_map_for_real_time_acquisition[scan]
             = std::vector<std::vector<float>>(); //// ms1 scan -> mass, charge ,score, mz range, precursor int, mass int, color
@@ -1049,12 +1049,12 @@ namespace OpenMS
         // uninitialised here, so such a row was filed under whatever the stack held. Must sit AFTER
         // the MS1 block (which assigns `scan`) and BEFORE the Mass block. "AllMass=" does not have
         // the prefix "Mass", so this cannot swallow the AllMass line.
-        if (line.hasPrefix("Mass") && scan < 0) { continue; }
-        if (line.hasPrefix("Mass"))
+        if (StringUtils::hasPrefix(line, "Mass") && scan < 0) { continue; }
+        if (StringUtils::hasPrefix(line, "Mass"))
         {
           Size st = 5;
           Size ed = line.find('\t');
-          String n = line.substr(st, ed);
+          std::string n = line.substr(st, ed);
           mass = (float)atof(n.c_str());
 
           st = line.find("Z=") + 2;

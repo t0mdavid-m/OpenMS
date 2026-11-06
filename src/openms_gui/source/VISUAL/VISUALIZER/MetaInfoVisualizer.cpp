@@ -8,6 +8,7 @@
 
 //OpenMS
 #include <OpenMS/VISUAL/VISUALIZER/MetaInfoVisualizer.h>
+#include <OpenMS/VISUAL/MISC/Qt5Port.h>
 
 //QT
 #include <QtWidgets/QGridLayout>
@@ -70,9 +71,9 @@ namespace OpenMS
 
     finishAdding_();
 
-    connect(buttongroup_, SIGNAL(buttonClicked(int)), this, SLOT(remove_(int)));
-    connect(addbutton_, SIGNAL(clicked()), this, SLOT(add_()));
-    connect(clearbutton_, SIGNAL(clicked()), this, SLOT(clear_()));
+    connect(buttongroup_, &QButtonGroup::idClicked, this, &MetaInfoVisualizer::remove_);
+    connect(addbutton_, &QPushButton::clicked, this, &MetaInfoVisualizer::add_);
+    connect(clearbutton_, &QPushButton::clicked, this, &MetaInfoVisualizer::clear_);
   }
 
   //----------------------------------------------------------------------------
@@ -179,12 +180,12 @@ namespace OpenMS
 
   void MetaInfoVisualizer::add_()
   {
-    String name(newkey_->text());
-    String description(newdescription_->text());
-    String value(newvalue_->text());
+    std::string name(fromQString(newkey_->text()));
+    std::string description(fromQString(newdescription_->text()));
+    std::string value(fromQString(newvalue_->text()));
 
 
-    if (name.trim().length() == 0)    //Must have a name
+    if (StringUtils::trim(name).length() == 0)    //Must have a name
     {
       return;
     }
@@ -230,7 +231,7 @@ namespace OpenMS
     for (iter2 = metainfoptr_.begin(); iter2 < metainfoptr_.end(); ++iter2)
     {
       UInt index = (*iter2).first;
-      String value(((*iter2).second)->text());
+      std::string value(fromQString(((*iter2).second)->text()));
       temp_.setMetaValue(index, value);
     }
     //copy temporary stored data into metainfo object

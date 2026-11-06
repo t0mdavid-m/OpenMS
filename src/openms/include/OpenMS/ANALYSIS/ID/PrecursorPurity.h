@@ -11,11 +11,14 @@
 #include <OpenMS/KERNEL/StandardTypes.h>
 #include <OpenMS/CONCEPT/Types.h>
 #include <OpenMS/KERNEL/MSExperiment.h>
+#include <unordered_map>
 #include <vector>
 
 
 namespace OpenMS
 {
+  class AASequence;
+
   /**
       @brief Precursor purity or noise estimation
 
@@ -49,22 +52,22 @@ namespace OpenMS
        This is the main function of this class. See class description.
        Note: Spectra annotated with charge 0 will be treated as charge 1.       
 
-     * @param spectra A PeakMap containing MS1 and MS2 spectra in order of acquisition or measurement. The first spectrum must be an MS1.
-     * @param precursor_mass_tolerance The precursor tolerance. Is used for determining the targeted peak and deisotoping.
-     * @param precursor_mass_tolerance_unit_ppm The unit of the precursor tolerance
-     * @param ignore_missing_precursor_spectra Allow MS2 spectra without a MS1 precursor spectrum (PurityScores for these spectra will be 0).
+     * @param[in] spectra A PeakMap containing MS1 and MS2 spectra in order of acquisition or measurement. The first spectrum must be an MS1.
+     * @param[out] precursor_mass_tolerance The precursor tolerance. Is used for determining the targeted peak and deisotoping.
+     * @param[in] precursor_mass_tolerance_unit_ppm The unit of the precursor tolerance
+     * @param[in] ignore_missing_precursor_spectra Allow MS2 spectra without a MS1 precursor spectrum (PurityScores for these spectra will be 0).
     */
-    static std::map<String, PurityScores> computePrecursorPurities(const PeakMap& spectra, double precursor_mass_tolerance, bool precursor_mass_tolerance_unit_ppm, bool ignore_missing_precursor_spectra = false);
+    static std::unordered_map<std::string, PurityScores> computePrecursorPurities(const PeakMap& spectra, double precursor_mass_tolerance, bool precursor_mass_tolerance_unit_ppm, bool ignore_missing_precursor_spectra = false);
 
     /** @brief compute precursor purity metrics for one MS2 precursor
 
        @note This function is implemented in a general way and can also be used for e.g. MS3 precursor isolation windows in MS2 spectra.
              Spectra annotated with charge 0 will be treated as charge 1.
 
-      @param ms1 The Spectrum containing the isolation window
-      @param pre The precursor containing the definition the isolation window
-      @param precursor_mass_tolerance The precursor tolerance. Is used for determining the targeted peak and deisotoping.
-      @param precursor_mass_tolerance_unit_ppm The unit of the precursor tolerance
+      @param[in] ms1 The Spectrum containing the isolation window
+      @param[in] pre The precursor containing the definition the isolation window
+      @param[out] precursor_mass_tolerance The precursor tolerance. Is used for determining the targeted peak and deisotoping.
+      @param[in] precursor_mass_tolerance_unit_ppm The unit of the precursor tolerance
     */
     static PurityScores computePrecursorPurity(const PeakSpectrum& ms1, const Precursor& pre, const double precursor_mass_tolerance, const bool precursor_mass_tolerance_unit_ppm);
 
@@ -74,10 +77,10 @@ namespace OpenMS
      * Extracts with fuzzy boundaries around expected isotopes where it only considers 50% of the intensity of the peak as belonging to the target.
      * Warning: Does neither check if the relationship between those spectra make sense nor that all precursors windows in @p ms2_spec_idx even come from the same spectrum.
      * 
-     * @param ms2_spec_idx index for the spectrum holding the precursor information
-     * @param precursor_spec_idx index for the precursor spectrum to extract the intensities from
-     * @param exp the MSExperiment holding the spectra to look them up
-     * @param max_precursor_isotope_deviation the maximum allowed deviation for the precursor isotopes in ppm
+     * @param[in] ms2_spec_idx index for the spectrum holding the precursor information
+     * @param[in] precursor_spec_idx index for the precursor spectrum to extract the intensities from
+     * @param[in] exp the MSExperiment holding the spectra to look them up
+     * @param[in] max_precursor_isotope_deviation the maximum allowed deviation for the precursor isotopes in ppm
      * @return std::vector<double> precursor intensity vs. total intensity for every precursor window in @p ms2_spec_idx
      */
     static std::vector<double> computeSingleScanPrecursorPurities(int ms2_spec_idx, int precursor_spec_idx, const MSExperiment & exp, double max_precursor_isotope_deviation);
@@ -93,14 +96,31 @@ namespace OpenMS
      * @note If @p next_ms1_spec_idx is out of range, does not refer to an MS1 spectrum, or the RT denominator is zero/invalid,
      *       the function will fall back to returning the early scan purity (from @p precursor_spec_idx) without interpolation.
      *
-     * @param ms2_spec_idx index for the spectrum holding the precursor information
-     * @param precursor_spec_idx index for the precursor spectrum to extract the intensities from
-     * @param next_ms1_spec_idx index for the next parent type spectrum to extract the intensities from
-     * @param exp the MSExperiment holding the spectra to look them up
-     * @param max_precursor_isotope_deviation the maximum allowed deviation for the precursor isotopes in ppm
+     * @param[in] ms2_spec_idx index for the spectrum holding the precursor information
+     * @param[in] precursor_spec_idx index for the precursor spectrum to extract the intensities from
+     * @param[in] next_ms1_spec_idx index for the next parent type spectrum to extract the intensities from
+     * @param[in] exp the MSExperiment holding the spectra to look them up
+     * @param[in] max_precursor_isotope_deviation the maximum allowed deviation for the precursor isotopes in ppm
      * @return std::vector<double> precursor intensity vs. total intensity for every precursor window in @p ms2_spec_idx
      */
     static std::vector<double> computeInterpolatedPrecursorPurity(int ms2_spec_idx, int precursor_spec_idx, int next_ms1_spec_idx, const MSExperiment & exp, double max_precursor_isotope_deviation);
+
+    /**
+     * @brief Counts how many SPS precursor windows of an MS3 spectrum contain a fragment ion of the identified peptide.
+     *
+     * In an SPS-MS3 (Synchronous Precursor Selection) experiment, several fragment ions of the MS2 spectrum are
+     * co-isolated and fragmented together to produce the MS3 (reporter) scan. This function counts how many of these
+     * selected precursor windows (the Precursor objects of the MS3 spectrum) correspond to a theoretical b- or y-ion
+     * of the identified peptide, i.e. how many of the SPS ions originate from true fragments of the peptide.
+     *
+     * @param[in] sps_precursors The list of Precursor objects (SPS windows) of the MS3 spectrum
+     * @param[in] peptide The identified peptide sequence used to generate theoretical b/y fragment ions
+     * @param[in] fragment_mass_tolerance The tolerance for matching a precursor m/z to a theoretical fragment m/z
+     * @param[in] fragment_mass_tolerance_unit_ppm The unit of the fragment mass tolerance (true = ppm, false = Da)
+     * @param[in] max_fragment_charge The maximum fragment ion charge state to consider (values < 1 are treated as 1)
+     * @return the number of SPS precursor windows matching a theoretical b/y fragment ion of the peptide
+     */
+    static Size countSPSPrecursorsMatchingPeptideFragments(const std::vector<Precursor>& sps_precursors, const AASequence& peptide, double fragment_mass_tolerance, bool fragment_mass_tolerance_unit_ppm, int max_fragment_charge = 1);
 
   private:
     // simple helper to combine the metrics contained in two PurityScores

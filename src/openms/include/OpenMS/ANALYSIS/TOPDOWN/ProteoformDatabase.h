@@ -9,7 +9,7 @@
 #pragma once
 
 #include <OpenMS/CONCEPT/Types.h>
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
 #include <cstdint>
 #include <map>
@@ -49,8 +49,8 @@ public:
   {
     int position = 0;  ///< residue in the entry, 0-based
     double mass = 0;   ///< monoisotopic mass shift
-    String accession;  ///< MOD:nnnnn or UNIMOD:n
-    String name;
+    std::string accession;  ///< MOD:nnnnn or UNIMOD:n
+    std::string name;
     int kind = 1;      ///< 1 side chain, 2 N-terminal, 3 C-terminal (the forms it is used in)
     int sites = 1;     ///< the sites of the residue it occupies, as bits: 1 side chain, 2 alpha-amino, 4 alpha-carboxyl group
     int bond = -1;     ///< a half cystine of a disulfide bond: the residue of the other one, in the entry (0-based); else -1
@@ -62,15 +62,15 @@ public:
     Size protein = 0;  ///< index into proteins
     int offset = 0;    ///< residues of the protein before the form
     int length = 0;    ///< residues of the form
-    String id;         ///< identifier and form range, e.g. "sp|P69776|LPP_ECOLI 21-78"
-    String proforma;   ///< the form with its fixed modifications (empty: not written in ProForma, e.g. with X)
+    std::string id;         ///< identifier and form range, e.g. "sp|P69776|LPP_ECOLI 21-78"
+    std::string proforma;   ///< the form with its fixed modifications (empty: not written in ProForma, e.g. with X)
     std::vector<FixedModification> fixed; ///< ascending by position
   };
 
   /// a protein: its full-length sequence and its entries
   struct DatabaseProtein
   {
-    String identifier, description, sequence;
+    std::string identifier, description, sequence;
     bool decoy = false;
     long partner = -1;        ///< the target-decoy partner (index into proteins), -1: none
     std::vector<Size> entries; ///< indices into entries, ascending
@@ -89,8 +89,8 @@ public:
     Size empty_sequences = 0;             ///< entries without residues (left out)
     Size unpaired_decoys = 0;             ///< decoys in the file without a target (or a second decoy of one)
     Size unmirrored_decoys = 0;           ///< decoys in the file whose entries differ from their target's (count or masses)
-    std::map<String, Size> unresolved;    ///< accession -> sites skipped (no mass, or skipped by mod_masses)
-    std::map<String, Size> wrong_residue; ///< accession -> sites skipped (the residue is not the modification's origin)
+    std::map<std::string, Size> unresolved;    ///< accession -> sites skipped (no mass, or skipped by mod_masses)
+    std::map<std::string, Size> wrong_residue; ///< accession -> sites skipped (the residue is not the modification's origin)
   };
 
   ProteoformDatabase() = default;
@@ -100,7 +100,7 @@ public:
   static ProteoformDatabase fromFASTA(const std::vector<FASTAFile::FASTAEntry>& fasta_entries);
 
   /// whether @p file is a PEFF file: its first line starts with "# PEFF", or its name ends with .peff
-  static bool isPEFF(const String& file);
+  static bool isPEFF(const std::string& file);
 
   /**
     @brief read a PEFF file and enumerate its entries
@@ -109,10 +109,10 @@ public:
     @param mod_masses masses by accession that replace (or, "skip", leave out) those of ModificationsDB, e.g. "MOD:01819=100.016044"
     @param fasta_entries output: per entry, the protein's identifier and description and the form's letters
   */
-  void loadPEFF(const String& file, int max_mods, const std::vector<String>& mod_masses, std::vector<FASTAFile::FASTAEntry>& fasta_entries);
+  void loadPEFF(const std::string& file, int max_mods, const std::vector<std::string>& mod_masses, std::vector<FASTAFile::FASTAEntry>& fasta_entries);
 
   /// the entries of a parsed PEFF (or FASTA) entry list, as loadPEFF makes them from its file; for tests and callers that read the file themselves
-  void build(const std::vector<FASTAFile::FASTAEntry>& input, int max_mods, const std::vector<String>& mod_masses,
+  void build(const std::vector<FASTAFile::FASTAEntry>& input, int max_mods, const std::vector<std::string>& mod_masses,
              std::vector<FASTAFile::FASTAEntry>& fasta_entries);
 
   /// one entry per protein, at offset 0 over its whole length, without fixed modifications (a FASTA search)
@@ -153,12 +153,12 @@ public:
   }
 
   /// FNV-1a 64 of the bytes of @p s (the decoy seed)
-  static std::uint64_t fnv1a64(const String& s);
+  static std::uint64_t fnv1a64(const std::string& s);
 
   /// the ProForma tag of a fixed modification: its mass with its accession as an alternative, e.g. "+42.010565|MOD:00064". The mass comes
   /// first: PSI-MOD's own DiffMono can differ from the mass searched (MOD:00083 trimethyl-K: 43.054775 for the charged form, 42.04695 for a
   /// neutral mass; or none in the bundled PSI-MOD), so a reader outside OpenMS gets the mass that was searched.
-  static String proformaTag(const String& accession, double mass);
+  static std::string proformaTag(const std::string& accession, double mass);
 
   std::vector<ProteoformEntry> entries;
   std::vector<DatabaseProtein> proteins;

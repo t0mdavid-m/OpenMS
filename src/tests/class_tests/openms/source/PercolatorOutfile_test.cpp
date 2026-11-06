@@ -39,25 +39,25 @@ START_SECTION(~PercolatorOutfile())
 END_SECTION
 
 
-START_SECTION(enum ScoreType getScoreType(String score_type_name))
+START_SECTION(ScoreType getScoreType(std::string score_type_name))
 {
   TEST_EQUAL(PercolatorOutfile::getScoreType("qvalue"),
-             PercolatorOutfile::QVALUE);
+             PercolatorOutfile::ScoreType::QVALUE);
   TEST_EQUAL(PercolatorOutfile::getScoreType("q-value"),
-             PercolatorOutfile::QVALUE);
+             PercolatorOutfile::ScoreType::QVALUE);
   TEST_EQUAL(PercolatorOutfile::getScoreType("PEP"),
-             PercolatorOutfile::POSTERRPROB);
+             PercolatorOutfile::ScoreType::POSTERRPROB);
   TEST_EQUAL(PercolatorOutfile::getScoreType("Posterior Error Probability"),
-             PercolatorOutfile::POSTERRPROB);
+             PercolatorOutfile::ScoreType::POSTERRPROB);
   TEST_EQUAL(PercolatorOutfile::getScoreType("score"),
-             PercolatorOutfile::SCORE);
+             PercolatorOutfile::ScoreType::SCORE);
 }
 END_SECTION
 
-START_SECTION(void load(const String& filename, ProteinIdentification& proteins,
-                        PeptideIdentificationList& peptides, 
+START_SECTION(void load(const std::string& filename, ProteinIdentification& proteins,
+                        PeptideIdentificationList& peptides,
                         SpectrumMetaDataLookup& lookup,
-                        enum ScoreType output_score))
+                        ScoreType output_score))
 {
   // mock-up raw data like those used for the search:
   vector<MSSpectrum> spectra(3);
@@ -75,10 +75,10 @@ START_SECTION(void load(const String& filename, ProteinIdentification& proteins,
   SpectrumMetaDataLookup lookup;
   lookup.readSpectra(spectra, ""); // no native IDs set, so don't parse them
 
-  String filename = OPENMS_GET_TEST_DATA_PATH("PercolatorOutfile_test.psms");
+  std::string filename = OPENMS_GET_TEST_DATA_PATH("PercolatorOutfile_test.psms");
   ProteinIdentification proteins;
   PeptideIdentificationList peptides;
-  file.load(filename, proteins, peptides, lookup, PercolatorOutfile::SCORE);
+  file.load(filename, proteins, peptides, lookup, PercolatorOutfile::ScoreType::SCORE);
 
   TEST_EQUAL(proteins.getHits().size(), 3);
   TEST_STRING_EQUAL(proteins.getHits()[0].getAccession(), "Protein1");

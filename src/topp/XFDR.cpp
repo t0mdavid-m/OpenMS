@@ -11,7 +11,11 @@
 #include <OpenMS/FORMAT/HANDLERS/XMLHandler.h>
 #include <OpenMS/FORMAT/XQuestResultXMLFile.h>
 #include <OpenMS/FORMAT/FileHandler.h>
+#include <OpenMS/CONCEPT/LogStream.h>
+#include <OpenMS/METADATA/PeptideIdentificationList.h>
+#include <OpenMS/METADATA/ProteinIdentification.h>
 #include <OpenMS/ANALYSIS/XLMS/XFDRAlgorithm.h>
+#include <OpenMS/DATASTRUCTURES/ListUtils.h>
 
 #include <cassert>
 
@@ -61,7 +65,7 @@ public TOPPBase
 public:
 
   TOPPXFDR() :
-    TOPPBase("XFDR", "Calculates false discovery rate estimates on crosslink identifications", true)
+    TOPPBase("XFDR", "Calculates false discovery rate estimates on crosslink identifications")
   {
   }
 
@@ -71,7 +75,7 @@ protected:
   // it gets automatically called on tool execution
   void registerOptionsAndFlags_() final
   {
-    StringList formats = ListUtils::create<String>("xml,idXML,mzid,xquest.xml");
+    StringList formats = ListUtils::create<std::string>("xml,idXML,mzid,xquest.xml");
 
     // File input
     registerInputFile_(TOPPXFDR::param_in_, "<file>", "", "Crosslink Identifications in either xquest.xml, idXML, or mzIdentML format (as produced by OpenPepXL)", false);
@@ -83,15 +87,15 @@ protected:
 
     // idXML output
     registerOutputFile_(TOPPXFDR::param_out_idXML_, "<idXML_file>", "", "Output as idXML file", false, false);
-    setValidFormats_(TOPPXFDR::param_out_idXML_, ListUtils::create<String>("idXML"));
+    setValidFormats_(TOPPXFDR::param_out_idXML_, ListUtils::create<std::string>("idXML"));
 
     // mzIdentML output
     registerOutputFile_(TOPPXFDR::param_out_mzid_, "<mzIdentML_file>", "", "Output as mzIdentML file", false, false);
-    setValidFormats_(TOPPXFDR::param_out_mzid_, ListUtils::create<String>("mzid"));
+    setValidFormats_(TOPPXFDR::param_out_mzid_, ListUtils::create<std::string>("mzid"));
 
     // xquest.xml output
     registerOutputFile_(TOPPXFDR::param_out_xquest_, "<xQuestXML_file>", "", "Output as xquest.xml file", false, false);
-    setValidFormats_(TOPPXFDR::param_out_xquest_, ListUtils::create<String>("xquest.xml"));
+    setValidFormats_(TOPPXFDR::param_out_xquest_, ListUtils::create<std::string>("xquest.xml"));
 
     registerFullParam_(XFDRAlgorithm().getDefaults());
   }
@@ -111,13 +115,13 @@ protected:
     XFDRAlgorithm fdr_algorithm;
     Param this_param = getParam_().copy("", true);
     Param algo_param = fdr_algorithm.getParameters();
-    algo_param.update(this_param, false, OpenMS_Log_debug); // suppress param. update message
+    algo_param.update(this_param, false, getGlobalLogDebug()); // suppress param. update message
     fdr_algorithm.setParameters(algo_param);
     fdr_algorithm.setLogType(this->log_type_);
 
     // TODO use this code? or just run the function?
     XFDRAlgorithm::ExitCodes class_arg_validation_code = fdr_algorithm.validateClassArguments();
-    if (class_arg_validation_code == XFDRAlgorithm::ILLEGAL_PARAMETERS)
+    if (class_arg_validation_code == XFDRAlgorithm::ExitCodes::ILLEGAL_PARAMETERS)
     {
       logFatal("Invalid input parameters!");
       return ILLEGAL_PARAMETERS;
@@ -163,17 +167,17 @@ protected:
 
 private:
 
-  String arg_out_idXML_;
-  String arg_out_mzid_;
-  String arg_out_xquest_;
-  String arg_in_;
-  String arg_in_type_;
+  std::string arg_out_idXML_;
+  std::string arg_out_mzid_;
+  std::string arg_out_xquest_;
+  std::string arg_in_;
+  std::string arg_in_type_;
 
-  static const String param_in_;
-  static const String param_in_type_;
-  static const String param_out_idXML_;
-  static const String param_out_mzid_;
-  static const String param_out_xquest_;
+  static const std::string param_in_;
+  static const std::string param_in_type_;
+  static const std::string param_out_idXML_;
+  static const std::string param_out_mzid_;
+  static const std::string param_out_xquest_;
 
   void loadArguments_()
   {
@@ -196,8 +200,8 @@ private:
      const Size n_pep_ids = peptide_ids.size();
      const Size n_prot_ids = protein_ids.size();
 
-     writeLogInfo_("Number of Peptide IDs in input file: " + String(n_pep_ids));
-     writeLogInfo_("Number of Protein IDs in input file: " + String(n_prot_ids));
+     writeLogInfo_("Number of Peptide IDs in input file: " + StringUtils::toStr(n_pep_ids));
+     writeLogInfo_("Number of Protein IDs in input file: " + StringUtils::toStr(n_prot_ids));
 
      // Terminate if no hits could be found
      if (n_pep_ids == 0)
@@ -217,7 +221,7 @@ private:
      return EXECUTION_OK;
   }
 
-  void logFatal(const String &message) const
+  void logFatal(const std::string &message) const
   {
     OPENMS_LOG_ERROR << "FATAL: " << message << " Terminating now!" << std::endl;
   }
@@ -228,10 +232,10 @@ private:
     {
       logFatal(
               "No output file specified. You must at least specify one output with -"
-              + String(TOPPXFDR::param_out_idXML_)
-              + " or -" + String(TOPPXFDR::param_out_mzid_)
-              + " or -" + String(TOPPXFDR::param_out_xquest_)
-              + " or -" + String(TOPPXFDR::param_out_xquest_)
+              + std::string(TOPPXFDR::param_out_idXML_)
+              + " or -" + std::string(TOPPXFDR::param_out_mzid_)
+              + " or -" + std::string(TOPPXFDR::param_out_xquest_)
+              + " or -" + std::string(TOPPXFDR::param_out_xquest_)
       );
       return ILLEGAL_PARAMETERS;
     }
@@ -246,11 +250,11 @@ private:
 };
 
 
-const String TOPPXFDR::param_in_ = "in";
-const String TOPPXFDR::param_in_type_ = "in_type";
-const String TOPPXFDR::param_out_idXML_ = "out_idXML";
-const String TOPPXFDR::param_out_mzid_ = "out_mzIdentML";
-const String TOPPXFDR::param_out_xquest_ = "out_xquest";
+const std::string TOPPXFDR::param_in_ = "in";
+const std::string TOPPXFDR::param_in_type_ = "in_type";
+const std::string TOPPXFDR::param_out_idXML_ = "out_idXML";
+const std::string TOPPXFDR::param_out_mzid_ = "out_mzIdentML";
+const std::string TOPPXFDR::param_out_xquest_ = "out_xquest";
 
 
 // the actual main function needed to create an executable

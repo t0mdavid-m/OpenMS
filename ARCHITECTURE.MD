@@ -62,52 +62,31 @@ TOPP consists of comprehensive suite of command-line tools built on top of the O
   - Development of custom data processing workflows
   - Interactive data analysis and visualization in Jupyter notebooks
 
-#### pyOpenMS Generation with Autowrap
+#### pyOpenMS Binding Architecture
 
-The Python bindings for OpenMS are generated through a specialized process:
+The Python bindings for OpenMS are hand-maintained using [nanobind](https://github.com/wjakob/nanobind), a lightweight C++17 binding library:
 
-- **Autowrap Tool**: A custom Python tool developed specifically for generating OpenMS bindings. ([README](https://github.com/OpenMS/autowrap/blob/master/docs/README.md)).
-- **Declaration Process**:
-  - Developers declare classes and functions to be exposed to Python in `.pxd` files located in the `pxds/` directory
-  - These declarations specify the function signatures and class hierarchies
-- **Code Generation Workflow**:
-  1. Autowrap reads the declarations and automatically generates wrapping code
-  2. Manual wrapper code can be added in the `addons/` folder for functionality that can't be wrapped automatically
-  3. The output is a `pyopenms.pyx` file in the `pyopenms/` directory
-  4. Cython translates this `.pyx` file to C++ code (`pyopenms.cpp`)
-  5. A C++ compiler compiles this code into a Python module importable via `import pyopenms`
-- **Customization Points**:
-  - Special annotations like `wrap-ignore`, `wrap-as`, `wrap-iter-begin`, etc. can be used to customize the wrapping process
-  - Allows for fine-grained control over how C++ classes and methods are exposed to Python
-- **Complex C++ Features**: Autowrap handles many advanced C++ features automatically (with some caveats):
-  - Operator overloading (e.g., implementing Python's `__add__`, `__getitem__`)
-  - Complex template instantiations
-  - Multiple inheritance scenarios
-  - Static methods and variables
+- **Binding Files**: Located in `src/pyOpenMS/bindings/bind_*.cpp`, organized by domain (kernel, format, analysis, etc.)
+- **Module Split**: 13 domain-based nanobind modules compiled in parallel for fast builds
+- **Type Casters**: Custom nanobind type casters in `bindings/type_casters/` handle C++ ↔ Python type conversion
+- **Addon System**: Pure Python methods in `pyopenms/addons/` are injected into wrapped classes at import time for Pythonic interfaces
+- **DataFrame Wrappers**: Optional pandas integration in `pyopenms/_dataframes.py`
 
-#### Manual Extensions with PYX Files
+#### Python Extensions
 
-While autowrap handles most standard C++ to Python wrapping automatically, manual PYX files (in the `addons/` directory) enable advanced functionality that goes beyond simple wrapping:
+The addon system (`pyopenms/addons/`) enables functionality beyond direct C++ wrapping:
 
 - **Python-Specific Enhancements**:
   - Adding Pythonic interfaces to C++ classes
-  - Custom exception handling and translation between C++ and Python exceptions
   - Implementing Python protocols (e.g., iteration, context managers)
 
 - **Performance Optimizations**:
-  - Custom memory management
-  - Efficient data conversion between NumPy arrays and OpenMS data structures
-  - Specialized handling for large datasets
+  - Efficient data conversion between NumPy arrays and OpenMS data structures via nanobind ndarray support
+  - Zero-copy data access where possible
 
 - **Integration with Python Ecosystem**:
   - Converters to/from pandas DataFrames
-  - Matplotlib visualization helpers
-  - Integration with scientific Python libraries
-
-- **Extension Methods**: Adding methods that exist only in Python and not in the C++ API, such as:
-  - Convenience functions for common operations
-  - Python-specific utility methods
-  - Simplified interfaces for complex C++ functionality
+  - Integration with scientific Python libraries (NumPy, SciPy)
 
 ## Data Flow and Processing Workflow
 
@@ -169,7 +148,7 @@ The OpenMS architecture is designed for extensibility at multiple levels:
 
 ### Workflow Customization
 - Users can combine OpenMS tools with custom scripts (e.g., via pyOpenMS)
-- Support for workflow systems like KNIME and Galaxy
+- Support for workflow systems like Nextflow and Galaxy
 - Parameter files (INI format) for tool configuration and chaining
 - TOPPAS workflow editor for visual pipeline construction
 
@@ -292,26 +271,39 @@ The OpenMS codebase follows a structured organization:
 ```
 OpenMS/
 ├── cmake/                   # CMake build system files and modules
-├── contrib/                 # Third-party dependencies
 ├── doc/                     # Documentation files
 ├── share/                   # Shared resources
 ├── src/                     # Source code
 │   ├── openms/              # Core OpenMS library
+│   ├── openms_cli/          # TOPP tool framework (TOPPBase, ToolHandler, ...)
 │   ├── openms_gui/          # GUI components
 │   ├── openswathalgo/       # OpenSWATH algorithms
 │   ├── pyOpenMS/            # Python bindings
-│   │   ├── pxds/            # Class declarations for autowrap
-│   │   ├── addons/          # Manual wrapping code
-│   │   ├── pyopenms/        # Generated Python module
+│   │   ├── bindings/        # nanobind C++ binding files (bind_*.cpp)
+│   │   ├── pyopenms/        # Python module (addons, DataFrames, etc.)
 │   │   └── tests/           # Tests for Python bindings
 │   ├── tests/               # C++ tests
 │   │   ├── class_tests/     # Unit tests for classes
 │   │   │   ├── openms/      # Tests for core library
+│   │   │   ├── openms_cli/  # Tests for the TOPP tool framework
 │   │   │   └── openms_gui/  # Tests for GUI components
 │   │   └── topp/            # Tests for TOPP tools
 │   └── topp/                # TOPP tools implementation
-└── tools/                   # Development tools and scripts
+├── tools/                   # Development tools and scripts
+├── vcpkg/                   # vcpkg package manager (git submodule)
+├── vcpkg-overlays/          # vcpkg overlay ports and triplets
+├── CMakePresets.json        # CMake presets (configure with vcpkg per platform and build type)
+├── vcpkg.json               # vcpkg manifest: third-party dependencies and optional features
+└── vcpkg-configuration.json # vcpkg registry baseline and overlay locations
 ```
+
+Third-party dependencies are obtained through vcpkg in manifest mode. `vcpkg.json` lists the required
+libraries and, as manifest features, the optional ones that go with a `WITH_*` or `USE_EXTERNAL_*` CMake
+option. `vcpkg-overlays/ports` holds ports that are missing from the vcpkg registry or need patches, and
+`vcpkg-overlays/triplets` the custom triplets. The presets in `CMakePresets.json` set `OPENMS_USE_VCPKG=ON`,
+select the vcpkg toolchain and a triplet per platform and build type, and build into `build/<preset>/`.
+CMake finds the libraries in `cmake/cmake_findExternalLibs.cmake`, which also works against system
+packages when vcpkg is not used. Qt is not part of the manifest and comes from the system or the Qt installer.
 
 ## Contributing
 

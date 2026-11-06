@@ -4,8 +4,10 @@ set(directory source/MATH/MISC)
 ### list all filenames of the directory here
 set(sources_list
 BSpline2d.cpp
+BSplineSmoothingSpline.cpp
 CubicSpline2d.cpp
 EmgGradientDescent.cpp
+LinearResampling.cpp
 SplineBisection.cpp
 )
 

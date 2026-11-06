@@ -7,10 +7,13 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/ListUtils.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 #include <OpenMS/KERNEL/MSExperiment.h>
 #include <OpenMS/KERNEL/FeatureMap.h>
 #include <OpenMS/FORMAT/FileHandler.h>
+#include <OpenMS/METADATA/PeptideIdentificationList.h>
+#include <OpenMS/METADATA/ProteinIdentification.h>
 #include <OpenMS/KERNEL/ConsensusMap.h>
 
 using namespace OpenMS;
@@ -71,9 +74,10 @@ The output file specified by the user determines which output file format will b
 
 // We do not want this class to show up in the docu:
 /// @cond TOPPCLASSES
-
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wshadow"
+#ifdef __clang__
+  #pragma clang diagnostic push
+  #pragma clang diagnostic ignored "-Wshadow"
+#endif
 
 class TOPPQCCalculator :
   public TOPPBase
@@ -82,7 +86,6 @@ public:
   TOPPQCCalculator() :
     TOPPBase("QCCalculator", 
       "Calculates basic quality parameters from MS experiments and subsequent analysis data as identification or feature detection.", 
-      true, 
       {{ "Walzer M, Pernas LE, Nasso S, Bittremieux W, Nahnsen S, Kelchtermans P,  Martens, L", 
          "qcML: An Exchange Format for Quality Control Metrics from Mass Spectrometry Experiments", 
          "Molecular & Cellular Proteomics 2014; 13(8)" , "10.1074/mcp.M113.035907"
@@ -94,7 +97,7 @@ protected:
   void registerOptionsAndFlags_() override
   {
     registerInputFile_("in", "<file>", "", "raw data input file (this is relevant if you want to look at MS1, MS2 and precursor peak information)");
-    setValidFormats_("in", ListUtils::create<String>("mzML"));
+    setValidFormats_("in", ListUtils::create<std::string>("mzML"));
     registerOutputFile_("out", "<file>", "", "Your QC file.");
     setValidFormats_("out", {"mzQC", "qcML"});
     registerStringOption_("out_type", "<type>", "", "Output file type -- default: determined from file extension or content", false);
@@ -104,26 +107,26 @@ protected:
     registerStringOption_("address", "<contact_address>", "", "contact address (mail/e-mail or phone)", false);
     registerStringOption_("description", "<description>", "", "description and comments about the mzQC file contents", false);
     registerInputFile_("id", "<file>", "", "Input idXML file containing the identifications. Your identifications will be exported in an easy-to-read format", false);
-    setValidFormats_("id", ListUtils::create<String>("idXML"));
+    setValidFormats_("id", ListUtils::create<std::string>("idXML"));
     registerInputFile_("feature", "<file>", "", "feature input file (this is relevant for most QC issues)", false);
-    setValidFormats_("feature", ListUtils::create<String>("featureXML"));
+    setValidFormats_("feature", ListUtils::create<std::string>("featureXML"));
     registerInputFile_("consensus", "<file>", "", "consensus input file (this is only used for charge state deconvoluted output. Use the consensusXML output form the DeCharger)", false);
-    setValidFormats_("consensus", ListUtils::create<String>("consensusXML"));
+    setValidFormats_("consensus", ListUtils::create<std::string>("consensusXML"));
     registerFlag_("remove_duplicate_features", "This flag should be set, if you work with a set of merged features.");
   }
 
   ExitCodes main_(int, const char**) override
   {
     // parsing parameters
-    String inputfile_id = getStringOption_("id");
-    String inputfile_feature = getStringOption_("feature");
-    String inputfile_consensus = getStringOption_("consensus");
-    String inputfile_name = getStringOption_("in");
-    String outputfile_name = getStringOption_("out");
-    String contact_name = getStringOption_("name");
-    String contact_address = getStringOption_("address");
-    String description = getStringOption_("description");
-    String label = getStringOption_("label");
+    std::string inputfile_id = getStringOption_("id");
+    std::string inputfile_feature = getStringOption_("feature");
+    std::string inputfile_consensus = getStringOption_("consensus");
+    std::string inputfile_name = getStringOption_("in");
+    std::string outputfile_name = getStringOption_("out");
+    std::string contact_name = getStringOption_("name");
+    std::string contact_address = getStringOption_("address");
+    std::string description = getStringOption_("description");
+    std::string label = getStringOption_("label");
     bool remove_duplicate_features(getFlag_("remove_duplicate_features"));
     
     // ensure output file hase valid extension
@@ -170,8 +173,9 @@ protected:
   }
 
 };
-
-#pragma clang diagnostic pop
+#ifdef __clang__
+  #pragma clang diagnostic pop
+#endif
 
 int main(int argc, const char** argv)
 {

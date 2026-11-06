@@ -10,8 +10,8 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
+#include <OpenMS/DATASTRUCTURES/ListUtils.h>
 #include <OpenMS/FORMAT/MzMLFile.h>
-#include <QFileInfo>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -85,11 +85,23 @@ using namespace std;
 class TOPPFLASHQuantConsensus : public TOPPBase
 {
 public:
-  TOPPFLASHQuantConsensus() : TOPPBase("FLASHQuantConsensus", "Quantification of FLASHDeconv features across runs, with match between runs.", false)
+  TOPPFLASHQuantConsensus() : TOPPBase("FLASHQuantConsensus", "Quantification of FLASHDeconv features across runs, with match between runs.")
   {
   }
 
 protected:
+  /// the file name without its path and its last suffix (as QFileInfo::completeBaseName)
+  static std::string completeBaseName_(const std::string& path)
+  {
+#ifdef OPENMS_WINDOWSPLATFORM
+    const std::string name = path.substr(path.find_last_of("\\/") + 1);
+#else
+    const std::string name = path.substr(path.find_last_of('/') + 1);
+#endif
+    const auto dot = name.rfind('.');
+    return dot == std::string::npos ? name : name.substr(0, dot);
+  }
+
   struct Feature
   {
     double mass, apex, start, end, aligned; // minutes
@@ -108,15 +120,15 @@ protected:
                            "The runs as given to FLASHDeconv: mzML files (centroided), or Thermo .raw files (recognised by their extension; read "
                            "with Thermo's peak picking, as ThermoRawFileParser converts them by default; needs OpenMS built with WITH_THERMO_RAW and "
                            "the .NET 8 runtime).", true);
-    setValidFormats_("in", ListUtils::create<String>("mzML,raw"));
+    setValidFormats_("in", ListUtils::create<std::string>("mzML,raw"));
     registerInputFileList_("in_feature", "<files>", {}, "FLASHDeconv feature tsv files (-out) of the runs, in the order of -in.", true);
-    setValidFormats_("in_feature", ListUtils::create<String>("tsv"));
+    setValidFormats_("in_feature", ListUtils::create<std::string>("tsv"));
     registerOutputFile_("out", "<file>", "", "Consensus feature tsv: per feature its mass, aligned apex and charges, and per run (named by the base name of its "
                         "-in file; a name two inputs share gets the run's position appended, _1, _2, ...) its abundance, "
                         "status (detected; mbr: a match between runs; mbr_id: one the run identifies, -in_id; or nan) and, for a match between "
                         "runs, its score (FLASHDeconv's Qscore2D of the mass, see above) and q-value (for mbr_id, that of the identified "
                         "transfers).", true);
-    setValidFormats_("out", ListUtils::create<String>("tsv"));
+    setValidFormats_("out", ListUtils::create<std::string>("tsv"));
     registerDoubleOption_("min_run_fraction", "<fraction>", 0.25, "Consensus features detected in at least this fraction of the runs are quantified in every run "
                           "(where not detected, by match between runs at -mbr_fdr). Lower values quantify more features, but their many weak transfers "
                           "raise the score threshold of all transfers (PXD042169: 0.25 doubled the quantified features over 0.5 at the same accuracy; "
@@ -128,7 +140,7 @@ protected:
                         "the feature's own mass error where detected (the reference of the mass errors) and its median abundance where detected; "
                         "fields not computed (no evidence with -mbr_fdr < 0, no decoy for a detected run) are empty. With -in_id, also whether the "
                         "run identifies the mass (Identified) and the decoy mass (DecoyIdentified) of a transfer.", false, true);
-    setValidFormats_("out_mbr_detail", ListUtils::create<String>("tsv"));
+    setValidFormats_("out_mbr_detail", ListUtils::create<std::string>("tsv"));
     registerDoubleOption_("mbr_fdr", "<fdr>", 0.01, "Match between runs: values are kept up to this FDR (target-decoy, see above); 1 keeps every "
                           "value, a negative value switches match between runs off (NaN where not detected).", false);
     registerInputFileList_("in_id", "<files>", {}, "Optional: FLASHTnT PrSM tsv files (-out_prsm) of the runs, in the order of -in. They mark the "
@@ -142,7 +154,7 @@ protected:
                            "other transfers are judged by FLASHDeconv's evidence without the kept identified ones among their targets: their "
                            "q-values are never lower than without identifications. Needs a FLASHTnT search of every run, with q-values (a "
                            "database with decoys). Without it, nothing changes.", false);
-    setValidFormats_("in_id", ListUtils::create<String>("tsv"));
+    setValidFormats_("in_id", ListUtils::create<std::string>("tsv"));
     registerOutputFile_("out_id", "<file>", "", "With -in_id: the identifications of the consensus features. One row per PrSM of -in_id "
                         "(target protein, not a decoy precursor, proteoform q-value <= -id_fdr) assigned to a consensus feature: the PrSM lies "
                         "in the feature's window in its run and its precursor mass is the feature's mass, or one isotope off, within "
@@ -150,7 +162,7 @@ protected:
                         "PrSM's PrSMIndex, Scan, RetentionTime, ProteinAccession, ProteinDescription, ProteoformIndex, Proforma, "
                         "ProteoformMass, PrecursorMass, ProteoformLevelQvalue, and the MassErrorPPM of the match (nearest isotope). "
                         "Detected runs and transfers alike; a feature without a row is not identified. Without it, nothing changes.", false);
-    setValidFormats_("out_id", ListUtils::create<String>("tsv"));
+    setValidFormats_("out_id", ListUtils::create<std::string>("tsv"));
     registerDoubleOption_("id_fdr", "<q-value>", 0.01, "With -in_id: the PrSMs used, by their proteoform-level q-value.", false);
     registerDoubleOption_("mbr_min_score", "<score>", 0.0, "Match between runs: transfers other than mbr_id (status mbr) are kept only with a "
                           "score (Qscore2D) at least this, besides -mbr_fdr; mbr_id ones always pass. The FDR says that the mass is "
@@ -166,35 +178,35 @@ protected:
   /// the identified masses of a FLASHTnT PrSM tsv, (retention time in s, mass), by retention time: target PrSMs (no DECOY accession, no
   /// decoy precursor) whose proteoform-level q-value is at most @p id_fdr (-1, a q-value not computed, is not used; counted in
   /// @p without_q); the mass is the precursor mass FLASHDeconv measured (the proteoform mass when there is none)
-  std::vector<std::pair<double, double>> readIdentifications_(const String& file, double id_fdr, Size& without_q) const
+  std::vector<std::pair<double, double>> readIdentifications_(const std::string& file, double id_fdr, Size& without_q) const
   {
     without_q = 0;
     std::ifstream in(file);
     std::string line;
     std::getline(in, line);
-    std::vector<String> header;
-    String(line).split('\t', header);
-    std::map<String, Size> col;
-    for (Size i = 0; i < header.size(); ++i) col[header[i].trim()] = i;
-    for (const String& c : {"RetentionTime", "ProteinAccession", "PrecursorMass", "ProteoformMass", "ProteoformLevelQvalue"})
+    std::vector<std::string> header;
+    StringUtils::split(line, '\t', header);
+    std::map<std::string, Size> col;
+    for (Size i = 0; i < header.size(); ++i) col[StringUtils::trim(header[i])] = i;
+    for (const std::string& c : {"RetentionTime", "ProteinAccession", "PrecursorMass", "ProteoformMass", "ProteoformLevelQvalue"})
     {
-      if (col.find(c) == col.end()) throw Exception::ParseError(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, file, String("no column ") + c);
+      if (col.find(c) == col.end()) throw Exception::ParseError(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, file, std::string("no column ") + c);
     }
     const auto decoy_weight = col.find("DecoyPrecursorWeight");
     std::vector<std::pair<double, double>> ids;
     while (std::getline(in, line))
     {
-      std::vector<String> v;
-      String(line).split('\t', v);
-      if (v.size() < header.size() || v[col["ProteinAccession"]].hasSubstring("DECOY")) continue;
+      std::vector<std::string> v;
+      StringUtils::split(line, '\t', v);
+      if (v.size() < header.size() || StringUtils::hasSubstring(v[col["ProteinAccession"]], "DECOY")) continue;
       // a decoy precursor PrSM keeps its target protein's accession (FLASHTnT -tnt:decoy_precursor with -tnt:keep_decoy)
-      if (decoy_weight != col.end() && !v[decoy_weight->second].trim().empty() && v[decoy_weight->second].toDouble() != 0) continue;
-      const double q = v[col["ProteoformLevelQvalue"]].trim().toDouble();
+      if (decoy_weight != col.end() && !StringUtils::trim(v[decoy_weight->second]).empty() && StringUtils::toDouble(v[decoy_weight->second]) != 0) continue;
+      const double q = StringUtils::toDouble(StringUtils::trim(v[col["ProteoformLevelQvalue"]]));
       if (q < 0) { ++without_q; continue; }
       if (q > id_fdr) continue;
-      double mass = v[col["PrecursorMass"]].toDouble();
-      if (!(mass > 0)) mass = v[col["ProteoformMass"]].toDouble();
-      if (mass > 0) ids.emplace_back(v[col["RetentionTime"]].toDouble(), mass);
+      double mass = StringUtils::toDouble(v[col["PrecursorMass"]]);
+      if (!(mass > 0)) mass = StringUtils::toDouble(v[col["ProteoformMass"]]);
+      if (mass > 0) ids.emplace_back(StringUtils::toDouble(v[col["RetentionTime"]]), mass);
     }
     std::sort(ids.begin(), ids.end());
     return ids;
@@ -204,40 +216,40 @@ protected:
   struct PrSM
   {
     double rt, mass; // seconds; the precursor mass FLASHDeconv measured (the proteoform mass when there is none)
-    std::vector<String> fields; // PrSMIndex, Scan, RetentionTime, ProteinAccession, ProteinDescription, ProteoformIndex, Proforma, ProteoformMass, PrecursorMass, ProteoformLevelQvalue
+    std::vector<std::string> fields; // PrSMIndex, Scan, RetentionTime, ProteinAccession, ProteinDescription, ProteoformIndex, Proforma, ProteoformMass, PrecursorMass, ProteoformLevelQvalue
   };
 
   /// the PrSMs of a FLASHTnT PrSM tsv that -out_id assigns: those readIdentifications_ uses (target protein, not a decoy precursor,
   /// proteoform-level q-value in [0, @p id_fdr]), with the columns -out_id reports (empty where the file has no such column)
-  std::vector<PrSM> readPrSMs_(const String& file, double id_fdr) const
+  std::vector<PrSM> readPrSMs_(const std::string& file, double id_fdr) const
   {
-    static const std::vector<String> reported = {"PrSMIndex", "Scan", "RetentionTime", "ProteinAccession", "ProteinDescription", "ProteoformIndex",
+    static const std::vector<std::string> reported = {"PrSMIndex", "Scan", "RetentionTime", "ProteinAccession", "ProteinDescription", "ProteoformIndex",
                                                  "Proforma", "ProteoformMass", "PrecursorMass", "ProteoformLevelQvalue"};
     std::ifstream in(file);
     std::string line;
     std::getline(in, line);
-    std::vector<String> header;
-    String(line).split('\t', header);
-    std::map<String, Size> col;
-    for (Size i = 0; i < header.size(); ++i) col[header[i].trim()] = i;
+    std::vector<std::string> header;
+    StringUtils::split(line, '\t', header);
+    std::map<std::string, Size> col;
+    for (Size i = 0; i < header.size(); ++i) col[StringUtils::trim(header[i])] = i;
     const auto decoy_weight = col.find("DecoyPrecursorWeight");
     std::vector<PrSM> prsms;
     while (std::getline(in, line))
     {
-      std::vector<String> v;
-      String(line).split('\t', v);
-      if (v.size() < header.size() || v[col["ProteinAccession"]].hasSubstring("DECOY")) continue;
-      if (decoy_weight != col.end() && !v[decoy_weight->second].trim().empty() && v[decoy_weight->second].toDouble() != 0) continue;
-      const double q = v[col["ProteoformLevelQvalue"]].trim().toDouble();
+      std::vector<std::string> v;
+      StringUtils::split(line, '\t', v);
+      if (v.size() < header.size() || StringUtils::hasSubstring(v[col["ProteinAccession"]], "DECOY")) continue;
+      if (decoy_weight != col.end() && !StringUtils::trim(v[decoy_weight->second]).empty() && StringUtils::toDouble(v[decoy_weight->second]) != 0) continue;
+      const double q = StringUtils::toDouble(StringUtils::trim(v[col["ProteoformLevelQvalue"]]));
       if (q < 0 || q > id_fdr) continue;
-      double mass = v[col["PrecursorMass"]].toDouble();
-      if (!(mass > 0)) mass = v[col["ProteoformMass"]].toDouble();
+      double mass = StringUtils::toDouble(v[col["PrecursorMass"]]);
+      if (!(mass > 0)) mass = StringUtils::toDouble(v[col["ProteoformMass"]]);
       if (!(mass > 0)) continue;
-      PrSM p{v[col["RetentionTime"]].toDouble(), mass, {}};
+      PrSM p{StringUtils::toDouble(v[col["RetentionTime"]]), mass, {}};
       for (const auto& c : reported)
       {
         const auto it = col.find(c);
-        p.fields.push_back(it == col.end() ? String("") : String(v[it->second]).trim());
+        p.fields.push_back(it == col.end() ? std::string("") : StringUtils::trimmed(v[it->second]));
       }
       prsms.push_back(p);
     }
@@ -245,31 +257,31 @@ protected:
   }
 
   /// the FLASHDeconv MS1 features of a feature tsv, and in @p source the mzML it was made from (its FileName column; empty without rows)
-  std::vector<Feature> readFeatures_(const String& file, String& source) const
+  std::vector<Feature> readFeatures_(const std::string& file, std::string& source) const
   {
     source.clear();
     std::ifstream in(file);
     std::string line;
     std::getline(in, line);
-    std::vector<String> header;
-    String(line).split('\t', header);
-    std::map<String, Size> col;
+    std::vector<std::string> header;
+    StringUtils::split(line, '\t', header);
+    std::map<std::string, Size> col;
     for (Size i = 0; i < header.size(); ++i) col[header[i]] = i;
-    for (const String& c : {"MSLevel", "MonoisotopicMass", "StartRetentionTime", "EndRetentionTime", "ApexRetentionTime", "MinCharge", "MaxCharge"})
+    for (const std::string& c : {"MSLevel", "MonoisotopicMass", "StartRetentionTime", "EndRetentionTime", "ApexRetentionTime", "MinCharge", "MaxCharge"})
     {
-      if (col.find(c) == col.end()) throw Exception::ParseError(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, file, String("no column ") + c);
+      if (col.find(c) == col.end()) throw Exception::ParseError(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, file, std::string("no column ") + c);
     }
     const auto decoy_col = col.find("IsDecoy"); // decoy features (FLASHDeconv with FDR reporting) are not features
     std::vector<Feature> features;
     while (std::getline(in, line))
     {
-      std::vector<String> v;
-      String(line).split('\t', v);
+      std::vector<std::string> v;
+      StringUtils::split(line, '\t', v);
       if (source.empty() && col.find("FileName") != col.end() && v.size() > col["FileName"]) source = v[col["FileName"]];
       if (v.size() < header.size() || v[col["MSLevel"]] != "1" || (decoy_col != col.end() && v[decoy_col->second] != "0")) continue;
-      features.push_back({v[col["MonoisotopicMass"]].toDouble(), v[col["ApexRetentionTime"]].toDouble(), v[col["StartRetentionTime"]].toDouble(),
-                          v[col["EndRetentionTime"]].toDouble(), v[col["ApexRetentionTime"]].toDouble(), v[col["MinCharge"]].toInt(),
-                          v[col["MaxCharge"]].toInt()});
+      features.push_back({StringUtils::toDouble(v[col["MonoisotopicMass"]]), StringUtils::toDouble(v[col["ApexRetentionTime"]]), StringUtils::toDouble(v[col["StartRetentionTime"]]),
+                          StringUtils::toDouble(v[col["EndRetentionTime"]]), StringUtils::toDouble(v[col["ApexRetentionTime"]]), StringUtils::toInt32(v[col["MinCharge"]]),
+                          StringUtils::toInt32(v[col["MaxCharge"]])});
     }
     return features;
   }
@@ -451,7 +463,7 @@ protected:
   ExitCodes main_(int, const char**) override
   {
     const StringList in = getStringList_("in"), in_feature = getStringList_("in_feature");
-    const String out = getStringOption_("out");
+    const std::string out = getStringOption_("out");
     const double min_fraction = getDoubleOption_("min_run_fraction"), mbr_fdr = getDoubleOption_("mbr_fdr"), mbr_min_score = getDoubleOption_("mbr_min_score");
     if (in.size() != in_feature.size() || in.empty())
     {
@@ -464,7 +476,7 @@ protected:
       OPENMS_LOG_ERROR << "-in_id needs one file per run (as -in), or none" << endl;
       return ILLEGAL_PARAMETERS;
     }
-    const String out_id = getStringOption_("out_id");
+    const std::string out_id = getStringOption_("out_id");
     if (!out_id.empty() && in_id.empty())
     {
       OPENMS_LOG_ERROR << "-out_id needs the identifications of the runs (-in_id)" << endl;
@@ -475,11 +487,11 @@ protected:
     bool positive_mode = false, negative_mode = false;
     for (Size r = 0; r < run_count; ++r)
     {
-      String source;
+      std::string source;
       runs[r] = readFeatures_(in_feature[r], source);
       // the feature table names the mzML FLASHDeconv read: a different name hints at files given in another order than -in
       // (a path written on Windows has backslashes, which QFileInfo on other systems does not split at)
-      const auto base_name = [](String path) { path.substitute('\\', '/'); return QFileInfo(path.toQString()).completeBaseName(); };
+      const auto base_name = [](std::string path) { StringUtils::substitute(path, '\\', '/'); return completeBaseName_(path); };
       if (!source.empty() && base_name(source) != base_name(in[r]))
       {
         OPENMS_LOG_WARN << "Warning: " << in_feature[r] << " was made from " << source << ", not from " << in[r] << " (the files of -in and -in_feature pair up by their order)" << endl;
@@ -810,8 +822,8 @@ protected:
     if (!in_id.empty() && mbr_fdr >= 0)
     {
       OPENMS_LOG_INFO << "Match between runs: identified transfers " << id_targets << ", identified decoy masses " << id_nulls
-                      << (id_targets == 0 ? String("")
-                          : String(": FDR ") + String(id_q) + (id_class ? " (kept: mbr_id)" : " (above -mbr_fdr: judged by FLASHDeconv's evidence like the others)"))
+                      << (id_targets == 0 ? std::string("")
+                          : std::string(": FDR ") + StringUtils::toStr(id_q) + (id_class ? " (kept: mbr_id)" : " (above -mbr_fdr: judged by FLASHDeconv's evidence like the others)"))
                       << endl;
     }
     // q-values: the FDR of a threshold T is (null scores >= T) / (target scores >= T) (one null per transfer); the q-value of a
@@ -847,7 +859,7 @@ protected:
 
     }
 
-    const String detail_out = getStringOption_("out_mbr_detail");
+    const std::string detail_out = getStringOption_("out_mbr_detail");
     if (!detail_out.empty())
     {
       std::ofstream ds(detail_out);
@@ -870,7 +882,7 @@ protected:
             // empty where not computed: no evidence with -mbr_fdr < 0, no decoy for a detected run
             const bool computed = mbr_fdr >= 0 && (kind == 0 || !detected);
             const auto& e = fd_evidence[k][r][kind];
-            if (kind == 1) ds << "\t" << (computed ? String(std::to_string(decoy_value[k][r])) : String(""));
+            if (kind == 1) ds << "\t" << (computed ? std::to_string(decoy_value[k][r]) : std::string(""));
             if (!computed)
             {
               ds << "\t\t\t\t";
@@ -878,12 +890,12 @@ protected:
             }
             ds << "\t" << std::to_string(e.qscore2d) << "\t" << std::to_string(e.max_qscore) << "\t" << e.scans << "\t" << std::to_string(e.ppm);
           }
-          ds << "\t" << (mbr_fdr >= 0 ? String(std::to_string(reference[k])) : String("")) << "\t" << std::to_string(det_median);
+          ds << "\t" << (mbr_fdr >= 0 ? std::to_string(reference[k]) : std::string("")) << "\t" << std::to_string(det_median);
           // with -in_id, for a transfer: 1 if its run identifies the mass (its decoy mass) in its window
           if (!in_id.empty())
           {
             const bool id_computed = mbr_fdr >= 0 && !detected;
-            ds << "\t" << (id_computed ? String(identified[k][r][0] ? "1" : "0") : String("")) << "\t" << (id_computed ? String(identified[k][r][1] ? "1" : "0") : String(""));
+            ds << "\t" << (id_computed ? std::string(identified[k][r][0] ? "1" : "0") : std::string("")) << "\t" << (id_computed ? std::string(identified[k][r][1] ? "1" : "0") : std::string(""));
           }
           ds << "\n";
         }
@@ -895,14 +907,14 @@ protected:
     os << "ConsensusIndex\tMonoisotopicMass\tApexRetentionTime\tMinCharge\tMaxCharge\tDetectedRuns";
     // the run names (file base names); a name two inputs share gets the run's position appended (_1, _2, ...), again while it equals
     // another run's name (run, run, run_2: run_1, run_2_2, run_2), so that no column repeats
-    std::vector<String> names;
-    for (const auto& f : in) names.push_back(QFileInfo(f.toQString()).completeBaseName());
+    std::vector<std::string> names;
+    for (const auto& f : in) names.push_back(completeBaseName_(f));
     {
       std::vector<bool> renamed(run_count, false);
       for (bool repeated = true; repeated;)
       {
         repeated = false;
-        std::map<String, Size> name_count;
+        std::map<std::string, Size> name_count;
         for (const auto& n : names) name_count[n]++;
         // first round: every run of a shared name; later: only the renamed ones (the names of the files stay)
         const bool first_round = std::none_of(renamed.begin(), renamed.end(), [](bool b) { return b; });
@@ -910,7 +922,7 @@ protected:
         {
           if (name_count[names[r]] < 2) continue;
           if (!renamed[r] && !first_round) continue;
-          names[r] += "_" + String(r + 1);
+          names[r] += "_" + StringUtils::toStr(r + 1);
           renamed[r] = true;
           repeated = true;
         }
@@ -953,7 +965,7 @@ protected:
         const double v = value[k][r].first;
         if (kept[k].runs.count(r) > 0)
         {
-          os << "\t" << (v > 0 ? String(std::to_string(v)) : String("nan")) << "\tdetected\t\t";
+          os << "\t" << (v > 0 ? std::to_string(v) : std::string("nan")) << "\tdetected\t\t";
           continue;
         }
         mbr_total++;
@@ -962,14 +974,14 @@ protected:
         const bool ok = mbr_fdr >= 0 && v > 0 && q <= mbr_fdr && (id || score[k][r] >= mbr_min_score);
         mbr_kept += ok;
         mbr_id_kept += ok && id;
-        os << "\t" << (ok ? std::to_string(v) : String("nan")) << "\t" << (ok ? (id ? "mbr_id" : "mbr") : "nan") << "\t" << (mbr_fdr >= 0 ? std::to_string(score[k][r]) : String(""))
-           << "\t" << (mbr_fdr >= 0 ? std::to_string(q) : String(""));
+        os << "\t" << (ok ? std::to_string(v) : std::string("nan")) << "\t" << (ok ? (id ? "mbr_id" : "mbr") : "nan") << "\t" << (mbr_fdr >= 0 ? std::to_string(score[k][r]) : std::string(""))
+           << "\t" << (mbr_fdr >= 0 ? std::to_string(q) : std::string(""));
       }
       os << "\n";
     }
     OPENMS_LOG_INFO << "Match between runs: " << mbr_kept << " of " << mbr_total << " values kept (q-value <= " << mbr_fdr
-                    << (mbr_min_score > 0 ? String(", score >= ") + String(mbr_min_score) + " unless mbr_id" : String("")) << ")"
-                    << (in_id.empty() ? String("") : String(", identified in their run (mbr_id) ") + String(mbr_id_kept)) << endl;
+                    << (mbr_min_score > 0 ? std::string(", score >= ") + StringUtils::toStr(mbr_min_score) + " unless mbr_id" : std::string("")) << ")"
+                    << (in_id.empty() ? std::string("") : std::string(", identified in their run (mbr_id) ") + StringUtils::toStr(mbr_id_kept)) << endl;
     return EXECUTION_OK;
   }
 };

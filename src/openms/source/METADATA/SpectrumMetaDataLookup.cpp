@@ -7,7 +7,11 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/METADATA/SpectrumMetaDataLookup.h>
+#include <OpenMS/FORMAT/FileHandler.h>
+#include <OpenMS/KERNEL/MSExperiment.h>
 #include <OpenMS/IONMOBILITY/IMTypes.h>
+#include <OpenMS/IONMOBILITY/FAIMSHelper.h>
+#include <OpenMS/CONCEPT/Constants.h>
 
 using namespace std;
 
@@ -62,7 +66,7 @@ namespace OpenMS
   }
 
 
-  void SpectrumMetaDataLookup::getSpectrumMetaData(const String& spectrum_ref,
+  void SpectrumMetaDataLookup::getSpectrumMetaData(const std::string& spectrum_ref,
                                                    SpectrumMetaData& meta,
                                                    MetaDataFlags flags) const
   {
@@ -76,59 +80,59 @@ namespace OpenMS
         // first try to extract the requested meta data from the reference:
         if (((flags & MDF_RT) == MDF_RT) && match["RT"].matched)
         {
-          String value = match["RT"].str();
+          std::string value = match["RT"].str();
           if (!value.empty())
           {
-            meta.rt = value.toDouble();
+            meta.rt = StringUtils::toDouble(value);
             flags &= ~MDF_RT; // unset flag
           }
         }
         if (((flags & MDF_PRECURSORRT) == MDF_PRECURSORRT) && 
             match["PRECRT"].matched)
         {
-          String value = match["PRECRT"].str();
+          std::string value = match["PRECRT"].str();
           if (!value.empty())
           {
-            meta.precursor_rt = value.toDouble();
+            meta.precursor_rt = StringUtils::toDouble(value);
             flags &= ~MDF_PRECURSORRT; // unset flag
           }
         }
         if (((flags & MDF_PRECURSORMZ) == MDF_PRECURSORMZ) && 
             match["MZ"].matched)
         {
-          String value = match["MZ"].str();
+          std::string value = match["MZ"].str();
           if (!value.empty())
           {
-            meta.precursor_mz = value.toDouble();
+            meta.precursor_mz = StringUtils::toDouble(value);
             flags &= ~MDF_PRECURSORMZ; // unset flag
           }
         }
         if (((flags & MDF_PRECURSORCHARGE) == MDF_PRECURSORCHARGE) &&
             match["CHARGE"].matched)
         {
-          String value = match["CHARGE"].str();
+          std::string value = match["CHARGE"].str();
           if (!value.empty())
           {
-            meta.precursor_charge = value.toDouble();
+            meta.precursor_charge = StringUtils::toDouble(value);
             flags &= ~MDF_PRECURSORCHARGE; // unset flag
           }
         }
         if (((flags & MDF_MSLEVEL) == MDF_MSLEVEL) && match["LEVEL"].matched)
         {
-          String value = match["LEVEL"].str();
+          std::string value = match["LEVEL"].str();
           if (!value.empty())
           {
-            meta.ms_level = value.toInt();
+            meta.ms_level = StringUtils::toInt32(value);
             flags &= ~MDF_MSLEVEL; // unset flag
           }
         }
         if (((flags & MDF_SCANNUMBER) == MDF_SCANNUMBER) && 
             match["SCAN"].matched)
         {
-          String value = match["SCAN"].str();
+          std::string value = match["SCAN"].str();
           if (!value.empty())
           {
-            meta.scan_number = value.toInt();
+            meta.scan_number = StringUtils::toInt32(value);
             flags &= ~MDF_SCANNUMBER; // unset flag
           }
         }
@@ -170,7 +174,7 @@ bool SpectrumMetaDataLookup::addMissingRTsToPeptideIDs(PeptideIdentificationList
     {
         if (std::isnan(pep.getRT())) // Only annotate peptides with missing RT
         {
-            String native_id = pep.getSpectrumReference();
+            std::string native_id = pep.getSpectrumReference();
             try
             {
                 // Look up spectrum index by native ID and assign RT
@@ -192,7 +196,7 @@ bool SpectrumMetaDataLookup::addMissingRTsToPeptideIDs(PeptideIdentificationList
 
   bool SpectrumMetaDataLookup::addMissingIMToPeptideIDs(PeptideIdentificationList& peptides,
                                 const MSExperiment& exp)
-  { 
+  {
     // Check if the experiment has spectra
     if (exp.getSpectra().empty())
     {
@@ -205,11 +209,11 @@ bool SpectrumMetaDataLookup::addMissingRTsToPeptideIDs(PeptideIdentificationList
     // Iterate over peptide_ids and annotate IM values stored in MSExperiment
     for (auto& pep : peptides)
     {
-      String native_id = pep.getSpectrumReference();
+      std::string native_id = pep.getSpectrumReference();
       Size index = lookup.findByNativeID(native_id);
       const MSSpectrum& spec =  exp.getSpectra()[index];
       // Check if desired IM format is present
-	  if (IMTypes::determineIMFormat(spec) == IMFormat::MULTIPLE_SPECTRA)
+	  if (IMTypes::determineIMFormat(spec) == IMFormat::IM_SPECTRUM)
 	  {
         pep.setMetaValue(Constants::UserParam::IM, spec.getDriftTime());
 	  }
@@ -222,7 +226,84 @@ bool SpectrumMetaDataLookup::addMissingRTsToPeptideIDs(PeptideIdentificationList
     return all_ids_have_im;
   }
 
-  bool SpectrumMetaDataLookup::addMissingSpectrumReferences(PeptideIdentificationList& peptides, const String& filename,
+  bool SpectrumMetaDataLookup::addMissingFAIMSToPeptideIDs(PeptideIdentificationList& peptides,
+                                                           const MSExperiment& exp)
+  {
+    // Check if the experiment has spectra
+    if (exp.getSpectra().empty())
+    {
+      OPENMS_LOG_INFO << "No spectra found in the experiment. Skipping FAIMS annotation." << endl;
+      return false;
+    }
+
+    // Check if experiment contains FAIMS data
+    std::set<double> faims_cvs = FAIMSHelper::getCompensationVoltages(exp);
+    if (faims_cvs.empty())
+    {
+      OPENMS_LOG_DEBUG << "No FAIMS data found in the experiment. Skipping FAIMS annotation." << endl;
+      return false;
+    }
+
+    SpectrumLookup lookup;
+    lookup.readSpectra(exp.getSpectra());
+
+    // Build a mapping from spectrum index to FAIMS CV
+    // Both MS1 and MS2 spectra can have explicit FAIMS CV annotations (DriftTimeUnit::FAIMS_COMPENSATION_VOLTAGE)
+    // For MS2 spectra without explicit FAIMS CV, fall back to the last seen FAIMS CV (from preceding spectrum)
+    std::map<Size, double> index_to_faims_cv;
+    double last_faims_cv = std::numeric_limits<double>::quiet_NaN();
+
+    for (Size i = 0; i < exp.size(); ++i)
+    {
+      const MSSpectrum& spec = exp[i];
+      if (spec.getDriftTimeUnit() == DriftTimeUnit::FAIMS_COMPENSATION_VOLTAGE)
+      {
+        // Spectrum has explicit FAIMS CV (can be MS1 or MS2)
+        last_faims_cv = spec.getDriftTime();
+        index_to_faims_cv[i] = last_faims_cv;
+      }
+      else if (!std::isnan(last_faims_cv) && spec.getMSLevel() > 1)
+      {
+        // MS2+ spectrum without explicit FAIMS CV inherits from context
+        index_to_faims_cv[i] = last_faims_cv;
+      }
+    }
+
+    Size annotated_count = 0;
+    // Iterate over peptide_ids and annotate FAIMS CV values
+    for (auto& pep : peptides)
+    {
+      // Skip if already annotated
+      if (pep.metaValueExists(Constants::UserParam::FAIMS_CV))
+      {
+        ++annotated_count;
+        continue;
+      }
+
+      std::string native_id = pep.getSpectrumReference();
+      try
+      {
+        Size index = lookup.findByNativeID(native_id);
+        auto it = index_to_faims_cv.find(index);
+        if (it != index_to_faims_cv.end())
+        {
+          pep.setMetaValue(Constants::UserParam::FAIMS_CV, it->second);
+          ++annotated_count;
+        }
+      }
+      catch (Exception::ElementNotFound&)
+      {
+        OPENMS_LOG_WARN << "Could not find spectrum with native ID '" << native_id
+                        << "' for FAIMS annotation." << endl;
+      }
+    }
+
+    OPENMS_LOG_INFO << "Annotated " << annotated_count << " of " << peptides.size()
+                    << " peptide IDs with FAIMS CV values." << endl;
+    return annotated_count > 0;
+  }
+
+  bool SpectrumMetaDataLookup::addMissingSpectrumReferences(PeptideIdentificationList& peptides, const std::string& filename,
     bool stop_on_error, 
     bool override_spectra_data, 
     bool override_spectra_references,
@@ -244,7 +325,7 @@ bool SpectrumMetaDataLookup::addMissingRTsToPeptideIDs(PeptideIdentificationList
     }
     if (override_spectra_data)
     {
-      vector<String> spectra_data(1);
+      vector<std::string> spectra_data(1);
       spectra_data[0] = "file://" + lookup.spectra_data_ref;
       for (auto& prot : proteins)
       {
@@ -268,7 +349,7 @@ bool SpectrumMetaDataLookup::addMissingRTsToPeptideIDs(PeptideIdentificationList
       }
       catch (Exception::ElementNotFound&)
       {
-        OPENMS_LOG_ERROR << "Error: Failed to look up spectrum native ID for peptide identification with retention time '" + String(pep.getRT()) + "'." << endl;
+        OPENMS_LOG_ERROR << "Error: Failed to look up spectrum native ID for peptide identification with retention time '" + StringUtils::toStr(pep.getRT()) + "'." << endl;
         success = false;
         if (stop_on_error)
         {

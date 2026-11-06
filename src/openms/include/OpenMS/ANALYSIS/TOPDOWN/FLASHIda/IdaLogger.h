@@ -41,7 +41,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Exploration.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 
 #include <cstdint>
 #include <fstream>
@@ -341,7 +341,7 @@ namespace OpenMS
            @param in_log_file input log file
            @return parsed information : scan number - percursor information
     **/
-    static std::map<int, std::vector<std::vector<float>>> parseFLASHIdaLog(const String& in_log_file);
+    static std::map<int, std::vector<std::vector<float>>> parseFLASHIdaLog(const std::string& in_log_file);
 
   private:
     /// Configuration object (owns the runtime output paths)

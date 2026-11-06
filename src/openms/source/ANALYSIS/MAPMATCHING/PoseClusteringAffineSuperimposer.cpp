@@ -10,6 +10,7 @@
 #include <OpenMS/PROCESSING/BASELINE/MorphologicalFilter.h>
 #include <OpenMS/MATH/STATISTICS/BasicStatistics.h>
 #include <OpenMS/ML/INTERPOLATION/LinearInterpolation.h>
+#include <OpenMS/CONCEPT/LogStream.h>
 
 #include <boost/math/special_functions/fpclassify.hpp> // isnan
 
@@ -130,7 +131,7 @@ namespace OpenMS
                                    Math::LinearInterpolation<double, double>& rt_high_hash_,
                                    const int hashing_round,
                                    const double rt_pair_min_distance,
-                                   const String& dump_pairs_basename,
+                                   const std::string& dump_pairs_basename,
                                    const Int dump_buckets_serial,
                                    const double mz_pair_max_distance,
                                    const double winlength_factor_baseline,
@@ -142,13 +143,13 @@ namespace OpenMS
     Size const model_map_size = model_map.size();   // i j
     Size const scene_map_size = scene_map.size();   // k l
 
-    String dump_pairs_filename;
+    std::string dump_pairs_filename;
     std::ofstream dump_pairs_file;
     if (do_dump_pairs)
     {
-      dump_pairs_filename = dump_pairs_basename + "_phase_two_" + String(dump_buckets_serial);
+      dump_pairs_filename = dump_pairs_basename + "_phase_two_" + StringUtils::toStr(dump_buckets_serial);
       dump_pairs_file.open(dump_pairs_filename.c_str());
-      dump_pairs_file << "#" << ' ' << "i" << ' ' << "j" << ' ' << "k" << ' ' << "l" << ' ' << std::endl;
+      dump_pairs_file << "#" << ' ' << "i" << ' ' << "j" << ' ' << "k" << ' ' << "l" << ' ' << '\n';
     }
 
     // first point in model map (i)
@@ -273,7 +274,7 @@ namespace OpenMS
               {
                 dump_pairs_file << i << ' ' << model_map[i].getRT() << ' ' << model_map[i].getMZ() << ' ' << j << ' ' << model_map[j].getRT() << ' '
                                 << model_map[j].getMZ() << ' ' << k << ' ' << scene_map[k].getRT() << ' ' << scene_map[k].getMZ() << ' ' << l << ' '
-                                << scene_map[l].getRT() << ' ' << scene_map[l].getMZ() << ' ' << similarity_ik_jl << ' ' << std::endl;
+                                << scene_map[l].getRT() << ' ' << scene_map[l].getMZ() << ' ' << similarity_ik_jl << ' ' << '\n';
               }
             }
           }   // l
@@ -298,7 +299,7 @@ namespace OpenMS
     Math::LinearInterpolation<double, double>& scaling_hash_1,
     const bool do_dump_buckets,
     const UInt struc_elem_length_datapoints,
-    const String& dump_buckets_basename,
+    const std::string& dump_buckets_basename,
     const Int dump_buckets_serial,
     const double scaling_histogram_crossing_slope,
     const double scaling_cutoff_stdev_multiplier,
@@ -311,14 +312,14 @@ namespace OpenMS
     UInt filtering_stage = 0;
 
     // optionally, dump before filtering
-    String dump_buckets_filename;
+    std::string dump_buckets_filename;
     std::ofstream dump_buckets_file;
     if (do_dump_buckets)
     {
-      dump_buckets_filename = dump_buckets_basename + "_scale_" + String(dump_buckets_serial);
+      dump_buckets_filename = dump_buckets_basename + "_scale_" + StringUtils::toStr(dump_buckets_serial);
       dump_buckets_file.open(dump_buckets_filename.c_str());
 
-      dump_buckets_file << "# rt scale hash table buckets dump ( scale, height ) : " << dump_buckets_filename << std::endl;
+      dump_buckets_file << "# rt scale hash table buckets dump ( scale, height ) : " << dump_buckets_filename << '\n';
       dump_buckets_file << "# unfiltered hash data\n";
       for (Size index = 0; index < scaling_hash_1.getData().size(); ++index)
       {
@@ -438,13 +439,13 @@ namespace OpenMS
         dump_buckets_file << "# loop: " << loop << "  mean: " << log_outside_mean << " [" << exp(log_outside_mean) << "]  stdev: " << log_outside_stdev
                           << " [" << scale_centroid_1 << "]  (mean-stdev): " << log_outside_mean - log_outside_stdev << " [" << scale_low_1 << "]  (mean+stdev): "
                           << log_outside_mean + log_outside_stdev << " [" << scale_high_1 << "]  data_range_begin: " << data_range_begin << "  data_range_end: "
-                          << data_range_end << std::endl;
+                          << data_range_end << '\n';
       }
     }
 
     if (do_dump_buckets)
     {
-      dump_buckets_file << "# EOF" << std::endl;
+      dump_buckets_file << "# EOF\n";
       dump_buckets_file.close();
     }
   }
@@ -458,23 +459,23 @@ namespace OpenMS
     const double scaling_histogram_crossing_slope,
     const double scaling_cutoff_stdev_multiplier,
     const UInt loops_mean_stdev_cutoff,
-    const String& dump_buckets_basename,
+    const std::string& dump_buckets_basename,
     double& rt_low_centroid,
     double& rt_high_centroid)
   {
     UInt filtering_stage = 0;
 
     // optionally, dump before filtering
-    String dump_buckets_low_filename;
+    std::string dump_buckets_low_filename;
     std::ofstream dump_buckets_low_file;
-    String dump_buckets_high_filename;
+    std::string dump_buckets_high_filename;
     std::ofstream dump_buckets_high_file;
     if (do_dump_buckets)
     {
-      dump_buckets_low_filename = dump_buckets_basename + "_low_" + String(dump_buckets_serial);
+      dump_buckets_low_filename = dump_buckets_basename + "_low_" + StringUtils::toStr(dump_buckets_serial);
       dump_buckets_low_file.open(dump_buckets_low_filename.c_str());
 
-      dump_buckets_low_file << "# rt low hash table buckets dump ( scale, height ) : " << dump_buckets_low_filename << std::endl;
+      dump_buckets_low_file << "# rt low hash table buckets dump ( scale, height ) : " << dump_buckets_low_filename << '\n';
       dump_buckets_low_file << "# unfiltered hash data\n";
       for (Size index = 0; index < rt_low_hash_.getData().size(); ++index)
       {
@@ -484,10 +485,10 @@ namespace OpenMS
       }
       dump_buckets_low_file << '\n';
 
-      dump_buckets_high_filename = dump_buckets_basename + "_high_" + String(dump_buckets_serial);
+      dump_buckets_high_filename = dump_buckets_basename + "_high_" + StringUtils::toStr(dump_buckets_serial);
       dump_buckets_high_file.open(dump_buckets_high_filename.c_str());
 
-      dump_buckets_high_file << "# rt high hash table buckets dump ( scale, height ) : " << dump_buckets_high_filename << std::endl;
+      dump_buckets_high_file << "# rt high hash table buckets dump ( scale, height ) : " << dump_buckets_high_filename << '\n';
       dump_buckets_high_file << "# unfiltered hash data\n";
       for (Size index = 0; index < rt_high_hash_.getData().size(); ++index)
       {
@@ -649,7 +650,7 @@ namespace OpenMS
         {
           dump_buckets_low_file << "# loop: " << loop << "  mean: " << outside_mean << "  stdev: " << outside_stdev << "  (mean-stdev): " << outside_mean
           - outside_stdev << "  (mean+stdev): " << outside_mean + outside_stdev << "  data_range_begin: " << data_range_begin << "  data_range_end: "
-                                << data_range_end << std::endl;
+                                << data_range_end << '\n';
         }
       }
     }
@@ -677,15 +678,15 @@ namespace OpenMS
         {
           dump_buckets_high_file << "# loop: " << loop << "  mean: " << outside_mean << "  stdev: " << outside_stdev << "  (mean-stdev): " << outside_mean
           - outside_stdev << "  (mean+stdev): " << outside_mean + outside_stdev << "  data_range_begin: " << data_range_begin << "  data_range_end: "
-                                 << data_range_end << std::endl;
+                                 << data_range_end << '\n';
         }
       }
     }
     if (do_dump_buckets)
     {
-      dump_buckets_low_file << "# EOF" << std::endl;
+      dump_buckets_low_file << "# EOF\n";
       dump_buckets_low_file.close();
-      dump_buckets_high_file << "# EOF" << std::endl;
+      dump_buckets_high_file << "# EOF\n";
       dump_buckets_high_file.close();
     }
   }
@@ -757,7 +758,7 @@ namespace OpenMS
     setProgress(++actual_progress);
     // Optionally, we will write dumps of the hash table buckets.
     bool do_dump_buckets = false;
-    String dump_buckets_basename;
+    std::string dump_buckets_basename;
     if (param_.getValue("dump_buckets") != "")
     {
       do_dump_buckets = true;
@@ -767,7 +768,7 @@ namespace OpenMS
 
     // Even more optionally, we will write dumps of the hashed pairs.
     bool do_dump_pairs = false;
-    String dump_pairs_basename;
+    std::string dump_pairs_basename;
     if (param_.getValue("dump_pairs") != "")
     {
       do_dump_pairs = true;
@@ -829,21 +830,21 @@ namespace OpenMS
       double shift = std::fabs(model_minrt - scene_minrt);
       double slope = (model_maxrt - model_minrt) / (scene_maxrt - scene_minrt);
 
-      if ( (double)param_.getValue("max_scaling") < slope * 1.2 || 
+      if ( (double)param_.getValue("max_scaling") < slope * 1.2 ||
            1.0 / (double)param_.getValue("max_scaling") > slope / 1.2)
       {
-        std::cout << "WARNING: your map likely has a scaling around " << slope
+        OPENMS_LOG_WARN << "WARNING: your map likely has a scaling around " << slope
           << " but your parameters only allow for a maximal scaling of " <<
-          param_.getValue("max_scaling") << std::endl;
-        std::cout << "It is strongly advised to adjust your max_scaling factor" << std::endl;
+          param_.getValue("max_scaling") << '\n';
+        OPENMS_LOG_WARN << "It is strongly advised to adjust your max_scaling factor\n";
       }
 
       if ( (double)param_.getValue("max_shift") < shift * 1.2)
       {
-        std::cout << "WARNING: your map likely has a shift around " << shift
+        OPENMS_LOG_WARN << "WARNING: your map likely has a shift around " << shift
           << " but your parameters only allow for a maximal shift of " <<
-          param_.getValue("max_shift") << std::endl;
-        std::cout << "It is strongly advised to adjust your max_shift factor" << std::endl;
+          param_.getValue("max_shift") << '\n';
+        OPENMS_LOG_WARN << "It is strongly advised to adjust your max_shift factor\n";
       }
 
     }
@@ -1012,8 +1013,8 @@ namespace OpenMS
       if (std::isinf(slope) || std::isnan(slope) || std::isinf(intercept) || std::isnan(intercept))
       {
         throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
-                                      String("Superimposer could not compute an initial transformation!") +
-                                      "You can try to increase 'max_num_peaks_considered' to solve this.", String(intercept * slope));
+                                      std::string("Superimposer could not compute an initial transformation!") +
+                                      "You can try to increase 'max_num_peaks_considered' to solve this.",StringUtils::toStr(intercept * slope));
       }
 
       transformation.fitModel("linear", params);       // no data, but explicit parameters

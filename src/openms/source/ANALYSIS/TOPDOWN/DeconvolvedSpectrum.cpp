@@ -301,10 +301,10 @@ namespace OpenMS
     auto filter_str = spec.getMetaValue("filter string").toString();
     Size pos = filter_str.find("cv=");
 
-    if (pos != String::npos)
+    if (pos != std::string::npos)
     {
       Size end = filter_str.find(" ", pos);
-      if (end == String::npos) end = filter_str.length() - 1;
+      if (end == std::string::npos) end = filter_str.length() - 1;
       cv_ = std::stod(filter_str.substr(pos + 3, end - pos));
     }
     spec_ = spec;

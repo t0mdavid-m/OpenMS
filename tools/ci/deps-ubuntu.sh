@@ -3,6 +3,23 @@
 set -eu
 set -o pipefail
 
+# Parse command line arguments
+SKIP_GUI_DEPS=false
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+  --skip-gui-deps)
+    SKIP_GUI_DEPS=true
+    shift
+    ;;
+  *)
+    echo "Unknown option: $1"
+    echo "Usage: $0 [--skip-gui-deps]"
+    exit 1
+    ;;
+  esac
+done
+
 # Code between the following doxygen markers are included in the
 # public-facing OpenMS installation instructions.
 
@@ -13,47 +30,37 @@ sudo apt update
 
 # Required dependencies:
 sudo apt-get -qq install -y \
+  autoconf \
+  autoconf-archive \
+  automake \
   build-essential \
   cmake \
-  autoconf \
-  patch \
-  libtool \
   git \
-  automake \
+  libtool \
   ninja-build \
-  xvfb \
-  ccache \
-  qt6-base-dev \
-  libqt6svg6-dev \
-  libqt6opengl6-dev \
-  libqt6openglwidgets6 \
-  libgl-dev \
-  libeigen3-dev \
-  libboost-random-dev \
-  libboost-regex-dev \
-  libboost-iostreams-dev \
-  libboost-date-time-dev \
-  libboost-math-dev \
-  libxerces-c-dev \
-  zlib1g-dev \
-  libsvm-dev \
-  libbz2-dev \
-  coinor-libcoinmp-dev \
-  libhdf5-dev
+  patch \
+  pkg-config
 
-  sudo apt update
-  sudo apt-get install -y -V ca-certificates lsb-release wget
-  wget https://packages.apache.org/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
-  sudo apt update
-  sudo apt-get install -y -V ./apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
-  sudo apt update
-  sudo apt-get install -y --no-install-recommends \
-        libarrow-dev \
-        libparquet-dev \
+# GUI dependencies (can be skipped for non-GUI builds):
+if [ "$SKIP_GUI_DEPS" = false ]; then
+  sudo apt-get -qq install -y \
+    qt6-base-dev \
+    libqt6svg6-dev \
+    libqt6opengl6-dev \
+    libqt6openglwidgets6
+fi
 
 # Optional dependencies:
 sudo apt-get -qq install -y \
-  doxygen \
-  ghostscript \
-  graphviz
+  doxygen
+
+# Graphviz is only needed for the optional 'doc_dot' target (documentation
+# with all dot graphs), so it is not installed here:
+#   sudo apt-get install -y graphviz
+
 # [installation_documentation]
+
+# These are only needed in CI:
+sudo apt-get -qq install -y \
+  ccache \
+  rclone

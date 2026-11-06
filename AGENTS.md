@@ -1,0 +1,689 @@
+# OpenMS Agent Notes
+
+This file provides context and instructions for AI coding agents working on OpenMS. It follows the [AGENTS.md](https://agents.md) standard.
+
+## Critical Constraints
+
+**NEVER do these things:**
+- Modify files in `src/openms/extern/` or `src/openms/thirdparty/` (third-party vendored code; use the provided sync scripts to update vendored libraries)
+- Commit secrets, credentials, or `.env` files
+- Add `using namespace` or `using std::...` in header files
+- Modify the `vcpkg` submodule or third-party dependencies
+- Skip tests when making code changes
+
+**Before opening a pull request, always build the changes locally and run the relevant tests.**
+Use an out-of-tree build and select the targets and tests affected by the change. Resolve
+build or test failures before opening the PR; do not defer this validation to CI.
+
+## Quick Commands
+
+```bash
+# Configure with vcpkg-provided dependencies (from the source directory; needs the vcpkg submodule,
+# `cmake --list-presets` lists the presets, -B overrides the preset's build/<preset> directory)
+cmake --preset linux-x64-debug -B ../OpenMS-build
+
+# Or configure against system packages (from OpenMS-build/ directory, adjust paths as needed)
+cmake -DOPENMS_USE_VCPKG=OFF -DCMAKE_BUILD_TYPE=Debug ../OpenMS
+
+# Build everything (includes tests)
+cmake --build . -j$(nproc)
+
+
+# Run tests with verbose output
+ctest -R MyTest -V
+```
+
+
+## Known build workarounds
+- **CMAKE_PREFIX_PATH separators** (per [CMake docs](https://cmake.org/cmake/help/latest/variable/CMAKE_PREFIX_PATH.html)): When passing via `-D` option, use semicolons (`;`) as list separators (e.g., `-DCMAKE_PREFIX_PATH="/path/one;/path/two"`). Environment variables use OS-native separators (`:` on Unix, `;` on Windows).
+- **Build**: CMake 3.24+, out-of-tree builds in `OpenMS-build/`
+- **Testing**: CTest, GoogleTest-style macros, pytest for Python
+- **Style**: `.clang-format` in repo root
+- **Platforms**: Linux, macOS (Apple Clang), Windows
+
+## Repository Layout
+
+```
+OpenMS/
+├── src/
+│   ├── openms/              # Core C++ library
+│   │   ├── include/OpenMS/  # Headers (.h)
+│   │   └── source/          # Implementation (.cpp)
+│   ├── openms_cli/          # TOPP tool framework (TOPPBase, ToolHandler, ...)
+│   ├── openms_gui/          # Qt-based GUI components
+│   ├── openswathalgo/       # OpenSWATH algorithms
+│   ├── topp/                # Command-line tools (TOPP)
+│   ├── pyOpenMS/            # Python bindings (nanobind)
+│   │   ├── bindings/        # Hand-maintained nanobind C++ binding files
+│   │   │   └── type_casters/# Custom nanobind type casters
+│   │   ├── pyopenms/addons/ # Pure Python addon methods
+│   │   └── tests/           # Python tests
+│   └── tests/
+│       ├── class_tests/openms/source/  # C++ unit tests
+│       └── topp/            # TOPP integration tests
+├── cmake/                   # CMake modules
+├── doc/                     # Documentation source
+└── share/OpenMS/            # Runtime data files
+```
+
+## Build and Install
+
+- **CMake minimum**: 3.24 for both building OpenMS and consuming its CMake package; **C++ standard**: C++23
+- Out-of-tree build expected in `OpenMS-build/`; build in place for development (install prefixes are for system installs).
+- When adding or removing a public header under `src/openms/include/OpenMS/` (or `src/openms_cli/include/OpenMS/`), update the matching directory's `sources.cmake` header list. These lists control the `OpenMS_headers` (`OpenMS_CLI_headers`) install component, and missing entries break consumers of the installed package.
+- Public headers are declared in `FILE_SET HEADERS`; generated export headers are added by `openms_add_library()`. Private headers under `source/` and `include/` belong to the private file set. File sets supply the build and installed include directories.
+- Linux x64 CI builds `all_verify_interface_header_sets`; developers can opt in with `OPENMS_VERIFY_INTERFACE_HEADER_SETS=ON`. Keep the JSON guard because shared include roots can hide private dependencies.
+- Use `CMAKE_BUILD_TYPE=Debug` for development to keep assertions/pre/post-conditions.
+- Dependencies via vcpkg: configure with a preset from `CMakePresets.json` (`cmake --preset <preset>`, `cmake --list-presets`). The presets set `OPENMS_USE_VCPKG=ON` and use the toolchain of the `vcpkg` submodule; vcpkg then builds the dependencies declared in the manifest `vcpkg.json` (optional ones as manifest features, enabled with `VCPKG_MANIFEST_FEATURES` next to the matching `WITH_*` option), using the overlay ports and triplets in `vcpkg-overlays/`. Qt is not in the manifest: pass its prefix with `CMAKE_PREFIX_PATH` if CMake does not find it.
+- **vcpkg is a git submodule**: run `git submodule update --init vcpkg` (or clone with `--recurse-submodules`) before configuring with a preset.
+- Builds without vcpkg use distro or Homebrew packages; set `CMAKE_PREFIX_PATH` as needed.
+- pyOpenMS build deps: install via `uv sync --only-group build` or `pip install -e .[dev]` (see `src/pyOpenMS/pyproject.toml`); enable with `-DPYOPENMS=ON`.
+- Style checks: formatting is `.clang-format`. Static analysis runs in CI (the `cppcheck-test` workflow), not from the build system.
+
+**Required dependencies:**
+- XercesC, Boost 1.81+ (date_time, regex, iostreams), Eigen3 (3.4.0+), libSVM (2.91+), COIN-OR, GLPK, or HiGHS (LP solver; use `-DLP_SOLVER=AUTO/COIN/GLPK/HIGHS`), ZLIB, BZip2, zstd, libcurl
+- Qt6 (6.1.0+) — required for GUI (`openms_gui`); optional for TOPP tools, core library (`libOpenMS`), and pyOpenMS builds
+
+**Optional:** HDF5 (`-DWITH_HDF5=ON`); Bruker TimsTOF `.d` directory support via opentims (`-DWITH_OPENTIMS=ON`, default on; set `-DENABLE_OPENTIMS_TESTS=ON` to also fetch and run integration tests); Thermo RAW file reading via openms-thermo-bridge (`-DWITH_THERMO_RAW=ON`, default on except on Linux/aarch64; requires .NET 8+ runtime at run time; set `-DENABLE_THERMO_RAW_TESTS=ON` to download test data and run integration tests)
+
+**Disabled by default (fetched via FetchContent when enabled; requires network or `FETCHCONTENT_SOURCE_DIR_*` override):** WNetAlign/WNet/PyLMCF for `FeatureLinkerWNet` (`-DWITH_WNETALIGN=ON` to enable)
+
+**Always enabled:** Apache Arrow/Parquet (required dependency since 3.6)
+
+## Platform-Specific Build Gotchas
+
+### Windows
+- **MSYS/MinGW NOT supported** — must use Visual Studio environment
+- **Minimum compiler versions are defined once** in `cmake/min_compiler_versions.cmake`, which both enforces them at configure time and feeds the numbers quoted in the doxygen install docs (via `ALIASES` in `doc/doxygen/Doxyfile.in`). Edit them there, not in the docs
+- **64-bit only**. The presets in `CMakePresets.json` build with **Ninja** on every platform, Windows included, so `cmake --preset windows-x64-*` produces a Ninja tree and no `.sln`. Pass `-G "Visual Studio 17 2022" -A x64` on the configure line to get a solution instead
+- **Keep build paths short** to avoid path length issues
+- **Never mix Release/Debug libraries** — causes stack corruption and segfaults
+- The Windows triplets fix the runtime: `windows-x64-debug` uses `x64-windows-static-md` (dependencies in debug and release form, so it is the preset for a Debug or multi-configuration build), the release presets use `x64-windows-static-md-release` (release dependencies only)
+- HDF5 forced to static linking on MSVC
+- OpenMP requires `/openmp:experimental` flag (set automatically) for SIMD support
+- Nested OpenMP (`MT_ENABLE_NESTED_OPENMP`) defaults to OFF on MSVC
+
+### macOS
+- **Apple Clang (Xcode) required**; Homebrew for dependencies
+- **Xcode 16+ (AppleClang 16+) required** for C++23
+- **AppleClang >= 15.0.0**: Requires `-ld_classic` linker flag (set automatically)
+- Remove older Qt versions if they interfere with Qt6
+- Qt6 requires `PrintSupport` component for platform plugin
+- `QT_QPA_PLATFORM=minimal` helps for headless/remote GUI runs
+- Code signing and notarization required for distribution (see `cmake/MacOSX/README.md`)
+- `fix_dependencies.rb` script fixes RPATH for relocatable binaries
+
+### Linux
+- Dependencies via the vcpkg presets (`linux-x64-*`, `linux-arm64-*`) or distro packages
+- `-fPIC` flag applied automatically for shared library compatibility
+- `QT_QPA_PLATFORM=minimal` for headless GUI test runs
+- STL debug mode (`_GLIBCXX_DEBUG`) only supported with GCC in Debug builds
+- System libraries (libc, libstdc++, libpthread, etc.) excluded from packaging
+
+### Qt6 Issues
+- **Minimum version**: 6.1.0
+- If Qt6 not found: `-DCMAKE_PREFIX_PATH='<path_to_Qt6_lib_parent>'`
+- WebEngineWidgets optional; if missing, JavaScript views disabled in TOPPView (warning only)
+- Required components: Core; GUI components need Gui, Widgets, Svg, OpenGLWidgets
+
+### Boost
+- OpenMS links only Boost's headers (`Boost::boost`), so static and shared Boost installs (distro, Homebrew, vcpkg) work alike
+- Do not link compiled Boost libraries (`Boost::regex`, `Boost::iostreams`, ...): a static one has to go into the shared libOpenMS and brings its own link dependencies (#3319)
+
+### Common CMake Issues
+- **CMAKE_SIZEOF_VOID_P bug**: Variable vanishes on CMake version updates → delete `CMakeFiles/` and `CMakeCache.txt`, rerun cmake
+- **Eigen3 version detection**: Build system handles CMake's version checking quirks with Eigen3 4.0+ automatically
+
+## Testing
+
+- Unit/class tests: `src/tests/class_tests/<lib>/source/`, add to `executables.cmake`; data in `src/tests/class_tests/libs/data/` (prefix files with class name).
+- TOPP tests: add to `src/tests/topp/CMakeLists.txt`, data in `src/tests/topp/`.
+- GUI tests: `src/tests/class_tests/openms_gui/source/` (Qt TestLib).
+- Build `all`/`ALL_BUILD` to include tests and `FuzzyDiff` (TOPP tests depend on it).
+- Use `NEW_TMP_FILE` for each output file in tests; avoid side effects in comparison macros.
+- Run with `ctest`, use `-R` for subset, `-V/-VV` for verbosity, `-C` for multi-config generators.
+- Use `FuzzyDiff` for numeric comparisons; keep test data small; use whitelist for unstable lines.
+- `START_SECTION` macro pitfalls: wrap template methods with 2+ arguments in parentheses.
+- Prefer `TEST_TRUE(expr)`/`TEST_FALSE(expr)` over `TEST_EQUAL(expr, true)`/`TEST_EQUAL(expr, false)` when checking boolean results (clearer intent and better failure messages).
+- pyOpenMS tests: `ctest -R pyopenms` or `pytest` with `PYTHONPATH=/path/to/OpenMS-build/pyOpenMS` (run outside the source tree to avoid shadowing).
+
+**Unit test example:**
+```cpp
+// src/tests/class_tests/openms/source/MyClass_test.cpp
+#include <OpenMS/CONCEPT/ClassTest.h>
+#include <OpenMS/PATH/TO/MyClass.h>
+
+START_TEST(MyClass, "$Id$")
+
+MyClass* ptr = nullptr;
+
+START_SECTION(MyClass())
+  ptr = new MyClass();
+  TEST_NOT_EQUAL(ptr, nullptr)
+END_SECTION
+
+START_SECTION(void process(const MSSpectrum&))
+  MSSpectrum spec;
+  spec.push_back(Peak1D(100.0, 1000.0));
+  ptr->process(spec);
+  TEST_EQUAL(spec.size(), 1)
+END_SECTION
+
+delete ptr;
+END_TEST
+```
+
+## Coding Conventions
+
+- Indentation: 2 spaces for C++/headers, 4 spaces for Python (PEP 8); no tabs; Unix line endings.
+- Spacing: after keywords (`if`, `for`) and around binary operators.
+- Braces: opening/closing braces align; use braces even for single-line blocks (trivial one-liners may stay single-line).
+- File names: class name matches file name; one class per file; always pair `.h` with `.cpp`.
+- Templates: use `_impl.h` only when needed; `.h` must not include `_impl.h`.
+- Names: classes/types/namespaces in PascalCase; methods lowerCamel; variables snake_case; private/protected members end with `_`.
+- Enums and macros uppercase with underscores; avoid the preprocessor; prefer `enum class`.
+- Parameters: lower_case with underscores; document ranges/units.
+- File extensions: lowercase, except `ML`/`XML` and `mzData`.
+- Use OpenMS primitive types from `OpenMS/CONCEPT/Types.h`.
+- No `using namespace` or `using std::...` in headers; allowed in `.cpp`.
+- Follow Rule-of-0 or Rule-of-6.
+- Accessors: get/set pairs for protected/private members; no reference getters for primitive types.
+- Exceptions: derive from `Exception::Base`; throw with file/line/`OPENMS_PRETTY_FUNCTION`; catch by reference; document possible exceptions.
+- Doxygen: `@brief` + blank line + details; use `@defgroup/@ingroup`; use `.doxygen` files for free-standing docs; `@todo` includes assignee name.
+- Comments: at least ~5% of code, use `//` style, plain English describing the next few lines.
+- Each file preamble contains the `$Maintainer:$` marker.
+- Formatting: use `./.clang-format` in supporting IDEs.
+
+## Doxygen Documentation Style
+
+OpenMS uses `/** */` block comments with `@` tags (not `\` backslash). `@brief` is **required** (not auto-generated from first line).
+
+**File header (required in every .h file):**
+```cpp
+// Copyright (c) 2002-present, OpenMS Inc. -- EKU Tuebingen, ETH Zurich, and FU Berlin
+// SPDX-License-Identifier: BSD-3-Clause
+//
+// --------------------------------------------------------------------------
+// $Maintainer: Your Name $
+// $Authors: Original Author, Your Name $
+// --------------------------------------------------------------------------
+```
+
+**Class documentation:**
+```cpp
+/**
+  @brief An algorithm to decharge features (i.e. as found by FeatureFinder).
+
+  Detailed description goes here after a blank line.
+  Can span multiple lines.
+
+  @htmlinclude OpenMS_FeatureDeconvolution.parameters
+
+  @ingroup Analysis
+*/
+class OPENMS_DLLAPI FeatureDeconvolution : public DefaultParamHandler
+```
+
+**Method documentation with parameters:**
+```cpp
+/**
+  @brief Compute a zero-charge feature map from charged features.
+
+  Find putative ChargePairs, then score them and hand over to ILP.
+
+  @param[in] fm_in      Input feature-map
+  @param[out] fm_out    Output feature-map (sorted by position)
+  @param[in,out] cons   Consensus map modified in place
+
+  @return The number of charge groups found
+
+  @throws Exception::MissingInformation if RT/MZ data missing
+  @throws Exception::InvalidParameter if threshold < 0
+
+  @note The original sequence is saved as MetaValue.
+  @warning This method modifies fm_out in place.
+*/
+Size compute(const FeatureMap& fm_in, FeatureMap& fm_out, ConsensusMap& cons);
+```
+
+**Parameter direction tags:** Always use `[in]`, `[out]`, or `[in,out]` for all parameters.
+
+**Grouping constructors/destructors:**
+```cpp
+/** @name Constructors and Destructors
+*/
+//@{
+/// Default constructor
+FeatureDeconvolution();
+
+/// Copy constructor
+FeatureDeconvolution(const FeatureDeconvolution& source);
+
+/// Destructor
+~FeatureDeconvolution() override;
+//@}
+```
+
+**Simple inline documentation:** Use `///` for brief single-line docs:
+```cpp
+/// Fragment mass tolerance for spectrum comparisons
+double fragment_mass_tolerance_;
+
+/// Is fragment mass tolerance given in ppm (or Da)?
+bool fragment_tolerance_ppm_;
+```
+
+**Common Doxygen tags:**
+| Tag | Usage |
+|-----|-------|
+| `@brief` | Required first line summary |
+| `@param[in/out]` | Parameter with direction |
+| `@return` | Return value description |
+| `@throws` / `@exception` | Exceptions that may be thrown |
+| `@note` | Important notes |
+| `@warning` | Warnings about usage |
+| `@ingroup` | Category grouping (e.g., `Analysis_ID`) |
+| `@see` | Cross-references |
+| `@todo` | Include assignee name: `@todo JohnDoe fix this` |
+
+**Naming examples:**
+│   ├── openms/           # Core C++ library
+│   │   ├── include/OpenMS/  # Headers (.h)
+│   │   └── source/          # Implementation (.cpp)
+│   ├── openms_cli/       # TOPP tool framework (TOPPBase, ToolHandler, ...)
+│   ├── openms_gui/       # Qt-based GUI components
+│   ├── openswathalgo/    # OpenSWATH algorithms
+│   ├── topp/             # Command-line tools (TOPP)
+│   ├── pyOpenMS/         # Python bindings (nanobind)
+│   │   ├── bindings/        # Hand-maintained nanobind C++ binding files
+│   │   │   └── type_casters/# Custom nanobind type casters
+│   │   ├── pyopenms/addons/ # Pure Python addon methods
+│   │   └── tests/        # Python tests
+│   └── tests/
+│       ├── class_tests/openms/source/  # C++ unit tests
+│       └── topp/         # TOPP integration tests
+├── cmake/                # CMake modules
+├── doc/                  # Documentation source
+└── share/OpenMS/         # Runtime data files
+```
+
+## Code Style (with Examples)
+
+**Naming conventions:**
+```cpp
+// Classes/Types/Namespaces: PascalCase
+class FeatureMap;
+namespace OpenMS { }
+
+// Methods: lowerCamelCase
+void processSpectrum();
+
+// Variables: snake_case
+int peak_count = 0;
+
+// Private/protected members: trailing underscore
+double intensity_;
+
+// Enums/macros: UPPER_SNAKE_CASE
+enum class Status { RUNNING, COMPLETE };
+#define OPENMS_DLLAPI
+```
+
+**File structure:**
+```cpp
+// MyClass.h - Header file
+#pragma once
+#include <OpenMS/KERNEL/MSSpectrum.h>
+
+namespace OpenMS
+{
+  class OPENMS_DLLAPI MyClass  // Export macro required
+  {
+  public:
+    MyClass();
+    void process(const MSSpectrum& spectrum);
+
+  private:
+    double threshold_;  // Trailing underscore
+  };
+}
+
+// MyClass.cpp - Implementation file
+#include <OpenMS/PATH/TO/MyClass.h>
+using namespace OpenMS;  // OK in .cpp files
+
+MyClass::MyClass() : threshold_(0.0) {}
+
+void MyClass::process(const MSSpectrum& spectrum)
+{
+  // 2-space indentation, braces on own lines
+  if (spectrum.empty())
+  {
+    OPENMS_LOG_WARN << "Empty spectrum\n";  // Use logging macros
+    return;
+  }
+}
+```
+
+## C++ Guide (OpenMS-specific)
+
+- `OPENMS_DLLAPI` on all non-template exported classes/structs/functions/vars; not on templates; include in friend operator declarations.
+- Use OpenMS logging macros and `OpenMS::LogStream`; avoid `std::cout/err` directly.
+- Use `ProgressLogger` in tools for progress reporting.
+- Avoid `std::endl` for performance; prefer `\n`.
+- Prefer `OpenMS::StringUtils` (`toStr`, `toInt32`/`toInt64`/`toDouble`/`toFloat`, ...) over stream operators for numeric formatting and parsing (precision and speed); OpenMS uses `std::string`/`std::string_view` throughout, not a custom String class.
+- Use `Size`/`SignedSize` for STL `.size()` values.
+- Avoid pointers; prefer references.
+- Prefer forward declarations in headers; include only base class headers, non-pointer members, and templates.
+
+## TOPP Tool Development
+
+- Add new tool source (e.g., `src/topp/<Tool>.cpp`) and register in `src/topp/executables.cmake`.
+- Declaring it with `openms_topp_tool(<Tool> "<Category>")` also registers it: the build generates the
+  tool registry `share/OpenMS/TOOLS/OpenMS.tsv` from those declarations, so `ToolHandler` lists it and
+  Doxygen help output is generated. There is no separate registry file to edit.
+- Define parameters in `registerOptionsAndFlags_()`; read with `getStringOption_` and related helpers.
+- Document the tool and add to `doc/doxygen/public/TOPP.doxygen` where applicable.
+- Add TOPP tests in `src/tests/topp/CMakeLists.txt`.
+
+## pyOpenMS Wrapping
+
+- Bindings are hand-maintained nanobind C++ files in `src/pyOpenMS/bindings/bind_<domain>.cpp`. No code generator — edit binding files directly.
+- Pick the right `bind_<domain>.cpp` based on the C++ header path (e.g., `KERNEL/` → `bind_kernel.cpp`, `FORMAT/` → `bind_format.cpp`).
+- Each class has a `// --- ClassName ---` section comment for navigation.
+- Add `nb::class_<OpenMS::MyClass>(m, "MyClass", "docstring")` with `.def()` chains for methods.
+- Always add default and copy constructors when available: `.def(nb::init<>())`, `.def(nb::init<const OpenMS::MyClass&>())`.
+- Addons in `src/pyOpenMS/pyopenms/addons/` inject pure Python methods at import time via `@addon("ClassName")`.
+- Use snake_case for Python-facing names and DataFrame columns.
+- Do not add Python-only methods to bindings; use addons or `_dataframes.py` wrappers.
+- DataFrame pattern: `get_data_dict()` in addon returns numpy arrays; `get_df()` in `src/pyOpenMS/pyopenms/_dataframes.py` wraps with pandas.
+- Type casters in `bindings/type_casters/` handle C++ ↔ Python type conversion (std::string ↔ str, DPosition, DataValue, etc.).
+- Keep addons minimal; avoid redundant aliases.
+- Performance-critical methods should be C++ lambdas in the binding files rather than Python addons.
+- All domain modules use `NB_DOMAIN "pyopenms"` for cross-module type sharing.
+- See `src/pyOpenMS/README_WRAPPING_NEW_CLASSES.md` for the full wrapping guide.
+- Build and test:
+  ```bash
+  cmake --build OpenMS-build --target pyopenms -j$(nproc)
+  cd /tmp && PYTHONPATH=.../OpenMS-build/pyOpenMS python3 -m pytest .../src/pyOpenMS/tests/ -v
+  ```
+
+## Change-Impact Checklist
+
+- New C++ class: add `.h`/`.cpp`, Doxygen docs, class test, `OPENMS_DLLAPI`, register in CMake lists.
+- C++ API change: update nanobind bindings/addons, pyOpenMS tests, and relevant docs; tag commits with `API` as needed.
+- New/changed TOPP tool: declare in `src/topp/executables.cmake` with its category, add docs, add TOPP tests and data.
+- Parameter or I/O change: update tool docs/CTD, tests, and `CHANGELOG`; use `PARAM`/`IO` commit tags.
+- File format change: update `FileHandler::NamesOfTypes[]`, schemas/validators, and tests.
+
+## Contribution Workflow and Commit Messages
+
+- Development follows Gitflow; use forks and open PRs against `develop`.
+- Build locally and run the relevant tests before opening a PR (see Critical Constraints).
+- Commit format: `[TAG1,TAG2] short summary` (<=120 chars, <=80 preferred), blank line, longer description, and `Fixes #N`/`Closes #N` when applicable.
+- Commit tags: NOP, DOC, COMMENT, API, INTERNAL, FEATURE, FIX, TEST, FORMAT, PARAM, IO, LOG, GUI, RESOURCE, BUILD.
+- PR checklist: update `AUTHORS` and `CHANGELOG`, run/extend tests, update pyOpenMS bindings when needed.
+- Minimize pushes on open PRs (CI is heavy).
+- Run clang-format for local style checks.
+
+**Commit message example:**
+**Formatting rules (C++):**
+- 2 spaces indentation, no tabs (Python uses 4 spaces per PEP 8)
+- Unix line endings (LF)
+- Braces on their own lines, aligned
+- Space after keywords (`if`, `for`, `while`)
+- Always use braces, even for single-line blocks
+
+## Testing Patterns
+
+**Unit test structure:**
+```cpp
+// src/tests/class_tests/openms/source/MyClass_test.cpp
+#include <OpenMS/CONCEPT/ClassTest.h>
+#include <OpenMS/PATH/TO/MyClass.h>
+
+START_TEST(MyClass, "$Id$")
+
+MyClass* ptr = nullptr;
+
+START_SECTION(MyClass())
+  ptr = new MyClass();
+  TEST_NOT_EQUAL(ptr, nullptr)
+END_SECTION
+
+START_SECTION(void process(const MSSpectrum&))
+  MSSpectrum spec;
+  spec.push_back(Peak1D(100.0, 1000.0));
+  ptr->process(spec);
+  TEST_EQUAL(spec.size(), 1)
+END_SECTION
+
+delete ptr;
+END_TEST
+```
+
+**Adding tests:**
+1. Create `src/tests/class_tests/openms/source/ClassName_test.cpp`
+2. Add to `src/tests/class_tests/openms/executables.cmake`
+3. Use `NEW_TMP_FILE(filename)` for temp output files
+4. Test data goes in `src/tests/class_tests/libs/data/` (prefix with class name)
+
+## Git Workflow
+
+**Commit message format:**
+```
+[TAG1,TAG2] Short summary (<=80 chars preferred)
+
+Longer description explaining why, not what.
+
+Fixes #123
+```
+
+## Debugging and Profiling
+
+- Linux: use `ldd` to inspect shared libs; `nm -C` for symbols; `perf`/`hotspot` for profiling.
+- Windows: Dependency Walker or `dumpbin /DEPENDENTS` and `dumpbin /EXPORTS`.
+- Memory checks: AddressSanitizer or valgrind with `tools/valgrind/openms_external.supp`.
+**Valid tags:** `NOP`, `DOC`, `COMMENT`, `API`, `INTERNAL`, `FEATURE`, `FIX`, `TEST`, `FORMAT`, `PARAM`, `IO`, `LOG`, `GUI`, `RESOURCE`, `BUILD`
+
+**Branch workflow:**
+- Fork the repo, branch from `develop`
+- Open PRs against `develop` (Gitflow)
+- Minimize pushes on open PRs (CI is resource-heavy)
+
+## Change Impact Checklist
+
+When you change | Also update
+----------------|------------
+C++ class (new) | Add `.h`/`.cpp`, Doxygen docs, class test, `OPENMS_DLLAPI`, CMake registration
+C++ API | nanobind bindings (`bind_<domain>.cpp`), pyOpenMS addons, tests, docs
+TOPP tool (new) | `src/topp/executables.cmake` (name + category), docs, TOPP tests
+Parameters | Tool docs, CTD, tests, `CHANGELOG`
+File format | `FileHandler::NamesOfTypes[]`, schemas, tests
+
+## pyOpenMS Wrapping
+
+**Key files:**
+- Nanobind bindings: `src/pyOpenMS/bindings/bind_<domain>.cpp` (13 domain files)
+- Type casters: `src/pyOpenMS/bindings/type_casters/`
+- Python addons: `src/pyOpenMS/pyopenms/addons/`
+- Wrapping guide: `src/pyOpenMS/README_WRAPPING_NEW_CLASSES.md`
+
+**Common patterns:**
+```python
+# In pyopenms/addons/myclass.py - inject Python-only methods
+from pyopenms.addons import addon
+
+@addon("MyClass")
+def get_df(self):
+    """Return pandas DataFrame."""
+    import pandas as pd
+    return pd.DataFrame(self.get_data_dict())
+```
+
+**Gotchas:**
+- Always add default and copy constructors: `.def(nb::init<>())`, `.def(nb::init<const OpenMS::MyClass&>())`
+- Use lambdas for explicit control over method wrapping
+- Use snake_case for Python-facing names
+
+## Verification Commands
+
+After making changes, verify with:
+```bash
+# Check formatting
+clang-format --dry-run -Werror <changed-files>
+
+# Run relevant tests
+ctest -R <ClassName> -V
+
+# For pyOpenMS changes
+cd OpenMS-build && ctest -R pyopenms -V
+```
+
+## Key Documentation
+
+**In-repo docs:**
+- `README.md` - Project overview
+- `CONTRIBUTING.md` - Contribution guidelines
+- `src/pyOpenMS/README.md` - pyOpenMS development
+- `src/pyOpenMS/README_WRAPPING_NEW_CLASSES.md` - Wrapping guide
+
+**Online resources:**
+- [OpenMS Documentation](https://openms.readthedocs.io/en/latest)
+- [pyOpenMS API Reference](https://pyopenms.readthedocs.io/en/latest/apidocs/index.html)
+- [Developer Coding Conventions](https://abibuilder.cs.uni-tuebingen.de/archive/openms/Documentation/release/latest/html/developer_coding_conventions.html)
+- [How to Write Tests](https://abibuilder.cs.uni-tuebingen.de/archive/openms/Documentation/release/latest/html/developer_how_to_write_tests.html)
+- [GitHub Wiki](https://github.com/OpenMS/OpenMS/wiki)
+
+## Common Gotchas
+
+1. **Template methods with 2+ args in tests**: Wrap in parentheses for `START_SECTION`
+2. **GUI tests need display**: Set `QT_QPA_PLATFORM=minimal` for headless runs
+3. **pyOpenMS tests shadow imports**: Run from outside source tree with `PYTHONPATH` set
+4. **Windows paths**: Keep build paths short; use 64-bit only
+5. **FuzzyDiff for numeric tests**: Build `all`/`ALL_BUILD` to include it
+
+## Debugging Tips
+
+```bash
+# Linux: inspect shared libraries
+ldd /path/to/binary
+nm -C /path/to/library.so | grep MySymbol
+
+# Memory checking
+valgrind --suppressions=tools/valgrind/openms_external.supp ./MyTest
+
+# Profile with perf
+perf record -g ./MyTool input.mzML
+perf report
+```
+
+## External Projects and Examples
+
+- Example external CMake project: `share/OpenMS/examples/external_code/`.
+- External test project: `src/tests/external/`.
+- Use the same compiler/generator as OpenMS; set `OpenMS_DIR` when configuring. For an OpenMS built with vcpkg, also pass its `CMAKE_TOOLCHAIN_FILE`, `VCPKG_INSTALLED_DIR` and `VCPKG_TARGET_TRIPLET` (as the installed-consumer tests in `src/tests/CMakeLists.txt` do).
+- `find_package(OpenMS CONFIG)` provides the imported targets `OpenMS::OpenMS`, `OpenMS::OpenSwathAlgo` and
+  `OpenMS::OpenMS_CLI` (the TOPP tool framework: TOPPBase, ToolHandler, ...; TOPP-style tools link this one
+  and request `COMPONENTS CLI`) (`OpenMS::OpenMS_GUI` via `COMPONENTS GUI`); every installed target also has
+  its un-namespaced alias (`OpenMS`, `OpenSwathAlgo`; `OpenMS_CLI`/`OpenMS_GUI` when those layers are installed).
+- The installed package is layered (`cmake/install_macros.cmake`): core (export set `OpenMSTargets`, install
+  components `library`/`cmake`), CLI (`OpenMSCLITargets`, `library_cli`/`cmake_cli`) and GUI
+  (`OpenMSGUITargets`, `library_gui`/`cmake_gui`); headers have their own `<target>_headers` components.
+  `openms_add_library(... EXPORT_SET <set>)` selects the layer. An installation may stop at any layer
+  (the pyOpenMS wheels install the core layer only); `OpenMSConfig.cmake` includes the target files that
+  exist and sets `OpenMS_CLI_FOUND`/`OpenMS_WITH_GUI`. When adding a library or an install component,
+  keep the layer's library and cmake components together, and update `CPACK_COMPONENTS_ALL` in
+  `cmake/package_deb.cmake`/`package_rpm.cmake` and the consumer fixture in `src/tests/CMakeLists.txt`.
+  `src/tests/package_layers` exercises the macros and the package template with stub libraries
+  (including a `WITH_GUI` ON to OFF reconfiguration of one build directory) in seconds.
+
+## CI, Packaging, and Containers
+
+- CI runs in GitHub Actions; CDash collects nightly results.
+- PR commands: `/reformat`.
+- Container images: see `dockerfiles/README.md` and GHCR packages.
+- macOS code signing/notarization: see `cmake/MacOSX/README.md`.
+
+## Documentation Links (External)
+
+### OpenMS Docs
+- http://www.openms.org/
+- http://www.OpenMS.de
+- https://openms.readthedocs.io/en/latest
+- https://abibuilder.cs.uni-tuebingen.de/archive/openms/Documentation/release/latest/html/index.html
+- https://abibuilder.cs.uni-tuebingen.de/archive/openms/Documentation/nightly/html/index.html
+- http://www.openms.de/current_doxygen/html/
+- https://pyopenms.readthedocs.io/en/latest/index.html
+- https://pyopenms.readthedocs.io/en/latest/apidocs/index.html
+- https://abibuilder.cs.uni-tuebingen.de/archive/openms/OpenMSInstaller/
+- https://abibuilder.cs.uni-tuebingen.de/archive/openms/OpenMSInstaller/nightly/
+- http://www.psidev.info/
+
+### Doxygen Developer Pages (release/latest)
+- https://abibuilder.cs.uni-tuebingen.de/archive/openms/Documentation/release/latest/html/developer_tutorial.html
+- https://abibuilder.cs.uni-tuebingen.de/archive/openms/Documentation/release/latest/html/developer_coding_conventions.html
+- https://abibuilder.cs.uni-tuebingen.de/archive/openms/Documentation/release/latest/html/developer_cpp_guide.html
+- https://abibuilder.cs.uni-tuebingen.de/archive/openms/Documentation/release/latest/html/developer_how_to_write_tests.html
+- https://abibuilder.cs.uni-tuebingen.de/archive/openms/Documentation/release/latest/html/howto_commit_messages.html
+- https://abibuilder.cs.uni-tuebingen.de/archive/openms/Documentation/release/latest/html/developer_faq.html
+
+### Developer Workflow and Contribution
+- https://github.com/OpenMS/OpenMS
+- https://github.com/OpenMS/OpenMS/issues
+- https://github.com/OpenMS/OpenMS/wiki#-for-developers
+- https://github.com/OpenMS/OpenMS/wiki/Coding-conventions
+- https://github.com/OpenMS/OpenMS/wiki/Write-tests
+- https://github.com/OpenMS/OpenMS/wiki/pyOpenMS#wrap
+- https://pyopenms.readthedocs.io/en/latest/wrap_classes.html
+- https://openms.readthedocs.io/en/latest/contribute-to-openms/pull-request-checklist.html
+- https://github.com/OpenMS/OpenMS/wiki/Pull-Request-Checklist
+- https://github.com/OpenMS/OpenMS/wiki/Preparation-of-a-new-OpenMS-release#release_developer
+- http://nvie.com/posts/a-successful-git-branching-model/
+- https://help.github.com/articles/fork-a-repo
+- https://help.github.com/articles/syncing-a-fork
+- https://help.github.com/articles/using-pull-requests
+- http://cdash.seqan.de/index.php?project=OpenMS
+- https://github.com/OpenMS/OpenMS/tags
+
+### Build/Install Guides
+- https://abibuilder.cs.uni-tuebingen.de/archive/openms/Documentation/release/latest/html/install_linux.html
+- https://abibuilder.cs.uni-tuebingen.de/archive/openms/Documentation/release/latest/html/install_mac.html
+- https://abibuilder.cs.uni-tuebingen.de/archive/openms/Documentation/release/latest/html/install_win.html
+- https://github.com/OpenMS/THIRDPARTY
+- https://pkgs.org/search/?q=openms
+- http://manpages.ubuntu.com/manpages/hardy/man1/ctest.1.html
+- http://www.cmake.org
+- http://cmake.org/
+- https://visualstudio.microsoft.com/de/downloads/?q=build+tools
+- http://www.7-zip.org/
+- https://www.qt.io/download
+- https://wiki.qt.io/Building_Qt_6_from_Git
+- https://developer.apple.com/xcode/
+- https://brew.sh/
+- http://www.OpenMS.de/download/
+
+### Coding and Tooling
+- https://clang.llvm.org/docs/ClangFormat.html
+- https://devblogs.microsoft.com/cppblog/clangformat-support-in-visual-studio-2017-15-7-preview-1/
+- https://git-scm.com/
+- http://www.doxygen.org
+- http://www.doxygen.org/index.html
+- https://llvm.org/builds/
+- https://docs.microsoft.com/en-us/cpp/error-messages/compiler-errors-1/compiler-error-c2471?view=msvc-170
+- https://nanobind.readthedocs.io/
+
+### Testing and Profiling Tools
+- https://openms.readthedocs.io/en/latest/docs/topp/adding-new-tool-to-topp.html#how-do-I-add-a-new-TOPP-test
+- https://perf.wiki.kernel.org/index.php/Main_Page
+- https://github.com/KDAB/hotspot
+- http://sandsoftwaresound.net/perf/perf-tutorial-hot-spots/
+- http://valgrind.org/docs/manual/
+- https://github.com/cbielow/wintime
+- http://www.dependencywalker.com/
+
+### Packaging and Containers
+- https://github.com/orgs/OpenMS/packages
+- https://github.com/OpenMS/NSIS
+- http://miktex.org/
+- https://graphviz.org (optional; only needed for the `doc_dot` documentation target with all dot graphs)

@@ -250,9 +250,9 @@ namespace OpenMS
     return mapper.map(spec, peak.peak);
   }
 
-  String LayerDataPeak::getDataArrayDescription(const PeakIndex& peak_index)
+  std::string LayerDataPeak::getDataArrayDescription(const PeakIndex& peak_index)
   {
-    String status;
+    std::string status;
     const ExperimentType::SpectrumType& s = getSpectrum(peak_index.spectrum);
     for (Size m = 0; m < s.getFloatDataArrays().size(); ++m)
     {
@@ -298,7 +298,7 @@ namespace OpenMS
   
   const LayerDataBase::ConstExperimentSharedPtrType LayerDataPeak::getPeakData() const
   {
-    return boost::static_pointer_cast<const ExperimentType>(peak_map_);
+    return std::static_pointer_cast<const ExperimentType>(peak_map_);
   }
 
 } // namespace OpenMS

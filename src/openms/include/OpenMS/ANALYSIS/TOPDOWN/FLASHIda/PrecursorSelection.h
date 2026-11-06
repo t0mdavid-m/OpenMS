@@ -101,7 +101,7 @@ namespace OpenMS
      */
     struct TargetPTM
     {
-      String name;      ///< Modification name (e.g., "acetylation")
+      std::string name;      ///< Modification name (e.g., "acetylation")
       double mass;      ///< Delta mass in Da
       int max_count;    ///< Maximum occurrences on single proteoform
     };
@@ -111,12 +111,12 @@ namespace OpenMS
      */
     struct TagMatch
     {
-      String tag_sequence;        ///< The sequence tag string
+      std::string tag_sequence;        ///< The sequence tag string
       double n_term_mass;         ///< N-terminal flanking mass
       double c_term_mass;         ///< C-terminal flanking mass
       double tag_score;           ///< Score of the tag
       int protein_index;          ///< Index in the FASTA file
-      String protein_accession;   ///< Protein accession
+      std::string protein_accession;   ///< Protein accession
       int match_position;         ///< Position in the protein sequence where tag matches
       double flanking_mass_diff;  ///< Difference between tag flanking mass and protein flanking mass
     };
@@ -416,10 +416,10 @@ namespace OpenMS
     std::vector<int> spentAuthoredCharges_(int nominal_mass) const;
 
     /// Parse TSV inclusion list file
-    void parseInclusionListTSV_(const String& filename);
+    void parseInclusionListTSV_(const std::string& filename);
 
     /// Parse TSV file containing PTM modifications for target expansion
-    void parseTargetPTMsTSV_(const String& filename);
+    void parseTargetPTMsTSV_(const std::string& filename);
 
     /// Generate all PTM mass combinations for a base protein mass
     std::vector<double> generatePTMCombinations_(double base_mass,

@@ -11,6 +11,7 @@
 #include <ui_InputFile.h>
 
 #include <OpenMS/SYSTEM/File.h>
+#include <OpenMS/VISUAL/MISC/Qt5Port.h>
 
 #include <QtWidgets/QMessageBox>
 #include <QtWidgets/QFileDialog>
@@ -30,7 +31,7 @@ namespace OpenMS
     QCompleter* completer = new QCompleter(this);
     completer->setModel(new QFileSystemModel(completer));
     ui_->line_edit->setCompleter(completer);
-    connect(ui_->browse_button, SIGNAL(clicked()), this, SLOT(showFileDialog()));
+    connect(ui_->browse_button, &QPushButton::clicked, this, &InputFile::showFileDialog);
   }
 
   InputFile::~InputFile()
@@ -72,7 +73,7 @@ namespace OpenMS
   {
     ui_->line_edit->setText(filename);
     emit updatedFile(filename);
-    setCWD(File::path(filename).toQString());
+    setCWD(toQString(File::path(fromQString(filename))));
   }
 
   QString InputFile::getFilename() const

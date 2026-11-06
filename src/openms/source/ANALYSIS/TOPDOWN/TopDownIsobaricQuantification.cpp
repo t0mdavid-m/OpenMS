@@ -68,7 +68,7 @@ namespace OpenMS
   void TopDownIsobaricQuantification::quantify(const MSExperiment& exp, std::vector<DeconvolvedSpectrum>& deconvolved_spectra, const std::vector<FLASHHelperClasses::MassFeature>& mass_features)
   {
     // set the parameters for this method
-    String type = getParameters().getValue("type").toString();
+    std::string type = getParameters().getValue("type").toString();
 
     if (type == "none")
     {

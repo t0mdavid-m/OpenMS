@@ -15,12 +15,12 @@
 #include <OpenMS/KERNEL/MSChromatogram.h>
 #include <OpenMS/CHEMISTRY/Element.h>
 
+#include <memory>
 #include <vector>
-
-struct svm_model;
 
 namespace OpenMS
 {
+  class SimpleSVM;
 
   /**
     @brief Internal structure used in @ref FeatureFindingMetabo that keeps
@@ -48,9 +48,9 @@ public:
     // getter & setter
     Size getSize() const;
 
-    String getLabel() const;
+    std::string getLabel() const;
 
-    std::vector<String> getLabels() const;
+    std::vector<std::string> getLabels() const;
 
     double getScore() const;
 
@@ -65,6 +65,8 @@ public:
     std::vector<double> getAllCentroidMZ() const;
 
     std::vector<double> getAllCentroidRT() const;
+
+    std::vector<double> getAllCentroidIM() const;
 
     std::vector<double> getIsotopeDistances() const;
 
@@ -172,15 +174,15 @@ protected:
 private:
     /**
      * @brief parses a string of element symbols into a vector of Elements
-     * @param elements_string string of element symbols without whitespaces or commas. e.g. CHNOPSCl
+     * @param[in] elements_string string of element symbols without whitespaces or commas. e.g. CHNOPSCl
      * @return vector of Elements
      */
     std::vector<const Element*> elementsFromString_(const std::string& elements_string) const;
     /**
      * Calculate the maximal and minimal mass defects of isotopes for a given set of elements.
      *
-     * @param alphabet   chemical alphabet (elements which are expected to be present)
-     * @param peakOffset integer distance between isotope peak and monoisotopic peak (minimum: 1)
+     * @param[in] alphabet   chemical alphabet (elements which are expected to be present)
+     * @param[in] peakOffset integer distance between isotope peak and monoisotopic peak (minimum: 1)
      * @return an interval which should contain the isotopic peak. This interval is relative to the monoisotopic peak.
      */
     Range getTheoreticIsotopicMassWindow_(const std::vector<Element const *>& alphabet, int peakOffset) const;
@@ -192,10 +194,12 @@ private:
      *
      * See also https://en.wikipedia.org/wiki/Cosine_similarity
      *
+     * @param[in] vec1 First vector
+     * @param[in] vec2 Second vector
     */
-    double computeCosineSim_(const std::vector<double>&, const std::vector<double>&) const;
+    double computeCosineSim_(const std::vector<double>& vec1, const std::vector<double>& vec2) const;
 
-    /** @brief Compare intensities of feature hypothesis with model 
+    /** @brief Compare intensities of feature hypothesis with model
      *
      * Use a pre-trained SVM model to evaluate the intensity distribution of a
      * given feature hypothesis. The model is trained on the monoisotopic and
@@ -204,19 +208,19 @@ private:
      *
      * Reference: Kenar et al., doi: 10.1074/mcp.M113.031278
      *
-     * @param feat_hypo A feature hypotheses containing mass traces
+     * @param[in] feat_hypo A feature hypotheses containing mass traces
      * @return 0 for 'no'; 1 for 'yes'; -1 if only a single mass trace exists
     */
     int isLegalIsotopePattern_(const FeatureHypothesis& feat_hypo) const;
 
-    void loadIsotopeModel_(const String&);
+    void loadIsotopeModel_(const std::string&);
 
     /** @brief Perform mass to charge scoring of two multiple mass traces
      *
      * Scores two mass traces based on the m/z and the hypothesis that one
      * trace is an isotopic trace of the other one. The isotopic position
      * (which trace it is) and the charge for the hypothesis are given as
-     * additional parameters. 
+     * additional parameters.
      * The scoring is described in Kenar et al., and is based on a random
      * sample of 115 000 compounds drawn from a comprehensive set of 24 million
      * putative sum formulas, of which the isotopic distribution was accurately
@@ -233,47 +237,64 @@ private:
      * An alternative scoring was added which test if isotope m/z distances lie in an expected m/z window.
      * This window is computed from a given set of elements.
      *
+     * @param[in] mt1 First mass trace
+     * @param[in] mt2 Second mass trace
+     * @param[in] isotopic_position Isotopic position
+     * @param[in] charge Charge
+     * @param[in] isotope_window Isotope window
     */
-    double scoreMZ_(const MassTrace &, const MassTrace &, Size isotopic_position, Size charge, Range isotope_window) const;
+    double scoreMZ_(const MassTrace& mt1, const MassTrace& mt2, Size isotopic_position, Size charge, Range isotope_window) const;
 
     /**
      * @brief score isotope m/z distance based on the expected m/z distances using C13-C12 or Kenar method
-     * @param iso_pos
-     * @param charge
-     * @param diff_mz
-     * @param mt_variances
-     * @return
+     * @param[in] iso_pos Isotopic position
+     * @param[in] charge Charge
+     * @param[in] diff_mz Mass-to-charge difference
+     * @param[in] mt_variances Mass trace variances
+     * @return Score value
      */
     double scoreMZByExpectedMean_(Size iso_pos, Size charge, const double diff_mz, double mt_variances) const;
 
     /**
      * @brief score isotope m/z distance based on an expected isotope window which was calculated from a set of expected elements
-     * @param charge
-     * @param diff_mz
-     * @param mt_variances m/z variance between the two mass traces which are compared
-     * @param isotope_window
-     * @return
+     * @param[in] charge Charge
+     * @param[in] diff_mz Mass-to-charge difference
+     * @param[in] mt_variances m/z variance between the two mass traces which are compared
+     * @param[in] isotope_window Isotope window
+     * @return Score value
      */
     double scoreMZByExpectedRange_(Size charge, const double diff_mz, double mt_variances, Range isotope_window) const;
 
     /** @brief Perform retention time scoring of two multiple mass traces
      *
      * Computes the similarity of the two peak shapes using cosine similarity
-     * (see computeCosineSim_) if some conditions are fulfilled. Mainly the
-     * overlap between the two peaks at FHWM needs to exceed a certain
-     * threshold. The threshold is set at 0.7 (i.e. 70 % overlap) as also
-     * described in Kenar et al.
+     * (see computeCosineSim_) if some conditions are fulfilled. The RT overlap
+     * of the two peaks at FWHM must exceed the fraction given by the
+     * 'min_isotope_rt_overlap' parameter. By default ('isotope_rt_overlap_reference'
+     * = "longer") the overlap is measured against the longer trace with a
+     * threshold of 0.7 (i.e. 70 % overlap), as described in Kenar et al. When
+     * 'isotope_rt_overlap_reference' is set to "shorter", the overlap is measured
+     * against the shorter trace instead (better for low-intensity isotope traces
+     * that are much shorter than the monoisotopic trace) and, additionally, the
+     * apex (most intense peak) of the longer trace must fall within the RT range
+     * of the shorter trace.
      *
      * @note this only works for equally sampled mass traces, e.g. they need to
      * come from the same map (not for SRM measurements for example).
+     *
+     * @param[in] mt1 First mass trace
+     * @param[in] mt2 Second mass trace
     */
-    double scoreRT_(const MassTrace&, const MassTrace&) const;
+    double scoreRT_(const MassTrace& mt1, const MassTrace& mt2) const;
 
     /** @brief Perform intensity scoring using the averagine model (for peptides only)
      *
      * Compare the isotopic intensity distribution with the theoretical one
      * expected for peptides, using the averagine model. Compute the cosine
      * similarity between the two values.
+     *
+     * @param[in] intensities Intensity values
+     * @param[in] molecular_weight Molecular weight
     */
     double computeAveragineSimScore_(const std::vector<double>& intensities, const double& molecular_weight) const;
 
@@ -284,11 +305,15 @@ private:
      * is assumed that candidates[0] is the monoisotopic trace.
      *
      * The resulting possible groupings are appended to output_hypotheses.
+     *
+     * @param[in] candidates Candidate mass traces
+     * @param[in] total_intensity Total intensity
+     * @param[out] output_hypotheses Output feature hypotheses
     */
     void findLocalFeatures_(const std::vector<const MassTrace*>& candidates, double total_intensity, std::vector<FeatureHypothesis>& output_hypotheses) const;
 
-    /// SVM parameters
-    svm_model* isotope_filt_svm_ = nullptr;
+    /// SVM model (wraps LIBSVM) used to filter isotope patterns; loaded via loadIsotopeModel_()
+    std::unique_ptr<SimpleSVM> isotope_filt_svm_;
     std::vector<double> svm_feat_centers_;
     std::vector<double> svm_feat_scales_;
 
@@ -297,6 +322,7 @@ private:
 
     /// parameter stuff
     double local_rt_range_;
+    double local_im_range_;
     double local_mz_range_;
     Size charge_lower_bound_;
     Size charge_upper_bound_;
@@ -304,7 +330,9 @@ private:
 
     bool report_summed_ints_;
     bool enable_RT_filtering_;
-    String isotope_filtering_model_;
+    double min_isotope_rt_overlap_;
+    bool isotope_rt_overlap_use_shorter_;
+    std::string isotope_filtering_model_;
     bool use_smoothed_intensities_;
     bool report_smoothed_intensities_;
 
@@ -314,6 +342,7 @@ private:
     bool report_chromatograms_;
 
     bool remove_single_traces_;
+    bool has_im_data_ = false; ///< whether the input mass traces contain ion mobility data
     std::vector<const Element*> elements_;
   };
 

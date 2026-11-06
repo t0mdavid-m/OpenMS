@@ -30,17 +30,17 @@ namespace OpenMS
     /**
     @brief Compute number of spectra per MS level and returns them in a map
 
-    @param exp MSExperiment containing the spectra to be counted
+    @param[in] exp MSExperiment containing the spectra to be counted
     @return SpectrumCount
     **/
 
     std::map<Size, UInt> compute(const MSExperiment& exp);
 
-    const String& getName() const override;
+    const std::string& getName() const override;
 
     QCBase::Status requirements() const override;
 
   private:
-    const String name_ = "SpectrumCount";
+    const std::string name_ = "SpectrumCount";
   };
 } // namespace OpenMS
