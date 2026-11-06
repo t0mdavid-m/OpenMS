@@ -16,6 +16,14 @@ instead. It costs nothing to register a new header there and it keeps the drift 
 `ScanRole.h`, `ScanCommandJoin.h`, `KineticModel.h`, `Refine.h`, `RefineSettings.h` and `SearchPool.h` are.
 `FLASHIda/SearchPool.{h,cpp}` (ADR-0062) is the fixed pool of search workers with a bounded backlog that
 matches MS2s beside the analysis thread; it knows nothing about spectra, and `FLASHIda` builds its jobs.
+`FLASHIda/ProteomeSearch.{h,cpp}` (ADR-0061 d.3) is FLASHTnT's own search of one MS2: the Protein
+reference loaded once (decoy-prefixed entries dropped and counted), `FLASHTnTAlgorithm::prepareDatabase`
+built once and shared, and a `Worker` per search thread that owns its `FLASHTnTAlgorithm` and calls `run()`
+on a one-spectrum input (the MS2 converted with `DeconvolvedSpectrum::toSpectrum`, its raw spectrum handed
+to the annotation through a loader). With a target-only reference, every run-level step of `run()` (protein
+FDR, cascade, q-values) has nothing to decide, so a spectrum's PrSMs are those a whole run of MS2s gives
+it. `FLASHIda_ProteomeSearch_test` pins it on a private E. coli slice (`test-data-private/ecoli_parity/`,
+parent repo only). Nothing in the engine calls it yet: push 4b wires it into the search pool.
 
 ### The untouchable boundary
 
@@ -77,14 +85,33 @@ is airtight:
 > `a_factor_shifts_the_ratio_and_leaves_the_reported_channels_raw` and
 > `emptiness_is_judged_on_the_raw_value` pin both.
 
-⚠️ **One owner-approved edit sits inside the boundary: `PeakGroup::updateSNR_`** (`fix(TOPDOWN)`
+⚠️ **Two owner-approved edits sit inside the boundary.** The first is `PeakGroup::updateSNR_` (`fix(TOPDOWN)`
 `9721595ca4`, 2026-10-26, on top of the FDmerge merge `d0954cf37b`). FDmerge's `updateChargeRange_` passes
 over up to two weak charges, so a charge with **no peak** can now sit inside a PeakGroup's range. With
 no signal and no noise, the two `1e-6` regularisers cancel and that charge scores SNR **exactly 1.0**,
 above the real charges. It then became the representative charge, and `buildMS2` wrote an isolation
 centre of −5.5. The fix gives a charge with no signal SNR 0. It is a separate commit so Kyowon can take
-it into FDmerge or reject it; nothing was pushed to `FDmerge` itself. Every other FLASHDeconv/FLASHTnT
-file is exactly as FDmerge has it.
+it into FDmerge or reject it; nothing was pushed to `FDmerge` itself.
+
+The second is `FLASHTnTAlgorithm`'s **prepared database** (ADR-0061 d.3, 2026-11-06), so that the real-time
+search builds `run()`'s database side once instead of per MS2 (the gapped-tag index alone is seconds for
+E. coli). `prepareDatabase()` holds that side moved as it was: the entries I→L, the sequences with and
+without X, the decoy factor, the full sequences and fixed masses of a PEFF database, the blind-mod map, the
+protein mass sets, the residue sums and their indexes, the gapped-tag index and the mass ladders.
+`setPreparedDatabase()` makes `run()` reuse it; without one, `run()` builds its own, so offline FLASHTnT runs
+the same code. Three things changed for offline runs, none of them a PrSM: the database work and its log
+lines come before the spectra are read; the precursor-ladder index is built whether or not a spectrum has a
+precursor mass (the searches still gate on it); and a prepared `run()` binds the ladders `const` and never
+batches precursor windows (`preparePrecursorWindows`/`clearPrecursorWindows`), because the batch writes the
+shared index. An unlisted mass is swept, which gives the same windows, and one spectrum never reaches the
+256 masses the batch needs. `FLASHIda_ProteomeSearch_test` pins `run()` after the edit to a capture taken
+before it (`test-data-private/ecoli_parity/tnt_reference.tsv`, run 42290157689), per scan as a multiset, because
+`run()` is not bit-reproducible: modification masses differ in their last digits between two runs of one binary, a
+scan's PrSM order differs between builds, and RawScore's chance rate is pooled per spectrum over its PrSMs' decoy
+fragments (`FLASHAnnotatorAlgorithm::annotate`), so one decoy match at a tolerance edge moves every RawScore of that
+spectrum (scan 1005, 0.4–1.0 %, in one of four runs). PrSM identity is compared exactly, RawScore to rel 2e-2, and the
+score only by 8 × its RawScore change. Every other
+FLASHDeconv/FLASHTnT file is exactly as FDmerge has it.
 
 ### Ownership tree — declaration order is load-bearing
 

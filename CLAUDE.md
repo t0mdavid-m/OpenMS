@@ -16,7 +16,7 @@ Headers in `src/openms/include/OpenMS/ANALYSIS/TOPDOWN/`, sources in
 `src/openms/source/ANALYSIS/TOPDOWN/` (**no** `OpenMS/` segment). `FLASHIda.cpp` and
 `FLASHIdaBridgeFunctions.cpp` sit in `TOPDOWN/`; the runtime helpers in `TOPDOWN/FLASHIda/`:
 `Config`, `Deconvolution`, `Exploration`, `FAIMS`, `FragmentAnalysis`, `IdaLogger`, `KineticModel`,
-`MS3FragmentMatcher`, `Ms2Params`, `PrecursorSelection`, `ProteoformTracker`, `Quantification`,
+`MS3FragmentMatcher`, `Ms2Params`, `PrecursorSelection`, `ProteoformTracker`, `ProteomeSearch`, `Quantification`,
 `Refine`, `ScanCommand`, `ScanCommandQueue`, `ScanRole`, `SearchPool`, plus the offline `ScanCommandJoin`.
 `sources.cmake` is not a reliable header inventory; glob the directory.
 
@@ -32,12 +32,19 @@ Every change under `src/` (engine, bridge, tests, `.cmake`) needs the owner's ap
 written; an approved plan that names the files and describes the change **is** that approval. A
 departure from the plan goes back to the owner. Ambiguous cases count as source changes.
 
-- **One owner-approved edit sits inside the boundary**: `PeakGroup::updateSNR_` (`9721595ca4`, a
-  charge with no signal has SNR 0). Everything else in FLASHDeconv/FLASHTnT is exactly as Kyowon's
-  FDmerge has it.
+- **Two owner-approved edits sit inside the boundary**: `PeakGroup::updateSNR_` (`9721595ca4`, a
+  charge with no signal has SNR 0), and `FLASHTnTAlgorithm`'s **prepared database** (ADR-0061 d.3):
+  `prepareDatabase()` holds `run()`'s database side moved as it was, and `setPreparedDatabase()` makes
+  `run()` reuse it read-only. Everything else in FLASHDeconv/FLASHTnT is exactly as Kyowon's FDmerge has it.
+- **A prepared `run()` must never write the shared state**: it binds the mass ladders `const` and skips
+  `preparePrecursorWindows`/`clearPrecursorWindows` (an unlisted precursor mass is swept: the same
+  windows). `run()` keeps its results until `releaseResults()`, and FLASHTnTAlgorithm's copy
+  constructor copies only its `Param`: construct each instance and call `setParameters`.
 - `OptimizationMetadata` is IDA code in FLASHDeconv territory (a sanctioned hook with its own test).
-- Only `FragmentAnalysis.cpp` and `PrecursorSelection.cpp` reach into FLASHTnT, driving Tagger and
-  Extender directly; every Param is built in `buildTaggerParam`/`buildExtenderParam`.
+- `FragmentAnalysis.cpp` and `PrecursorSelection.cpp` reach into FLASHTnT, driving Tagger and Extender
+  directly (every Param built in `buildTaggerParam`/`buildExtenderParam`); `ProteomeSearch.cpp` drives
+  `FLASHTnTAlgorithm::run` itself, one MS2 at a time on the prepared database. Nothing calls it yet
+  (ADR-0061 push 4b wires it into the search pool); `FLASHIda_ProteomeSearch_test` pins it to FLASHTnT.
 - `TopDownIsobaricQuantification` (off-limits) and `FLASHIda/Quantification` are unrelated.
   `channel_normalization` is applied in `Quantification::evaluate()` only, after the empty check,
   and never written into the logged channels (ADR-0057).
