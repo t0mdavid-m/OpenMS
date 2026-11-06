@@ -960,6 +960,172 @@ namespace
   }
 } // namespace
 
+std::shared_ptr<FLASHTnTAlgorithm::PreparedDatabase> FLASHTnTAlgorithm::prepareDatabase(const std::vector<FASTAFile::FASTAEntry>& original_fasta_entry,
+                                                                                        const ProteoformDatabase* db) const
+{
+  // run()'s database side, moved here as it was (its locals are pd's members), so that a real-time search builds it once (ADR-0061)
+  auto prepared = std::make_shared<PreparedDatabase>();
+  auto& pd = *prepared;
+  if (db == nullptr)
+  {
+    pd.identity_db = ProteoformDatabase::fromFASTA(original_fasta_entry);
+    db = &pd.identity_db;
+  }
+  else if (db->entries.size() != original_fasta_entry.size())
+  {
+    throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "the database has another number of entries than the FASTA entries",
+                                  String(db->entries.size()));
+  }
+  pd.db = db;
+  const bool by_entry = ! db->isIdentity(); // several entries per protein, or fixed modifications
+  const bool with_fixed = db->hasFixedModifications();
+
+  pd.fasta_entry.reserve(original_fasta_entry.size());
+  for (const auto& fe : original_fasta_entry)
+  {
+    auto seq = fe.sequence;
+    std::replace(seq.begin(), seq.end(), 'I', 'L');
+    pd.fasta_entry.emplace_back(fe.identifier, fe.description, seq);
+  }
+
+  {
+    pd.protein_seqs.reserve(pd.fasta_entry.size());
+    pd.cleaned_protein_seqs.reserve(pd.fasta_entry.size());
+    for (const auto& fe : pd.fasta_entry)
+    {
+      pd.protein_seqs.push_back(fe.sequence);
+      String cleaned_seq;
+      std::remove_copy(fe.sequence.begin(), fe.sequence.end(),
+                       std::back_inserter(cleaned_seq), 'X');
+      pd.cleaned_protein_seqs.push_back(cleaned_seq);
+    }
+    // decoys per target by protein (a FASTA entry is a protein), so that the entries of a PEFF protein count once
+    double taget_count = 0;
+    double decoy_count = 0;
+    for (const auto& protein : db->proteins)
+    {
+      if (protein.identifier.hasPrefix("DECOY")) { decoy_count++; }
+      else { taget_count++; }
+    }
+
+    pd.decoy_factor = decoy_count / taget_count;
+  }
+  // the full-length protein sequences (I as L), to which a PrSM of an entry is decoded
+  if (by_entry)
+  {
+    pd.protein_full_seqs.reserve(db->proteins.size());
+    for (const auto& protein : db->proteins)
+    {
+      String seq = protein.sequence;
+      std::replace(seq.begin(), seq.end(), 'I', 'L');
+      pd.protein_full_seqs.push_back(seq);
+    }
+  }
+  // the fixed modifications of each entry in its sequence (fixedMasses) and in its sequence without X (cleaned_protein_seqs)
+  const std::vector<std::vector<std::pair<int, double>>>* entry_fixed = with_fixed ? &db->fixedMasses() : nullptr;
+  if (with_fixed)
+  {
+    pd.cleaned_fixed.resize(pd.fasta_entry.size());
+    for (Size e = 0; e < pd.fasta_entry.size(); e++)
+    {
+      const auto& seq = pd.fasta_entry[e].sequence;
+      for (const auto& [p, mass] : (*entry_fixed)[e])
+      {
+        if (p < 0 || p >= (int)seq.size() || seq[p] == 'X') continue;
+        pd.cleaned_fixed[e].emplace_back(p - (int)std::count(seq.begin(), seq.begin() + p, 'X'), mass);
+      }
+    }
+  }
+
+  // the candidate blind modifications: those of ModificationsDB within the largest total blind shift
+  {
+    const auto inst = ModificationsDB::getInstance();
+    std::vector<String> mod_strs;
+    inst->getAllSearchModifications(mod_strs);
+    for (const auto& mod_str : mod_strs)
+    {
+      const auto mod = *inst->getModification(mod_str);
+      if (std::abs(mod.getDiffMonoMass()) > max_total_mod_mass_) continue;
+      pd.blind_mod_map[mod.getDiffMonoMass()].push_back(mod);
+    }
+  }
+
+  // wall time of the database indexes below (logged after the mass ladders)
+  auto index_clock = std::chrono::steady_clock::now();
+  auto lap = [&index_clock]() {
+    const auto now = std::chrono::steady_clock::now();
+    const double s = std::chrono::duration<double>(now - index_clock).count();
+    index_clock = now;
+    return s;
+  };
+  vectorizeProteinSequence_(pd.cleaned_protein_seqs, pd.vec_pro, pd.rev_vec_pro, with_fixed ? &pd.cleaned_fixed : nullptr);
+  const double t_mass_sets = lap();
+
+  // exact residue sums from the N- and the C-terminus per protein, for the protein-level score (FLASHTaggerAlgorithm::runMatchingExact);
+  // with the fixed masses of an entry, whose residues without them (pro_plain_mass; 0: none fixed) set the chance of a match
+  pd.pro_prefix.resize(pd.cleaned_protein_seqs.size());
+  pd.pro_suffix.resize(pd.cleaned_protein_seqs.size());
+  pd.pro_plain_mass.assign(with_fixed ? pd.cleaned_protein_seqs.size() : 0, 0.0);
+#pragma omp parallel for schedule(dynamic, 64)
+  for (SignedSize k = 0; k < (SignedSize)pd.cleaned_protein_seqs.size(); k++)
+  {
+    const auto& seq = pd.cleaned_protein_seqs[k];
+    auto& pre = pd.pro_prefix[k];
+    auto& suf = pd.pro_suffix[k];
+    pre.reserve(seq.size() + 1);
+    suf.reserve(seq.size() + 1);
+    pre.push_back(0);
+    suf.push_back(0);
+    if (with_fixed && ! pd.cleaned_fixed[k].empty())
+    {
+      std::vector<double> extra(seq.size(), 0.0);
+      for (const auto& [p, mass] : pd.cleaned_fixed[k]) extra[p] += mass;
+      double plain = 0; // as the sum of an entry without fixed modifications
+      for (Size j = 0; j < seq.size(); j++)
+      {
+        const double m = ResidueDB::getInstance()->getResidue(seq[j])->getMonoWeight(Residue::Internal);
+        plain += m;
+        pre.push_back(pre.back() + m + extra[j]);
+      }
+      pd.pro_plain_mass[k] = plain;
+      for (Size j = 0; j < seq.size(); j++)
+        suf.push_back(suf.back() + ResidueDB::getInstance()->getResidue(seq[seq.size() - 1 - j])->getMonoWeight(Residue::Internal) + extra[seq.size() - 1 - j]);
+      continue;
+    }
+    for (Size j = 0; j < seq.size(); j++) pre.push_back(pre.back() + ResidueDB::getInstance()->getResidue(seq[j])->getMonoWeight(Residue::Internal));
+    for (Size j = 0; j < seq.size(); j++) suf.push_back(suf.back() + ResidueDB::getInstance()->getResidue(seq[seq.size() - 1 - j])->getMonoWeight(Residue::Internal));
+  }
+  // their bucket indices, with which FLASHTaggerAlgorithm::scoreShifts looks the residue sum of a mass up instead of walking to it
+  pd.pro_prefix_index.resize(pd.cleaned_protein_seqs.size());
+  pd.pro_suffix_index.resize(pd.cleaned_protein_seqs.size());
+#pragma omp parallel for schedule(dynamic, 64)
+  for (int k = 0; k < (int)pd.cleaned_protein_seqs.size(); k++)
+  {
+    FLASHTaggerAlgorithm::indexResidueSums(pd.pro_prefix[k], pd.pro_prefix_index[k]);
+    FLASHTaggerAlgorithm::indexResidueSums(pd.pro_suffix[k], pd.pro_suffix_index[k]);
+  }
+  const double t_residue_sums = lap();
+  lap();
+  if (gapped_mode_ != "off")
+  {
+    pd.gapped_tagger.setParameters(gapped_param_);
+    pd.gapped_tagger.buildIndex(pd.protein_seqs, entry_fixed);
+    OPENMS_LOG_INFO << "Gapped tag index: " << pd.gapped_tagger.getIndexBytes() / (1024 * 1024) << " MB" << std::endl;
+  }
+  const double t_gapped = lap();
+  // the sliding ladders of native mode read the runs of standard residues of the precursor ladders
+  lap();
+  pd.mass_ladders.buildIndex(pd.protein_seqs, param_.getValue("ion_type").toStringVector(), terminal_ladders_, (precursor_ladders_ && ! protein_level_only_) || (native_ && pd.decoy_factor > 0), db);
+  OPENMS_LOG_INFO << "Database indexes (wall s): protein mass sets " << t_mass_sets << ", residue sums " << t_residue_sums << ", gapped tags "
+                  << t_gapped << ", mass ladders " << lap() << std::endl;
+  return prepared;
+}
+
+void FLASHTnTAlgorithm::setPreparedDatabase(std::shared_ptr<const PreparedDatabase> prepared)
+{
+  prepared_ = std::move(prepared);
+}
+
 void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile::FASTAEntry>& original_fasta_entry, const ProteoformDatabase* db)
 {
   setLogType(CMD);
@@ -968,17 +1134,11 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   // that reads it is the search as before. With a PEFF database, an entry is a processed form of a protein with fixed modifications: the
   // tag hits, the residue sums and the extension add the fixed masses; the candidates are one entry per protein; the protein-level gate
   // and the chimeric exclusion work by protein; and a PrSM is decoded to its protein right after the extension.
-  ProteoformDatabase identity_db;
-  if (db == nullptr)
-  {
-    identity_db = ProteoformDatabase::fromFASTA(original_fasta_entry);
-    db = &identity_db;
-  }
-  else if (db->entries.size() != original_fasta_entry.size())
-  {
-    throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "the database has another number of entries than the FASTA entries",
-                                  String(db->entries.size()));
-  }
+  std::shared_ptr<PreparedDatabase> own_prepared; // built here when nothing was prepared (setPreparedDatabase)
+  if (! prepared_) own_prepared = prepareDatabase(original_fasta_entry, db);
+  const PreparedDatabase& prepared = prepared_ ? *prepared_ : *own_prepared;
+  db = prepared.db;
+  decoy_factor_ = prepared.decoy_factor;
   const bool by_entry = ! db->isIdentity(); // several entries per protein, or fixed modifications
   const auto& protein_of = db->proteinOfEntry();
   const bool with_fixed = db->hasFixedModifications();
@@ -993,44 +1153,16 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   std::vector<TagDbHits> tag_db;
 
   std::map<int, std::vector<Size>> scan_to_tag_indices;         // scan number to tag indices
-  std::vector<std::string> tag_seqs, protein_seqs, cleaned_protein_seqs;
+  std::vector<std::string> tag_seqs;
+  const auto& protein_seqs = prepared.protein_seqs;
+  const auto& cleaned_protein_seqs = prepared.cleaned_protein_seqs;
   std::vector<DeconvolvedSpectrum> dspecs;
   // per spectrum in dspecs: the tolerance of its deconvolution and, for the chimeric search only, all its masses (ascending) if the cap
   // max_node_cntr_ left some out (else empty: dspecs has them all)
   std::vector<double> spectrum_tols;
   std::vector<std::vector<PeakGroup>> uncapped_masses;
 
-  std::vector<FASTAFile::FASTAEntry> fasta_entry;
-  fasta_entry.reserve(original_fasta_entry.size());
-  for (const auto& fe : original_fasta_entry)
-  {
-    auto seq = fe.sequence;
-    std::replace(seq.begin(), seq.end(), 'I', 'L');
-    fasta_entry.emplace_back(fe.identifier, fe.description, seq);
-  }
-
-  {
-    protein_seqs.reserve(fasta_entry.size());
-    cleaned_protein_seqs.reserve(fasta_entry.size());
-    for (const auto& fe : fasta_entry)
-    {
-      protein_seqs.push_back(fe.sequence);
-      String cleaned_seq;
-      std::remove_copy(fe.sequence.begin(), fe.sequence.end(),
-                       std::back_inserter(cleaned_seq), 'X');
-      cleaned_protein_seqs.push_back(cleaned_seq);
-    }
-    // decoys per target by protein (a FASTA entry is a protein), so that the entries of a PEFF protein count once
-    double taget_count = 0;
-    double decoy_count = 0;
-    for (const auto& protein : db->proteins)
-    {
-      if (protein.identifier.hasPrefix("DECOY")) { decoy_count++; }
-      else { taget_count++; }
-    }
-
-    decoy_factor_ = decoy_count / taget_count;
-  }
+  const auto& fasta_entry = prepared.fasta_entry;
   if (by_entry)
   {
     Size with_mods = 0, decoys = 0;
@@ -1039,48 +1171,10 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     OPENMS_LOG_INFO << "Database: " << db->proteins.size() - decoys << " target and " << decoys << " decoy proteins, " << db->entries.size()
                     << " entries (" << with_mods << " with fixed modifications)" << std::endl;
   }
-  // the full-length protein sequences (I as L), to which a PrSM of an entry is decoded
-  std::vector<String> protein_full_seqs;
-  if (by_entry)
-  {
-    protein_full_seqs.reserve(db->proteins.size());
-    for (const auto& protein : db->proteins)
-    {
-      String seq = protein.sequence;
-      std::replace(seq.begin(), seq.end(), 'I', 'L');
-      protein_full_seqs.push_back(seq);
-    }
-  }
-  // the fixed modifications of each entry in its sequence (fixedMasses) and in its sequence without X (cleaned_protein_seqs)
+  const auto& protein_full_seqs = prepared.protein_full_seqs;
   const std::vector<std::vector<std::pair<int, double>>>* entry_fixed = with_fixed ? &db->fixedMasses() : nullptr;
-  std::vector<std::vector<std::pair<int, double>>> cleaned_fixed;
-  if (with_fixed)
-  {
-    cleaned_fixed.resize(fasta_entry.size());
-    for (Size e = 0; e < fasta_entry.size(); e++)
-    {
-      const auto& seq = fasta_entry[e].sequence;
-      for (const auto& [p, mass] : (*entry_fixed)[e])
-      {
-        if (p < 0 || p >= (int)seq.size() || seq[p] == 'X') continue;
-        cleaned_fixed[e].emplace_back(p - (int)std::count(seq.begin(), seq.begin() + p, 'X'), mass);
-      }
-    }
-  }
 
-  // the candidate blind modifications: those of ModificationsDB within the largest total blind shift
-  std::map<double, std::vector<ResidueModification>> blind_mod_map;
-  {
-    const auto inst = ModificationsDB::getInstance();
-    std::vector<String> mod_strs;
-    inst->getAllSearchModifications(mod_strs);
-    for (const auto& mod_str : mod_strs)
-    {
-      const auto mod = *inst->getModification(mod_str);
-      if (std::abs(mod.getDiffMonoMass()) > max_total_mod_mass_) continue;
-      blind_mod_map[mod.getDiffMonoMass()].push_back(mod);
-    }
-  }
+  const auto& blind_mod_map = prepared.blind_mod_map;
 
   double precursor_tol = -1, tol, ms2_tol = -1;
 
@@ -1496,60 +1590,13 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   searchTagSequences(tag_seqs);
   startProgress(0, (SignedSize)dspecs.size(), "Running candidate protein filtration ...");
 
-  // wall time of the database indexes below (logged after the mass ladders)
-  auto index_clock = std::chrono::steady_clock::now();
-  auto lap = [&index_clock]() {
-    const auto now = std::chrono::steady_clock::now();
-    const double s = std::chrono::duration<double>(now - index_clock).count();
-    index_clock = now;
-    return s;
-  };
-  std::vector<std::unordered_set<int>> vec_pro, rev_vec_pro;
-  vectorizeProteinSequence_(cleaned_protein_seqs, vec_pro, rev_vec_pro, with_fixed ? &cleaned_fixed : nullptr);
-  const double t_mass_sets = lap();
-
-  // exact residue sums from the N- and the C-terminus per protein, for the protein-level score (FLASHTaggerAlgorithm::runMatchingExact);
-  // with the fixed masses of an entry, whose residues without them (pro_plain_mass; 0: none fixed) set the chance of a match
-  std::vector<std::vector<double>> pro_prefix(cleaned_protein_seqs.size()), pro_suffix(cleaned_protein_seqs.size());
-  std::vector<double> pro_plain_mass(with_fixed ? cleaned_protein_seqs.size() : 0, 0.0);
-#pragma omp parallel for schedule(dynamic, 64)
-  for (SignedSize k = 0; k < (SignedSize)cleaned_protein_seqs.size(); k++)
-  {
-    const auto& seq = cleaned_protein_seqs[k];
-    auto& pre = pro_prefix[k];
-    auto& suf = pro_suffix[k];
-    pre.reserve(seq.size() + 1);
-    suf.reserve(seq.size() + 1);
-    pre.push_back(0);
-    suf.push_back(0);
-    if (with_fixed && ! cleaned_fixed[k].empty())
-    {
-      std::vector<double> extra(seq.size(), 0.0);
-      for (const auto& [p, mass] : cleaned_fixed[k]) extra[p] += mass;
-      double plain = 0; // as the sum of an entry without fixed modifications
-      for (Size j = 0; j < seq.size(); j++)
-      {
-        const double m = ResidueDB::getInstance()->getResidue(seq[j])->getMonoWeight(Residue::Internal);
-        plain += m;
-        pre.push_back(pre.back() + m + extra[j]);
-      }
-      pro_plain_mass[k] = plain;
-      for (Size j = 0; j < seq.size(); j++)
-        suf.push_back(suf.back() + ResidueDB::getInstance()->getResidue(seq[seq.size() - 1 - j])->getMonoWeight(Residue::Internal) + extra[seq.size() - 1 - j]);
-      continue;
-    }
-    for (Size j = 0; j < seq.size(); j++) pre.push_back(pre.back() + ResidueDB::getInstance()->getResidue(seq[j])->getMonoWeight(Residue::Internal));
-    for (Size j = 0; j < seq.size(); j++) suf.push_back(suf.back() + ResidueDB::getInstance()->getResidue(seq[seq.size() - 1 - j])->getMonoWeight(Residue::Internal));
-  }
-  // their bucket indices, with which FLASHTaggerAlgorithm::scoreShifts looks the residue sum of a mass up instead of walking to it
-  std::vector<std::vector<std::uint32_t>> pro_prefix_index(cleaned_protein_seqs.size()), pro_suffix_index(cleaned_protein_seqs.size());
-#pragma omp parallel for schedule(dynamic, 64)
-  for (int k = 0; k < (int)cleaned_protein_seqs.size(); k++)
-  {
-    FLASHTaggerAlgorithm::indexResidueSums(pro_prefix[k], pro_prefix_index[k]);
-    FLASHTaggerAlgorithm::indexResidueSums(pro_suffix[k], pro_suffix_index[k]);
-  }
-  const double t_residue_sums = lap();
+  const auto& vec_pro = prepared.vec_pro;
+  const auto& rev_vec_pro = prepared.rev_vec_pro;
+  const auto& pro_prefix = prepared.pro_prefix;
+  const auto& pro_suffix = prepared.pro_suffix;
+  const auto& pro_plain_mass = prepared.pro_plain_mass;
+  const auto& pro_prefix_index = prepared.pro_prefix_index;
+  const auto& pro_suffix_index = prepared.pro_suffix_index;
   const double protein_tol = protein_tol_ > 0 ? protein_tol_ : (ms2_tol > 0 ? ms2_tol : tol);
   // the learned candidate cut reads the ion ladders from the residue sums: c ions NH3 above them; z ions NH3 below, z+1 ions NH3 - H
   const auto ion_types = param_.getValue("ion_type").toStringVector();
@@ -1581,16 +1628,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
              mi_pl_isotope = registry.registerName("PrecursorLadderIsotope"), mi_entry_of_kept = registry.registerName("EntryOfKeptProtein"),
              mi_description = registry.registerName("Description");
   // gapped tags (only for spectra in which no sequence tag proposes a protein); their tags are kept per spectrum until appended to tags_
-  FLASHGappedTaggerAlgorithm gapped_tagger;
-  lap();
-  if (gapped_mode_ != "off")
-  {
-    gapped_tagger.setParameters(gapped_param_);
-    gapped_tagger.buildIndex(protein_seqs, entry_fixed);
-    OPENMS_LOG_INFO << "Gapped tag index: " << gapped_tagger.getIndexBytes() / (1024 * 1024) << " MB" << std::endl;
-  }
   std::vector<std::vector<FLASHHelperClasses::Tag>> spec_gapped_tags(dspecs.size());
-  const double t_gapped = lap();
+  const FLASHGappedTaggerAlgorithm& gapped_tagger = prepared.gapped_tagger;
 
   // Mass ladders (MassLadderAlgorithm): terminal ladders from the residue sums of every protein from its termini, and precursor-anchored
   // ladders from the runs of standard residues of the database, for the window search of every spectrum with a precursor mass. The
@@ -1613,12 +1652,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   bool any_precursor_mass = false;
   for (const auto& dspec : dspecs) any_precursor_mass |= dspec.getPrecursorPeakGroup().getMonoMass() > 0;
   const bool use_precursor_ladders = precursor_ladders_ && ! protein_level_only_ && any_precursor_mass;
-  MassLadderAlgorithm mass_ladders;
-  // the sliding ladders of native mode read the runs of standard residues of the precursor ladders
-  lap();
-  mass_ladders.buildIndex(protein_seqs, param_.getValue("ion_type").toStringVector(), terminal_ladders_, use_precursor_ladders || native_rule, db);
-  OPENMS_LOG_INFO << "Database indexes (wall s): protein mass sets " << t_mass_sets << ", residue sums " << t_residue_sums << ", gapped tags "
-                  << t_gapped << ", mass ladders " << lap() << std::endl;
+  const MassLadderAlgorithm& mass_ladders = prepared.mass_ladders;
   // the precursor tolerance of the windows: the MS1 tolerance of the input, else (no MS1 spectra) the fragment tolerance
   const double pl_precursor_tol = precursor_tol > 0 ? precursor_tol : protein_tol;
   // per spectrum: the windows that fit its precursor mass (hypotheses), and the candidates; the same at the decoy precursor mass
@@ -2450,7 +2484,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         all_precursor_masses.push_back(dspec.getPrecursorPeakGroup().getMonoMass());
         if (decoy_precursor_ && dspec.getDecoyPrecursorMass() > 0) all_precursor_masses.push_back(dspec.getDecoyPrecursorMass());
       }
-      mass_ladders.preparePrecursorWindows(all_precursor_masses, pl_precursor_tol);
+      if (own_prepared) own_prepared->mass_ladders.preparePrecursorWindows(all_precursor_masses, pl_precursor_tol);
     }
     std::vector<std::vector<MassLadderAlgorithm::Candidate>> sliding_of;
     if (native_rule) searchSlidingSpectra(dspecs, spectra, nullptr, sliding_of);
@@ -2469,7 +2503,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
                        spec_hits[d], spec_ladder_hits[d], spec_pl_hits[d], spec_decoy_pl_hits[d], spec_gapped_tags[d], spec_pl_windows[d],
                        native_notes[d], native_rule ? &sliding_of[d] : nullptr);
     }
-    if (with_precursor_ladders) mass_ladders.clearPrecursorWindows();
+    if (with_precursor_ladders && own_prepared) own_prepared->mass_ladders.clearPrecursorWindows();
     if (native_rule)
     {
       OPENMS_LOG_INFO << "Native candidates (score above the best decoy of the source in the spectrum + " << native_margin_ << "):";
@@ -4327,10 +4361,13 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   releaseInParallel(dspecs);
   releaseInParallel(uncapped_masses);
   releaseInParallel(tag_db);
-  releaseInParallel(vec_pro);
-  releaseInParallel(rev_vec_pro);
-  releaseInParallel(pro_prefix);
-  releaseInParallel(pro_suffix);
+  if (own_prepared)
+  {
+    releaseInParallel(own_prepared->vec_pro);
+    releaseInParallel(own_prepared->rev_vec_pro);
+    releaseInParallel(own_prepared->pro_prefix);
+    releaseInParallel(own_prepared->pro_suffix);
+  }
   releaseInParallel(ladder_candidates);
   releaseInParallel(pl_candidates);
   releaseInParallel(decoy_pl_candidates);

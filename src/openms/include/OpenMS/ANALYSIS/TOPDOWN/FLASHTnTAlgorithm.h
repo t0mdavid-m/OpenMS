@@ -10,9 +10,12 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHAnnotatorAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHGappedTaggerAlgorithm.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/MassLadderAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/ProteoformDatabase.h>
 #include <OpenMS/CHEMISTRY/Residue.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
+#include <OpenMS/CHEMISTRY/ResidueModification.h>
 #include <OpenMS/DATASTRUCTURES/DefaultParamHandler.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
 #include <OpenMS/METADATA/ProteinHit.h>
@@ -21,7 +24,9 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <set>
+#include <unordered_set>
 
 namespace OpenMS
 {
@@ -108,6 +113,35 @@ public:
     raw_loader_ = std::move(loader);
   }
 
+  /// The database side of run(), built once: the entries (I as L), their sequences with and without X, the decoy factor, the full
+  /// sequences and fixed masses of a PEFF database, the blind modification map, the protein mass sets, the residue sums and their
+  /// indexes, the gapped tag index and the mass ladders (precursor ladders always built). Read-only once built.
+  struct PreparedDatabase
+  {
+    ProteoformDatabase identity_db;               ///< the database when run() was given none
+    const ProteoformDatabase* db = nullptr;       ///< the database searched (&identity_db or the given one)
+    std::vector<FASTAFile::FASTAEntry> fasta_entry;
+    std::vector<std::string> protein_seqs, cleaned_protein_seqs;
+    double decoy_factor = 0;
+    std::vector<String> protein_full_seqs;
+    std::vector<std::vector<std::pair<int, double>>> cleaned_fixed;
+    std::map<double, std::vector<ResidueModification>> blind_mod_map;
+    std::vector<std::unordered_set<int>> vec_pro, rev_vec_pro;
+    std::vector<std::vector<double>> pro_prefix, pro_suffix;
+    std::vector<double> pro_plain_mass;
+    std::vector<std::vector<std::uint32_t>> pro_prefix_index, pro_suffix_index;
+    FLASHGappedTaggerAlgorithm gapped_tagger;
+    MassLadderAlgorithm mass_ladders;
+  };
+  /// Build the database side of run() for @p fasta_entry and @p db with this instance's parameters. run() builds one itself when none is set.
+  std::shared_ptr<PreparedDatabase> prepareDatabase(const std::vector<FASTAFile::FASTAEntry>& fasta_entry,
+                                                    const ProteoformDatabase* db = nullptr) const;
+  /// run() reuses @p prepared instead of building the database side: its fasta_entry and db arguments must be those @p prepared was
+  /// built from, with the same parameters. A prepared run() only reads it (the mass ladders' batch of precursor windows is not
+  /// prepared, so every precursor mass is swept: the same windows), so instances on several threads may share one. nullptr: build it
+  /// in every run().
+  void setPreparedDatabase(std::shared_ptr<const PreparedDatabase> prepared);
+
   /// The protein-level hits, as they were ranked before proteoform characterization. Filled in
   /// both modes, so a run can be used to shortlist proteins even when the extension is performed.
   void getProteinHits(std::vector<ProteinHit>& hits) const
@@ -127,6 +161,8 @@ private:
 
   Param tagger_param_, extender_param_, gapped_param_, annotator_param_;
   RawSpectrumLoader raw_loader_;
+  /// the database side run() reuses (setPreparedDatabase); nullptr: run() builds its own
+  std::shared_ptr<const PreparedDatabase> prepared_;
   /// weight of the raw-spectrum evidence score added to the extension score for the FDR
   double raw_score_weight_ = 8.0;
   /// the raw spectra of loadRawSpectra_, by position (raw_slot_: scan to position): their peaks centroided into raw_peaks_ and removed
