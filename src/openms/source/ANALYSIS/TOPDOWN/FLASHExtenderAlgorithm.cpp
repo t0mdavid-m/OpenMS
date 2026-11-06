@@ -98,7 +98,11 @@ namespace OpenMS
                        "for its series (b/y or c/z). 0 switches it off.");
     defaults_.setMinFloat("cleavage_weight", 0.0);
     defaults_.setValue("cleavage_table", "", "Cleavage propensities replacing the built-in ones, one per line: series (by or cz), before or after, "
-                       "residue, log2(rate / mean). Built-in: b/y from HCD E. coli lysates, c/z from ECD native proteins.");
+                       "residue, log2(rate / mean). Built-in: b/y from HCD E. coli lysates, c/z from AI-ETD E. coli lysate fractions (with "
+                       "cleavage_native: from ECD native proteins).");
+    defaults_.setValue("cleavage_native", "false", "Use the built-in c/z cleavage propensities of native proteins (ECD) instead of those of "
+                       "denatured proteins (ETD). FLASHTnT sets it with -native.");
+    defaults_.setValidStrings("cleavage_native", {"true", "false"});
 
     defaults_.setValue("ion_type", std::vector<std::string> {"b", "y"}, "Specifies ion types to consider");
     defaults_.setValidStrings("ion_type", {"b", "c", "a", "y", "z", "x", "zp1", "zp2"});
@@ -157,13 +161,25 @@ namespace OpenMS
   void FLASHExtenderAlgorithm::loadCleavageTables_()
   {
     // log2(cleavage rate / mean) of the residue before / after a bond, A C D E F G H I K L M N P Q R S T V W Y.
-    // b/y: Eclip_1476/1479/1480 (HCD), 4592 unmodified PrSMs at 1% FDR, 618,683 bonds; the three runs agree (r >= 0.986).
-    // c/z: ECD native proteins (NIST mAb, Infliximab, AQPZ, DLDH, OMPA/OMPF/G3P1), 49 PrSMs, 18,005 bonds, shrunk with 600 pseudo-bonds.
+    // b/y: Eclip_1476/1479/1480 (HCD), 4592 unmodified PrSMs at 1% FDR, 618,683 bonds; the three runs agree (r >= 0.986). The same table
+    // learned on other laboratories' HCD data (PXD007273 CZE on a Q Exactive, PXD068962 native E. coli proteome on a UHMR; 4436 PrSMs)
+    // agrees (r 0.88 before, 0.84 after the bond) and gives the same identifications on the three lysates (5150 vs 5108 proteoforms,
+    // 1007 vs 1009 proteins), so it is kept.
+    // c/z, denatured (default): PXD012247 (E. coli, AI-ETD, 14 SEC fractions; FLASHTnT c z), 7236 unmodified PrSMs, 780,096 bonds. It shows
+    // the known ETD chemistry (no c/z fragments N-terminal to proline: -4.51 after the bond), which the native ECD table did not (-0.45).
+    // Learned on the odd fractions, it gave 2349 instead of 2264 proteoforms on the even ones (+3.8 %, the same 288 proteins).
+    // c/z, native (cleavage_native): ECD native proteins (NIST mAb, Infliximab, AQPZ, DLDH, OMPA/OMPF/G3P1), 49 PrSMs, 18,005 bonds, shrunk
+    // with 600 pseudo-bonds. The denatured table lost an expected protein of the native test spectra (34 -> 33 of 43; NIST heavy chain).
     static const char aa[] = "ACDEFGHIKLMNPQRSTVWY";
     static const double by_before[] = {+0.04, -0.90, +0.63, +0.51, -0.25, -0.79, +0.14, +0.33, -0.18, +0.07, -0.56, -0.05, -1.13, +0.13, -1.61, -0.12, -0.07, +0.48, -0.08, -0.23};
     static const double by_after[] = {+0.06, -0.26, -0.07, -0.07, -0.08, -0.05, -0.10, +0.22, -0.42, +0.02, -0.49, +0.01, +0.80, +0.11, -2.09, +0.36, +0.14, +0.25, -0.15, -0.18};
-    static const double cz_before[] = {-0.24, +0.22, +0.19, -0.28, +0.10, +0.31, +0.19, -0.18, -0.19, -0.27, -0.29, -0.22, -0.04, +0.14, -0.39, +0.53, +0.14, +0.07, -0.20, -0.11};
-    static const double cz_after[] = {-0.24, -0.03, -0.06, -0.30, +0.30, +0.18, +0.09, -0.12, +0.13, -0.24, -0.23, -0.02, -0.45, +0.14, -0.30, +0.49, +0.29, -0.04, -0.05, +0.04};
+    static const double cz_before_denatured[] = {-0.40, -1.15, -0.12, +0.51, +0.05, -0.11, +0.69, -0.21, +0.22, -0.35, -0.29, -0.11, -0.56, +0.47, +0.45, +0.10, +0.10, -0.30, +0.07, +0.04};
+    static const double cz_after_denatured[] = {-0.21, -0.91, +0.30, +0.27, -0.19, -0.29, +0.43, -0.76, +0.17, +0.10, +0.10, +0.31, -4.51, +0.43, +0.48, +0.39, +0.23, -0.69, -0.27, +0.02};
+    static const double cz_before_native[] = {-0.24, +0.22, +0.19, -0.28, +0.10, +0.31, +0.19, -0.18, -0.19, -0.27, -0.29, -0.22, -0.04, +0.14, -0.39, +0.53, +0.14, +0.07, -0.20, -0.11};
+    static const double cz_after_native[] = {-0.24, -0.03, -0.06, -0.30, +0.30, +0.18, +0.09, -0.12, +0.13, -0.24, -0.23, -0.02, -0.45, +0.14, -0.30, +0.49, +0.29, -0.04, -0.05, +0.04};
+    const bool native = param_.getValue("cleavage_native").toString() == "true";
+    const double* cz_before = native ? cz_before_native : cz_before_denatured;
+    const double* cz_after = native ? cz_after_native : cz_after_denatured;
     for (int s = 0; s < 2; s++)
     {
       for (int r = 0; r < 26; r++) cleavage_before_[s][r] = cleavage_after_[s][r] = 0;
