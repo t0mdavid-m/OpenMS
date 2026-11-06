@@ -15,7 +15,8 @@
 //
 // Three things are pinned to each other:
 //   - FLASHTnTAlgorithm::run on the whole slice, nothing prepared, to tnt_reference.tsv: the same run captured
-//     BEFORE the prepared-database edit (so the edit changed no PrSM of offline FLASHTnT);
+//     BEFORE the prepared-database edit (so the edit changed no PrSM of offline FLASHTnT), per scan as a multiset with
+//     the raw-evidence scores tolerant (sameCaptureRow: the whole run varies between builds);
 //   - ProteomeSearch's per-MS2 search (a prepared database, run() on one spectrum) to that whole run;
 //   - the per-MS2 search on 4 threads, each with its own Worker, to the serial one.
 
@@ -226,6 +227,67 @@ namespace
     return same;
   }
 
+  // A whole run against the stored capture (owner's rule, 2026-11-06). FLASHTnT's whole run varies between builds of the
+  // same code: the order of a scan's PrSMs, and in one of three builds one spectrum's pooled raw scores (scan 1005, by
+  // 0.4-1.0 %; a cold rebuild of the pre-edit code, run 42298462925, matched the post-edit run, not the capture). So a
+  // scan's PrSMs are compared as a sorted multiset: what FLASHTnT reports exactly (accession, Scan, start, end,
+  // modification positions, ExtensionScore; modification masses to relative 1e-9), RawScore to relative 2e-2, and the
+  // score only as FLASHTnT's formula moves it for that RawScore change: score = ExtensionScore + 8 x max(0, RawScore -
+  // log10 count), so |d score| <= 8 x |d RawScore| (0 where clamped). RawScore carries one chance rate per spectrum,
+  // pooled over its PrSMs' decoy fragments (FLASHAnnotatorAlgorithm::annotate), so one decoy match at a tolerance edge
+  // moves every RawScore of that spectrum.
+  const std::vector<double> kCaptureRel = {0, -1, 0, 0, 0, 1e-9, 0, 0, 0, 2e-2};  // per column of prsmHeader(); 0 exact, -1 the score
+  const Size kScoreColumn = 1, kRawColumn = 9;
+
+  bool sameCaptureRow(const std::vector<std::string>& a, const std::vector<std::string>& b)
+  {
+    if (a.size() != b.size() || a.size() != kCaptureRel.size()) return false;
+    for (Size i = 0; i < a.size(); i++)
+    {
+      if (a[i] == b[i]) continue;
+      if (i == kScoreColumn)
+      {
+        double sa, sb, ra = 0, rb = 0;
+        if (! asNumber(a[i], sa) || ! asNumber(b[i], sb)) return false;
+        if (asNumber(a[kRawColumn], ra) != asNumber(b[kRawColumn], rb)) return false;
+        if (! (std::fabs(sa - sb) <= 8.0 * std::fabs(ra - rb) + 1e-9 * std::max(std::fabs(sa), std::fabs(sb)))) return false;
+        continue;
+      }
+      if (kCaptureRel[i] == 0) return false;
+      const auto pa = split(a[i], ','), pb = split(b[i], ',');
+      if (pa.size() != pb.size()) return false;
+      for (Size k = 0; k < pa.size(); k++)
+      {
+        double x, y;
+        if (! asNumber(pa[k], x) || ! asNumber(pb[k], y)) return false;
+        if (! (std::fabs(x - y) <= kCaptureRel[i] * std::max(std::fabs(x), std::fabs(y)))) return false;
+      }
+    }
+    return true;
+  }
+
+  // per scan, its rows sorted by what identifies a PrSM (never by a tolerant column)
+  std::map<std::string, std::vector<std::vector<std::string>>> captureByScan(const std::vector<std::string>& rows)
+  {
+    std::map<std::string, std::vector<std::vector<std::string>>> out;
+    for (const auto& r : rows) {
+      auto cells = split(r, '\t');
+      if (cells.size() > 2) out[cells[2]].push_back(cells);
+    }
+    for (auto& [scan, v] : out)
+    {
+      std::sort(v.begin(), v.end(), [](const std::vector<std::string>& l, const std::vector<std::string>& r) {
+        for (Size i : {Size(0), Size(3), Size(4), Size(6), Size(7), Size(8), Size(5)})
+        {
+          if (i >= l.size() || i >= r.size()) return l.size() < r.size();
+          if (l[i] != r[i]) return l[i] < r[i];
+        }
+        return false;
+      });
+    }
+    return out;
+  }
+
   // FLASHTnT's rank of a spectrum's PrSMs (FLASHTnTAlgorithm.cpp, score then coverage); the earlier one on a tie
   const ProteinHit* bestOf(const std::vector<ProteinHit>& hits)
   {
@@ -281,8 +343,30 @@ START_SECTION(the_whole_run_equals_the_capture_from_before_the_prepared_database
   TEST_EQUAL(rows.empty() ? std::string() : rows[0], prsmHeader())
   const auto& hits = tnt.getProteoforms();
   TEST_EQUAL(hits.size() + 1, rows.size())
+  std::vector<std::string> now;
+  for (const auto& h : hits) now.push_back(prsmRow(h));
+  const auto now_by = captureByScan(now);
+  const auto ref_by = captureByScan(std::vector<std::string>(rows.begin() + (rows.empty() ? 0 : 1), rows.end()));
+  TEST_EQUAL(now_by.size(), ref_by.size())
   Size same = 0;
-  for (Size i = 0; i < hits.size() && i + 1 < rows.size(); i++) same += sameRow(prsmRow(hits[i]), rows[i + 1], "whole run vs capture, row " + std::to_string(i + 1));
+  for (const auto& [scan, ref_rows] : ref_by)
+  {
+    const auto it = now_by.find(scan);
+    if (it == now_by.end() || it->second.size() != ref_rows.size())
+    {
+      std::cout << "    [PARITY-MISMATCH] scan " << scan << ": " << ref_rows.size() << " PrSMs captured, "
+                << (it == now_by.end() ? 0 : it->second.size()) << " now" << std::endl;
+      continue;
+    }
+    for (Size i = 0; i < ref_rows.size(); i++)
+    {
+      if (sameCaptureRow(it->second[i], ref_rows[i])) { same++; continue; }
+      std::string a, b;
+      for (const auto& c : it->second[i]) a += c + "\t";
+      for (const auto& c : ref_rows[i]) b += c + "\t";
+      std::cout << "    [PARITY-MISMATCH] whole run vs capture, scan " << scan << "\n      " << a << "\n      " << b << std::endl;
+    }
+  }
   TEST_EQUAL(same, hits.size())
   std::cout << "[PARITY] ms2=" << in.ms2_count << " deconvolved=" << in.deconvolved.size() << " prsms=" << hits.size()
             << " scans_with_prsm=" << whole.size() << " fasta=" << fasta.size() << std::endl;
