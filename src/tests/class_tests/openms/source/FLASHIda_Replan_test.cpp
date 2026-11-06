@@ -1187,9 +1187,10 @@ START_SECTION(push_site_inventory)
     "runSurveyMS1_ | const ReplanResult replan = queue_.replacePlan(faims_cv, std::move(units), adjust, replace_remainder_of);",
     // the five permanent sites
     "refineRoundClose_ | stampAndPush_(c, precursor_id);",                  // refine re-dispatch
-    "processScan | stampAndPush_(c, precursor_id);",                        // exploration MS2 return
+    // ADR-0062: the two MS2 tails a search worker's apply also runs (inline when nothing is searched)
+    "finishVariantMS2_ | stampAndPush_(c, precursor_id);",                  // exploration MS2 return
     "processScan | stampAndPush_(ident, cons.winner_precursor_id);",        // bought R
-    "processScan | stampAndPush_(c, precursor_id);",                        // MS3 targeting
+    "finishRegularMS2_ | stampAndPush_(c, precursor_id);",                  // MS3 targeting
     "processScan | stampAndPush_(c, precursor_id);",                        // exploration MS3 return
     // the bought R, registered adjustable at the quant verdict
     "processScan | queue_.registerAdjustable(ident.scan_id, cons.q_covered_charges, cons.winner_survey_id,",

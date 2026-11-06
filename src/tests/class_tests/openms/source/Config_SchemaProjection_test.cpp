@@ -9,9 +9,11 @@
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 
+#include <algorithm>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 
 using namespace OpenMS;
@@ -1542,6 +1544,26 @@ START_SECTION(identification_section_presence_switches_and_refusals)
     const std::string msg = refineMessage(cfgJson("", member, kMs3));
     TEST_EQUAL(contains(msg, needle), true)
     TEST_EQUAL(contains(msg, "ADR-0061"), true)
+  }
+
+  // identification.search_threads (ADR-0062 d.1): unauthored = the core count minus two, at least 1;
+  // authored = a whole number of workers, at least 1.
+  {
+    Config cfg(cfgJson("", R"("identification": { "reference": { "sequence": "PEPTIDEK" } },)"));
+    const int cores = static_cast<int>(std::thread::hardware_concurrency());
+    TEST_EQUAL(cfg.identification().search_threads, std::max(1, cores - 2))
+    TEST_EQUAL(cfg.identification().search_threads >= 1, true)
+  }
+  {
+    Config cfg(cfgJson("", R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "search_threads": 3 },)"));
+    TEST_EQUAL(cfg.identification().search_threads, 3)
+  }
+  for (const std::string bad : {"0", "-1", "2.5", "\"4\""})
+  {
+    const std::string msg = refineMessage(cfgJson("",
+        R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "search_threads": )" + bad + " },"));
+    TEST_EQUAL(contains(msg, "identification.search_threads"), true)
+    TEST_EQUAL(contains(msg, "ADR-0062"), true)
   }
 }
 END_SECTION

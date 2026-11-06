@@ -99,6 +99,8 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   TEST_EQUAL(cfg.identification().flashtnt.fixed_mod.size(), j["identification"]["flashtnt"]["fixed_mod"].size())
   TEST_EQUAL(cfg.identification().flashtnt.fixed_mod.empty() ? std::string("") : cfg.identification().flashtnt.fixed_mod[0],
              j["identification"]["flashtnt"]["fixed_mod"][0].get<std::string>())
+  // --- identification.search_threads (ADR-0062: the search pool's size) ---
+  TEST_EQUAL(cfg.identification().search_threads, j["identification"]["search_threads"].get<int>())
 
   // --- ms_settings.ms2_quant, the quantification scan (ADR-0038) ---
   // Replaces the old quantification.follow_up_scan block. That key named the scan quantification

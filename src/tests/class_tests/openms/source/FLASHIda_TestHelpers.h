@@ -34,6 +34,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <functional>
+#include <future>
 #include <limits>
 #include <map>
 #include <optional>
@@ -41,6 +43,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 // Test-only header: pull OpenMS into scope so includers need not order the include
@@ -211,6 +214,7 @@ namespace
       total += ida->processScan(scan.mzs.data(), scan.ints.data(),
                                 (int)scan.mzs.size(), scan.rt, 1, (id + "S").c_str(),
                                 0.0, instrumentScanNumberOf(scan));
+      total += ida->waitForSearchIdle();   // ADR-0062 d.7: every drive waits for the search pool after a feed
       if (fed_ms1_ids) fed_ms1_ids->push_back(id);
     }
     return total;
@@ -399,6 +403,7 @@ namespace
         const ScanData& s = ms1_scans[ms1_fed > 0 ? ms1_fed - 1 : 0];
         ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt + rt_offset, 1,
                          cmd.scan_description, cmd.faims_cv, instrumentScanNumberOf(s));
+        ida->waitForSearchIdle();
         cmd = ScanCommand{};
         continue;
       }
@@ -422,6 +427,7 @@ namespace
         // never observed the commanded CV, so downstream CV binding was lost.
         int ret = ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt + rt_offset, 1,
                                    cmd.scan_description, cmd.faims_cv, instrumentScanNumberOf(s));
+        ret += ida->waitForSearchIdle();
         if (single_group_only && ret > 0 && !group_formed) { r.first_group_commands = ret; group_formed = true; }
       }
       else if (cmd.msn_level == 2)
@@ -450,9 +456,14 @@ namespace
           ms2_src = &zit->second;
         }
         if (ms2_src != nullptr)
+        {
           r.ms2_feed_returns += ida->processScan(ms2_src->mzs.data(), ms2_src->ints.data(),
                            (int)ms2_src->mzs.size(), ms2_src->rt, 2, cmd.scan_description,
                            0.0, instrumentScanNumberOf(*ms2_src));
+          // ADR-0062 d.7: wait for the search pool, so the drain sees exactly the order a synchronous
+          // processScan produced; the commands the workers' applies pushed count toward this feed.
+          r.ms2_feed_returns += ida->waitForSearchIdle();
+        }
       }
       else  // msn_level >= 3
       {
@@ -473,9 +484,12 @@ namespace
           spectra = ms2_scans.empty() ? nullptr : &ms2_scans;  // legacy MS2-as-MS3 shortcut (no manifest)
         }
         if (spectra != nullptr && !spectra->empty())
+        {
           ida->processScan((*spectra)[0].mzs.data(), (*spectra)[0].ints.data(),
                            (int)(*spectra)[0].mzs.size(), (*spectra)[0].rt, 3, cmd.scan_description,
                            0.0, instrumentScanNumberOf((*spectra)[0]));
+          ida->waitForSearchIdle();
+        }
       }
       cmd = ScanCommand{};
     }
@@ -847,6 +861,7 @@ namespace
         const ScanData& s = scans[ms1_fed > 0 ? ms1_fed - 1 : 0];
         ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
                          cmd.scan_description, 0.0, instrumentScanNumberOf(s));
+        ida->waitForSearchIdle();
         cmd = ScanCommand{};
         continue;
       }
@@ -855,6 +870,7 @@ namespace
         const ScanData& s = scans[ms1_fed++];
         int n = ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
                                  cmd.scan_description, 0.0, instrumentScanNumberOf(s));
+        n += ida->waitForSearchIdle();
         if (n > 0) return n;  // group created; leave its variants queued for the caller
         idle = 0;
       }
@@ -900,6 +916,7 @@ namespace
       if (ms2 == nullptr || c.msn_level != 2) return;
       ida.processScan(ms2->mzs.data(), ms2->ints.data(), (int)ms2->mzs.size(), ms2->rt, 2, c.scan_description, 0.0,
                       instrumentScanNumberOf(*ms2));
+      ida.waitForSearchIdle();   // ADR-0062 d.7
     };
 
     ScanCommand a{};
@@ -1022,4 +1039,43 @@ namespace
   const std::string FI_MS1_CYTC  = "../../FlashIDA/test-data/spectra/ms1_cytc.txt";
   const std::string FI_MS2_CYTC  = "../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt";
   const std::string FI_MS2_CYTC149 = "../../FlashIDA/test-data/spectra/ms2_cytc_scan149.txt";
+
+  // ----------------------------------------------------------------------------
+  // The search pool (ADR-0062): tools for the sections that pin the mechanism and therefore do NOT
+  // wait for the pool after a feed.
+  // ----------------------------------------------------------------------------
+  /// Poll @p pred for up to @p limit; true once it holds.
+  template <typename Pred>
+  bool waitUntil(Pred pred, std::chrono::seconds limit = std::chrono::seconds(120))
+  {
+    const auto end = std::chrono::steady_clock::now() + limit;
+    while (std::chrono::steady_clock::now() < end)
+    {
+      if (pred()) return true;
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return pred();
+  }
+
+  /// A before_search_ hook that parks the FIRST search until released. reached() is ready once a worker
+  /// is parked; release() lets it go (idempotent).
+  struct SearchGate
+  {
+    std::promise<void> reached_p, go_p;
+    std::future<void> reached_f = reached_p.get_future();
+    std::shared_future<void> go_f = go_p.get_future().share();
+    std::atomic<bool> first{true};
+    std::atomic<bool> released{false};
+    std::function<void()> hook()
+    {
+      return [this] {
+        if (first.exchange(false)) { reached_p.set_value(); go_f.wait(); }
+      };
+    }
+    bool reached(std::chrono::seconds limit = std::chrono::seconds(120))
+    {
+      return reached_f.wait_for(limit) == std::future_status::ready;
+    }
+    void release() { if (!released.exchange(true)) go_p.set_value(); }
+  };
 } // anonymous namespace

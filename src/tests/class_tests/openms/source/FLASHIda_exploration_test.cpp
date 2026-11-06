@@ -5141,4 +5141,79 @@ START_SECTION(dropGroup_refuses_a_group_with_a_received_variant)
     TEST_EQUAL(exploration.isExplorationVariant(cmds[i].scan_id), true)
 }
 END_SECTION
+// ADR-0062 d.4: a sweep completes when its SEARCHES return, not when its scans do. Every variant of one
+// group is fed while the only worker is parked before the first search: the group must still be active and
+// nothing applied. Released, the group completes -- and every variant's row (score, winner) is what an
+// unparked twin, which waits for the pool after each feed, writes.
+START_SECTION(search_a_sweep_completes_when_its_searches_return_not_its_scans)
+{
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  auto ms2_scans = loadTsvScans(ms2_tsv_path);
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+  std::string base = explorationConfig();
+  const std::string key = "\"identification\": {";
+  const size_t at = base.find(key);
+  ABORT_IF(at == std::string::npos)
+  base.insert(at + key.size(), "\"search_threads\": 1, ");
+
+  struct Drive
+  {
+    int fed = 0;
+    int active_before = 0, active_while_parked = -1, applies_while_parked = -1, active_after = -1;
+    std::multiset<std::string> rows;   // tracking_id|exploration_score|winner_tracking_id of every MS2 row
+  };
+  auto drive = [&](bool park, const std::string& tag) {
+    Drive d;
+    const std::string log_dir = freshLogDir(tag);
+    const std::string cfg = injectRuntime(base, log_dir);
+    {
+      FLASHIda ida(const_cast<char*>(cfg.c_str()));
+      FLASHIdaTestAccess::setSearchBacklog(ida, 256);   // every variant waits; none is dropped
+      if (bootstrapExplorationGroup(&ida, ms1_scans) <= 0) return d;
+      d.active_before = FLASHIdaTestAccess::explorationActiveGroupCount(ida);
+      SearchGate gate;
+      if (park) FLASHIdaTestAccess::onBeforeSearch(ida, gate.hook());
+      const auto& ms2 = ms2_scans[0];
+      for (int k = 0; k < 256; ++k)
+      {
+        ScanCommand c{};
+        ida.getNextScanCommand(c);
+        if (c.msn_level == 1 && c.priority == 3) break;   // the idle survey: the queue is empty
+        if (c.msn_level != 2 || std::strlen(c.scan_description) < 4 || c.scan_description[3] != 'E') continue;
+        ida.processScan(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt, 2, c.scan_description, 0.0,
+                        instrumentScanNumberOf(ms2));
+        if (!park) ida.waitForSearchIdle();
+        ++d.fed;
+        if (park && d.fed == 1 && !gate.reached()) return d;   // the variant was not searched: fails below
+      }
+      if (park)
+      {
+        d.active_while_parked = FLASHIdaTestAccess::explorationActiveGroupCount(ida);
+        d.applies_while_parked = FLASHIdaTestAccess::appliesFinished(ida);
+        gate.release();
+        ida.waitForSearchIdle();
+      }
+      d.active_after = FLASHIdaTestAccess::explorationActiveGroupCount(ida);
+    }
+    TSVFile results = TSVFile::parse(log_dir + "/scan_results.tsv");
+    for (const auto& row : results.rows)
+      if (cell(results, row, "ms_level") == "2")
+        d.rows.insert(cell(results, row, "tracking_id") + "|" + cell(results, row, "exploration_score") + "|"
+                      + cell(results, row, "winner_tracking_id"));
+    return d;
+  };
+
+  const Drive parked = drive(true, "sweep_search_parked");
+  const Drive free_ = drive(false, "sweep_search_free");
+  TEST_EQUAL(parked.fed >= 2, true)
+  TEST_EQUAL(parked.fed, free_.fed)
+  TEST_EQUAL(parked.active_before >= 1, true)
+  TEST_EQUAL(parked.active_while_parked, parked.active_before)   // fed, but not complete: searches still out
+  TEST_EQUAL(parked.applies_while_parked, 0)
+  TEST_EQUAL(parked.active_after < parked.active_before, true)    // completed once they returned
+  TEST_EQUAL(parked.active_after, free_.active_after)
+  TEST_EQUAL(parked.rows.size(), static_cast<size_t>(parked.fed))
+  TEST_EQUAL(parked.rows == free_.rows, true)                      // same scores, same winner
+}
+END_SECTION
 END_TEST

@@ -157,6 +157,18 @@ namespace OpenMS
     /// Quantification groups still open: a frozen group stays open until its last member returns.
     static size_t quantOpenGroupCount(const FLASHIda& f) { return f.quant_.openGroupCount(); }
 
+    // ---- The search pool (ADR-0062) -------------------------------------------------------------
+    /// Run @p fn on the worker before every search (the engine's private before_search_ hook): a test blocks a
+    /// worker there, or observes that a search started. Set it before the first feed; empty clears it.
+    static void onBeforeSearch(FLASHIda& f, std::function<void()> fn) { f.before_search_ = std::move(fn); }
+    static bool hasSearchPool(const FLASHIda& f) { return f.search_pool_ != nullptr; }
+    static int searchThreads(const FLASHIda& f) { return f.search_pool_ ? f.search_pool_->threadCount() : 0; }
+    /// Searches whose search step returned / jobs whose apply step returned, since construction.
+    static int searchesFinished(const FLASHIda& f) { return f.search_pool_ ? f.search_pool_->searchesFinished() : 0; }
+    static int appliesFinished(const FLASHIda& f) { return f.search_pool_ ? f.search_pool_->appliesFinished() : 0; }
+    /// Shrink the backlog so a test can fill it with a handful of scans.
+    static void setSearchBacklog(FLASHIda& f, size_t n) { if (f.search_pool_) f.search_pool_->setBacklog(n); }
+
     /// Exploration groups still active, and the id of the last one minted.
     static int explorationActiveGroupCount(const FLASHIda& f) { return f.exploration_.activeGroupCount(); }
     static int explorationLastGroupId(const FLASHIda& f) { return f.exploration_.lastGroupId(); }

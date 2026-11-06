@@ -1166,6 +1166,35 @@ namespace
   }
 }
 
+// ===== The search pool (ADR-0062) ===============================================================
+// processScan copies what a search needs under analysis_mutex_ and returns; a worker searches with no
+// lock held and then APPLIES the result under analysis_mutex_ -- the engine's second acquisition site.
+// Every harness waits for the pool after each feed (waitForSearchIdle), so the goldens see the order a
+// synchronous processScan produced; these sections are the ones that do NOT wait, to pin the mechanism.
+namespace
+{
+  /// ms3_mode1_json (inclusion-pinned cytC, identification + characterization) with a pool of @p threads.
+  std::string searchPoolCytcJson(int threads)
+  {
+    nlohmann::json j = nlohmann::json::parse(ms3_mode1_json);
+    j["identification"]["search_threads"] = threads;
+    return j.dump();
+  }
+
+  /// standard_json + an identification section (identify only) with a pool of @p threads: a survey of
+  /// ms1_ecoli_rich plans several MS2s, so a test can put more than one search in flight.
+  std::string searchPoolStandardJson(int threads, const std::string& log_dir = "")
+  {
+    nlohmann::json j = nlohmann::json::parse(standard_json);
+    j["identification"] = {
+      {"reference", {{"sequence", "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"}}},
+      {"search_threads", threads}};
+    if (!log_dir.empty()) j["runtime"] = {{"log_dir", log_dir}};
+    return j.dump();
+  }
+
+}
+
 START_TEST(FLASHIda_ProcessScan, "$Id$")
 
 /////////////////////////////////////////////////////////////
@@ -3098,7 +3127,9 @@ END_SECTION
 //
 // These two are a matched pair and only mean something together. The first says the drain must NOT
 // wait on analysis_mutex_; the second says processScan must STILL take it. Either one alone can be
-// satisfied by deleting the wrong lock.
+// satisfied by deleting the wrong lock. Since ADR-0062 there is a second acquisition site -- a search
+// worker's apply step -- and search_the_apply_is_the_second_analysis_mutex_site_and_the_search_holds_none
+// pins it; neither pin below changes.
 /////////////////////////////////////////////////////////////
 
 // The drain must not acquire analysis_mutex_ on ANY of its three emitting paths.
@@ -3410,6 +3441,176 @@ START_SECTION(quant_identify_all_buys_an_undecided_group)
   TEST_EQUAL(quantPushedFor(quantified.c_str(), ms1, partial), 0)
   const std::string differential = quantObjectiveJson("1.4", "", "");
   TEST_EQUAL(quantPushedFor(differential.c_str(), ms1, partial), 0)
+}
+END_SECTION
+
+
+START_SECTION(search_the_apply_is_the_second_analysis_mutex_site_and_the_search_holds_none)
+{
+  auto ms1_scans = loadTsvScans(ms1_cytc_tsv_path);
+  auto ms2_scans = loadTsvScans(ms2_cytc_fresh_tsv_path);
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+  const std::string cfg = searchPoolCytcJson(1);
+  FLASHIda ida(const_cast<char*>(cfg.c_str()));
+  TEST_EQUAL(FLASHIdaTestAccess::searchThreads(ida), 1)
+
+  // Surveys only: the inclusion-pinned cytC MS2 stays pending for the feed below.
+  AcqResult acq = runInterleaved(&ida, ms1_scans, {});
+  ABORT_IF(acq.ms2_cmds.empty())
+  const size_t ms3_before = FLASHIdaTestAccess::queueSize(ida, 1);
+
+  SearchGate gate;
+  FLASHIdaTestAccess::onBeforeSearch(ida, gate.hook());
+  const auto& ms2 = ms2_scans[0];
+  const int rc = ida.processScan(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt, 2,
+                                 acq.ms2_cmds[0].scan_description, 0.0, instrumentScanNumberOf(ms2));
+  TEST_EQUAL(rc, 0)   // nothing pushed by processScan itself: the MS3s come from the apply
+  ABORT_IF(!gate.reached())
+
+  {
+    std::unique_lock<std::mutex> held(FLASHIdaTestAccess::analysisMutex(ida));
+    gate.release();
+    // The search runs to completion while the test holds analysis_mutex_ ...
+    TEST_EQUAL(waitUntil([&] { return FLASHIdaTestAccess::searchesFinished(ida) == 1; }), true)
+    // ... and the apply waits for it: no apply has returned and no MS3 is queued.
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    TEST_EQUAL(FLASHIdaTestAccess::appliesFinished(ida), 0)
+    TEST_EQUAL(FLASHIdaTestAccess::queueSize(ida, 1), ms3_before)
+  }
+
+  const int pushed = ida.waitForSearchIdle();
+  TEST_EQUAL(FLASHIdaTestAccess::appliesFinished(ida), 1)
+  TEST_EQUAL(pushed > 0, true)   // cytC identifies and the ambiguity objective targets MS3 (processScan_ms3_commands)
+  TEST_EQUAL(FLASHIdaTestAccess::queueSize(ida, 1), ms3_before + static_cast<size_t>(pushed))
+  TEST_EQUAL(ida.waitForSearchIdle(), 0)   // the count is handed out once
+}
+END_SECTION
+
+START_SECTION(search_concurrent_searches_equal_the_serial_search)
+{
+  auto ms1_scans = loadTsvScans(ms1_cytc_tsv_path);
+  auto ms2_scans = loadTsvScans(ms2_cytc_fresh_tsv_path);
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+  const std::string json = searchPoolCytcJson(1);
+
+  // The MS2 command the engine plans for cytC: its precursor is what the deconvolution needs.
+  ScanCommand cmd{};
+  {
+    FLASHIda ida(const_cast<char*>(json.c_str()));
+    AcqResult acq = runInterleaved(&ida, ms1_scans, {});
+    ABORT_IF(acq.ms2_cmds.empty())
+    cmd = acq.ms2_cmds[0];
+  }
+
+  Config cfg{json};
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+  Deconvolution deconv(cfg, cfg.toleranceList());
+  const auto& ms2 = ms2_scans[0];
+  deconv.deconvolveMSn(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt, cmd.mono_mass,
+                       std::abs(cmd.stages[0].charge_state));
+  const DeconvolvedSpectrum spec = deconv.storedMS2();
+
+  const Exploration::NextLevelSearch serial = exploration.searchNextLevel(2, spec, &cmd);
+  TEST_EQUAL(serial.ran, true)
+  TEST_EQUAL(serial.frag_result.fragments.empty(), false)   // a real identification, or equality proves nothing
+
+  auto same = [&](const Exploration::NextLevelSearch& s) {
+    const auto& a = s.frag_result;
+    const auto& b = serial.frag_result;
+    return a.proteoform_sequence == b.proteoform_sequence && a.region_start == b.region_start
+        && a.region_end == b.region_end && a.ptm_sites.size() == b.ptm_sites.size()
+        && a.score == b.score && a.total_match_count == b.total_match_count && a.tag_count == b.tag_count
+        && a.fragments.size() == b.fragments.size() && s.tic_coverage == serial.tic_coverage
+        && s.fragment_count == serial.fragment_count;
+  };
+
+  constexpr int kThreads = 4, kRounds = 5;
+  std::atomic<int> mismatches{0};
+  std::vector<std::thread> threads;
+  for (int t = 0; t < kThreads; ++t)
+    threads.emplace_back([&] {
+      for (int r = 0; r < kRounds; ++r)
+        if (!same(exploration.searchNextLevel(2, spec, &cmd))) mismatches.fetch_add(1);
+    });
+  for (auto& th : threads) th.join();
+  TEST_EQUAL(mismatches.load(), 0)
+}
+END_SECTION
+
+START_SECTION(search_a_full_backlog_drops_the_oldest_waiting_job)
+{
+  auto ms1_scans = loadTsvScans(ms1_ecoli_rich_tsv_path);
+  auto ms2_scans = loadTsvScans(ms2_cytc_fresh_tsv_path);
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+  const std::string log_dir = freshLogDir("search_backlog");
+  const std::string cfg = searchPoolStandardJson(1, log_dir);
+  std::vector<std::string> ids;
+  {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    FLASHIdaTestAccess::setSearchBacklog(ida, 1);
+    AcqResult acq = runInterleaved(&ida, ms1_scans, {});
+    ABORT_IF(acq.ms2_cmds.size() < 3)
+
+    SearchGate gate;
+    FLASHIdaTestAccess::onBeforeSearch(ida, gate.hook());
+    const auto& ms2 = ms2_scans[0];
+    auto feed = [&](const ScanCommand& c) {
+      ids.push_back(std::string(c.scan_description).substr(0, 3));
+      return ida.processScan(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt, 2, c.scan_description,
+                             0.0, instrumentScanNumberOf(ms2));
+    };
+    feed(acq.ms2_cmds[0]);          // #1: taken by the worker, parked before its search
+    ABORT_IF(!gate.reached())
+    feed(acq.ms2_cmds[1]);          // #2: waits (the backlog holds one)
+    feed(acq.ms2_cmds[2]);          // #3: the backlog is full, so #2 -- the oldest WAITING -- is dropped
+    TEST_EQUAL(FLASHIdaTestAccess::searchesFinished(ida), 0)
+    gate.release();
+    ida.waitForSearchIdle();
+    TEST_EQUAL(FLASHIdaTestAccess::searchesFinished(ida), 2)   // #1 and #3 only
+    TEST_EQUAL(FLASHIdaTestAccess::appliesFinished(ida), 2)
+  }
+
+  // Every scan still has its scan_results row. The dropped one's identification columns keep the "never
+  // examined" sentinel; the searched ones carry a reading.
+  TSVFile results = TSVFile::parse(log_dir + "/scan_results.tsv");
+  ABORT_IF(results.headers.empty())
+  std::map<std::string, std::string> tag_count;
+  for (const auto& row : results.rows) tag_count[cell(results, row, "tracking_id")] = cell(results, row, "tag_count");
+  TEST_EQUAL(tag_count.count(ids[0]), 1)
+  TEST_EQUAL(tag_count.count(ids[1]), 1)
+  TEST_EQUAL(tag_count.count(ids[2]), 1)
+  TEST_EQUAL(tag_count[ids[1]], "-1")
+  TEST_NOT_EQUAL(tag_count[ids[0]], "-1")
+  TEST_NOT_EQUAL(tag_count[ids[2]], "-1")
+}
+END_SECTION
+
+START_SECTION(search_dispose_with_searches_in_flight)
+{
+  auto ms1_scans = loadTsvScans(ms1_ecoli_rich_tsv_path);
+  auto ms2_scans = loadTsvScans(ms2_cytc_fresh_tsv_path);
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+  const std::string cfg = searchPoolStandardJson(1);
+  auto ida = std::make_unique<FLASHIda>(const_cast<char*>(cfg.c_str()));
+  AcqResult acq = runInterleaved(ida.get(), ms1_scans, {});
+  ABORT_IF(acq.ms2_cmds.size() < 3)
+
+  SearchGate gate;
+  FLASHIdaTestAccess::onBeforeSearch(*ida, gate.hook());
+  const auto& ms2 = ms2_scans[0];
+  for (int i = 0; i < 3; ++i)
+    ida->processScan(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt, 2,
+                     acq.ms2_cmds[i].scan_description, 0.0, instrumentScanNumberOf(ms2));
+  ABORT_IF(!gate.reached())
+
+  // Release the parked search and destroy the engine at once: the running job finishes (its apply
+  // included), the two waiting ones are discarded, the worker is joined -- and nothing hangs.
+  auto done = std::async(std::launch::async, [&] {
+    gate.release();
+    ida.reset();
+  });
+  TEST_EQUAL(done.wait_for(std::chrono::seconds(120)) == std::future_status::ready, true)
 }
 END_SECTION
 
