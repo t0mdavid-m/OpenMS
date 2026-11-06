@@ -4466,7 +4466,7 @@ void FLASHTnTAlgorithm::setCombinedCoverage_(const std::vector<std::vector<Size>
     std::vector<long> k;
     if (h.metaValueExists("Modifications"))
     {
-      for (double m : (std::vector<double>)h.getMetaValue("Modifications")) k.push_back(std::lround(m / 0.05));
+      for (double m : h.getMetaValue("Modifications").toDoubleList()) k.push_back(std::lround(m / 0.05));
     }
     std::sort(k.begin(), k.end());
     return k;
