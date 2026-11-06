@@ -13,7 +13,9 @@ Headers under `src/openms/include/OpenMS/ANALYSIS/TOPDOWN/`, sources under
 `CandidateAdmission.h`, `Ms2Params.h`, `NotchSelection.h` and `ProteoformTracker.h` are live but
 unregistered (verified 2026-09-04 — the list is longer than it used to be). Glob the directory
 instead. It costs nothing to register a new header there and it keeps the drift from growing;
-`ScanRole.h`, `ScanCommandJoin.h`, `KineticModel.h`, `Refine.h` and `RefineSettings.h` are.
+`ScanRole.h`, `ScanCommandJoin.h`, `KineticModel.h`, `Refine.h`, `RefineSettings.h` and `SearchPool.h` are.
+`FLASHIda/SearchPool.{h,cpp}` (ADR-0062) is the fixed pool of search workers with a bounded backlog that
+matches MS2s beside the analysis thread; it knows nothing about spectra, and `FLASHIda` builds its jobs.
 
 ### The untouchable boundary
 
@@ -103,6 +105,11 @@ config-reference-only: `IdaLogger`, `ScanCommandQueue`, `FragmentAnalysis`, `Qua
 `FAIMS` and `Deconvolution` take `const Config&` but **copy** what they need. The ctor init list
 mirrors the declaration order exactly (`FLASHIda.cpp:54-64`).
 
+The search pool is not one of the ten: `search_pool_` is a `std::unique_ptr<SearchPool>`, declared last,
+created in the ctor body only when an `identification` section is present (ADR-0062), and **stopped and
+joined first in `~FLASHIda`'s body**, before any member a running apply touches (tracker, queue, logger) is
+destroyed. Waiting jobs are discarded; a running one finishes, its apply included.
+
 ### Enqueue discipline: return, don't push
 
 `FLASHIda.cpp` is the **sole enqueuer**, and since ADR-0060 its sites come in three kinds, pinned as a
@@ -110,11 +117,13 @@ table by `FLASHIda_Replan_test::push_site_inventory` (a new or moved site fails 
 what the site is): a survey's MS2s enter through **one** `queue_.replacePlan(` in `runSurveyMS1_`; five
 **permanent** sites go through `stampAndPush_` (`FLASHIda.h`, the one `queue_.push` that stamps a
 precursor id first: refine re-dispatch, exploration MS2 return, the bought `R`, MS3 targeting,
-exploration MS3 return; the tag follow-up `C` went with ADR-0061); three MS1-family `queue_.push(` sites (CV transition, cycle time,
+exploration MS3 return; the tag follow-up `C` went with ADR-0061; since ADR-0062 "MS3 targeting" sits in
+`finishRegularMS2_` and "exploration MS2 return" in `finishVariantMS2_`, which a search worker's apply
+reaches as well as `processScan`); three MS1-family `queue_.push(` sites (CV transition, cycle time,
 monitor) plus the idle survey's `pushAndDequeue`; and one `registerAdjustable` (the quant verdict). No
 `.push(` on a `ScanCommandQueue` exists anywhere else under `TOPDOWN/`. The `ScanCommandQueue&` that
-`Exploration::initiate/feedResult/initiateNextLevel` receive is a **command builder, not an
-enqueue target**: `buildMS2`/`buildMS3`/`buildFollowUp` allocate a tracking id and return a
+`Exploration::initiate/feedResult/applyVariant/initiateNextLevel/applyNextLevel` receive is a **command
+builder, not an enqueue target**: `buildMS2`/`buildMS3`/`buildFollowUp` allocate a tracking id and return a
 `ScanCommand` by value. Any new command-producing component must follow the same contract.
 
 They also do **not** register in the pending-scan map — that happens only in `dequeue()` and in
@@ -201,6 +210,39 @@ seconds. Everything behind it decides in seconds — `rt_window`, the expiry of 
 inclusion rows, target logs. The two log streams that record it (`scan_results` `rt`,
 `ida.log` `RT`) write `rt / 60`, because their readers read minutes; the stdout markers
 (`[TRACK-RESOLVE] rt=`, `[CHARGE-SET] rt=`) print seconds.
+
+### A matched MS2 is searched beside the analysis thread (ADR-0062)
+
+With an `identification` section the engine owns a `SearchPool` of `identification.search_threads` workers
+(unset = the core count minus two, at least 1; each worker sets OpenMP's team size on start, because a new
+thread does not inherit it). Two job kinds exist, exactly the matcher's two callers on an MS2:
+
+| Scan | Under `analysis_mutex_` in `processScan` | On the worker, no lock | The apply, under `analysis_mutex_` |
+|---|---|---|---|
+| Regular MS2 (not `Q`) | deconvolve, then copy the stored MS2, `parent_ctx` and the half-filled row into a `RegularSearch` | `Exploration::searchNextLevel` | `applyRegularSearch_` → `finishRegularMS2_` (`applyNextLevel`: tracker seeding, MS3 planning and pushes), then the `scan_results` + `identification` rows |
+| MS2 exploration variant the matcher reads (`variantNeedsSearch`) | `Exploration::prepareVariant` (route, deconvolve, share) into a `VariantSearch` | `Exploration::searchVariant` | `applyVariantSearch_` → `applyVariant` (score, pool, group completion) → `finishVariantMS2_`, then the rows |
+
+`initiateNextLevel == applyNextLevel(searchNextLevel(...))` and `feedResult == applyVariant(prepareVariant(...))`,
+split at their existing seams with no logic change; without a pool, or for a `Q` scan, an MS3 variant, a trap
+or empty variant, the inline path runs both halves as before. The cascade re-match of a completed MS2 sweep's
+winner (`initiateNextLevel` inside `applyVariant`) still runs under the lock.
+
+- **`analysis_mutex_` has two acquisition sites**: `processScan` and the worker's apply. The drain takes
+  neither (ADR-0025). A worker never holds the pool mutex while it runs a search or an apply, so the
+  hierarchy `analysis_mutex_` → { `queue_mutex_`, `precursor_map_mutex_`, the `IdaLogger` stream mutexes,
+  the `SearchPool` mutex } stays acyclic.
+- **A sweep completes when its searches return**, not its scans. **Rows of searched MS2s are written in
+  completion order** in production.
+- **A bounded backlog drops the oldest** (d.5): 4 waiting jobs per worker (`kSearchBacklogPerThread`,
+  provisional until push 4 logs `search_ms`/`search_wait_ms`). The dropped job's `drop()` runs in the
+  submitting `processScan`, under its lock: `[SEARCH-DROPPED] id=…`, the row written with the identification
+  columns at the not-run sentinels (`tag_count` -1), nothing matched, planned or identified. A dropped sweep
+  variant is received unscored under `fragment_count`, scored as usual under the other metrics, and never
+  pooled, so its group still completes.
+- **`waitForSearchIdle()`** (bridge export `WaitForSearchIdle`, the sixth) blocks until nothing waits or runs
+  and returns the commands the applies pushed since the previous call; `0` at once with no pool. Harnesses
+  only: production never calls it, and calling it with `analysis_mutex_` held deadlocks (an apply would wait
+  for the caller).
 
 ### Scan-description wire format
 
@@ -313,12 +355,14 @@ Two subtleties:
   critical sections. The drain takes **no** `analysis_mutex_` anywhere, the `writeScanCommandRow` calls
   included (ADR-0025; `IdaLogger` serialises each stream itself), and ADR-0060's commit happens inside
   `dequeue_`'s own `queue_mutex_` hold. Lock order wherever both are taken: `analysis_mutex_` → `queue_mutex_`.
+  `analysis_mutex_` itself has two acquisition sites, `processScan` and a search worker's apply (ADR-0062).
   The only lock-free `processScan` → `getNextScanCommand` channel is two atomics
   (`exploration_active_`, `current_faims_cv_`), written release / read acquire.
 
 This matters because the two bridge calls genuinely run on **different threads**: `processScan` on
 the C# TPL Dataflow `ActionBlock` thread (serialized with itself, `MaxDegreeOfParallelism = 1`),
-`getNextScanCommand` on the instrument's event thread.
+`getNextScanCommand` on the instrument's event thread, and since ADR-0062 a matched MS2's apply on a
+search-pool worker.
 
 ### Priority ladder (0 highest → 3 lowest)
 
@@ -1092,6 +1136,15 @@ response scan stamped with that command's own engine-emitted description → rep
 `idle >= 3`. You cannot fabricate a scan id (gate 3 above), which is precisely why hand-rolled
 drive loops don't work. `FLASHIda_ProcessScan_test` pins this with
 `processScan_ms1_gate_rejects_unrequested_id`.
+
+**Every drive waits for the search pool after every feed** (ADR-0062 d.7): `runInterleaved` and the
+hand-driven helpers (`pushAllScans`, `bootstrapExplorationGroup`, `driveStaleSurvey`) call
+`ida->waitForSearchIdle()` after each `processScan`, so the next pull sees exactly what a synchronous
+`processScan` left queued; `runInterleaved` adds its return to `ms2_feed_returns`. The sections that pin the
+pool itself (`FLASHIda_ProcessScan_test`, `FLASHIda_exploration_test`) deliberately skip the wait and use
+`waitUntil` and `SearchGate` (`FLASHIda_TestHelpers.h`) with the `FLASHIda_TestAccess.h` seams
+`onBeforeSearch`, `hasSearchPool`, `searchThreads`, `searchesFinished`, `appliesFinished` and
+`setSearchBacklog`.
 
 Division of labour with the C# suite: **C++ ctests assert plausibility ranges** (stable across
 engine bumps); **C# NUnit asserts exact goldens**. Put a new numeric expectation on the C# side

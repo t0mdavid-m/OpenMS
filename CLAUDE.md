@@ -17,7 +17,7 @@ Headers in `src/openms/include/OpenMS/ANALYSIS/TOPDOWN/`, sources in
 `FLASHIdaBridgeFunctions.cpp` sit in `TOPDOWN/`; the runtime helpers in `TOPDOWN/FLASHIda/`:
 `Config`, `Deconvolution`, `Exploration`, `FAIMS`, `FragmentAnalysis`, `IdaLogger`, `KineticModel`,
 `MS3FragmentMatcher`, `Ms2Params`, `PrecursorSelection`, `ProteoformTracker`, `Quantification`,
-`Refine`, `ScanCommand`, `ScanCommandQueue`, `ScanRole`, plus the offline `ScanCommandJoin`.
+`Refine`, `ScanCommand`, `ScanCommandQueue`, `ScanRole`, `SearchPool`, plus the offline `ScanCommandJoin`.
 `sources.cmake` is not a reliable header inventory; glob the directory.
 
 ### The untouchable boundary
@@ -54,6 +54,10 @@ departure from the plan goes back to the owner. Ambiguous cases count as source 
   `queue_mutex_` and hands stamps to the next survey's fold. A committed species is never dropped.
   `wouldBar` must mirror `admitCandidate` (a drift-guard test pins them). Depth-1 harnesses never
   re-plan; `FLASHIda_Replan_test` forces the race through a seam.
+- **An MS2's MS3s are pushed by a search worker's apply**, not by `processScan` (ADR-0062): the
+  "MS3 targeting" and "exploration MS2 return" push sites live in `finishRegularMS2_` and
+  `finishVariantMS2_`. The pool exists only with an `identification` section, and `~FLASHIda` stops
+  it before any member an apply touches is destroyed.
 
 ## `processScan`
 
@@ -68,6 +72,13 @@ departure from the plan goes back to the owner. Ambiguous cases count as source 
   description resolves as a survey**: do not "fail closed" there.
 - **The decision gates read the engine's own command (`parent_ctx`)**; only the observe gate reads
   the echo (ADR-0042).
+- **A matched MS2 is searched beside the analysis thread** (ADR-0062). `processScan` copies what
+  the match needs (regular MS2, or an MS2 exploration variant) and returns; a `SearchPool` worker
+  (`identification.search_threads`) runs `Exploration::searchNextLevel`/`searchVariant` with no
+  lock, then `applyRegularSearch_`/`applyVariantSearch_` under `analysis_mutex_`. MS3 variants,
+  trap variants and `Q` scans stay inline. A sweep completes when its searches return; searched
+  rows are written in completion order. A full backlog (4 per worker, provisional) drops the oldest
+  waiting search (`[SEARCH-DROPPED]`): its scan identifies nothing.
 - **Quantification** (ADR-0038/0039/0056): `Q` is the scan measured; a verdict buys an ordinary `R`.
   `quantification.identify` decides which verdicts buy; `enriched_in` is evaluated on
   `condition_means`, **never on `fold_change`** (−1 is a sentinel for an absent condition).
@@ -80,7 +91,9 @@ Steps: (1) scheduled AGC prescan → (2) cycle-time MS1 → (2b) monitor scan �
 - **Step 5 emits no prescan** and re-enters `dequeue()` (ADR-0031). Prescans come only from Step 1.
 - **Step 2b is not an `else` of Step 2**: `takeMonitorDue()` must run on every drain to re-arm.
 - **`recordMS1Time()` carries a `roleDecides` conjunct**, or a monitor scan starves `cycle_time`.
-- **No `analysis_mutex_` in the drain** (ADR-0025). Lock order: `analysis_mutex_` → `queue_mutex_`.
+- **No `analysis_mutex_` in the drain** (ADR-0025). It has two acquisition sites, `processScan` and
+  a search worker's apply (ADR-0062). Lock order: `analysis_mutex_` → { `queue_mutex_`,
+  `precursor_map_mutex_`, the `IdaLogger` stream mutexes, the `SearchPool` mutex }, all leaves.
   The steps are not atomic; the drain and `processScan` run on different threads.
 - **Priorities**: 0 = CV-transition/cycle-time MS1, bought `R`, monitor `M`;
   1 = MS3; 2 = MS2; **3 = the idle survey and nothing else** (C# drain loops stop on it). Strict
@@ -194,6 +207,11 @@ keep reading pre-2026-09 run folders. The FLASHDeconv side is inside the boundar
   `<build>/src/tests/class_tests/bin/` and need the 5-DLL set (incl. `zlib.dll`) on Windows.
 - **Drive acquisitions only through `FLASHIda_TestHelpers.h::runInterleaved`**, the mirror of C#
   `PushScanAndDrainFull`; a hand-rolled drive loop is a defect even if correct.
+- **Every drive calls `waitForSearchIdle()` after every `processScan`** (ADR-0062), so it sees the
+  order a synchronous `processScan` produced; the bridge's sixth export `WaitForSearchIdle` exists
+  for that and production never calls it. Never call it holding `analysis_mutex_`. Only the
+  sections that pin the pool skip the wait (`waitUntil`, `SearchGate`, the `FLASHIda_TestAccess.h`
+  search seams).
 - C++ ctests assert **plausibility ranges**; C# NUnit asserts exact goldens.
 - Release only: `OPENMS_PRECONDITION` and asserts are compiled out, and the TOPDOWN tree has none
   anyway.
