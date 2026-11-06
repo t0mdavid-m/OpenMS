@@ -787,6 +787,22 @@ add_test("TOPP_FLASHDeconv_8_out1" ${CMAKE_COMMAND} -E compare_files FLASHDeconv
 add_test("TOPP_FLASHDeconv_8_out2" ${CMAKE_COMMAND} -E compare_files FLASHDeconv_8_ms1.tmp.tsv FLASHDeconv_7_ms1.tmp.tsv)
 add_test("TOPP_FLASHDeconv_8_out3" ${CMAKE_COMMAND} -E compare_files FLASHDeconv_8_ms1.tmp.feature FLASHDeconv_7_ms1.tmp.feature)
 set_tests_properties("TOPP_FLASHDeconv_8_out1" "TOPP_FLASHDeconv_8_out2" "TOPP_FLASHDeconv_8_out3" PROPERTIES DEPENDS "TOPP_FLASHDeconv_7;TOPP_FLASHDeconv_8")
+# Expected outputs on real data: a short window of an E. coli lysate (Eclip_1480, Orbitrap Eclipse; MS1 3845-3880 s, MS2 3858-3868 s,
+# each spectrum cut to its most intense peaks, 1500 for MS1 and 500 for MS2): MS1 and MS2 deconvolution, MS1 features (whose masses
+# are the precursor masses) and the files for TopPIC. The input is copied into the test directory first, as the outputs hold the input
+# file name. Numbers have to agree to 1e-7 (relative; 0.5 mDa at 5 kDa) or 1e-6 (absolute), much stricter than FuzzyDiff.ini (1 %):
+# a changed value fails, and so does a number written with fewer digits. The expected files were written with one thread, the tests
+# run with four.
+add_test("TOPP_FLASHDeconv_9_copy" ${CMAKE_COMMAND} -E copy ${DATA_DIR_TOPP}/FLASHTnT_1_input.mzML FLASHTnT_1_input.mzML)
+set_tests_properties("TOPP_FLASHDeconv_9_copy" PROPERTIES FIXTURES_SETUP FLASH_lysate_input)
+add_test("TOPP_FLASHDeconv_9" ${TOPP_BIN_PATH}/FLASHDeconv -test -threads 4 -in FLASHTnT_1_input.mzML -out FLASHDeconv_9.tmp.tsv -out_spec1 FLASHDeconv_9_ms1.tmp.tsv -out_msalign1 FLASHDeconv_9_tmp_ms1.msalign -out_msalign2 FLASHDeconv_9_tmp_ms2.msalign -out_feature1 FLASHDeconv_9_tmp_ms1.feature -out_mzml FLASHDeconv_9_deconv.tmp.mzML)
+set_tests_properties("TOPP_FLASHDeconv_9" PROPERTIES FIXTURES_REQUIRED FLASH_lysate_input FIXTURES_SETUP FLASH_lysate_deconv)
+add_test("TOPP_FLASHDeconv_9_out1" ${DIFF} -ratio 1.0000001 -absdiff 0.000001 -in1 FLASHDeconv_9.tmp.tsv -in2 ${DATA_DIR_TOPP}/FLASHDeconv_9_output.tsv)
+add_test("TOPP_FLASHDeconv_9_out2" ${DIFF} -ratio 1.0000001 -absdiff 0.000001 -in1 FLASHDeconv_9_ms1.tmp.tsv -in2 ${DATA_DIR_TOPP}/FLASHDeconv_9_ms1_output.tsv)
+add_test("TOPP_FLASHDeconv_9_out3" ${DIFF} -ratio 1.0000001 -absdiff 0.000001 -in1 FLASHDeconv_9_tmp_ms1.msalign -in2 ${DATA_DIR_TOPP}/FLASHDeconv_9_output_ms1.msalign)
+add_test("TOPP_FLASHDeconv_9_out4" ${DIFF} -ratio 1.0000001 -absdiff 0.000001 -in1 FLASHDeconv_9_tmp_ms2.msalign -in2 ${DATA_DIR_TOPP}/FLASHDeconv_9_output_ms2.msalign)
+add_test("TOPP_FLASHDeconv_9_out5" ${DIFF} -ratio 1.0000001 -absdiff 0.000001 -in1 FLASHDeconv_9_tmp_ms1.feature -in2 ${DATA_DIR_TOPP}/FLASHDeconv_9_output_ms1.feature)
+set_tests_properties("TOPP_FLASHDeconv_9_out1" "TOPP_FLASHDeconv_9_out2" "TOPP_FLASHDeconv_9_out3" "TOPP_FLASHDeconv_9_out4" "TOPP_FLASHDeconv_9_out5" PROPERTIES DEPENDS "TOPP_FLASHDeconv_9")
 
 #------------------------------------------------------------------------------
 # FLASHQuantConsensus tests: two synthetic runs (5 species; run 2: one species x2, one x0.5, retention times +3 s) with their FLASHDeconv
@@ -828,6 +844,33 @@ add_test("TOPP_FLASHQuantConsensus_9_out" ${DIFF} -in1 FLASHQuantConsensus_9.tmp
 set_tests_properties("TOPP_FLASHQuantConsensus_9_out" PROPERTIES DEPENDS "TOPP_FLASHQuantConsensus_9")
 add_test("TOPP_FLASHQuantConsensus_9_id" ${DIFF} -in1 FLASHQuantConsensus_9_id.tmp.tsv -in2 ${DATA_DIR_TOPP}/FLASHQuantConsensus_9_id_output.tsv)
 set_tests_properties("TOPP_FLASHQuantConsensus_9_id" PROPERTIES DEPENDS "TOPP_FLASHQuantConsensus_9")
+
+#------------------------------------------------------------------------------
+# FLASHTnT and FLASHAnnotator tests: expected outputs, numbers to 1e-7 (relative) or 1e-6 (absolute), four threads (expected files
+# written with one). FLASHTnT_input.fasta: 301 E. coli proteins (the 5 identified in the lysate window, 295 others identified in the
+# whole run, and AqpZ) with shuffled decoys (DecoyDatabase, no cleavage, seed 1).
+#  1: one step from the raw mzML of FLASHDeconv_9 (deconvolved inside): PrSMs, proteoforms and tags
+#  2: two steps, the deconvolved mzML of FLASHDeconv_9 with -in_raw: the same PrSMs and proteoforms as 1
+#  3: -native on one native spectrum of AqpZ (EThcD; b y c z)
+add_test("TOPP_FLASHTnT_1" ${TOPP_BIN_PATH}/FLASHTnT -test -threads 4 -in ${DATA_DIR_TOPP}/FLASHTnT_1_input.mzML -db ${DATA_DIR_TOPP}/FLASHTnT_input.fasta -out_prsm FLASHTnT_1_prsm.tmp.tsv -out_pro FLASHTnT_1_pro.tmp.tsv -out_tag FLASHTnT_1_tag.tmp.tsv)
+add_test("TOPP_FLASHTnT_1_out1" ${DIFF} -ratio 1.0000001 -absdiff 0.000001 -in1 FLASHTnT_1_prsm.tmp.tsv -in2 ${DATA_DIR_TOPP}/FLASHTnT_1_prsm_output.tsv)
+add_test("TOPP_FLASHTnT_1_out2" ${DIFF} -ratio 1.0000001 -absdiff 0.000001 -in1 FLASHTnT_1_pro.tmp.tsv -in2 ${DATA_DIR_TOPP}/FLASHTnT_1_pro_output.tsv)
+add_test("TOPP_FLASHTnT_1_out3" ${DIFF} -ratio 1.0000001 -absdiff 0.000001 -in1 FLASHTnT_1_tag.tmp.tsv -in2 ${DATA_DIR_TOPP}/FLASHTnT_1_tag_output.tsv)
+set_tests_properties("TOPP_FLASHTnT_1_out1" "TOPP_FLASHTnT_1_out2" "TOPP_FLASHTnT_1_out3" PROPERTIES DEPENDS "TOPP_FLASHTnT_1")
+add_test("TOPP_FLASHTnT_2" ${TOPP_BIN_PATH}/FLASHTnT -test -threads 4 -in FLASHDeconv_9_deconv.tmp.mzML -in_raw ${DATA_DIR_TOPP}/FLASHTnT_1_input.mzML -db ${DATA_DIR_TOPP}/FLASHTnT_input.fasta -out_prsm FLASHTnT_2_prsm.tmp.tsv -out_pro FLASHTnT_2_pro.tmp.tsv)
+set_tests_properties("TOPP_FLASHTnT_2" PROPERTIES FIXTURES_REQUIRED FLASH_lysate_deconv)
+add_test("TOPP_FLASHTnT_2_out1" ${DIFF} -ratio 1.0000001 -absdiff 0.000001 -in1 FLASHTnT_2_prsm.tmp.tsv -in2 ${DATA_DIR_TOPP}/FLASHTnT_1_prsm_output.tsv)
+add_test("TOPP_FLASHTnT_2_out2" ${DIFF} -ratio 1.0000001 -absdiff 0.000001 -in1 FLASHTnT_2_pro.tmp.tsv -in2 ${DATA_DIR_TOPP}/FLASHTnT_1_pro_output.tsv)
+set_tests_properties("TOPP_FLASHTnT_2_out1" "TOPP_FLASHTnT_2_out2" PROPERTIES DEPENDS "TOPP_FLASHTnT_2")
+add_test("TOPP_FLASHTnT_3" ${TOPP_BIN_PATH}/FLASHTnT -test -threads 4 -in ${DATA_DIR_TOPP}/FLASHTnT_3_input.mzML -db ${DATA_DIR_TOPP}/FLASHTnT_input.fasta -ion_type b y c z -native -out_prsm FLASHTnT_3_prsm.tmp.tsv -out_pro FLASHTnT_3_pro.tmp.tsv)
+add_test("TOPP_FLASHTnT_3_out1" ${DIFF} -ratio 1.0000001 -absdiff 0.000001 -in1 FLASHTnT_3_prsm.tmp.tsv -in2 ${DATA_DIR_TOPP}/FLASHTnT_3_prsm_output.tsv)
+add_test("TOPP_FLASHTnT_3_out2" ${DIFF} -ratio 1.0000001 -absdiff 0.000001 -in1 FLASHTnT_3_pro.tmp.tsv -in2 ${DATA_DIR_TOPP}/FLASHTnT_3_pro_output.tsv)
+set_tests_properties("TOPP_FLASHTnT_3_out1" "TOPP_FLASHTnT_3_out2" PROPERTIES DEPENDS "TOPP_FLASHTnT_3")
+# FLASHAnnotator: the PrSMs of FLASHTnT_1 annotated on the raw spectra (fragment isotope envelopes at every charge)
+add_test("TOPP_FLASHAnnotator_1" ${TOPP_BIN_PATH}/FLASHAnnotator -test -threads 4 -in ${DATA_DIR_TOPP}/FLASHTnT_1_input.mzML -in_prsm ${DATA_DIR_TOPP}/FLASHTnT_1_prsm_output.tsv -out FLASHAnnotator_1.tmp.tsv -out_annotation FLASHAnnotator_1_annotation.tmp.tsv)
+add_test("TOPP_FLASHAnnotator_1_out1" ${DIFF} -ratio 1.0000001 -absdiff 0.000001 -in1 FLASHAnnotator_1.tmp.tsv -in2 ${DATA_DIR_TOPP}/FLASHAnnotator_1_output.tsv)
+add_test("TOPP_FLASHAnnotator_1_out2" ${DIFF} -ratio 1.0000001 -absdiff 0.000001 -in1 FLASHAnnotator_1_annotation.tmp.tsv -in2 ${DATA_DIR_TOPP}/FLASHAnnotator_1_annotation_output.tsv)
+set_tests_properties("TOPP_FLASHAnnotator_1_out1" "TOPP_FLASHAnnotator_1_out2" PROPERTIES DEPENDS "TOPP_FLASHAnnotator_1")
 
 #------------------------------------------------------------------------------
 # GNPSExport tests
