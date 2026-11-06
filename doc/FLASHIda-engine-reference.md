@@ -44,8 +44,9 @@ is airtight:
   `PrecursorSelection.cpp` (constructs `FLASHTaggerAlgorithm` :934, calls the static
   `fillMatchedPositionsAndFlankingMassDiffs` :972). The IDA path drives Tagger + Extender
   **directly** and never uses `FLASHTnTAlgorithm` — that orchestrator belongs to the TOPP tool.
-  Tuning knobs arrive via the `flashtnt` config section, not through `FLASHTnTAlgorithm`'s own
-  defaults.
+  Tuning knobs arrive via the `identification.flashtnt` config block
+  (`config_.identification().flashtnt`, a `FlashTnTSettings`; ADR-0061 moved it out of the top level
+  and out of `TargetingConfig`), not through `FLASHTnTAlgorithm`'s own defaults.
   **Every Param handed to either algorithm is built in one of two places** —
   `FragmentAnalysis::buildTaggerParam` / `buildExtenderParam` (:197 / :213, which construct a
   throwaway instance purely for `getDefaults()`). All three call sites route through them, so a new
@@ -372,9 +373,22 @@ under `exhaustive` (ADR-0055); every other path returns zero commands. No tracke
 model, or an unidentified precursor in any other mode ⇒ **zero MS3 by design**, with no intensity
 or legacy fallback.
 
-- **`characterization.mode`** (`off | ambiguity | coverage | fragments | exhaustive | discriminating`)
-  is the single MS3 switch and also picks the targets: each on-value *is* an objective, one for one
-  (ADR-0013, extended by ADR-0023, ADR-0049, ADR-0052). `Off` means no MS3 at all.
+- **`identification` gates MS2 matching; its `characterization` block gates MS3** (ADR-0061).
+  `Config::identification()` returns an `IdentificationConfig`: `sequence` (from
+  `identification.reference.sequence`, refused empty), `method`, `refine`, `has_refine_block`,
+  `flashtnt` (`FlashTnTSettings`: `min_length`, `max_length`, `allow_gap`, `max_aa_in_gap`,
+  `fixed_mod`, `max_blind_mod_count`, `max_mod_mass`) and `enabled()` (= non-empty sequence). Read
+  sites: `config_.identification().sequence` (was `characterization().protein_sequence`),
+  `.method`/`.refine`, `.flashtnt.*` (was `targeting().min_tag_length` etc.); the three MS2-matching
+  gates in `FLASHIda.cpp` read `identification().enabled()`. `CharacterizationConfig` no longer
+  carries the sequence, method or refine block. Root `characterization`/`flashtnt` and
+  `identification.characterization.protein_sequence`/`.method`/`.refine` throw with a migration
+  message.
+- **`identification.characterization.mode`** (`ambiguity | coverage | fragments | exhaustive |
+  discriminating`) picks the targets: each value *is* an objective, one for one (ADR-0013, extended
+  by ADR-0023, ADR-0049, ADR-0052). It is required when the block is present, and `"off"` throws
+  ("delete the block"); `CharacterizationMode::Off` remains as the internal state for an absent
+  block, which means no MS3 at all.
   **No objective is a set cover any more** (ADR-0052): `coverage` takes every fragment whose interior
   still holds an MS2-unwitnessed bond, `fragments` every mapped fragment with a bond inside it, both
   strongest `best_ms2` first until `max_targets`. The uncovered set is computed once and never
@@ -403,7 +417,7 @@ or legacy fallback.
   makes every projection site refuse an unknown class **on the class, never on the index** — the two
   fields travel independently, and the old `default:`/`else` fallback was the *suffix* branch, so an
   index-only guard would let a `'u'` with a plausible index cut a real suffix and match against it.
-  Its pool floor is the new `characterization.min_target_mass` (Da, `0` = off), and an unassigned
+  Its pool floor is the new `identification.characterization.min_target_mass` (Da, `0` = off), and an unassigned
   target's CE sweep is forced onto `RemainingPrecursor` whatever the config asked for — gated
   `msn_level >= 3`, because `initiate`'s `ion_type` defaults to `'\0'` and an ungated test would
   drag every MS2 exploration group with it (ADR-0023 decisions 5 and 11, D-f, D-g).
@@ -431,9 +445,11 @@ or legacy fallback.
   config.
 - **Budget and charge floor come from level 2**, not 3: `config_.level(2).max_targets` (hardcoded
   inside `planNextScans`) and level 2's `min_charge`. Both are now AUTHORED as
-  `characterization.max_targets` / `.min_fragment_charge` and projected onto level 2 by
-  `Config::applyCharacterizationMode_`, so the read sites are unchanged while the keys finally sit
-  where the feature does. `selection_strategy.ms3.max_targets` / `.min_charge` were parsed and
+  `identification.characterization.max_targets` / `.min_fragment_charge` and projected onto level 2
+  by `Config::applyCharacterizationMode_`, so the read sites are unchanged while the keys finally sit
+  where the feature does. Quirk: level 2's `max_targets` also caps the matched fragments behind the
+  MS2 `tic_coverage` column, so under the old `mode: off` with a sequence an authored value still
+  counted there; an `identification` with no `characterization` block uses the default 3. `selection_strategy.ms3.max_targets` / `.min_charge` were parsed and
   **never read** — four committed configs set 200 and ran 3 — and are deleted.
 
 ### `fragmentContains` vs `fragmentBrackets` (ADR-0005)
@@ -498,7 +514,10 @@ precursor class and is left alone — its full-protein ions are right whatever t
 `ETciD` (one spelling, PSI-MS MS:1003182) joins both `needsCollisionEnergy` and `needsReactionTime`.
 **No ETD→MS3 has run on hardware**; whether the instrument takes `ReactionTime "7;0"` is open.
 
-### `characterization.method` picks the MS2 annotator; Refine is the second one (ADR-0049)
+### `identification.method` picks the MS2 annotator; Refine is the second one (ADR-0049)
+
+(`characterization.method` and `.refine` until ADR-0061; read as `config_.identification().method` /
+`.refine`.)
 
 `FragmentAnalysis::getTopFragmentMatches` is **the one switch**: `AnnotationMethod::Refine` →
 `runRefineMatching_`, else `runTagBasedFragmentMatching_` (FLASHTagger + FLASHExtender, the default
@@ -746,7 +765,7 @@ Traps worth internalizing before touching config code:
   `Config_SchemaProjection_test::analyzer_is_a_closed_set`. An **unset** analyzer is not the trap: a
   pre-scan that reaches the trap through the instrument method's default is invisible to the rule
   (recorded gap).
-- **Selection is never authored per level any more** — it is projected from `characterization.mode`
+- **Selection is never authored per level any more** — it is projected from `identification.characterization.mode`
   and `precursor_selection.rank_by`, so there is no "level present without a selection key" case
   left. `Config::level(n)` still returns a static `default_level_` with `selection = None` for a
   level not in `levels_`, but `levels_` is now always `{1,2,3}`. `MSLevelConfig::selection`'s
@@ -1033,7 +1052,7 @@ loop.** That bookkeeping runs once per species and both its guards
 `ProteoformTracker::feedScan` flattens each fragment PeakGroup to `getMaxIntensityAbsCharge()` for the
 representative fields, and *also* stores every present charge as a `ChargeRecord` in
 `PeakRecord::by_charge`; `upsertMappedObservation_` fills `ms2_by_charge` from that. Without the
-envelope, `ms2_by_charge` held one entry per fragment per scan and `characterization.fragment_charges`
+envelope, `ms2_by_charge` held one entry per fragment per scan and `identification.characterization.fragment_charges`
 was inert in **both** on-values while the spectra resolved ~38% of fragments at two or more charges.
 `planNextScans` derives `separate` and `multiplexed` from **one** `selectNotches` call, so the two modes
 acquire the same set and differ only in scan count.

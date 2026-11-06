@@ -96,8 +96,15 @@ private `monitor_deconv_` (ADR-0042). **Do not merge the monitor engine into `de
 
 - **`ProteoformTracker::planNextScans` is the only producer of MS3 targets.** No identified model
   (or `exhaustive`, ADR-0055) ⇒ zero MS3, by design.
-- **`characterization.mode`** is the one switch and objective (`off | ambiguity | coverage |
-  fragments | exhaustive | discriminating`); unknown values throw. No mode is a set cover (ADR-0052);
+- **`identification` gates matching; its `characterization` block gates MS3** (ADR-0061).
+  `Config::identification()` (`IdentificationConfig`: `sequence`, `method`, `refine`,
+  `has_refine_block`, `flashtnt`, `enabled()` = non-empty sequence) replaces
+  `characterization().protein_sequence`/`.method`/`.refine` and `targeting()`'s seven FLASHTnT
+  fields; the three MS2-matching gates in `FLASHIda.cpp` read `identification().enabled()`. Root
+  `characterization`/`flashtnt` and the moved keys throw with a migration message.
+- **`identification.characterization.mode`** is the objective (`ambiguity | coverage | fragments |
+  exhaustive | discriminating`), required when the block is present; `"off"` and unknown values
+  throw. `CharacterizationMode::Off` survives only as the internal no-block state. No mode is a set cover (ADR-0052);
   full-length ions are dropped where the pools are built. The engine branches on `.objective`, so a
   new mode without an objective ships as `ambiguity`.
 - **`Config::applyCharacterizationMode_` must assign level 1 too**, or every MS1 is skipped. Budget
@@ -108,7 +115,7 @@ private `monitor_deconv_` (ADR-0042). **Do not merge the monitor engine into `de
 - **Any activation feeds an MS3; only a b/y precursor's MS3 is annotated** (ADR-0054):
   `isKnownIonClass` (has a frame) and `isAnnotatableMs3Precursor` (b/y) answer different questions;
   do not merge them.
-- **`characterization.method`**: `getTopFragmentMatches` is the one switch between FLASHTnT and
+- **`identification.method`**: `getTopFragmentMatches` is the one switch between FLASHTnT and
   Refine (ADR-0049). `Refine` is pure static functions; `RefineSettings.h` exists to break an include
   cycle. The tracker owns the discriminating round; the MS3 return closes it; `Config::validate`
   refuses `refine`/`discriminating` under `flashtnt` and `discriminating` with level-3 exploration.
