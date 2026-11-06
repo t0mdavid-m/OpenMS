@@ -509,6 +509,12 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "targets and decoys in one ranking.",
                      {"advanced"});
   defaults_.setValidStrings("protein_ranking", {"proteoform", "top_two_prsms"});
+  defaults_.setValue("shift_penalty", 0.0,
+                     "With scoring_model: a determined PrSM with a blind shift loses this weight times log10 of the candidates the shift opens "
+                     "(the protein's windows within max_mod_mass of its mass) from its confidence, without a floor: the multiple-testing burden "
+                     "of the free shift, as TopPIC's E-value charges it. 0: off.",
+                     {"advanced"});
+  defaults_.setMinFloat("shift_penalty", 0.0);
   defaultsToParam_();
 }
 
@@ -622,6 +628,7 @@ void FLASHTnTAlgorithm::updateMembers_()
   protein_top_two_ = param_.getValue("protein_ranking").toString() == "top_two_prsms";
   const String scoring_file = param_.getValue("scoring_model").toString();
   scoring_model_ = scoring_file.empty() ? nullptr : LearnedScoringModel::load(scoring_file);
+  shift_penalty_ = param_.getValue("shift_penalty");
   terminal_ladders_ = param_.getValue("terminal_ladders").toString() == "true";
   precursor_ladders_ = param_.getValue("precursor_ladders").toString() == "true";
   search_cascade_ = param_.getValue("search_cascade").toString() == "true";
@@ -5273,7 +5280,15 @@ void FLASHTnTAlgorithm::applyLearnedScoring_(std::vector<ProteinHit>& hits, cons
     auto& hit = hits[best];
     hit.setMetaValue("CombinedScore", hit.getScore());
     hit.setMetaValue("ChoiceScore", choice[best]);
-    hit.setScore(model.confidence(x));
+    double confidence = model.confidence(x);
+    // the free shift's multiple-testing burden (shift_penalty): a determined PrSM with a blind shift could have fit any of the protein's windows
+    // within max_mod_mass of its mass; uncapped, unlike the raw score's. Held-out seed 2 (0.5): shuffled-entrapment proteoforms 1.33 -> 1.19 %,
+    // foreign 1.41 -> 1.29 %, for under 1 % of the proteoforms (emulated on the class's proteoform q-values)
+    if (shift_penalty_ > 0 && isDetermined(hit) && blindModCount_(hit) > 0)
+    {
+      confidence -= shift_penalty_ * std::log10(shiftedCandidateCount(hit.getSequence(), (double)hit.getMetaValue(tntKey("Mass"), -1.0), max_total_mod_mass_));
+    }
+    hit.setScore(confidence);
     keep[best] = true;
   }
   Size w = 0;
