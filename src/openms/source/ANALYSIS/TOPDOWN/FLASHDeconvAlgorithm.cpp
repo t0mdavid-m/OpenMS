@@ -1669,6 +1669,32 @@ void FLASHDeconvAlgorithm::runFeatureFinding_(std::vector<DeconvolvedSpectrum>& 
   for (int ms_level = (int)current_min_ms_level_ + 1; ms_level <= (int)current_max_ms_level_; ms_level++)
   {
     updatePrecursorQScores_(deconvolved_spectra, ms_level);
+    // An MSn precursor that belongs to a feature of the lowest MS level gets the feature's mass, at the isotope label the precursor has
+    // (chosen with the fragments: precursor_by_fragments). The feature mass is the centroid of the masses of all its survey spectra, so it
+    // scatters less than the mass of the one survey spectrum the precursor was found in; TopFD likewise gives an MS2 spectrum its
+    // feature's mass. Three E. coli lysates, 1% PrSMs whose precursor mass equals the sequence mass: 2.5-97.5 % of the error -0.96..+2.23
+    // ppm with the survey mass, -0.48..+1.71 ppm with the feature mass (TopFD -0.41..+1.45); identifications unchanged (5106 -> 5108
+    // proteoforms, 1008 -> 1009 proteins). Taking the feature's isotope label as well put one third fewer precursors one isotope low, but
+    // left the reported proteoform masses as they were and lost 11 proteoforms.
+    if (ms_level == (int)current_min_ms_level_ + 1)
+    {
+      std::map<uint, double> feature_mass;
+      for (const auto& mf : deconvolved_features)
+      {
+        if (! mf.is_decoy) feature_mass[mf.index] = mf.mt.getCentroidMZ() + mf.iso_offset * Constants::ISOTOPE_MASSDIFF_55K_U;
+      }
+      for (auto& dspec : deconvolved_spectra)
+      {
+        if ((int)dspec.getOriginalSpectrum().getMSLevel() != ms_level || dspec.getPrecursorPeakGroup().empty()) continue;
+        auto pg = dspec.getPrecursorPeakGroup();
+        if (pg.getFeatureIndex() == 0) continue;
+        const auto it = feature_mass.find(pg.getFeatureIndex());
+        if (it == feature_mass.end()) continue;
+        const double d = pg.getIsotopeDaDistance();
+        pg.setMonoisotopicMass(it->second + std::round((pg.getMonoMass() - it->second) / d) * d);
+        dspec.setPrecursorPeakGroup(pg);
+      }
+    }
     std::map<uint, std::vector<Size>> feature_index_set;
     for (Size i = 0; i < deconvolved_spectra.size(); i++)
     {
