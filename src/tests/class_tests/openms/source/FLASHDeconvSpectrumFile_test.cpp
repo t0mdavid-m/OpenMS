@@ -60,7 +60,7 @@ PeakGroup createTestPeakGroup(double mono_mass, int min_charge, int max_charge, 
 // Helper function to create a test DeconvolvedSpectrum
 /////////////////////////////////////////////////////////////
 
-DeconvolvedSpectrum createTestDeconvolvedSpectrum(int scan_number, UInt ms_level, double rt)
+DeconvolvedSpectrum createTestDeconvolvedSpectrum(int scan_number, uint ms_level, double rt)
 {
   DeconvolvedSpectrum dspec(scan_number);
 
@@ -117,7 +117,7 @@ START_TEST(FLASHDeconvSpectrumFile, "$Id$")
 // Test writeDeconvolvedMassesHeader
 /////////////////////////////////////////////////////////////
 
-START_SECTION(static void writeDeconvolvedMassesHeader(std::ostream& os, UInt ms_level, bool detail, bool report_decoy))
+START_SECTION(static void writeDeconvolvedMassesHeader(std::ostream& os, uint ms_level, bool detail, bool report_decoy))
 {
   // Test MS1 header without detail, without decoy
   {
@@ -272,7 +272,7 @@ END_SECTION
 // Test writeTopFD with synthesized data
 /////////////////////////////////////////////////////////////
 
-START_SECTION(static void writeTopFD(DeconvolvedSpectrum& dspec, std::ostream& os, const std::string& filename, const double qval_threshold, const UInt min_ms_level, bool randomize_precursor_mass, bool randomize_fragment_mass))
+START_SECTION(static void writeTopFD(DeconvolvedSpectrum& dspec, std::ostream& os, const std::string& filename, const double qval_threshold, const uint min_ms_level, bool randomize_precursor_mass, bool randomize_fragment_mass))
 {
   // Test with MS1 spectrum
   {

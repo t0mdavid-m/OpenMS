@@ -31,7 +31,7 @@ namespace OpenMS
             @param write_abundance if set true (FLASHDeconv -quant), the MS1 header ends with the columns Abundance and AbundanceTraceCount.
        */
     static void writeDeconvolvedMassesHeader(std::fstream& fs,
-                                             UInt ms_level,
+                                             uint ms_level,
                                              bool detail,
                                              bool report_decoy,
                                              bool write_abundance = false);
@@ -118,7 +118,7 @@ namespace OpenMS
     */
     static void writeTopFD(DeconvolvedSpectrum& dspec, std::fstream& fs, const std::string& filename,
                            const double qval_threshold = 1.0,
-                           const UInt min_ms_level = 1);
+                           const uint min_ms_level = 1);
 
   private:
 

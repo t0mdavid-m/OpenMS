@@ -81,7 +81,7 @@ namespace OpenMS
     */
     void runFromDeconvolvedMasses(const PeakMap& ms1_map, const std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
                                   const FLASHHelperClasses::PrecalculatedAveragine& avg,
-                                  std::vector<std::vector<MassAbundance>>& mass_abundances, std::map<UInt, MassAbundance>& feature_abundances,
+                                  std::vector<std::vector<MassAbundance>>& mass_abundances, std::map<uint, MassAbundance>& feature_abundances,
                                   const std::vector<FLASHHelperClasses::MassFeature>* mass_features = nullptr);
 
     /// a mass to quantify in a run from its raw traces (FLASHQuantConsensus: a consensus feature in every run)

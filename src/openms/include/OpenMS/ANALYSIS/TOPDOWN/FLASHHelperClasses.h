@@ -9,6 +9,9 @@
 #pragma once
 
 #include <OpenMS/CHEMISTRY/ISOTOPEDISTRIBUTION/CoarseIsotopePatternGenerator.h>
+#ifdef _MSC_VER
+using uint = unsigned int; // POSIX uint not available on MSVC; was provided transitively via Qt
+#endif
 #include <OpenMS/CHEMISTRY/ProForma.h>
 #include <OpenMS/CHEMISTRY/ISOTOPEDISTRIBUTION/IsotopeDistribution.h>
 #include <OpenMS/CONCEPT/Constants.h>
@@ -156,7 +159,7 @@ namespace OpenMS
     {
     public:
       /// feature index;
-      UInt index;
+      uint index;
       /// the trace calculated from the masses
       MassTrace mt;
       /// per charge and isotope intensities
@@ -173,7 +176,7 @@ namespace OpenMS
       double isotope_score, qscore;
       double rep_mz;
       bool is_decoy;
-      UInt ms_level;
+      uint ms_level;
       /// features are compared
       bool operator<(const MassFeature& a) const
       {

@@ -141,7 +141,7 @@ void FLASHDeconvAlgorithm::updateMSLevels_(MSExperiment& map)
     if (it.empty()) { continue; }
     if (it.getMSLevel() > max_ms_level_) { continue; }
 
-    UInt ms_level = it.getMSLevel();
+    uint ms_level = it.getMSLevel();
     current_max_ms_level_ = current_max_ms_level_ < ms_level ? ms_level : current_max_ms_level_;
     current_min_ms_level_ = current_min_ms_level_ > ms_level ? ms_level : current_min_ms_level_;
   }
@@ -269,7 +269,7 @@ void FLASHDeconvAlgorithm::deconvolveSpectrum_(const MSExperiment& map, Spectrum
                                                SpectralDeconvolution& noise_decoy_sd, SpectralDeconvolution& signal_decoy_sd) const
 {
   const auto& spec = map[job.index];
-  const UInt ms_level = spec.getMSLevel();
+  const uint ms_level = spec.getMSLevel();
   const int scan_number = job.scan_number;
   const std::string& native_id = spec.getNativeID();
 
@@ -549,7 +549,7 @@ void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vec
   }
 #endif
 
-  for (UInt ms_level = 1; ms_level <= current_max_ms_level_; ms_level++)
+  for (uint ms_level = 1; ms_level <= current_max_ms_level_; ms_level++)
   {
     if (ms_level > 1)
     {
@@ -768,7 +768,7 @@ namespace
   }
 } // namespace
 
-void FLASHDeconvAlgorithm::determineTolerance_(const MSExperiment& map, const Param& sd_param, const FLASHHelperClasses::PrecalculatedAveragine& avg, const UInt ms_level)
+void FLASHDeconvAlgorithm::determineTolerance_(const MSExperiment& map, const Param& sd_param, const FLASHHelperClasses::PrecalculatedAveragine& avg, const uint ms_level)
 {
   // The tolerance that recruits 98% of the true peaks: a peak is taken when its error from its mass's isotope position is within
   // +-0.8 x tol (PeakGroup), so tol = W98 / 0.8, W98 the half-width holding 98% of the errors of the peaks of good masses (Qscore >= 0.9)
@@ -782,7 +782,7 @@ void FLASHDeconvAlgorithm::determineTolerance_(const MSExperiment& map, const Pa
   std::vector<Size> spectra; // the non-empty spectra of the level, in file order
   for (Size i = 0; i < map.size(); i++)
   {
-    if ((UInt)map[i].getMSLevel() == ms_level && ! map[i].empty()) spectra.push_back(i);
+    if ((uint)map[i].getMSLevel() == ms_level && ! map[i].empty()) spectra.push_back(i);
   }
   if (spectra.empty())
   {
@@ -977,7 +977,7 @@ void FLASHDeconvAlgorithm::run(MSExperiment& map,
   const auto& avg = sd_.getAveragine();
 
   // determine tolerance in case tolerance input is negative
-  for (UInt ms_level = 1; ms_level <= current_max_ms_level_; ms_level++)
+  for (uint ms_level = 1; ms_level <= current_max_ms_level_; ms_level++)
   {
     if (tols_[ms_level - 1] > 0) continue;
     determineTolerance_(map, sd_param, avg, ms_level);
@@ -1016,7 +1016,7 @@ void FLASHDeconvAlgorithm::run(MSExperiment& map,
   for (auto& dspec : deconvolved_spectra)
   {
     // a decoy precursor is a mass of the level below: its weight is that level's
-    const UInt ms_level = dspec.getOriginalSpectrum().getMSLevel();
+    const uint ms_level = dspec.getOriginalSpectrum().getMSLevel();
     if (dspec.getDecoyPrecursorMass() > 0 && dspec.getDecoyPrecursorWeight() < 0) dspec.setDecoyPrecursorWeight(getNoiseDecoyWeight(ms_level > 1 ? ms_level - 1 : 1));
   }
 
@@ -1114,7 +1114,7 @@ int FLASHDeconvAlgorithm::choosePrecursorByFragments_(const std::vector<double>&
 
 void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperiment& map,
                                                                  const std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
-                                                                 UInt ms_level)
+                                                                 uint ms_level)
 {
   auto cv_of = [](const MSSpectrum& sp) {
     auto fs = sp.getMetaValue("filter string").toString();
@@ -1678,7 +1678,7 @@ void FLASHDeconvAlgorithm::runFeatureFinding_(std::vector<DeconvolvedSpectrum>& 
     // left the reported proteoform masses as they were and lost 11 proteoforms.
     if (ms_level == (int)current_min_ms_level_ + 1)
     {
-      std::map<UInt, double> feature_mass;
+      std::map<uint, double> feature_mass;
       for (const auto& mf : deconvolved_features)
       {
         if (! mf.is_decoy) feature_mass[mf.index] = mf.mt.getCentroidMZ() + mf.iso_offset * Constants::ISOTOPE_MASSDIFF_55K_U;
@@ -1695,13 +1695,13 @@ void FLASHDeconvAlgorithm::runFeatureFinding_(std::vector<DeconvolvedSpectrum>& 
         dspec.setPrecursorPeakGroup(pg);
       }
     }
-    std::map<UInt, std::vector<Size>> feature_index_set;
+    std::map<uint, std::vector<Size>> feature_index_set;
     for (Size i = 0; i < deconvolved_spectra.size(); i++)
     {
       const auto& dspec = deconvolved_spectra[i];
       if ((int)dspec.getOriginalSpectrum().getMSLevel() != ms_level) continue;
       if (dspec.getPrecursorPeakGroup().empty()) continue;
-      UInt findex = dspec.getPrecursorPeakGroup().getFeatureIndex();
+      uint findex = dspec.getPrecursorPeakGroup().getFeatureIndex();
       if (findex == 0) continue;
       feature_index_set[findex].push_back(i);
     }
@@ -1709,7 +1709,7 @@ void FLASHDeconvAlgorithm::runFeatureFinding_(std::vector<DeconvolvedSpectrum>& 
     // The groups are traced in parallel, each from its own spectra (every spectrum is in one group; the tracing reads no feature index or
     // 2D Qscore), and numbered and labelled afterwards in the group order (the target, then the decoy features of a group), the order in
     // which they were traced and numbered one after the other before.
-    std::vector<std::pair<UInt, std::vector<Size>>> groups(feature_index_set.begin(), feature_index_set.end());
+    std::vector<std::pair<uint, std::vector<Size>>> groups(feature_index_set.begin(), feature_index_set.end());
     std::vector<MassFeatureTrace::TracedFeatures> traced(groups.size()), traced_decoy(report_decoy_ ? groups.size() : 0);
     std::vector<std::exception_ptr> errors(groups.size());
     bool parallel = groups.size() > 1;

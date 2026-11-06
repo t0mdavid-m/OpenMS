@@ -1436,7 +1436,7 @@ namespace OpenMS
     return (it != qscores_.end()) ? it->second : 0.0f;
   }
 
-  void PeakGroup::setFeatureIndex(UInt findex)
+  void PeakGroup::setFeatureIndex(uint findex)
   {
     findex_ = findex;
   }
@@ -1576,17 +1576,17 @@ namespace OpenMS
     return use_window_bounds_;
   }
 
-  void PeakGroup::setIndex(const UInt i)
+  void PeakGroup::setIndex(const uint i)
   {
     index_ = i;
   }
 
-  UInt PeakGroup::getIndex() const
+  uint PeakGroup::getIndex() const
   {
     return index_;
   }
 
-  UInt PeakGroup::getFeatureIndex() const
+  uint PeakGroup::getFeatureIndex() const
   {
     return findex_;
   }

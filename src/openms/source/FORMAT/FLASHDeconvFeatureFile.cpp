@@ -30,7 +30,7 @@ namespace OpenMS
     fs << "\n";
   }
 
-  void FLASHDeconvFeatureFile::writeTopFDFeatureHeader(std::fstream& fs, UInt ms_level)
+  void FLASHDeconvFeatureFile::writeTopFDFeatureHeader(std::fstream& fs, uint ms_level)
   {
     // MS2 layout targets TopPIC 1.8.x: 17 columns, parsed positionally and without bounds checks
     // (see docs/adr/0034). Column 13 was added in TopPIC 1.8.0; emitting the older 16-column form
@@ -51,7 +51,7 @@ namespace OpenMS
   }
 
   void FLASHDeconvFeatureFile::writeFeatures(const std::vector<FLASHHelperClasses::MassFeature>& mass_features, const std::string& file_name, std::fstream& fs, bool report_decoy,
-                                             const std::map<UInt, std::pair<double, Size>>* abundances)
+                                             const std::map<uint, std::pair<double, Size>>* abundances)
   {
     // the row of a feature
     const auto write_row = [&file_name, report_decoy, abundances](const FLASHHelperClasses::MassFeature& mass_feature, std::stringstream& ss) {
@@ -149,7 +149,7 @@ namespace OpenMS
   }
 
   void FLASHDeconvFeatureFile::writeTopFDFeatures(std::vector<DeconvolvedSpectrum>& deconvolved_spectra, const std::vector<FLASHHelperClasses::MassFeature>& mass_features,
-                                                  const std::map<int, double>& scan_rt_map, const std::string& file_name, std::fstream& fs, UInt ms_level)
+                                                  const std::map<int, double>& scan_rt_map, const std::string& file_name, std::fstream& fs, uint ms_level)
   {
     std::stringstream ss;
 
@@ -160,7 +160,7 @@ namespace OpenMS
       // branch discriminates minted from real on `index > mass_features.size()`. Basing this on
       // the MS1-target max mints into that occupied space, and the MS2 branch then reports an
       // unrelated feature's payload.
-      UInt max_feature_index = (UInt)mass_features.size();
+      uint max_feature_index = (uint)mass_features.size();
       for (const auto& mass_feature : mass_features)
       {
         if (mass_feature.ms_level != 1 || mass_feature.is_decoy) continue;
@@ -211,7 +211,7 @@ namespace OpenMS
     {
       // The MS1 target features by their index. A precursor without one got an index beyond them in the MS1 pass above, which may be
       // the index of a decoy feature (report_FDR) or an MSn feature as well, so a feature is looked up by its index among these only.
-      std::map<UInt, const FLASHHelperClasses::MassFeature*> ms1_features;
+      std::map<uint, const FLASHHelperClasses::MassFeature*> ms1_features;
       for (const auto& mass_feature : mass_features)
       {
         if (mass_feature.ms_level != 1 || mass_feature.is_decoy) continue;

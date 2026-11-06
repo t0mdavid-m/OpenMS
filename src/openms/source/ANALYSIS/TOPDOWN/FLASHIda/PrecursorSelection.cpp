@@ -383,7 +383,7 @@ namespace OpenMS
       {
         int nominal_mass = SpectralDeconvolution::getNominalMass(mass);
         auto qscores = target_mass_qscore_map_[mass];
-        for (UInt i = 0; i < rts.size(); i++)
+        for (uint i = 0; i < rts.size(); i++)
         {
           double prt = rts[i];
           double qscore = qscores[i];

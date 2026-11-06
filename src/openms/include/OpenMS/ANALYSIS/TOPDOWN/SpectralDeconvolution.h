@@ -237,7 +237,7 @@ namespace OpenMS
     double mz_bin_min_value_;
 
     /// current ms Level
-    UInt ms_level_;
+    uint ms_level_;
 
     /// isotope dalton distance (set per spectrum; initialised for setTargetMasses before the first deconvolution)
     double iso_da_distance_ = Constants::ISOTOPE_MASSDIFF_55K_U;

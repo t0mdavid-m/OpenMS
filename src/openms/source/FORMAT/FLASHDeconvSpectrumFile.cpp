@@ -73,9 +73,9 @@ namespace OpenMS
     }
 
     /// the row index of each MS level in the spectrum tsv files (1-based), continued over all calls of the writers
-    std::vector<UInt>& writerIndices_()
+    std::vector<uint>& writerIndices_()
     {
-      static std::vector<UInt> indices {};
+      static std::vector<uint> indices {};
       return indices;
     }
 
@@ -106,7 +106,7 @@ namespace OpenMS
     }
 
     /// the weight of MS level @p ms_level in @p weights (by MS level - 1), 1 if absent
-    double levelWeight_(const std::vector<double>& weights, const UInt ms_level)
+    double levelWeight_(const std::vector<double>& weights, const uint ms_level)
     {
       return ms_level >= 1 && ms_level <= weights.size() ? weights[ms_level - 1] : 1.0;
     }
@@ -115,7 +115,7 @@ namespace OpenMS
     /// noiseDecoyCopies_ says, from @p carry on (advanced)
     void writeDeconvolvedMasses_(DeconvolvedSpectrum& dspec, std::ostream& fs, const std::string& file_name, const FLASHHelperClasses::PrecalculatedAveragine& avg,
                                  const FLASHHelperClasses::PrecalculatedAveragine& decoy_avg, double tol, const bool write_detail, const bool report_decoy,
-                                 const double noise_decoy_weight, UInt& index, double& carry,
+                                 const double noise_decoy_weight, uint& index, double& carry,
                                  const std::vector<std::pair<double, Size>>* abundances = nullptr)
     {
     std::stringstream ss;
@@ -416,7 +416,7 @@ namespace OpenMS
     std::vector<Size> jobs;
     for (Size s = 0; s < spectra.size(); s++)
     {
-      const UInt ms_level = spectra[s].getOriginalSpectrum().getMSLevel();
+      const uint ms_level = spectra[s].getOriginalSpectrum().getMSLevel();
       if (ms_level == 0 || ms_level > out_files.size() || out_files[ms_level - 1].empty()) continue;
       jobs.push_back(s);
     }
@@ -427,7 +427,7 @@ namespace OpenMS
     // soon as it is written.
     auto& indices = writerIndices_();
     const Size n = jobs.size();
-    std::vector<UInt> first_index(n, 0);
+    std::vector<uint> first_index(n, 0);
     std::vector<double> first_carry(n, .5); // the noise decoy carry each spectrum starts from (with report_decoy), per MS level from 0.5 on
     std::vector<double> carries; // by MS level - 1
     std::vector<char> skip(n, 0);
@@ -439,12 +439,12 @@ namespace OpenMS
         skip[k] = 1;
         continue;
       }
-      const UInt ms_level = dspec.getOriginalSpectrum().getMSLevel();
+      const uint ms_level = dspec.getOriginalSpectrum().getMSLevel();
       while (indices.size() <= ms_level) indices.push_back(1);
       first_index[k] = indices[ms_level - 1];
       while (carries.size() < ms_level) carries.push_back(.5);
       first_carry[k] = carries[ms_level - 1];
-      indices[ms_level - 1] += (UInt)(report_decoy ? countDecoyReportRows_(dspec, levelWeight_(noise_decoy_weights, ms_level), carries[ms_level - 1])
+      indices[ms_level - 1] += (uint)(report_decoy ? countDecoyReportRows_(dspec, levelWeight_(noise_decoy_weights, ms_level), carries[ms_level - 1])
                                                    : countTargetMasses(dspec));
     }
 
@@ -507,7 +507,7 @@ namespace OpenMS
         {
           auto& dspec = spectra[jobs[k]];
           std::ostringstream os;
-          UInt index = first_index[k];
+          uint index = first_index[k];
           double carry = first_carry[k];
           writeDeconvolvedMasses_(dspec, os, file_name, avg, decoy_avg, tols[dspec.getOriginalSpectrum().getMSLevel() - 1], write_detail, report_decoy,
                                   levelWeight_(noise_decoy_weights, dspec.getOriginalSpectrum().getMSLevel()), index, carry,
@@ -530,7 +530,7 @@ namespace OpenMS
     if (failed) { std::rethrow_exception(errors[next_write.load()]); }
   }
 
-  void FLASHDeconvSpectrumFile::writeDeconvolvedMassesHeader(std::fstream& fs, const UInt ms_level, const bool detail, const bool report_decoy,
+  void FLASHDeconvSpectrumFile::writeDeconvolvedMassesHeader(std::fstream& fs, const uint ms_level, const bool detail, const bool report_decoy,
                                                              const bool write_abundance)
   {
     if (detail)
@@ -910,7 +910,7 @@ namespace OpenMS
     fs << "####################### Parameters ######################\n";
   }
 
-  void FLASHDeconvSpectrumFile::writeTopFD(DeconvolvedSpectrum& dspec, std::fstream& fs, const std::string& filename, const double qval_threshold, const UInt min_ms_level)
+  void FLASHDeconvSpectrumFile::writeTopFD(DeconvolvedSpectrum& dspec, std::fstream& fs, const std::string& filename, const double qval_threshold, const uint min_ms_level)
   {
     std::stringstream ss;
     UInt ms_level = dspec.getOriginalSpectrum().getMSLevel();
