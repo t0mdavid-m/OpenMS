@@ -172,7 +172,6 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   std::string cfg_json = std::string(R"({
     "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 1, "max_charge": 50, "min_mass": 100, "max_mass": 50000, "tol": [10, 10, 10] },
     "precursor_selection": { "rt_window": 180, "targeting": "none", "consider_all_charges": false, "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 3 },
-    "flashtnt": { "min_length": 3, "max_length": 8 },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
     "ms_settings": {
@@ -182,7 +181,7 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
     },
     "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
     "files": { "target_logs": [], "inclusion_list": "" },
-    "characterization": { "mode": "coverage", "max_targets": 10, "protein_sequence": "PEPTIDEK" },
+    "identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "coverage", "max_targets": 10 } },
     "runtime": { "log_dir": ")") + log_dir + R"(" } })";
 
   Config cfg{cfg_json};

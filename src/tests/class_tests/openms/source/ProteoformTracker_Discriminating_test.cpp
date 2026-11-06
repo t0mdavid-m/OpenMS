@@ -75,7 +75,6 @@ namespace
     "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 1, "max_charge": 50,
     "min_mass": 50, "max_mass": 50000, "tol": [10, 10, 10]
   },
-  "flashtnt": {"min_length": 3, "max_length": 8},
   "faims": {"cv_values": [], "max_cv_skip": 0, "cv_precursor_threshold": 15},
   "scheduling": {
     "cycle_time": {"enabled": false, "value_ms": 60000},
@@ -86,10 +85,10 @@ namespace
     "rt_window": 180, "targeting": "none", "consider_all_charges": false, "strict_inclusion": false,
     "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 3
   },
-  "characterization": {
-    "mode": ")JSON";
-    s += mode + "\",\n    \"method\": \"" + method + "\",\n    \"protein_sequence\": \"" + SEQ + "\",\n    \"max_targets\": " +
-         std::to_string(max_targets);
+  "identification": {
+    "reference": {"sequence": ")JSON";
+    s += SEQ + "\"},\n    \"method\": \"" + method + "\",\n    \"flashtnt\": {\"min_length\": 3, \"max_length\": 8},\n"
+         "    \"characterization\": {\"mode\": \"" + mode + "\", \"max_targets\": " + std::to_string(max_targets) + "}";
     s += R"JSON(
   },
   "ms_settings": {

@@ -66,10 +66,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0,
@@ -98,10 +94,18 @@ namespace
     "rank_by": "qscore",
     "max_precursors": 3
   },
-  "characterization": {
-    "mode": "coverage",
-    "protein_sequence": "PEPTIDEK",
-    "max_targets": 10
+  "identification": {
+    "reference": {
+      "sequence": "PEPTIDEK"
+    },
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8
+    },
+    "characterization": {
+      "mode": "coverage",
+      "max_targets": 10
+    }
   },
   "ms_settings": {
     "ms1": {

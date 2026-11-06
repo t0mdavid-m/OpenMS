@@ -1057,16 +1057,16 @@ START_SECTION(corpus_betacasein_meets_criterion_a)
 }
 END_SECTION
 
-// ---- characterization.method switches FragmentAnalysis::getTopFragmentMatches (ADR-0049) ----
+// ---- identification.method switches FragmentAnalysis::getTopFragmentMatches (ADR-0049) ----
 // Driven through FragmentAnalysis itself: the refine section reproduces the defaults table's best path through the contract,
 // the flashtnt section shows the same call under the default method never takes the Refine path.
 
-// A loadable config: mode off, the cytochrome c sequence, the named method; @p refine_block is spliced after the sequence.
+// A loadable config: no MS3, the cytochrome c reference, the named method; @p refine_block is spliced after the method.
 auto methodConfigJson = [](const std::string& method, const std::string& refine_block) {
   return std::string(R"({
     "deconvolution": { "tol": [10, 10, 10] },
     "precursor_selection": { "rank_by": "qscore", "max_precursors": 5 },
-    "characterization": { "mode": "off", "method": ")") + method + R"(", "protein_sequence": ")" + std::string(CYTC105) + "\"" +
+    "identification": { "reference": { "sequence": ")") + std::string(CYTC105) + R"(" }, "method": ")" + method + "\"" +
          refine_block + R"( },
     "ms_settings": {
       "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
@@ -1105,7 +1105,7 @@ auto spectrumFromMassList = [](const MassList& m, int scan, double precursor_mon
 START_SECTION(getTopFragmentMatches_under_refine_fills_the_contract)
 {
   const Config cfg(methodConfigJson("refine", R"(, "refine": {})"));
-  TEST_EQUAL((int)cfg.characterization().method, (int)AnnotationMethod::Refine)
+  TEST_EQUAL((int)cfg.identification().method, (int)AnnotationMethod::Refine)
   FragmentAnalysis fa(cfg);
   DeconvolvedSpectrum ms2 = spectrumFromMassList(fx, 4242, 12351.30);
   TEST_EQUAL(ms2.size(), 150)

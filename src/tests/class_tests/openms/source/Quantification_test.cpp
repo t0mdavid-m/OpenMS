@@ -58,7 +58,6 @@ namespace
     return std::string(R"({
       "deconvolution": { "tol": [10, 10, 10] },
       "precursor_selection": { "rank_by": "qscore", "max_precursors": 5 },
-      "characterization": { "mode": "off" },
       "quantification": { "enabled": true, "labelling": "tmt6plex", "reporter_mz_tol": 0.002,
                           "conditions": )") + conditions + extra + R"( },
       "ms_settings": {
@@ -354,7 +353,6 @@ auto groupJson = [](const std::string& extra) {
     "deconvolution": { "tol": [10, 10, 10] },
     "precursor_selection": { "rank_by": "qscore", "max_precursors": 5, "precursor_charges": "separate",
                              "min_charge_states": 2, "max_charge_states": 3 },
-    "characterization": { "mode": "off" },
     "quantification": { "enabled": true, "labelling": "tmt6plex", "reporter_mz_tol": 0.002,
                         "conditions": )") + kThreeVsThree + extra + kNoCorrection + R"( },
     "ms_settings": {

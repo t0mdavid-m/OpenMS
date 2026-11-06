@@ -87,10 +87,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0,
@@ -119,10 +115,18 @@ namespace
     "rank_by": "qscore",
     "max_precursors": 3
   },
-  "characterization": {
-    "mode": "ambiguity",
-    "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
-    "max_targets": 3
+  "identification": {
+    "reference": {
+      "sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
+    },
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8
+    },
+    "characterization": {
+      "mode": "ambiguity",
+      "max_targets": 3
+    }
   },
   "ms_settings": {
     "ms1": {
@@ -169,10 +173,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0,
@@ -207,10 +207,14 @@ namespace
       "ce_step": 10.0
     }
   },
-  "characterization": {
-    "mode": "off",
-    "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
-    "max_targets": 3
+  "identification": {
+    "reference": {
+      "sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
+    },
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8
+    }
   },
   "ms_settings": {
     "ms1": {
@@ -257,10 +261,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0,
@@ -295,10 +295,14 @@ namespace
       "ce_step": 10.0
     }
   },
-  "characterization": {
-    "mode": "off",
-    "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
-    "max_targets": 3
+  "identification": {
+    "reference": {
+      "sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
+    },
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8
+    }
   },
   "ms_settings": {
     "ms1": {
@@ -352,15 +356,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 4,
-    "max_length": 9,
-    "allow_gap": true,
-    "max_aa_in_gap": 3,
-    "fixed_mod": [
-      "Carbamidomethyl (C)"
-    ]
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0,
@@ -389,10 +384,23 @@ namespace
     "rank_by": "qscore",
     "max_precursors": 3
   },
-  "characterization": {
-    "mode": "ambiguity",
-    "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
-    "max_targets": 3
+  "identification": {
+    "reference": {
+      "sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
+    },
+    "flashtnt": {
+      "min_length": 4,
+      "max_length": 9,
+      "allow_gap": true,
+      "max_aa_in_gap": 3,
+      "fixed_mod": [
+        "Carbamidomethyl (C)"
+      ]
+    },
+    "characterization": {
+      "mode": "ambiguity",
+      "max_targets": 3
+    }
   },
   "ms_settings": {
     "ms1": {
@@ -441,12 +449,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8,
-    "max_blind_mod_count": 4,
-    "fixed_mod": []
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0,
@@ -475,10 +477,20 @@ namespace
     "rank_by": "qscore",
     "max_precursors": 3
   },
-  "characterization": {
-    "mode": "ambiguity",
-    "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
-    "max_targets": 3
+  "identification": {
+    "reference": {
+      "sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
+    },
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8,
+      "max_blind_mod_count": 4,
+      "fixed_mod": []
+    },
+    "characterization": {
+      "mode": "ambiguity",
+      "max_targets": 3
+    }
   },
   "ms_settings": {
     "ms1": {

@@ -956,29 +956,34 @@ END_SECTION
 // Exploration::initiateNextLevel owns identification AND MS3 target selection, with the former above the
 // latter, and it used to bail at its entry gate whenever characterization.mode was off. So "no MS3"
 // silently meant "no sequence tags, no fragment matches, no identification.tsv row". Identification is now
-// gated by characterization.protein_sequence; DISPATCH is still gated by mode.
+// gated by the identification section; DISPATCH by its characterization block (ADR-0061).
 //
 // This section is the ONLY thing that observes that change. It is byte-identical on every golden mode --
 // the 9 mode: off modes carry an empty sequence and return at the new gate, and the 13 others already
 // identified -- so no golden can see it, and without this the whole engine change would be
 // indistinguishable from an empty commit.
 /////////////////////////////////////////////////////////////
-START_SECTION(identification_runs_when_mode_off_with_sequence)
+START_SECTION(identification_runs_without_characterization)
 {
   auto ms1 = loadTsvScans(CYTC_MS1);
   auto ms2 = loadTsvScans(CYTC_MS2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
   const std::string dir = freshLogDir("lf_id1");
-  // The same inclusion-pinned cytC recipe §I3 drives, with exactly ONE key flipped: ambiguity -> off. The
-  // real protein_sequence stays, and so does ms_settings.ms3 (permitted-but-inert when off), so the only
-  // difference from a run that identifies today is the thing under test.
+  // The same inclusion-pinned cytC recipe §I3 drives, with exactly ONE thing removed: the
+  // identification.characterization block, whose presence is the MS3 switch (ADR-0061). The reference
+  // stays, and so does ms_settings.ms3 (permitted-but-inert without the block), so the only difference
+  // from a run that identifies today is the thing under test. (The old mode "off" flip kept the block's
+  // max_targets 10, which bounds the matched fragments behind tic_coverage; identification without a
+  // block uses 3. Nothing below reads it.)
   std::string json = buildJsonWithLogDir(dir, true);
-  const std::string from = "\"mode\": \"ambiguity\"";
-  const size_t at = json.find(from);
-  ABORT_IF(at == std::string::npos)   // recipe reshaped: the flip would silently be a no-op and §ID1 vacuous
-  json.replace(at, from.size(), "\"mode\": \"off\"");
-  TEST_TRUE(json.find("\"mode\": \"ambiguity\"") == std::string::npos)
+  const size_t key = json.find("\"characterization\"");
+  ABORT_IF(key == std::string::npos)   // recipe reshaped: the removal would silently be a no-op and §ID1 vacuous
+  const size_t comma = json.rfind(',', key);
+  const size_t close = json.find('}', key);   // the block holds no nested object
+  ABORT_IF(comma == std::string::npos || close == std::string::npos)
+  json.erase(comma, close + 1 - comma);
+  TEST_TRUE(json.find("\"characterization\"") == std::string::npos)
 
   FLASHIda ida(const_cast<char*>(json.c_str()));
   runFullCycle(&ida, ms1, ms2);
@@ -1747,13 +1752,11 @@ START_SECTION(exclusion_mode2_tqscore_suppresses_target_mass)
     o << R"({
       "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
       "precursor_selection": { "rt_window": 180, "targeting": ")" << targeting << R"(", "consider_all_charges": false, "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": )" << max_targets << R"( },
-      "flashtnt": { "min_length": 3, "max_length": 8 },
       "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
       "faims": { "cv_values": [], "max_cv_skip": 0 },
       "ms_settings": { "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 }, "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
-      "files": { "target_logs": [)" << target_log_json << R"(], "inclusion_list": "" },
-      "characterization": { "mode": "off" }
+      "files": { "target_logs": [)" << target_log_json << R"(], "inclusion_list": "" }
     })";
     return o.str();
   };
@@ -1853,13 +1856,11 @@ START_SECTION(target_log_double_digit_target_count_is_not_skipped)
     o << R"({
       "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
       "precursor_selection": { "rt_window": 60, "targeting": ")" << targeting << R"(", "consider_all_charges": false, "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": )" << max_precursors << R"( },
-      "flashtnt": { "min_length": 3, "max_length": 8 },
       "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
       "faims": { "cv_values": [], "max_cv_skip": 0 },
       "ms_settings": { "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 }, "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
-      "files": { "target_logs": [)" << target_log_json << R"(], "inclusion_list": "" },
-      "characterization": { "mode": "off" }
+      "files": { "target_logs": [)" << target_log_json << R"(], "inclusion_list": "" }
     })";
     return o.str();
   };
@@ -1945,13 +1946,11 @@ START_SECTION(target_log_skips_superseded_masses)
     o << R"({
       "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
       "precursor_selection": { "rt_window": 60, "targeting": ")" << targeting << R"(", "consider_all_charges": false, "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 1 },
-      "flashtnt": { "min_length": 3, "max_length": 8 },
       "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
       "faims": { "cv_values": [], "max_cv_skip": 0 },
       "ms_settings": { "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 }, "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
-      "files": { "target_logs": [)" << target_log_json << R"(], "inclusion_list": "" },
-      "characterization": { "mode": "off" }
+      "files": { "target_logs": [)" << target_log_json << R"(], "inclusion_list": "" }
     })";
     return o.str();
   };

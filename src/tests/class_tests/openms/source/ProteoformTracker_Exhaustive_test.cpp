@@ -94,7 +94,6 @@ namespace
     "max_mass": 50000,
     "tol": [10, 10, 10]
   },
-  "flashtnt": {"min_length": 3, "max_length": 8},
   "faims": {"cv_values": [], "max_cv_skip": 0, "cv_precursor_threshold": 15},
   "scheduling": {
     "cycle_time": {"enabled": false, "value_ms": 60000},
@@ -110,10 +109,12 @@ namespace
     "rank_by": "qscore",
     "max_precursors": 3
   },
-  "characterization": {
-    "mode": ")JSON";
+  "identification": {
+    "flashtnt": {"min_length": 3, "max_length": 8},
+    "reference": {"sequence": ")JSON";
 
   const char* kConfigTail = R"JSON(
+    }
   },
   "ms_settings": {
     "ms1": {"analyzer": "Orbitrap", "first_mass": 100, "last_mass": 2000,
@@ -128,8 +129,8 @@ namespace
   std::string trackerConfig(const std::string& mode, int max_targets,
                             double min_target_mass, int min_fragment_charge)
   {
-    return std::string(kConfigHead) + mode
-         + "\",\n    \"protein_sequence\": \"" + WINNER_SEQ
+    return std::string(kConfigHead) + WINNER_SEQ
+         + "\"},\n    \"characterization\": {\n      \"mode\": \"" + mode
          + "\",\n    \"max_targets\": " + std::to_string(max_targets)
          + ",\n    \"min_target_mass\": " + std::to_string(min_target_mass)
          + ",\n    \"min_fragment_charge\": " + std::to_string(min_fragment_charge)
@@ -692,11 +693,20 @@ START_SECTION(unassigned_ms3_sweep_is_scored_by_remaining_precursor)
   const std::string cfg_json = R"JSON({
     "deconvolution": {"tol": [10, 10, 10]},
     "precursor_selection": {"rank_by": "qscore", "max_precursors": 3},
-    "characterization": {
-      "mode": "exhaustive",
-      "protein_sequence": "PEPTIDEK",
-      "max_targets": 3,
-      "exploration": {"metric": "fragment_count", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0}
+    "identification": {
+      "reference": {
+        "sequence": "PEPTIDEK"
+      },
+      "characterization": {
+        "mode": "exhaustive",
+        "max_targets": 3,
+        "exploration": {
+          "metric": "fragment_count",
+          "ce_min": 20.0,
+          "ce_max": 30.0,
+          "ce_step": 5.0
+        }
+      }
     },
     "ms_settings": {
       "ms1": {"analyzer": "Orbitrap", "resolution": 120000},
@@ -819,12 +829,28 @@ START_SECTION(unassigned_ms3_sweep_keeps_kinetic_model)
   const std::string cfg_json = R"JSON({
     "deconvolution": {"tol": [10, 10, 10]},
     "precursor_selection": {"rank_by": "qscore", "max_precursors": 3},
-    "characterization": {
-      "mode": "exhaustive",
-      "protein_sequence": "PEPTIDEK",
-      "max_targets": 3,
-      "exploration": {"metric": "kinetic_model", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0,
-                      "activations": ["CID"], "kinetic_model": {"k2": {"CID": 0.0388}}}
+    "identification": {
+      "reference": {
+        "sequence": "PEPTIDEK"
+      },
+      "characterization": {
+        "mode": "exhaustive",
+        "max_targets": 3,
+        "exploration": {
+          "metric": "kinetic_model",
+          "ce_min": 20.0,
+          "ce_max": 30.0,
+          "ce_step": 5.0,
+          "activations": [
+            "CID"
+          ],
+          "kinetic_model": {
+            "k2": {
+              "CID": 0.0388
+            }
+          }
+        }
+      }
     },
     "ms_settings": {
       "ms1": {"analyzer": "Orbitrap", "resolution": 120000},
@@ -877,7 +903,7 @@ START_SECTION(ms2_exploration_metric_is_never_overridden)
         "rank_by": "qscore", "max_precursors": 3,
         "exploration": {"metric": ")JSON" + metric + R"JSON(", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0}
       },
-      "characterization": {"mode": "off", "protein_sequence": "PEPTIDEK"},
+      "identification": { "reference": { "sequence": "PEPTIDEK" } },
       "ms_settings": {
         "ms1": {"analyzer": "Orbitrap", "resolution": 120000},
         "ms2": {"analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29},
@@ -933,11 +959,20 @@ START_SECTION(ms3_unrecorded_ion_type_keeps_the_configured_metric)
   const std::string cfg_json = R"JSON({
     "deconvolution": {"tol": [10, 10, 10]},
     "precursor_selection": {"rank_by": "qscore", "max_precursors": 3},
-    "characterization": {
-      "mode": "exhaustive",
-      "protein_sequence": "PEPTIDEK",
-      "max_targets": 3,
-      "exploration": {"metric": "fragment_count", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0}
+    "identification": {
+      "reference": {
+        "sequence": "PEPTIDEK"
+      },
+      "characterization": {
+        "mode": "exhaustive",
+        "max_targets": 3,
+        "exploration": {
+          "metric": "fragment_count",
+          "ce_min": 20.0,
+          "ce_max": 30.0,
+          "ce_step": 5.0
+        }
+      }
     },
     "ms_settings": {
       "ms1": {"analyzer": "Orbitrap", "resolution": 120000},

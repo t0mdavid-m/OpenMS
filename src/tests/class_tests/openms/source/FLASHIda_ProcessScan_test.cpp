@@ -53,10 +53,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0
@@ -87,10 +83,6 @@ namespace
     "additional_scans": [
       "secondary"
     ]
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
   },
   "ms_settings": {
     "ms1": {
@@ -141,10 +133,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0
@@ -173,10 +161,18 @@ namespace
     "rank_by": "qscore",
     "max_precursors": 1
   },
-  "characterization": {
-    "mode": "ambiguity",
-    "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
-    "max_targets": 3
+  "identification": {
+    "reference": {
+      "sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
+    },
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8
+    },
+    "characterization": {
+      "mode": "ambiguity",
+      "max_targets": 3
+    }
   },
   "ms_settings": {
     "ms1": {
@@ -223,10 +219,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0
@@ -257,10 +249,6 @@ namespace
     "additional_scans": [
       "secondary"
     ]
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
   },
   "ms_settings": {
     "ms1": {
@@ -310,10 +298,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0
@@ -344,10 +328,6 @@ namespace
     "additional_scans": [
       "secondary"
     ]
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
   },
   "ms_settings": {
     "ms1": {
@@ -397,10 +377,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0
@@ -428,10 +404,6 @@ namespace
     "tie_threshold": 0.1,
     "rank_by": "qscore",
     "max_precursors": 3
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
   },
   "ms_settings": {
     "ms1": {
@@ -472,10 +444,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0
@@ -503,10 +471,6 @@ namespace
     "tie_threshold": 0.1,
     "rank_by": "qscore",
     "max_precursors": 3
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
   },
   "ms_settings": {
     "ms1": {
@@ -546,10 +510,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0
@@ -577,10 +537,6 @@ namespace
     "tie_threshold": 0.1,
     "rank_by": "qscore",
     "max_precursors": 3
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
   },
   "ms_settings": {
     "ms1": {
@@ -638,10 +594,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0
@@ -669,10 +621,6 @@ namespace
     "tie_threshold": 0.1,
     "rank_by": "qscore",
     "max_precursors": 3
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
   },
   "ms_settings": {
     "ms1": {
@@ -726,10 +674,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0
@@ -757,10 +701,6 @@ namespace
     "tie_threshold": 0.1,
     "rank_by": "qscore",
     "max_precursors": 3
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
   },
   "ms_settings": {
     "ms1": {
@@ -801,10 +741,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0
@@ -835,10 +771,6 @@ namespace
     "additional_scans": [
       "secondary"
     ]
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
   },
   "ms_settings": {
     "ms1": {
@@ -888,10 +820,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0
@@ -919,10 +847,6 @@ namespace
     "tie_threshold": 0.1,
     "rank_by": "none",
     "max_precursors": 3
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
   },
   "ms_settings": {
     "ms1": {
@@ -963,10 +887,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0
@@ -994,10 +914,6 @@ namespace
     "tie_threshold": 0.1,
     "rank_by": "qscore",
     "max_precursors": 1
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
   },
   "ms_settings": {
     "ms1": {
@@ -1156,7 +1072,6 @@ namespace
     return std::string(R"({
   "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4,
                      "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
-  "flashtnt": { "min_length": 3, "max_length": 8 },
   "faims": { "cv_values": [], "max_cv_skip": 0 },
   "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 },
                   "scan_timeout": { "enabled": false, "value_ms": 30000 },
@@ -1165,7 +1080,6 @@ namespace
   "precursor_selection": { "rt_window": 180, "targeting": "none", "consider_all_charges": false,
                            "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore",
                            "max_precursors": 1)" + precursor_extra + R"( },
-  "characterization": { "mode": "off", "max_targets": 3 },
   "ms_settings": {
     "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000,
              "agc_target": 800000, "max_it": 246 },
@@ -2037,7 +1951,6 @@ START_SECTION(processScan_quant_scan_raises_no_ms3)
   const char* quant_json = R"({
   "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4,
                      "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
-  "flashtnt": { "min_length": 3, "max_length": 8 },
   "faims": { "cv_values": [], "max_cv_skip": 0 },
   "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 },
                   "scan_timeout": { "enabled": false, "value_ms": 30000 },
@@ -2046,7 +1959,6 @@ START_SECTION(processScan_quant_scan_raises_no_ms3)
   "precursor_selection": { "rt_window": 180, "targeting": "none", "consider_all_charges": false,
                            "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore",
                            "max_precursors": 3 },
-  "characterization": { "mode": "off", "max_targets": 10 },
   "ms_settings": {
     "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000,
              "agc_target": 800000, "max_it": 246 },
@@ -2715,10 +2627,6 @@ START_SECTION(processScan_ms1_min_charge_filter)
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0,
@@ -2748,10 +2656,6 @@ START_SECTION(processScan_ms1_min_charge_filter)
     "rank_by": "qscore",
     "max_precursors": 3,
     "min_precursor_charge": 99
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
   },
   "ms_settings": {
     "ms1": {
@@ -2869,10 +2773,6 @@ START_SECTION(cleanup_expired_drops_stale_queued_commands)
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0
@@ -2900,10 +2800,6 @@ START_SECTION(cleanup_expired_drops_stale_queued_commands)
     "tie_threshold": 0.1,
     "rank_by": "qscore",
     "max_precursors": 3
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
   },
   "ms_settings": {
     "ms1": {

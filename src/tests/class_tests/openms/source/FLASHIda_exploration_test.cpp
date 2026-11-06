@@ -53,7 +53,7 @@ namespace
     return R"({
       "deconvolution": { "tol": [10, 10, 10] },
       "precursor_selection": { "rank_by": ")" + rank_by + R"(", "max_precursors": 3 },
-      "characterization": { "mode": ")" + mode + R"(", "protein_sequence": "PEPTIDER" },
+      "identification": { "reference": { "sequence": "PEPTIDER" }, "characterization": { "mode": ")" + mode + R"(" } },
       "ms_settings": {
         "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
         "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 },
@@ -91,23 +91,30 @@ namespace
            + overrides + R"( })";
   }
 
-  // The characterization body that makes characterization.exploration reachable at level 3: the MS3
-  // gate (mode != off) plus the sequence Config.cpp:1012-1016 then requires. Trailing comma included,
-  // so a caller appends its own keys directly.
-  const std::string ms3_on = R"("mode": "ambiguity", "protein_sequence": "PEPTIDER", )";
+  // The characterization body that makes identification.characterization.exploration reachable at level 3:
+  // a mode names the objective, and the block's presence is the MS3 gate (ADR-0061). Trailing comma
+  // included, so a caller appends its own keys directly.
+  const std::string ms3_on = R"("mode": "ambiguity", )";
 
   // Minimal loadable config. `ps_extra` is appended inside precursor_selection (lead with a comma),
-  // `charact` REPLACES the characterization body, and `with_ms3` adds the level-3 scan config that a
-  // non-off mode requires (Config.cpp:1022-1027 -- without it Exploration::initiateNextLevel OOB-reads
-  // scans[0], so its absence is a crash rather than a no-op).
+  // `charact` is the identification.characterization body (empty = no characterization block),
+  // `with_ms3` adds the level-3 scan config a characterization block requires (without it
+  // Exploration::initiateNextLevel OOB-reads scans[0], so its absence is a crash rather than a no-op),
+  // and `identify` adds the identification section with the PEPTIDER reference. A characterization
+  // block always brings its reference: it lives inside identification, which requires one.
   std::string sweepProbe(const std::string& ps_extra = "",
-                         const std::string& charact = R"("mode": "off")",
-                         bool with_ms3 = false)
+                         const std::string& charact = "",
+                         bool with_ms3 = false,
+                         bool identify = false)
   {
+    const std::string ident = (identify || !charact.empty())
+        ? R"("identification": { "reference": { "sequence": "PEPTIDER" })"
+          + (charact.empty() ? std::string() : R"(, "characterization": { )" + charact + " }") + " },"
+        : std::string();
     return std::string(R"({
       "deconvolution": { "tol": [10, 10, 10] },
       "precursor_selection": { "rank_by": "qscore", "max_precursors": 3)") + ps_extra + R"( },
-      "characterization": { )" + charact + R"( },
+      )" + ident + R"(
       "ms_settings": {
         "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
         "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 })"
@@ -133,10 +140,6 @@ namespace
       10,
       10
     ]
-  },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -173,10 +176,14 @@ namespace
       "ce_step": 5.0
     }
   },
-  "characterization": {
-    "mode": "off",
-    "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
-    "max_targets": 3
+  "identification": {
+    "reference": {
+      "sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
+    },
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8
+    }
   },
   "ms_settings": {
     "ms1": {
@@ -223,10 +230,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0,
@@ -262,15 +265,23 @@ namespace
       "ce_step": 5.0
     }
   },
-  "characterization": {
-    "mode": "ambiguity",
-    "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
-    "max_targets": 3,
-    "exploration": {
-      "metric": "fragment_count",
-      "ce_min": 15.0,
-      "ce_max": 35.0,
-      "ce_step": 5.0
+  "identification": {
+    "reference": {
+      "sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
+    },
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8
+    },
+    "characterization": {
+      "mode": "ambiguity",
+      "max_targets": 3,
+      "exploration": {
+        "metric": "fragment_count",
+        "ce_min": 15.0,
+        "ce_max": 35.0,
+        "ce_step": 5.0
+      }
     }
   },
   "ms_settings": {
@@ -318,10 +329,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0,
@@ -357,10 +364,18 @@ namespace
       "ce_step": 5.0
     }
   },
-  "characterization": {
-    "mode": "ambiguity",
-    "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
-    "max_targets": 3
+  "identification": {
+    "reference": {
+      "sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
+    },
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8
+    },
+    "characterization": {
+      "mode": "ambiguity",
+      "max_targets": 3
+    }
   },
   "ms_settings": {
     "ms1": {
@@ -476,10 +491,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0,
@@ -515,10 +526,6 @@ namespace
       "ce_step": 5.0,
       "overrides": { "analyzer": "Orbitrap" }
     }
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 3
   },
   "ms_settings": {
     "ms1": {
@@ -566,10 +573,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0,
@@ -599,15 +602,22 @@ namespace
     "rank_by": "qscore",
     "max_precursors": 3
   },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 3,
-    "exploration": {
-      "metric": "remaining_precursor",
-      "ce_min": 20.0,
-      "ce_max": 40.0,
-      "ce_step": 5.0,
-      "overrides": { "analyzer": "Orbitrap" }
+  "identification": {
+    "reference": { "sequence": "PEPTIDER" },
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8
+    },
+    "characterization": {
+      "mode": "ambiguity",
+      "max_targets": 3,
+      "exploration": {
+        "metric": "remaining_precursor",
+        "ce_min": 20.0,
+        "ce_max": 40.0,
+        "ce_step": 5.0,
+        "overrides": { "analyzer": "Orbitrap" }
+      }
     }
   },
   "ms_settings": {
@@ -664,10 +674,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0,
@@ -697,14 +703,21 @@ namespace
     "rank_by": "qscore",
     "max_precursors": 3
   },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 3,
-    "exploration": {
-      "metric": "mass_count",
-      "ce_min": 20.0,
-      "ce_max": 40.0,
-      "ce_step": 5.0
+  "identification": {
+    "reference": { "sequence": "PEPTIDER" },
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8
+    },
+    "characterization": {
+      "mode": "ambiguity",
+      "max_targets": 3,
+      "exploration": {
+        "metric": "mass_count",
+        "ce_min": 20.0,
+        "ce_max": 40.0,
+        "ce_step": 5.0
+      }
     }
   },
   "ms_settings": {
@@ -752,10 +765,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0,
@@ -790,10 +799,6 @@ namespace
       "ce_max": 40.0,
       "ce_step": 5.0
     }
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 3
   },
   "ms_settings": {
     "ms1": {
@@ -834,10 +839,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0,
@@ -867,15 +868,23 @@ namespace
     "rank_by": "qscore",
     "max_precursors": 3
   },
-  "characterization": {
-    "mode": "ambiguity",
-    "protein_sequence": "MKWVTFISLLLLFSSAYSRGVFRR",
-    "max_targets": 3,
-    "exploration": {
-      "metric": "fragment_count",
-      "ce_min": 15.0,
-      "ce_max": 35.0,
-      "ce_step": 5.0
+  "identification": {
+    "reference": {
+      "sequence": "MKWVTFISLLLLFSSAYSRGVFRR"
+    },
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8
+    },
+    "characterization": {
+      "mode": "ambiguity",
+      "max_targets": 3,
+      "exploration": {
+        "metric": "fragment_count",
+        "ce_min": 15.0,
+        "ce_max": 35.0,
+        "ce_step": 5.0
+      }
     }
   },
   "ms_settings": {
@@ -952,10 +961,6 @@ namespace
       20
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0,
@@ -992,14 +997,21 @@ namespace
       "tolerance_ppm": 15.0
     }
   },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 3,
-    "exploration": {
-      "metric": "mass_count",
-      "ce_min": 20.0,
-      "ce_max": 40.0,
-      "ce_step": 5.0
+  "identification": {
+    "reference": { "sequence": "PEPTIDER" },
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8
+    },
+    "characterization": {
+      "mode": "ambiguity",
+      "max_targets": 3,
+      "exploration": {
+        "metric": "mass_count",
+        "ce_min": 20.0,
+        "ce_max": 40.0,
+        "ce_step": 5.0
+      }
     }
   },
   "ms_settings": {
@@ -1047,10 +1059,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0,
@@ -1089,10 +1097,14 @@ namespace
       ]
     }
   },
-  "characterization": {
-    "mode": "off",
-    "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
-    "max_targets": 3
+  "identification": {
+    "reference": {
+      "sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
+    },
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8
+    }
   },
   "ms_settings": {
     "ms1": {
@@ -1161,9 +1173,7 @@ namespace
       "activations": [)" << activations << R"(])" << overrides << R"(
     }
   },
-  "characterization": { "mode": "off",
-    "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
-    "max_targets": 3 },
+  "identification": { "reference": { "sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" } },
   "ms_settings": {
     "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
     "ms2": { "analyzer": "Orbitrap", "activation": ")" << ms2_activation
@@ -1193,23 +1203,25 @@ namespace
         "exploration": { "metric": "kinetic_model", "ce_min": )") + std::to_string(ce_min)
         + R"(, "ce_max": )" + std::to_string(ce_max) + R"(, "ce_step": )" + std::to_string(ce_step)
         + R"(, "activations": ["HCD"], "kinetic_model": { "k2": )" + k2_json + R"( })" + overrides + R"( } },
-      "characterization": { "mode": "off" },
       "ms_settings": { "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
                        "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29,
                                 "first_mass": 150, "last_mass": 2000 } } })";
   }
 
-  /// An MS3 kinetic_model sweep: CID ce_min..ce_max/ce_step on characterization.exploration with an authored
-  /// CID k2; mode off (the sweep is driven through initiate(3, ...) directly, which reads the level config).
+  /// An MS3 kinetic_model sweep: CID ce_min..ce_max/ce_step on identification.characterization.exploration with
+  /// an authored CID k2. The sweep is driven through initiate(3, ...) directly, which reads the level config, so
+  /// the objective is never consulted; it is "ambiguity" only because an MS3 exploration block now lives inside a
+  /// characterization block, which must name one (ADR-0061). The PEPTIDER reference matches nothing in the b32
+  /// spectra, standing in for the empty sequence the mode-"off" version of this config carried.
   std::string kineticMs3Cfg(double ce_min, double ce_max, double ce_step, double k2 = 0.0388)
   {
     return std::string(R"({
       "deconvolution": { "tol": [10, 10, 10] },
       "precursor_selection": { "rank_by": "qscore", "max_precursors": 3 },
-      "characterization": { "mode": "off", "max_targets": 3,
+      "identification": { "reference": { "sequence": "PEPTIDER" }, "characterization": { "mode": "ambiguity", "max_targets": 3,
         "exploration": { "metric": "kinetic_model", "ce_min": )") + std::to_string(ce_min)
         + R"(, "ce_max": )" + std::to_string(ce_max) + R"(, "ce_step": )" + std::to_string(ce_step)
-        + R"(, "activations": ["CID"], "kinetic_model": { "k2": { "CID": )" + std::to_string(k2) + R"( } } } },
+        + R"(, "activations": ["CID"], "kinetic_model": { "k2": { "CID": )" + std::to_string(k2) + R"( } } } } },
       "ms_settings": { "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
                        "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 },
                        "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25,
@@ -1236,7 +1248,6 @@ namespace
         "exploration": { "metric": "mass_count", "ce_min": )") + std::to_string(ce_min)
         + R"(, "ce_max": )" + std::to_string(ce_max) + R"(, "ce_step": )" + std::to_string(ce_step)
         + R"(, "activations": [)" + activations + R"(] } },
-      "characterization": { "mode": "off" },
       "ms_settings": { "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
                        "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 } } })";
   }
@@ -1270,13 +1281,17 @@ namespace
       "  \"exploration\": { \"metric\": \"mass_count\", \"ce_min\": 20.0, \"ce_max\": 40.0, \"ce_step\": 5.0"
       + ms2_monitor + " }"
       "},"
-      // protein_sequence is set unconditionally: an ms3_metric of "fragment_count" makes level 3 a
-      // READING metric, and Config::validate requires a sequence for one. Harmless when the metric
-      // is "none", which is this helper's default.
-      "\"characterization\": { \"mode\": \"off\", \"max_targets\": 3,"
-      "  \"protein_sequence\": \"PEPTIDERPEPTIDER\","
-      "  \"exploration\": { \"metric\": \"" + ms3_metric + "\"" + ms3_monitor + " }"
-      "},"
+      // The reference is set unconditionally: an ms3_metric of "fragment_count" makes level 3 a READING
+      // metric, and Config::validate requires a reference for one. A level-3 exploration block exists only
+      // inside identification.characterization (ADR-0061), so the block is added only when a level-3
+      // monitor or metric is asked for -- the two config-load checks below. Every processScan caller asks
+      // for neither and gets no block, which is what its old mode "off" meant.
+      "\"identification\": { \"reference\": { \"sequence\": \"PEPTIDERPEPTIDER\" }"
+      + ((ms3_metric != "none" || !ms3_monitor.empty())
+            ? ", \"characterization\": { \"mode\": \"ambiguity\", \"max_targets\": 3,"
+              "  \"exploration\": { \"metric\": \"" + ms3_metric + "\"" + ms3_monitor + " } }"
+            : std::string())
+      + "},"
       "\"ms_settings\": {"
       "  \"ms1\": { \"analyzer\": \"Orbitrap\", \"first_mass\": 500, \"last_mass\": 2000,"
       "             \"resolution\": 120000, \"agc_target\": 800000, \"max_it\": 246 },"
@@ -2319,20 +2334,22 @@ END_SECTION
 
 START_SECTION(fragment_count_requires_protein_sequence)
 {
-  // Config with fragment_count metric but empty protein_sequence should throw
+  // Config with fragment_count metric but no identification section should throw. The section is removed
+  // whole (ADR-0061): blanking only the sequence would be refused for THAT reason, and the test would pass
+  // without ever reaching the fragment_count rule.
   std::string cfg_str = std::string(exploration_config);
-  // Clear protein_sequence to test empty-sequence validation path
   {
-    const std::string seq = "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
-    auto seq_pos = cfg_str.find(seq);
-    if (seq_pos != std::string::npos) cfg_str.erase(seq_pos, seq.size());
+    const auto a = cfg_str.find("\"identification\"");
+    const auto b = cfg_str.find("\"ms_settings\"", a);
+    ABORT_IF(a == std::string::npos || b == std::string::npos)
+    cfg_str.erase(a, b - a);
   }
   // Replace "mass_count" with "fragment_count" at MS2 level
   auto pos = cfg_str.find("\"mass_count\"");
   if (pos != std::string::npos)
     cfg_str.replace(pos, 12, "\"fragment_count\"");
 
-  // fragment_count requires protein_sequence — should throw
+  // fragment_count requires an identification reference — should throw
   TEST_EXCEPTION(std::invalid_argument, Config cfg{cfg_str})
 }
 END_SECTION
@@ -2380,9 +2397,9 @@ END_SECTION
 
 START_SECTION(ms3_protein_sequence_only_accepted)
 {
-  // Config with ms3.protein_sequence should be accepted (no throw)
+  // Config with an identification reference should be accepted (no throw)
   Config cfg{std::string(exploration_config)};
-  TEST_EQUAL(cfg.characterization().protein_sequence.empty(), false)
+  TEST_EQUAL(cfg.identification().sequence.empty(), false)
 }
 END_SECTION
 
@@ -2535,7 +2552,6 @@ START_SECTION(pre_scans_read_out_the_levels_scan_range_ms2)
       "exploration": { "metric": "remaining_precursor", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0,
                        "overrides": { "analyzer": "IonTrap" } }
     },
-    "characterization": { "mode": "off" },
     "ms_settings": {
       "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
       "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29,
@@ -2588,10 +2604,23 @@ START_SECTION(pre_scans_read_out_the_levels_scan_range_ms3)
   const std::string cfg_json = R"JSON({
     "deconvolution": { "tol": [10, 10, 10] },
     "precursor_selection": { "rank_by": "qscore", "max_precursors": 3 },
-    "characterization": {
-      "mode": "ambiguity", "protein_sequence": "PEPTIDER", "max_targets": 3,
-      "exploration": { "metric": "remaining_precursor", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0,
-                       "overrides": { "analyzer": "IonTrap" } }
+    "identification": {
+      "reference": {
+        "sequence": "PEPTIDER"
+      },
+      "characterization": {
+        "mode": "ambiguity",
+        "max_targets": 3,
+        "exploration": {
+          "metric": "remaining_precursor",
+          "ce_min": 20.0,
+          "ce_max": 30.0,
+          "ce_step": 5.0,
+          "overrides": {
+            "analyzer": "IonTrap"
+          }
+        }
+      }
     },
     "ms_settings": {
       "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
@@ -2656,10 +2685,23 @@ START_SECTION(production_scan_is_built_from_the_unoverridden_config)
   const std::string cfg_json = R"JSON({
     "deconvolution": { "tol": [10, 10, 10] },
     "precursor_selection": { "rank_by": "qscore", "max_precursors": 3 },
-    "characterization": {
-      "mode": "ambiguity", "protein_sequence": "PEPTIDER", "max_targets": 3,
-      "exploration": { "metric": "remaining_precursor", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0,
-                       "overrides": { "analyzer": "IonTrap" } }
+    "identification": {
+      "reference": {
+        "sequence": "PEPTIDER"
+      },
+      "characterization": {
+        "mode": "ambiguity",
+        "max_targets": 3,
+        "exploration": {
+          "metric": "remaining_precursor",
+          "ce_min": 20.0,
+          "ce_max": 30.0,
+          "ce_step": 5.0,
+          "overrides": {
+            "analyzer": "IonTrap"
+          }
+        }
+      }
     },
     "ms_settings": {
       "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
@@ -2761,7 +2803,6 @@ START_SECTION(range_overrides_patch_pre_scans_like_any_key)
       "exploration": { "metric": "remaining_precursor", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0,
                        "overrides": { "analyzer": "Orbitrap", "first_mass": "600", "last_mass": "1600" } }
     },
-    "characterization": { "mode": "off" },
     "ms_settings": {
       "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
       "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29,
@@ -2818,10 +2859,23 @@ START_SECTION(forced_remaining_precursor_reads_the_configured_range)
   const std::string cfg_json = R"JSON({
     "deconvolution": { "tol": [10, 10, 10] },
     "precursor_selection": { "rank_by": "qscore", "max_precursors": 3 },
-    "characterization": {
-      "mode": "exhaustive", "protein_sequence": "PEPTIDEK", "max_targets": 3,
-      "exploration": { "metric": "fragment_count", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0,
-                       "overrides": { "analyzer": "Orbitrap" } }
+    "identification": {
+      "reference": {
+        "sequence": "PEPTIDEK"
+      },
+      "characterization": {
+        "mode": "exhaustive",
+        "max_targets": 3,
+        "exploration": {
+          "metric": "fragment_count",
+          "ce_min": 20.0,
+          "ce_max": 30.0,
+          "ce_step": 5.0,
+          "overrides": {
+            "analyzer": "Orbitrap"
+          }
+        }
+      }
     },
     "ms_settings": {
       "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
@@ -2932,7 +2986,7 @@ START_SECTION(fragment_match_propagated_in_feed_result)
   FragmentAnalysis fragments(cfg);
   Exploration exploration(cfg, fragments);
 
-  TEST_EQUAL(cfg.characterization().protein_sequence.empty(), false)
+  TEST_EQUAL(cfg.identification().sequence.empty(), false)
 
   auto pg = makeSyntheticPeakGroup(968.4916, 29006.3881, 30);   // INTACT CA precursor z30
   auto cmds = exploration.initiate(2, pg, 30, queue);
@@ -2975,7 +3029,7 @@ START_SECTION(full_length_ca_fragment_match_high_count)
   FragmentAnalysis fragments(cfg);
   Exploration exploration(cfg, fragments);
 
-  TEST_EQUAL(cfg.characterization().protein_sequence.empty(), false)
+  TEST_EQUAL(cfg.identification().sequence.empty(), false)
 
   auto pg = makeSyntheticPeakGroup(968.4916, 29006.3881, 30);   // INTACT CA precursor z30
   auto cmds = exploration.initiate(2, pg, 30, queue);
@@ -3003,7 +3057,7 @@ END_SECTION
 START_SECTION(fragment_count_zero_without_protein_sequence)
 {
   Config cfg{std::string(remaining_precursor_config)};
-  TEST_EQUAL(cfg.characterization().protein_sequence.empty(), true)
+  TEST_EQUAL(cfg.identification().sequence.empty(), true)
 
   ScanCommandQueue queue(cfg);
   Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
@@ -3141,7 +3195,6 @@ START_SECTION(ms2_scoring_window_matches_commanded_isolation)
       "exploration": { "metric": "remaining_precursor", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0,
                        "overrides": { "analyzer": "IonTrap" } }
     },
-    "characterization": { "mode": "off" },
     "ms_settings": {
       "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
       "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 }
@@ -3239,7 +3292,6 @@ START_SECTION(optimal_window_margin_has_one_definition)
       "rank_by": "qscore", "max_precursors": 3,
       "exploration": { "metric": "mass_count", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0 }
     },
-    "characterization": { "mode": "off" },
     "ms_settings": {
       "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
       "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 }
@@ -3307,7 +3359,6 @@ START_SECTION(single_isotope_charge_keeps_the_margin_window)
       "exploration": { "metric": "remaining_precursor", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0,
                        "overrides": { "analyzer": "IonTrap" } }
     },
-    "characterization": { "mode": "off" },
     "ms_settings": {
       "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
       "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 }
@@ -3419,10 +3470,6 @@ START_SECTION(tol_validation_insufficient_entries)
     "rank_by": "qscore",
     "max_precursors": 3
   },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 3
-  },
   "ms_settings": {
     "ms1": {
       "analyzer": "Orbitrap",
@@ -3484,10 +3531,14 @@ START_SECTION(selection_without_next_level_scan_config_rejected)
     "rank_by": "qscore",
     "max_precursors": 3
   },
-  "characterization": {
-    "mode": "ambiguity",
-    "protein_sequence": "PEPTIDER",
-    "max_targets": 3
+  "identification": {
+    "reference": {
+      "sequence": "PEPTIDER"
+    },
+    "characterization": {
+      "mode": "ambiguity",
+      "max_targets": 3
+    }
   },
   "ms_settings": {
     "ms1": {
@@ -3752,10 +3803,6 @@ START_SECTION(inclusion_ms3_full_acquisition_roundtrip)
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0,
@@ -3785,10 +3832,18 @@ START_SECTION(inclusion_ms3_full_acquisition_roundtrip)
     "rank_by": "qscore",
     "max_precursors": 3
   },
-  "characterization": {
-    "mode": "ambiguity",
-    "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
-    "max_targets": 3
+  "identification": {
+    "reference": {
+      "sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
+    },
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8
+    },
+    "characterization": {
+      "mode": "ambiguity",
+      "max_targets": 3
+    }
   },
   "ms_settings": {
     "ms1": {
@@ -3901,10 +3956,6 @@ START_SECTION(exploration_multiplexed_ms3_inherits_the_variant_notch_set)
     "max_mass": 50000,
     "tol": [10, 10, 10]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0,
@@ -3942,11 +3993,19 @@ START_SECTION(exploration_multiplexed_ms3_inherits_the_variant_notch_set)
       "activations": ["HCD"]
     }
   },
-  "characterization": {
-    "mode": "ambiguity",
-    "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
-    "max_targets": 3,
-    "fragment_charges": "@FC@"
+  "identification": {
+    "reference": {
+      "sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
+    },
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8
+    },
+    "characterization": {
+      "mode": "ambiguity",
+      "max_targets": 3,
+      "fragment_charges": "@FC@"
+    }
   },
   "ms_settings": {
     "ms1": {
@@ -3982,7 +4041,7 @@ START_SECTION(exploration_multiplexed_ms3_inherits_the_variant_notch_set)
   // targeting none -> inclusion and points inclusion_list at inclusion_cytc.txt. Required, not
   // decorative: under targeting "none" the top-qscore precursor of this survey is not reliably cytC,
   // and if it is not, the fresh57 ladder matches nothing and no MS3 fires at all. Its other two
-  // replacements (M-start sequence, mode) are already satisfied above, so they no-op.
+  // replacements (M-start sequence, characterization block) are already satisfied above, so they no-op.
   auto instantiate = [&cfg_template](const std::string& pc, const std::string& fc) {
     std::string s = cfg_template;
     s.replace(s.find("@PC@"), 4, pc);
@@ -4088,10 +4147,6 @@ START_SECTION(ms3_min_charge_floor_filters_all_targets)
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0,
@@ -4121,11 +4176,19 @@ START_SECTION(ms3_min_charge_floor_filters_all_targets)
     "rank_by": "qscore",
     "max_precursors": 3
   },
-  "characterization": {
-    "mode": "ambiguity",
-    "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
-    "max_targets": 3,
-    "min_fragment_charge": 99
+  "identification": {
+    "reference": {
+      "sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
+    },
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8
+    },
+    "characterization": {
+      "mode": "ambiguity",
+      "max_targets": 3,
+      "min_fragment_charge": 99
+    }
   },
   "ms_settings": {
     "ms1": {
@@ -4194,10 +4257,6 @@ START_SECTION(ms3_min_charge_default_emits_ms3)
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0,
@@ -4227,11 +4286,19 @@ START_SECTION(ms3_min_charge_default_emits_ms3)
     "rank_by": "qscore",
     "max_precursors": 3
   },
-  "characterization": {
-    "mode": "ambiguity",
-    "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
-    "max_targets": 3,
-    "min_fragment_charge": 1
+  "identification": {
+    "reference": {
+      "sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
+    },
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8
+    },
+    "characterization": {
+      "mode": "ambiguity",
+      "max_targets": 3,
+      "min_fragment_charge": 1
+    }
   },
   "ms_settings": {
     "ms1": {
@@ -4951,7 +5018,7 @@ START_SECTION(a_trap_pre_scan_is_measured_never_identified)
       "precursor_selection": { "rank_by": "qscore", "max_precursors": 3,
         "exploration": { "metric": "remaining_precursor", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0,
                          "overrides": { "analyzer": ")" + analyzer + R"(" } } },
-      "characterization": { "mode": "off", "protein_sequence": ")" + std::string(ca_sequence) + R"(" },
+      "identification": { "reference": { "sequence": ")" + std::string(ca_sequence) + R"(" } },
       "ms_settings": {
         "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
         "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "first_mass": 150, "last_mass": 2000 }
@@ -5016,7 +5083,6 @@ START_SECTION(a_trap_sweep_must_use_remaining_precursor)
   auto sweep = [](const std::string& metric, const std::string& ov) {
     return R"("exploration": { "metric": ")" + metric + R"(", "ce_min": 20.0, "ce_max": 40.0, "ce_step": 5.0)" + ov + R"( })";
   };
-  const std::string seq_off = R"("mode": "off", "protein_sequence": "PEPTIDER")";   // fragment_count needs a sequence at any level
 
   Config ok_rp{sweepProbe(", " + sweep("remaining_precursor", trap))};
   TEST_EQUAL(static_cast<int>(ok_rp.level(2).exploration), static_cast<int>(ExplorationMetric::RemainingPrecursor))
@@ -5024,12 +5090,12 @@ START_SECTION(a_trap_sweep_must_use_remaining_precursor)
   TEST_EQUAL(static_cast<int>(ok_orbi.level(2).exploration), static_cast<int>(ExplorationMetric::MassCount))
 
   TEST_EXCEPTION(std::invalid_argument, Config(sweepProbe(", " + sweep("mass_count", trap))))
-  TEST_EXCEPTION(std::invalid_argument, Config(sweepProbe(", " + sweep("fragment_count", trap), seq_off)))
+  // fragment_count needs a reference at any level: identify, without a characterization block.
+  TEST_EXCEPTION(std::invalid_argument, Config(sweepProbe(", " + sweep("fragment_count", trap), "", false, true)))
   TEST_EXCEPTION(std::invalid_argument, Config(sweepProbe("", ms3_on + sweep("mass_count", trap), true)))
 
-  // mode off: no MS3 sweep is ever emitted, so no throw (the same guard the multiplexed pair carries).
-  Config off_l3{sweepProbe("", R"("mode": "off", )" + sweep("mass_count", trap), true)};
-  TEST_EQUAL(static_cast<int>(off_l3.level(3).exploration), static_cast<int>(ExplorationMetric::MassCount))
+  // The arm that loaded a level-3 trap sweep under mode "off" is gone with that state (ADR-0061): an MS3
+  // exploration block now lives inside identification.characterization, whose presence turns MS3 on.
 }
 END_SECTION
 

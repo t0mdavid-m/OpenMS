@@ -38,10 +38,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [
       -40,
@@ -74,10 +70,6 @@ namespace
     "tie_threshold": 0.1,
     "rank_by": "qscore",
     "max_precursors": 1
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
   },
   "ms_settings": {
     "ms1": {
@@ -118,10 +110,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [
       -40,
@@ -154,10 +142,6 @@ namespace
     "tie_threshold": 0.1,
     "rank_by": "qscore",
     "max_precursors": 1
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
   },
   "ms_settings": {
     "ms1": {
@@ -201,10 +185,6 @@ namespace
       10
     ]
   },
-  "flashtnt": {
-    "min_length": 3,
-    "max_length": 8
-  },
   "faims": {
     "cv_values": [],
     "max_cv_skip": 0
@@ -232,10 +212,6 @@ namespace
     "tie_threshold": 0.1,
     "rank_by": "qscore",
     "max_precursors": 1
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
   },
   "ms_settings": {
     "ms1": {

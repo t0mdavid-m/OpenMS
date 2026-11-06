@@ -589,15 +589,15 @@ namespace
         "ms3": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35, "resolution": 120000 })"
       : "";
 
-    // characterization.mode is now the whole MS3 gate -- it replaces what used to be two separate
-    // selection strings plus the presence of an ms3 scan block.
+    // The identification.characterization block is now the whole MS3 gate (ADR-0061) -- it replaces what
+    // used to be two separate selection strings plus the presence of an ms3 scan block.
     //
     // BUDGET, and why the number is what it is. `ms3_max_targets` used to be appended to
     // selection_strategy.ms3.max_targets, which the engine NEVER READ (the budget is taken from
     // level 2). So §T9's "exhaustive MS3" request has always been silently ignored and every caller
     // has actually run the level-2 default. For hand-written bridge JSON like this that default was
     // the C++ literal 10, NOT the C# 3 -- so 10 is the behaviour-preserving value and is now stated
-    // explicitly, because characterization.max_targets defaults to 3.
+    // explicitly, because identification.characterization.max_targets defaults to 3.
     //
     // Honouring ms3_max_targets for real would CHANGE §T9's behaviour, so it is deliberately not
     // done here: this rewrite preserves behaviour, and turning that request on is a separate,
@@ -607,9 +607,9 @@ namespace
     (void)ms3_max_targets;  // inert since before this rewrite; see above
 
     std::string ms3_block = enable_ms3
-      ? R"("characterization": { "mode": "ambiguity", "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE")"
-        + ms3_max_targets_json + R"( },)"
-      : R"("characterization": { "mode": "off" },)";
+      ? R"("identification": { "reference": { "sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },
+          "characterization": { "mode": "ambiguity")" + ms3_max_targets_json + R"( } },)"
+      : "";
     // reaction_time is an ETD-family parameter; only emit it for ETD/EThcD so the HCD
     // default stays byte-identical to the original FLASHIda_Logging_test config.
     std::string ms2_rt = (ms2_activation == "ETD" || ms2_activation == "EThcD")
@@ -628,7 +628,6 @@ namespace
         "strict_inclusion": false, "tie_threshold": 0.1,
         "rank_by": "qscore", "max_precursors": 5
       },
-      "flashtnt": { "min_length": 3, "max_length": 8 },
       "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
       "faims": { "cv_values": [], "max_cv_skip": 0 },
       "ms_settings": {
@@ -671,7 +670,6 @@ namespace
       "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
       "precursor_selection": { "rt_window": 180, "targeting": "none", "consider_all_charges": false, "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 3,
         "exploration": { "metric": "mass_count", "ce_min": 20.0, "ce_max": 40.0, "ce_step": 5.0 } },
-      "flashtnt": { "min_length": 3, "max_length": 8 },
       "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
       "faims": { "cv_values": [], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
       "ms_settings": {
@@ -681,7 +679,7 @@ namespace
       },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
       "files": { "target_logs": [], "inclusion_list": "" },
-      "characterization": { "mode": "off", "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE", "max_targets": 3 }
+      "identification": {"reference": {"sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"}, "flashtnt": {"min_length": 3, "max_length": 8}}
     })";
   }
 
@@ -694,7 +692,6 @@ namespace
       "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
       "precursor_selection": { "rt_window": 180, "targeting": "none", "consider_all_charges": false, "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 3,
         "exploration": { "metric": "mass_count", "ce_min": 20.0, "ce_max": 40.0, "ce_step": 5.0 } },
-      "flashtnt": { "min_length": 3, "max_length": 8 },
       "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
       "faims": { "cv_values": [], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
       "ms_settings": {
@@ -704,8 +701,25 @@ namespace
       },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
       "files": { "target_logs": [], "inclusion_list": "" },
-      "characterization": { "mode": "ambiguity", "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE", "max_targets": 3,
-        "exploration": { "metric": "fragment_count", "ce_min": 15.0, "ce_max": 35.0, "ce_step": 5.0 } }
+      "identification": {
+        "reference": {
+          "sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
+        },
+        "flashtnt": {
+          "min_length": 3,
+          "max_length": 8
+        },
+        "characterization": {
+          "mode": "ambiguity",
+          "max_targets": 3,
+          "exploration": {
+            "metric": "fragment_count",
+            "ce_min": 15.0,
+            "ce_max": 35.0,
+            "ce_step": 5.0
+          }
+        }
+      }
     })";
   }
 
@@ -718,7 +732,6 @@ namespace
       "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
       "precursor_selection": { "rt_window": 180, "targeting": "none", "consider_all_charges": false, "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 3,
         "exploration": { "metric": "mass_count", "ce_min": 20.0, "ce_max": 40.0, "ce_step": 5.0 } },
-      "flashtnt": { "min_length": 3, "max_length": 8 },
       "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
       "faims": { "cv_values": [], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
       "ms_settings": {
@@ -728,7 +741,7 @@ namespace
       },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
       "files": { "target_logs": [], "inclusion_list": "" },
-      "characterization": { "mode": "ambiguity", "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE", "max_targets": 3 }
+      "identification": {"reference": {"sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"}, "flashtnt": {"min_length": 3, "max_length": 8}, "characterization": {"mode": "ambiguity", "max_targets": 3}}
     })";
   }
 
@@ -746,7 +759,10 @@ namespace
         "\"inclusion_list\": \"../../FlashIDA/test-data/configs/inclusion_cytc.txt\"");
     rep("GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
         "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE");
-    rep("\"mode\": \"off\"", "\"mode\": \"ambiguity\"");
+    // MS3-capable: an identify-only config gains a characterization block, the ADR-0061 form of the old
+    // "mode": "off" -> "ambiguity" flip. A config that already characterizes is left alone.
+    if (cfg.find("\"characterization\"") == std::string::npos)
+      rep("\"identification\": {", "\"identification\": { \"characterization\": { \"mode\": \"ambiguity\" },");
     return cfg;
   }
 
@@ -763,7 +779,6 @@ namespace
         "exploration": { "metric": "kinetic_model", "ce_min": 1.0, "ce_max": 50.0, "ce_step": 10.0, "activations": ["HCD"],
                          "overrides": { "analyzer": "IonTrap", "agc_target": "10000", "max_it": "10", "microscans": "1" },
                          "kinetic_model": { "k2": { "HCD": 0.0388 } } } },
-      "flashtnt": { "min_length": 3, "max_length": 8 },
       "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
       "faims": { "cv_values": [], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
       "ms_settings": {
@@ -772,7 +787,7 @@ namespace
       },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
       "files": { "target_logs": [], "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc_z17.txt" },
-      "characterization": { "mode": "off", "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE", "max_targets": 3 }
+      "identification": {"reference": {"sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"}, "flashtnt": {"min_length": 3, "max_length": 8}}
     })";
   }
 

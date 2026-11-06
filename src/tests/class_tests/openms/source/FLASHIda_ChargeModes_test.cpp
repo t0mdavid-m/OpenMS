@@ -111,7 +111,6 @@ namespace
     "max_mass": 50000,
     "tol": [10, 10, 10]
   },
-  "flashtnt": { "min_length": 3, "max_length": 8 },
   "faims": { "cv_values": [], "max_cv_skip": 0 },
   "scheduling": {
     "cycle_time": { "enabled": false, "value_ms": 60000 },
@@ -133,7 +132,6 @@ namespace
     "min_charge_states": )JSON" + std::to_string(min_charge_states) + R"JSON(,
     "charge_selection": ")JSON" + charge_selection + R"JSON("
   },
-  "characterization": { "mode": "off", "max_targets": 10 },
   "ms_settings": {
     "ms1": {
       "analyzer": "Orbitrap",

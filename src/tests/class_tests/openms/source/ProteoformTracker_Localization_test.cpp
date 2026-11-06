@@ -145,14 +145,13 @@ namespace
     return ctx;
   }
 
-  // Config JSON with the winner sequence as the characterization protein_sequence. No pooled log path
+  // Config JSON with the winner sequence as the identification reference. No pooled log path
   // (this test reads the model directly via tracker.getModel(pid), not the pooled file).
   std::string makeConfigJson()
   {
     return std::string(R"({
     "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 1, "max_charge": 50, "min_mass": 100, "max_mass": 50000, "tol": [10, 10, 10] },
     "precursor_selection": { "rt_window": 180, "targeting": "none", "consider_all_charges": false, "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 3 },
-    "flashtnt": { "min_length": 3, "max_length": 8 },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
     "ms_settings": {
@@ -162,7 +161,8 @@ namespace
     },
     "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
     "files": { "target_logs": [], "inclusion_list": "" },
-    "characterization": { "mode": "coverage", "max_targets": 10, "protein_sequence": ")") + std::string(WINNER_SEQ) + R"(" },
+    "identification": { "reference": { "sequence": ")") + std::string(WINNER_SEQ) + R"(" }, "flashtnt": { "min_length": 3, "max_length": 8 },
+                        "characterization": { "mode": "coverage", "max_targets": 10 } },
     "runtime": {} })";
   }
 }

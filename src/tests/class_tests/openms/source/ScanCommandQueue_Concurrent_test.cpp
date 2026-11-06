@@ -61,10 +61,6 @@ namespace
     "rank_by": "qscore",
     "max_precursors": 10
   },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
-  },
   "ms_settings": {
     "ms1": {
       "analyzer": "Orbitrap",

@@ -126,10 +126,6 @@ START_SECTION(([EXTRA] Config rejects exploration with multiple scan configs))
       ]
     }
   },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
-  },
   "ms_settings": {
     "ms1": {
       "analyzer": "Orbitrap",
@@ -202,10 +198,6 @@ START_SECTION(([EXTRA] Config rejects legacy ms3.enabled key))
     "rank_by": "qscore",
     "max_precursors": 3
   },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
-  },
   "ms_settings": {
     "ms1": {
       "analyzer": "Orbitrap",
@@ -268,10 +260,6 @@ START_SECTION(([EXTRA] Config rejects legacy ms3.active key))
     "targeting": "none",
     "rank_by": "qscore",
     "max_precursors": 3
-  },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
   },
   "ms_settings": {
     "ms1": {
@@ -336,10 +324,6 @@ START_SECTION(([EXTRA] Config rejects legacy ms3.mode key))
     "rank_by": "qscore",
     "max_precursors": 3
   },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
-  },
   "ms_settings": {
     "ms1": {
       "analyzer": "Orbitrap",
@@ -403,10 +387,6 @@ START_SECTION(([EXTRA] Config rejects legacy ms3.max_per_ms2 key))
     "rank_by": "qscore",
     "max_precursors": 3
   },
-  "characterization": {
-    "mode": "off",
-    "max_targets": 10
-  },
   "ms_settings": {
     "ms1": {
       "analyzer": "Orbitrap",
@@ -436,7 +416,7 @@ START_SECTION(([EXTRA] Config rejects legacy ms3.max_per_ms2 key))
 }
 END_SECTION
 
-START_SECTION(([EXTRA] Config accepts characterization with only protein_sequence))
+START_SECTION(([EXTRA] Config accepts an identification section with only a reference))
 {
   const char* json = R"({
   "deconvolution": {
@@ -466,10 +446,10 @@ START_SECTION(([EXTRA] Config accepts characterization with only protein_sequenc
     "rank_by": "qscore",
     "max_precursors": 3
   },
-  "characterization": {
-    "mode": "off",
-    "protein_sequence": "MKWVTFISLLLLFSSAYSRGVFRR",
-    "max_targets": 10
+  "identification": {
+    "reference": {
+      "sequence": "MKWVTFISLLLLFSSAYSRGVFRR"
+    }
   },
   "ms_settings": {
     "ms1": {
@@ -493,7 +473,7 @@ START_SECTION(([EXTRA] Config accepts characterization with only protein_sequenc
 }
 )";
   Config cfg{std::string(json)};
-  TEST_EQUAL(cfg.characterization().protein_sequence, "MKWVTFISLLLLFSSAYSRGVFRR")
+  TEST_EQUAL(cfg.identification().sequence, "MKWVTFISLLLLFSSAYSRGVFRR")
 }
 END_SECTION
 
@@ -506,8 +486,16 @@ START_SECTION(([EXTRA] characterization mode exhaustive parses and carries its o
   const std::string json = R"JSON({
     "deconvolution": {"tol": [10, 10, 10]},
     "precursor_selection": {"rank_by": "qscore", "max_precursors": 2},
-    "characterization": {"mode": "exhaustive", "protein_sequence": "PEPTIDEPEPTIDE",
-                         "max_targets": 3, "min_target_mass": 0},
+    "identification": {
+      "reference": {
+        "sequence": "PEPTIDEPEPTIDE"
+      },
+      "characterization": {
+        "mode": "exhaustive",
+        "max_targets": 3,
+        "min_target_mass": 0
+      }
+    },
     "ms_settings": {"ms1": {}, "ms2": {"activation": "HCD", "collision_energy": 29},
                     "ms3": {"activation": "HCD", "collision_energy": 25}}
   })JSON";
@@ -525,7 +513,7 @@ START_SECTION(([EXTRA] a mistyped mode still throws, and min_target_mass is hono
 {
   const std::string bad = R"JSON({
     "deconvolution": {"tol": [10, 10, 10]},
-    "characterization": {"mode": "exhaustve", "protein_sequence": "PEPTIDE"},
+    "identification": { "reference": { "sequence": "PEPTIDE" }, "characterization": { "mode": "exhaustve" } },
     "ms_settings": {"ms1": {}, "ms2": {"activation": "HCD", "collision_energy": 29},
                     "ms3": {"activation": "HCD", "collision_energy": 25}}
   })JSON";
@@ -544,8 +532,15 @@ START_SECTION(([EXTRA] a mistyped mode still throws, and min_target_mass is hono
   const std::string floored = R"JSON({
     "deconvolution": {"tol": [10, 10, 10]},
     "precursor_selection": {"rank_by": "qscore", "max_precursors": 2},
-    "characterization": {"mode": "exhaustive", "protein_sequence": "PEPTIDEPEPTIDE",
-                         "min_target_mass": 1500.5},
+    "identification": {
+      "reference": {
+        "sequence": "PEPTIDEPEPTIDE"
+      },
+      "characterization": {
+        "mode": "exhaustive",
+        "min_target_mass": 1500.5
+      }
+    },
     "ms_settings": {"ms1": {}, "ms2": {"activation": "HCD", "collision_energy": 29},
                     "ms3": {"activation": "HCD", "collision_energy": 25}}
   })JSON";

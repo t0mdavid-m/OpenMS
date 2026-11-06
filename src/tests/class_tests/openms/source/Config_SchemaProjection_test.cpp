@@ -30,13 +30,13 @@ namespace
   // Minimal loadable config. `extra` is spliced in at the top level so a section can add or
   // override whatever it is probing.
   std::string cfgJson(const std::string& precursor_extra = "",
-                      const std::string& characterization = R"("characterization": { "mode": "off" },)",
+                      const std::string& identification = "",
                       const std::string& ms_settings_extra = "")
   {
     return std::string(R"({
       "deconvolution": { "tol": [10, 10, 10] },
       "precursor_selection": { "rank_by": "qscore", "max_precursors": 5)") + precursor_extra + R"( },
-      )" + characterization + R"(
+      )" + identification + R"(
       "ms_settings": {
         "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
         "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 })"
@@ -93,7 +93,7 @@ START_SECTION(projection_covers_all_three_levels)
   // "MS3 on with MS2 off" unrepresentable instead of merely discouraged.
   {
     Config cfg(cfgJson("",
-      R"("characterization": { "mode": "ambiguity", "protein_sequence": "PEPTIDEK", "max_targets": 7, "min_fragment_charge": 2 },)",
+      R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "ambiguity", "max_targets": 7, "min_fragment_charge": 2 } },)",
       R"(, "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25 })"));
     TEST_EQUAL((int)cfg.level(1).selection, (int)SelectionMetric::QScore)
     TEST_EQUAL(cfg.level(2).selection != SelectionMetric::None, true)
@@ -108,7 +108,7 @@ START_SECTION(projection_covers_all_three_levels)
   // coverage derives the other objective from the same key.
   {
     Config cfg(cfgJson("",
-      R"("characterization": { "mode": "coverage", "protein_sequence": "PEPTIDEK" },)",
+      R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "coverage" } },)",
       R"(, "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25 })"));
     TEST_EQUAL((int)cfg.characterization().objective, (int)CharacterizationObjective::Coverage)
   }
@@ -117,7 +117,7 @@ START_SECTION(projection_covers_all_three_levels)
   // and switches levels 2 and 3 on like every other on-value.
   {
     Config cfg(cfgJson("",
-      R"("characterization": { "mode": "fragments", "protein_sequence": "PEPTIDEK" },)",
+      R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "fragments" } },)",
       R"(, "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25 })"));
     TEST_EQUAL((int)cfg.characterization().mode, (int)CharacterizationMode::Fragments)
     TEST_EQUAL((int)cfg.characterization().objective, (int)CharacterizationObjective::Fragments)
@@ -147,8 +147,7 @@ START_SECTION(exhaustive_projects_every_level)
 
   {
     Config cfg(cfgJson("",
-      R"("characterization": { "mode": "exhaustive", "protein_sequence": "PEPTIDEK",
-                               "max_targets": 3, "min_target_mass": 700 },)", ms3));
+      R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "exhaustive", "max_targets": 3, "min_target_mass": 700 } },)", ms3));
 
     // Level 1 MUST be assigned, and from rank_by rather than from the mode. MSLevelConfig::selection
     // defaults to None, and an unassigned level 1 makes FLASHIda.cpp short-circuit EVERY MS1 -- the
@@ -170,17 +169,17 @@ START_SECTION(exhaustive_projects_every_level)
   // A fourth legal value did not loosen the strictness: unknown and wrong-case mode values still
   // throw, and so does an unknown key beside the new one.
   TEST_EXCEPTION(std::invalid_argument,
-    Config(cfgJson("", R"("characterization": { "mode": "Exhaustive", "protein_sequence": "PEPTIDEK" },)", ms3)))
+    Config(cfgJson("", R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "Exhaustive" } },)", ms3)))
   TEST_EXCEPTION(std::invalid_argument,
-    Config(cfgJson("", R"("characterization": { "mode": "exhaustve", "protein_sequence": "PEPTIDEK" },)", ms3)))
+    Config(cfgJson("", R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "exhaustve" } },)", ms3)))
   TEST_EXCEPTION(std::invalid_argument,
-    Config(cfgJson("", R"("characterization": { "mode": "exhaustive", "protein_sequence": "P", "min_targt_mass": 700 },)", ms3)))
+    Config(cfgJson("", R"("identification": { "reference": { "sequence": "P" }, "characterization": { "mode": "exhaustive", "min_targt_mass": 700 } },)", ms3)))
 
   // min_target_mass is a plain optional key, not an exhaustive-only one: it parses under any mode
   // and simply goes unread. Gating it on the mode would make toggling the mode off a two-key edit.
   {
     Config cfg(cfgJson("",
-      R"("characterization": { "mode": "ambiguity", "protein_sequence": "PEPTIDEK", "min_target_mass": 900 },)", ms3));
+      R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "ambiguity", "min_target_mass": 900 } },)", ms3));
     TEST_REAL_SIMILAR(cfg.characterization().min_target_mass, 900.0)
     TEST_EQUAL((int)cfg.characterization().objective, (int)CharacterizationObjective::Ambiguity)
   }
@@ -206,7 +205,7 @@ START_SECTION(scan_name_resolution)
   // -- silently reordering MS2 dispatch, and with it scan_commands row order and child_ids.
   {
     Config cfg(cfgJson(R"(, "additional_scans": ["etd_extra", "aaa_first"])",
-                       R"("characterization": { "mode": "off" },)", two_extra_scans));
+                       "", two_extra_scans));
     TEST_EQUAL(cfg.level(2).scans.size(), 3)             // ms2 + two extras
     TEST_EQUAL(cfg.level(2).scans[0].activation, "HCD")  // ms_settings.ms2 always first
     TEST_EQUAL(cfg.level(2).scans[1].activation, "ETD")  // array order, NOT alphabetical
@@ -215,35 +214,35 @@ START_SECTION(scan_name_resolution)
 
   // A definition that nobody references is NOT in the roster, so it never fires.
   {
-    Config cfg(cfgJson("", R"("characterization": { "mode": "off" },)", two_extra_scans));
+    Config cfg(cfgJson("", "", two_extra_scans));
     TEST_EQUAL(cfg.level(2).scans.size(), 1)
   }
 
   // Dangling reference: hard error, and the message lists what IS defined.
   TEST_EXCEPTION(std::invalid_argument,
     Config(cfgJson(R"(, "additional_scans": ["nope"])",
-                   R"("characterization": { "mode": "off" },)", two_extra_scans)))
+                   "", two_extra_scans)))
 
   // Duplicate reference.
   TEST_EXCEPTION(std::invalid_argument,
     Config(cfgJson(R"(, "additional_scans": ["etd_extra", "etd_extra"])",
-                   R"("characterization": { "mode": "off" },)", two_extra_scans)))
+                   "", two_extra_scans)))
 
   // Name grammar: outer map keys are user-authored so they cannot be allowlisted; they are
   // validated as snake_case identifiers instead.
   TEST_EXCEPTION(std::invalid_argument,
-    Config(cfgJson("", R"("characterization": { "mode": "off" },)",
+    Config(cfgJson("", "",
       R"(, "additional_ms2": { "ETD Extra": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 20 } })")))
 
   // Reserved words would make a reference ambiguous with a level name or with "no scans".
   TEST_EXCEPTION(std::invalid_argument,
-    Config(cfgJson("", R"("characterization": { "mode": "off" },)",
+    Config(cfgJson("", "",
       R"(, "additional_ms2": { "none": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 20 } })")))
 
   // Inner objects are still validated against the 17-key scan allowlist. Returning early for any
   // Dictionary (the old C#-side behaviour) would let this load clean and drop the key.
   TEST_EXCEPTION(std::invalid_argument,
-    Config(cfgJson("", R"("characterization": { "mode": "off" },)",
+    Config(cfgJson("", "",
       R"(, "additional_ms2": { "bad": { "IsolationMode": "Quadrupole" } })")))
 
   // Array form is a migration error, not a generic unknown-key one.
@@ -265,12 +264,12 @@ START_SECTION(enum_strictness)
   //   selection  -> Intensity  (a typo ENABLED a level)
   //   metric     -> None       (a typo collapsed an N-variant sweep to one scan)
   //   objective  -> Ambiguity  (a typo silently picked an objective)
-  // With mode carrying the on/off bit, a typo'd "Off" would silently enable MS3. All throw now.
+  // A characterization block's mode names an objective (ADR-0061): "off" is refused, and so is any typo.
 
   TEST_EXCEPTION(std::invalid_argument,
-    Config(cfgJson("", R"("characterization": { "mode": "Off" },)")))       // wrong case
+    Config(cfgJson("", R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "Off" } },)")))     // wrong case
   TEST_EXCEPTION(std::invalid_argument,
-    Config(cfgJson("", R"("characterization": { "mode": "covrage" },)")))   // typo
+    Config(cfgJson("", R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "covrage" } },)"))) // typo
   TEST_EXCEPTION(std::invalid_argument,
     Config(cfgJson(R"(, "rank_by": "QScore")")))                            // wrong case
   TEST_EXCEPTION(std::invalid_argument,
@@ -322,18 +321,19 @@ START_SECTION(sweep_step_and_required_scan_validation)
   // ms3 block", and it is the direction that segfaults: Exploration::initiateNextLevel reads
   // next_cfg.scans[0] unguarded, so a reachable MS3 with no level-3 scan config is an OOB read.
   TEST_EXCEPTION(std::invalid_argument,
-    Config(cfgJson("", R"("characterization": { "mode": "ambiguity", "protein_sequence": "PEPTIDEK" },)")))
+    Config(cfgJson("", R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "ambiguity" } },)")))
 
-  // mode != off also requires a protein sequence -- re-keyed onto mode. It used to fire off the
-  // UPSTREAM gate, which is why 18 configs that ran no MS3 still carried a placeholder sequence.
+  // MS3 also requires a protein sequence: a characterization block lives inside identification, whose
+  // reference is required (ADR-0061).
   TEST_EXCEPTION(std::invalid_argument,
-    Config(cfgJson("", R"("characterization": { "mode": "ambiguity" },)",
+    Config(cfgJson("", R"("identification": { "characterization": { "mode": "ambiguity" } },)",
       R"(, "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25 })")))
 
-  // ...and mode: off does NOT forbid either of them, so toggling MS3 off is a one-word edit.
+  // ...and an identification without characterization does NOT forbid an ms3 block, so switching MS3
+  // off is deleting that one block.
   {
     Config cfg(cfgJson("",
-      R"("characterization": { "mode": "off", "protein_sequence": "PEPTIDEK" },)",
+      R"("identification": { "reference": { "sequence": "PEPTIDEK" } },)",
       R"(, "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25 })"));
     TEST_EQUAL((int)cfg.level(3).selection, (int)SelectionMetric::None)
   }
@@ -362,7 +362,7 @@ START_SECTION(charge_acquisition_modes_parse)
   }
   {
     Config cfg(cfgJson("",
-        R"("characterization": { "mode": "ambiguity", "protein_sequence": "PEPTIDEK", "fragment_charges": "multiplexed" },)",
+        R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "ambiguity", "fragment_charges": "multiplexed" } },)",
         R"(, "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25 })"));
     TEST_EQUAL((int)cfg.characterization().fragment_charges, (int)ChargeAcquisitionMode::Multiplexed)
   }
@@ -379,7 +379,7 @@ START_SECTION(charge_acquisition_unknown_value_throws)
   TEST_EXCEPTION(std::invalid_argument, Config(cfgJson(R"(, "precursor_charges": "all")")))
   TEST_EXCEPTION(std::invalid_argument,
       Config(cfgJson("",
-          R"("characterization": { "mode": "ambiguity", "protein_sequence": "PEPTIDEK", "fragment_charges": "Separate" },)",
+          R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "ambiguity", "fragment_charges": "Separate" } },)",
           R"(, "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25 })")))
 }
 END_SECTION
@@ -451,7 +451,7 @@ START_SECTION(ms3_all_charges_is_a_migration_error)
 {
   TEST_EXCEPTION(std::invalid_argument,
       Config(cfgJson("",
-          R"("characterization": { "mode": "ambiguity", "protein_sequence": "PEPTIDEK", "ms3_all_charges": true },)",
+          R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "ambiguity", "ms3_all_charges": true } },)",
           R"(, "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25 })")))
 }
 END_SECTION
@@ -534,7 +534,6 @@ START_SECTION(analyzer_is_a_closed_set)
       "precursor_selection": { "rank_by": "qscore", "max_precursors": 3,
         "exploration": { "metric": "remaining_precursor", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0,
                          "overrides": { "analyzer": ")" + override_analyzer + R"(" } } },
-      "characterization": { "mode": "off" },
       "ms_settings": {
         "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
         "ms2": { "analyzer": ")" + ms2_analyzer + R"(", "activation": "HCD", "collision_energy": 29 }
@@ -549,7 +548,7 @@ START_SECTION(analyzer_is_a_closed_set)
 
   // A present-but-null analyzer keeps today's behaviour: the generated schema reference carries nulls.
   const std::string null_ms1 = R"({ "deconvolution": { "tol": [10,10,10] },
-    "precursor_selection": { "rank_by": "qscore", "max_precursors": 3 }, "characterization": { "mode": "off" },
+    "precursor_selection": { "rank_by": "qscore", "max_precursors": 3 },
     "ms_settings": { "ms1": { "analyzer": null, "resolution": 120000 },
                      "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 } } })";
   Config ok_c{null_ms1};
@@ -557,7 +556,7 @@ START_SECTION(analyzer_is_a_closed_set)
   // A non-string, non-null value is a typo, not a default. FAILS WHEN the check runs on the coerced
   // std::string: str()'s is_string() guard turns 5 into "" and the config would load clean.
   const std::string int_ms1 = R"({ "deconvolution": { "tol": [10,10,10] },
-    "precursor_selection": { "rank_by": "qscore", "max_precursors": 3 }, "characterization": { "mode": "off" },
+    "precursor_selection": { "rank_by": "qscore", "max_precursors": 3 },
     "ms_settings": { "ms1": { "analyzer": 5, "resolution": 120000 },
                      "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 } } })";
   TEST_EXCEPTION(std::invalid_argument, Config{int_ms1})
@@ -705,7 +704,6 @@ START_SECTION(zero_on_a_coupled_axis_is_accepted)
     return std::string(R"({
       "deconvolution": { "tol": [10, 10, 10] },
       "precursor_selection": { "rank_by": "qscore", "max_precursors": 5 },
-      "characterization": { "mode": "off" },
       "ms_settings": {
         "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
         "ms2": )") + scan_body + R"(
@@ -741,7 +739,7 @@ END_SECTION
 
 // cfgJson splices its `characterization` argument verbatim at the top level, so it doubles as the
 // slot for a quantification section; `ms_settings_extra` is spliced inside ms_settings.
-#define QUANT_ON(body) R"("characterization": { "mode": "off" }, "quantification": )" body R"(,)"
+#define QUANT_ON(body) R"("quantification": )" body R"(,)"
 #define MS2_QUANT R"(, "ms2_quant": { "analyzer": "Orbitrap", "activation": "ETD", "reaction_time": 12 })"
 
 START_SECTION(quantification_inverts_the_level2_roster)
@@ -764,7 +762,7 @@ START_SECTION(quantification_inverts_the_level2_roster)
 
   // Quantification OFF puts ms_settings.ms2 back on the roster -- i.e. every other mode is
   // untouched, which is what keeps 'R' meaning "identification MS2" everywhere.
-  Config off(cfgJson("", R"("characterization": { "mode": "off" },)", MS2_QUANT));
+  Config off(cfgJson("", "", MS2_QUANT));
   TEST_EQUAL(off.level(2).scans.size(), 1)
   TEST_STRING_EQUAL(off.level(2).scans[0].activation, "HCD")
   // ...and ms2_quant is still PARSED when off, so the schema fixture can see its keys.
@@ -990,7 +988,6 @@ START_SECTION(quantification_requires_the_identification_scan)
     return std::string(R"({
       "deconvolution": { "tol": [10, 10, 10] },
       "precursor_selection": { "rank_by": "qscore", "max_precursors": 5 },
-      "characterization": { "mode": "off" },
       "quantification": )") + quant_body + R"(,
       "ms_settings": {
         "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
@@ -1331,7 +1328,7 @@ START_SECTION(charge_state_bounds_parse_and_an_unsatisfiable_pair_throws)
 END_SECTION
 
 // ---------------------------------------------------------------------------------------------
-// characterization.method / characterization.refine / mode "discriminating" (ADR-0049).
+// identification.method / identification.refine / mode "discriminating" (ADR-0049, ADR-0061).
 // Messages are asserted where a bare TEST_EXCEPTION could pass on a different, pre-existing guard.
 // Helpers (kMs3, refineMessage, contains) are in the anonymous namespace at the top of the file.
 
@@ -1339,10 +1336,10 @@ START_SECTION(method_defaults_to_flashtnt_and_parses_refine)
 {
   // No method, no block: FLASHTnT, and the seven defaults of RefineSettings.
   {
-    Config c1(cfgJson("", R"("characterization": { "mode": "off", "protein_sequence": "PEPTIDEK" },)"));
-    TEST_EQUAL((int)c1.characterization().method, (int)AnnotationMethod::FlashTnT)
-    TEST_EQUAL(c1.characterization().has_refine_block, false)
-    const RefineSettings& d = c1.characterization().refine;
+    Config c1(cfgJson("", R"("identification": { "reference": { "sequence": "PEPTIDEK" } },)"));
+    TEST_EQUAL((int)c1.identification().method, (int)AnnotationMethod::FlashTnT)
+    TEST_EQUAL(c1.identification().has_refine_block, false)
+    const RefineSettings& d = c1.identification().refine;
     TEST_REAL_SIMILAR(d.fdr, 0.2)
     TEST_EQUAL(d.shuffles, 300)
     TEST_REAL_SIMILAR(d.grid_da, 0.01)
@@ -1357,7 +1354,7 @@ START_SECTION(method_defaults_to_flashtnt_and_parses_refine)
     Config c2(R"({
       "deconvolution": { "tol": [10, 7, 5] },
       "precursor_selection": { "rank_by": "qscore", "max_precursors": 5 },
-      "characterization": { "mode": "off", "protein_sequence": "PEPTIDEK", "method": "refine",
+      "identification": { "reference": { "sequence": "PEPTIDEK" }, "method": "refine",
         "refine": { "fdr": 0.25, "shuffles": 50, "grid_da": 0.02, "max_shift_da": 300, "min_ions": 4,
                     "max_levels": 7, "jump_penalty": 3 } },
       "ms_settings": {
@@ -1365,9 +1362,9 @@ START_SECTION(method_defaults_to_flashtnt_and_parses_refine)
         "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 }
       }
     })");
-    TEST_EQUAL((int)c2.characterization().method, (int)AnnotationMethod::Refine)
-    TEST_EQUAL(c2.characterization().has_refine_block, true)
-    const RefineSettings& r = c2.characterization().refine;
+    TEST_EQUAL((int)c2.identification().method, (int)AnnotationMethod::Refine)
+    TEST_EQUAL(c2.identification().has_refine_block, true)
+    const RefineSettings& r = c2.identification().refine;
     TEST_REAL_SIMILAR(r.fdr, 0.25)
     TEST_EQUAL(r.shuffles, 50)
     TEST_REAL_SIMILAR(r.grid_da, 0.02)
@@ -1381,10 +1378,10 @@ START_SECTION(method_defaults_to_flashtnt_and_parses_refine)
 
   // Case-sensitive, like mode; and an unknown value throws with the method named.
   TEST_EXCEPTION(std::invalid_argument,
-    Config(cfgJson("", R"("characterization": { "mode": "off", "protein_sequence": "PEPTIDEK", "method": "Refine" },)")))
+    Config(cfgJson("", R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "method": "Refine" },)")))
   TEST_EQUAL(contains(refineMessage(cfgJson("",
-    R"("characterization": { "mode": "off", "protein_sequence": "PEPTIDEK", "method": "tnt" },)")),
-    "characterization.method"), true)
+    R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "method": "tnt" },)")),
+    "identification.method"), true)
 }
 END_SECTION
 
@@ -1394,32 +1391,32 @@ START_SECTION(refine_block_under_flashtnt_throws)
   for (const std::string& meth : {std::string(R"("method": "flashtnt", )"), std::string()})
   {
     const std::string msg = refineMessage(cfgJson("",
-      R"("characterization": { "mode": "off", "protein_sequence": "PEPTIDEK", )" + meth
+      R"("identification": { "reference": { "sequence": "PEPTIDEK" }, )" + meth
       + R"("refine": { "fdr": 0.2 } },)"));
-    TEST_EQUAL(contains(msg, "characterization.refine"), true)
-    TEST_EQUAL(contains(msg, "characterization.method"), true)
+    TEST_EQUAL(contains(msg, "identification.refine"), true)
+    TEST_EQUAL(contains(msg, "identification.method"), true)
   }
 }
 END_SECTION
 
 START_SECTION(discriminating_under_flashtnt_throws)
 {
-  // protein_sequence and ms3 present, so neither pre-existing mode guard can be what fires.
+  // A reference and ms3 present, so neither pre-existing mode guard can be what fires.
   const std::string msg = refineMessage(cfgJson("",
-    R"("characterization": { "mode": "discriminating", "protein_sequence": "PEPTIDEK" },)", kMs3));
+    R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "discriminating" } },)", kMs3));
   TEST_EQUAL(contains(msg,
-    "characterization.mode \"discriminating\" requires characterization.method \"refine\""), true)
+    "identification.characterization.mode \"discriminating\" requires identification.method \"refine\""), true)
 
   // Case-sensitive like every other mode value.
   TEST_EXCEPTION(std::invalid_argument,
-    Config(cfgJson("", R"("characterization": { "mode": "Discriminating", "method": "refine", "protein_sequence": "PEPTIDEK" },)", kMs3)))
+    Config(cfgJson("", R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "method": "refine", "characterization": { "mode": "Discriminating" } },)", kMs3)))
 }
 END_SECTION
 
 START_SECTION(discriminating_under_refine_projects_level_selection)
 {
   Config cfg(cfgJson("",
-    R"("characterization": { "mode": "discriminating", "method": "refine", "protein_sequence": "PEPTIDEK", "max_targets": 4 },)",
+    R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "method": "refine", "characterization": { "mode": "discriminating", "max_targets": 4 } },)",
     kMs3));
   TEST_EQUAL((int)cfg.characterization().mode, (int)CharacterizationMode::Discriminating)
   TEST_EQUAL((int)cfg.characterization().objective, (int)CharacterizationObjective::Discriminating)
@@ -1437,15 +1434,17 @@ START_SECTION(discriminating_with_ms3_exploration_throws)
   const std::string expl =
     R"("exploration": { "metric": "fragment_count", "ce_min": 15, "ce_max": 35, "ce_step": 10 })";
   const std::string msg = refineMessage(cfgJson("",
-    R"("characterization": { "mode": "discriminating", "method": "refine", "protein_sequence": "PEPTIDEK", )" + expl + " },",
+    R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "method": "refine", "characterization": { "mode": "discriminating", )"
+    + expl + " } },",
     kMs3));
   TEST_EQUAL(contains(msg,
-    "characterization.mode \"discriminating\" does not yet pool MS3 exploration variants; disable "
-    "characterization.exploration or choose another mode (ADR-0049)."), true)
+    "identification.characterization.mode \"discriminating\" does not yet pool MS3 exploration variants; disable "
+    "identification.characterization.exploration or choose another mode (ADR-0049)."), true)
 
   // Positive control: the same exploration block under another mode loads, so the block itself is not what fires.
   Config ok(cfgJson("",
-    R"("characterization": { "mode": "exhaustive", "method": "refine", "protein_sequence": "PEPTIDEK", )" + expl + " },",
+    R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "method": "refine", "characterization": { "mode": "exhaustive", )"
+    + expl + " } },",
     kMs3));
   TEST_EQUAL(ok.hasExploration(3), true)
 }
@@ -1455,7 +1454,7 @@ START_SECTION(refine_bounds_are_validated)
 {
   auto withRefine = [](const std::string& block) {
     return cfgJson("",
-      R"("characterization": { "mode": "off", "protein_sequence": "PEPTIDEK", "method": "refine", "refine": { )"
+      R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "method": "refine", "refine": { )"
       + block + R"( } },)");
   };
   // Each violation throws and names its key.
@@ -1472,21 +1471,78 @@ START_SECTION(refine_bounds_are_validated)
   for (const auto& [key, block] : bad)
   {
     const std::string msg = refineMessage(withRefine(block));
-    TEST_EQUAL(contains(msg, std::string("characterization.refine.") + key), true)
+    TEST_EQUAL(contains(msg, std::string("identification.refine.") + key), true)
   }
   // The edges that are legal load clean.
   Config edge(withRefine(R"("fdr": 1.0, "shuffles": 1, "min_ions": 1, "max_levels": 1, "jump_penalty": 1)"));
-  TEST_REAL_SIMILAR(edge.characterization().refine.fdr, 1.0)
-  TEST_EQUAL(edge.characterization().refine.jump_penalty, 1)
+  TEST_REAL_SIMILAR(edge.identification().refine.fdr, 1.0)
+  TEST_EQUAL(edge.identification().refine.jump_penalty, 1)
 }
 END_SECTION
 
 START_SECTION(refine_block_unknown_key_throws)
 {
   const std::string msg = refineMessage(cfgJson("",
-    R"("characterization": { "mode": "off", "protein_sequence": "PEPTIDEK", "method": "refine", "refine": { "fdr": 0.5, "alpha": 0.1 } },)"));
-  TEST_EQUAL(contains(msg, "unknown key(s) in 'characterization.refine'"), true)
+    R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "method": "refine", "refine": { "fdr": 0.5, "alpha": 0.1 } },)"));
+  TEST_EQUAL(contains(msg, "unknown key(s) in 'identification.refine'"), true)
   TEST_EQUAL(contains(msg, "alpha"), true)
+}
+END_SECTION
+
+// ---------------------------------------------------------------------------------------------
+// ADR-0061. The identification section's PRESENCE is the matching switch (it was a non-empty
+// characterization.protein_sequence) and its nested characterization block's presence is the MS3
+// switch (it was mode != "off"). Every refusal below asserts its message, because a bare
+// TEST_EXCEPTION would pass on the generic unknown-key error the dedicated message exists to replace.
+START_SECTION(identification_section_presence_switches_and_refusals)
+{
+  // Absent: nothing is matched and MS3 is off.
+  {
+    Config cfg(cfgJson());
+    TEST_EQUAL(cfg.identification().enabled(), false)
+    TEST_EQUAL(cfg.identification().sequence, "")
+    TEST_EQUAL((int)cfg.characterization().mode, (int)CharacterizationMode::Off)
+    TEST_EQUAL((int)cfg.level(2).selection, (int)SelectionMetric::None)
+  }
+  // Present without characterization: matched, no MS3; the flashtnt block reads into identification.
+  {
+    Config cfg(cfgJson("",
+      R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "flashtnt": { "min_length": 4, "max_mod_mass": 650 } },)"));
+    TEST_EQUAL(cfg.identification().enabled(), true)
+    TEST_EQUAL(cfg.identification().sequence, "PEPTIDEK")
+    TEST_EQUAL(cfg.identification().flashtnt.min_length, 4)
+    TEST_EQUAL(cfg.identification().flashtnt.max_length, 8)
+    TEST_REAL_SIMILAR(cfg.identification().flashtnt.max_mod_mass, 650.0)
+    TEST_EQUAL((int)cfg.characterization().mode, (int)CharacterizationMode::Off)
+    TEST_EQUAL((int)cfg.level(3).selection, (int)SelectionMetric::None)
+  }
+  // A null section, as the C# serializer emits for an unauthored one, is absent.
+  {
+    Config cfg(cfgJson("", R"("identification": null,)"));
+    TEST_EQUAL(cfg.identification().enabled(), false)
+  }
+
+  // Refusals, each naming what to do instead.
+  const std::pair<std::string, std::string> refused[] = {
+    {R"("identification": { "method": "flashtnt" },)", "identification.reference is required"},
+    {R"("identification": { "reference": { "sequence": "" } },)", "identification.reference.sequence is empty"},
+    {R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "max_targets": 3 } },)",
+     "identification.characterization.mode is required"},
+    {R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "off" } },)",
+     "delete the characterization block"},
+    {R"("characterization": { "mode": "off" },)", "moved into 'identification'"},
+    {R"("flashtnt": { "min_length": 3 },)", "moved to identification.flashtnt"},
+    {R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "ambiguity", "protein_sequence": "PEPTIDEK" } },)",
+     "moved to identification.reference.sequence"},
+    {R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "ambiguity", "method": "refine" } },)",
+     "moved to identification.method"},
+  };
+  for (const auto& [member, needle] : refused)
+  {
+    const std::string msg = refineMessage(cfgJson("", member, kMs3));
+    TEST_EQUAL(contains(msg, needle), true)
+    TEST_EQUAL(contains(msg, "ADR-0061"), true)
+  }
 }
 END_SECTION
 

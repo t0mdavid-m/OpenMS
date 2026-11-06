@@ -89,16 +89,16 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   TEST_EQUAL(cfg.level(1).max_targets, j["precursor_selection"]["max_precursors"].get<int>())
   TEST_EQUAL(cfg.level(1).min_charge, j["precursor_selection"]["min_precursor_charge"].get<int>())
 
-  // --- flashtnt (now only genuine FLASHTnT Params) ---
-  TEST_EQUAL(cfg.targeting().min_tag_length, j["flashtnt"]["min_length"].get<int>())
-  TEST_EQUAL(cfg.targeting().max_tag_length, j["flashtnt"]["max_length"].get<int>())
-  TEST_EQUAL(cfg.targeting().allow_gap, j["flashtnt"]["allow_gap"].get<bool>())
-  TEST_EQUAL(cfg.targeting().max_aa_in_gap, j["flashtnt"]["max_aa_in_gap"].get<int>())
-  TEST_EQUAL(cfg.targeting().max_blind_mod_count, j["flashtnt"]["max_blind_mod_count"].get<int>())
-  TEST_REAL_SIMILAR(cfg.targeting().max_mod_mass, j["flashtnt"]["max_mod_mass"].get<double>())
-  TEST_EQUAL(cfg.targeting().fixed_mod.size(), j["flashtnt"]["fixed_mod"].size())
-  TEST_EQUAL(cfg.targeting().fixed_mod.empty() ? std::string("") : cfg.targeting().fixed_mod[0],
-             j["flashtnt"]["fixed_mod"][0].get<std::string>())
+  // --- identification.flashtnt (genuine FLASHTnT Params; ADR-0061 moved them out of TargetingConfig) ---
+  TEST_EQUAL(cfg.identification().flashtnt.min_length, j["identification"]["flashtnt"]["min_length"].get<int>())
+  TEST_EQUAL(cfg.identification().flashtnt.max_length, j["identification"]["flashtnt"]["max_length"].get<int>())
+  TEST_EQUAL(cfg.identification().flashtnt.allow_gap, j["identification"]["flashtnt"]["allow_gap"].get<bool>())
+  TEST_EQUAL(cfg.identification().flashtnt.max_aa_in_gap, j["identification"]["flashtnt"]["max_aa_in_gap"].get<int>())
+  TEST_EQUAL(cfg.identification().flashtnt.max_blind_mod_count, j["identification"]["flashtnt"]["max_blind_mod_count"].get<int>())
+  TEST_REAL_SIMILAR(cfg.identification().flashtnt.max_mod_mass, j["identification"]["flashtnt"]["max_mod_mass"].get<double>())
+  TEST_EQUAL(cfg.identification().flashtnt.fixed_mod.size(), j["identification"]["flashtnt"]["fixed_mod"].size())
+  TEST_EQUAL(cfg.identification().flashtnt.fixed_mod.empty() ? std::string("") : cfg.identification().flashtnt.fixed_mod[0],
+             j["identification"]["flashtnt"]["fixed_mod"][0].get<std::string>())
 
   // --- ms_settings.ms2_quant, the quantification scan (ADR-0038) ---
   // Replaces the old quantification.follow_up_scan block. That key named the scan quantification
@@ -233,20 +233,20 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   TEST_EQUAL((int)cfg.scheduling().agc_interval_ms,
              (int)(j["scheduling"]["agc_interval_seconds"].get<double>() * 1000.0))
 
-  // --- characterization ---
+  // --- identification: reference + characterization (ADR-0061) ---
   // `objective` is gone: its two values ARE the two on-values of `mode`, so it is derived rather
   // than authored. Asserting the derivation is what pins them together.
   {
-    const std::string m = j["characterization"]["mode"].get<std::string>();
+    const std::string m = j["identification"]["characterization"]["mode"].get<std::string>();
     TEST_EQUAL((int)cfg.characterization().objective,
                (int)(m == "coverage" ? CharacterizationObjective::Coverage
                                      : CharacterizationObjective::Ambiguity))
   }
-  TEST_EQUAL(cfg.characterization().protein_sequence, j["characterization"]["protein_sequence"].get<std::string>())
+  TEST_EQUAL(cfg.identification().sequence, j["identification"]["reference"]["sequence"].get<std::string>())
   // fragment_charges replaced the bool ms3_all_charges (ADR-0016): its two states became "single"
   // and "separate", and "multiplexed" is the value a bool could not express.
   {
-    const std::string fc = j["characterization"]["fragment_charges"].get<std::string>();
+    const std::string fc = j["identification"]["characterization"]["fragment_charges"].get<std::string>();
     TEST_EQUAL((int)cfg.characterization().fragment_charges,
                (int)(fc == "multiplexed" ? ChargeAcquisitionMode::Multiplexed
                      : fc == "separate"  ? ChargeAcquisitionMode::Separate
@@ -274,10 +274,10 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   // --- the projection: characterization.mode drives levels 2 and 3, and the MS3 budget/charge
   //     floor are AUTHORED in characterization but READ off level 2. Pinning both sides here is
   //     what stops the projection silently regressing.
-  TEST_EQUAL(cfg.level(2).max_targets, j["characterization"]["max_targets"].get<int>())
-  TEST_EQUAL(cfg.level(2).min_charge, j["characterization"]["min_fragment_charge"].get<int>())
+  TEST_EQUAL(cfg.level(2).max_targets, j["identification"]["characterization"]["max_targets"].get<int>())
+  TEST_EQUAL(cfg.level(2).min_charge, j["identification"]["characterization"]["min_fragment_charge"].get<int>())
   {
-    const std::string mode = j["characterization"]["mode"].get<std::string>();
+    const std::string mode = j["identification"]["characterization"]["mode"].get<std::string>();
     const bool on = mode != "off";
     // Both gates move together -- MS3 requires level 2 AND level 3 non-None, so the incoherent
     // states are unrepresentable rather than merely discouraged.
@@ -303,7 +303,7 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   // tolerance_ppm is first-class now, not smuggled through the overrides map.
   TEST_REAL_SIMILAR(cfg.level(2).exploration_tolerance_ppm, jex2["tolerance_ppm"].get<double>())
 
-  const auto& jex3 = j["characterization"]["exploration"];
+  const auto& jex3 = j["identification"]["characterization"]["exploration"];
   // ADR-0047: the reference authors kinetic_model at level 3 so the generated file proves the C# emitter
   // carries the k2 map (a NON-default value, per BuildFullReferenceConfig's rule) and the C++ parser reads
   // it back under the swept activation. Level 2 stays mass_count: a kinetic_model object there would be
@@ -394,7 +394,7 @@ START_SECTION(UnknownKey_Throws)
   TEST_EXCEPTION(std::invalid_argument, Config(std::string(R"({ "bogus_top": 1 })")))
   TEST_EXCEPTION(std::invalid_argument, Config(std::string(R"({ "precursor_selection": { "bogus": 1 } })")))
   TEST_EXCEPTION(std::invalid_argument, Config(std::string(R"({ "ms_settings": { "ms1": { "IsolationMode": "Quadrupole" } } })")))
-  TEST_EXCEPTION(std::invalid_argument, Config(std::string(R"({ "flashtnt": { "typo": 1 } })")))
+  TEST_EXCEPTION(std::invalid_argument, Config(std::string(R"({ "identification": { "reference": { "sequence": "P" }, "flashtnt": { "typo": 1 } } })")))
   TEST_EXCEPTION(std::invalid_argument, Config(std::string(R"({ "ms3": { "enabled": true } })")))   // legacy top-level section
 }
 END_SECTION

@@ -146,7 +146,6 @@ namespace
     "max_mass": 50000,
     "tol": [10, 10, 10]
   },
-  "flashtnt": { "min_length": 3, "max_length": 8 },
   "faims": { "cv_values": [], "max_cv_skip": 0 },
   "scheduling": {
     "cycle_time": { "enabled": false, "value_ms": 60000 },
@@ -164,7 +163,6 @@ namespace
     "max_precursors": 3,
     "precursor_charges": "single"
   },
-  "characterization": { "mode": "off", "max_targets": 10 },
   "ms_settings": {
     "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000,
              "agc_target": 800000, "max_it": 246 },

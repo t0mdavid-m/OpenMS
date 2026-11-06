@@ -91,7 +91,6 @@ namespace
     "score_threshold": 0.0, "tqscore_threshold": 0.0,
     "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
   },
-  "flashtnt": { "min_length": 3, "max_length": 8 },
   "faims": { "cv_values": [], "max_cv_skip": 0 },
   "scheduling": {
     "cycle_time": { "enabled": false, "value_ms": 60000 },
@@ -104,7 +103,6 @@ namespace
     "consider_all_charges": false, "strict_inclusion": )JSON" + (strict_inclusion ? "true" : "false") + R"JSON(,
     "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": )JSON" + std::to_string(max_precursors) + R"JSON(
   },
-  "characterization": { "mode": "off", "max_targets": 3 },
   "ms_settings": {
     "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
     "ms2": { "analyzer": "Orbitrap", "first_mass": 100, "last_mass": 2000, "resolution": 120000, "agc_target": 500000,
@@ -209,7 +207,6 @@ namespace
     "score_threshold": 0.0, "tqscore_threshold": 0.9,
     "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
   },
-  "flashtnt": { "min_length": 3, "max_length": 8 },
   "faims": { "cv_values": [], "max_cv_skip": 0 },
   "scheduling": {
     "cycle_time": { "enabled": false, "value_ms": 60000 },
@@ -222,7 +219,6 @@ namespace
     "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 1,
     "precursor_charges": ")JSON") + charges + R"JSON(", "min_charge_states": 2, "max_charge_states": 3
   },
-  "characterization": { "mode": "off", "max_targets": 3 },
   "ms_settings": {
     "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
     "ms2": { "analyzer": "Orbitrap", "first_mass": 100, "last_mass": 2000, "resolution": 120000, "agc_target": 500000,
@@ -396,7 +392,6 @@ namespace
     "score_threshold": 0.0, "tqscore_threshold": 0.9,
     "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
   },
-  "flashtnt": { "min_length": 3, "max_length": 8 },
   "faims": { "cv_values": [], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
   "scheduling": {
     "cycle_time": { "enabled": false, "value_ms": 60000 },
@@ -408,7 +403,6 @@ namespace
     "rt_window": 180, "targeting": "none", "consider_all_charges": false, "strict_inclusion": false,
     "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 5
   },
-  "characterization": { "mode": "off", "max_targets": 3 },
   "ms_settings": {
     "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
     "ms2": { "analyzer": "Orbitrap", "first_mass": 100, "last_mass": 2000, "resolution": 120000, "agc_target": 500000,
@@ -437,9 +431,11 @@ namespace
     cfg = with(cfg, R"("inclusion_list": "")", R"("inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt")");
     cfg = with(cfg, R"("targeting": "none")", R"("targeting": "inclusion")");
     cfg = with(cfg, R"("max_precursors": 5)", R"("max_precursors": 1, "precursor_charges": "separate", "max_charge_states": 3)");
-    cfg = with(cfg, R"("characterization": { "mode": "off", "max_targets": 3 })",
-               R"("characterization": { "mode": "ambiguity", "max_targets": 3, "fragment_charges": "separate",
-    "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" })");
+    // ADR-0061: the base config has no identification section; the twin adds one in front of ms_settings.
+    cfg = with(cfg, R"("ms_settings": {)",
+               R"("identification": { "reference": { "sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },
+                    "characterization": { "mode": "ambiguity", "max_targets": 3, "fragment_charges": "separate" } },
+  "ms_settings": {)");
     return with(cfg, R"("activation": "ETD", "reaction_time": 7,
              "reagent_agc_target": 700000, "reagent_max_it": 200 })",
                 R"("activation": "HCD", "collision_energy": 30 })");
