@@ -465,6 +465,7 @@ set(analysis_executables_list
   FLASHIda_exploration_test
   KineticModel_test
   Refine_test
+  FLASHIda_ProteomeSearch_test
   FLASHIda_LegacyConfig_test
   ConfigSchemaParity_test
   FLASHIda_Logging_test
