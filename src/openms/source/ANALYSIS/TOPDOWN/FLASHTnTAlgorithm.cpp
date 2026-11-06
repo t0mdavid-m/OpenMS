@@ -392,6 +392,7 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   // the extender's defaults: the cleavage propensity weight and table, fitted on lysates and native proteins
   eparam.remove("cleavage_weight");
   eparam.remove("cleavage_table");
+  eparam.remove("cleavage_native"); // set from -native (updateMembers_)
 
   defaults_.insert("ex:", eparam);
 
@@ -498,6 +499,8 @@ void FLASHTnTAlgorithm::updateMembers_()
   extender_param_.setValue("max_blind_mod_count", param_.getValue("max_blind_mod_count"));
   extender_param_.setValue("max_mod_mass", param_.getValue("max_mod_mass"));
   extender_param_.setValue("var_mod", param_.getValue("var_mod"));
+  // c/z cleavage propensities of native proteins (ECD) with -native, of denatured ones (ETD) otherwise
+  extender_param_.setValue("cleavage_native", param_.getValue("native").toString() == "true" ? "true" : "false");
 
   gapped_param_ = FLASHGappedTaggerAlgorithm().getDefaults();
   annotator_param_ = FLASHAnnotatorAlgorithm().getDefaults();
