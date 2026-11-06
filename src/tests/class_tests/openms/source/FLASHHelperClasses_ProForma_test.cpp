@@ -123,6 +123,21 @@ START_SECTION(static std::vector<ProFormaModification> getProFormaModifications(
 }
 END_SECTION
 
+START_SECTION(static ProForma::PeptidoformIon parseProForma(const std::string& text))
+{
+  // FLASHTnT's fixed modification without an accession: the "-" alternative is dropped, the mass stays on its residue
+  std::string sequence;
+  const auto mods = FLASHHelperClasses::getProFormaModifications(FLASHHelperClasses::parseProForma("PEPC[+57.021464|-]TIDEK[+42.010565|-|INFO:x]"), sequence);
+  TEST_EQUAL(sequence, "PEPCTIDEK")
+  TEST_EQUAL(mods.size(), 2)
+  TEST_REAL_SIMILAR(mods[0].mass, 57.021464)
+  TEST_EQUAL(mods[0].start, 3)
+  TEST_REAL_SIMILAR(mods[1].mass, 42.010565)
+  TEST_EQUAL(mods[1].start, 8)
+  TEST_EXCEPTION(Exception::ParseError, ProForma::parseIon("PEPC[+57.021464|-]TIDE"))
+}
+END_SECTION
+
 START_SECTION(static ProForma::Peptidoform toPeptidoform(const std::string& sequence, const std::vector<ProFormaModification>& modifications))
 {
   std::vector<PFM> mods = {residueMod(1, 1, 15.994915), residueMod(3, 5, -18.010565, ""), residueMod(3, 5, 1.0)};

@@ -878,6 +878,16 @@ namespace OpenMS
     proformaFail(tag, "no mass for the modification");
   }
 
+  ProForma::PeptidoformIon FLASHHelperClasses::parseProForma(const std::string& text)
+  {
+    std::string cleaned = text;
+    for (const std::string& alt : {std::string("|-]"), std::string("|-|")})
+    {
+      for (size_t pos = cleaned.find(alt); pos != std::string::npos; pos = cleaned.find(alt, pos)) { cleaned.erase(pos, 2); }
+    }
+    return ProForma::parseIon(cleaned);
+  }
+
   std::vector<FLASHHelperClasses::ProFormaModification> FLASHHelperClasses::getProFormaModifications(const ProForma::PeptidoformIon& ion,
                                                                                                       std::string& sequence)
   {

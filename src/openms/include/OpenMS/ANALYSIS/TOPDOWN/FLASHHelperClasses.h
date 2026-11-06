@@ -776,6 +776,13 @@ namespace OpenMS
     static std::vector<ProFormaModification> getProFormaModifications(const ProForma::PeptidoformIon& ion, std::string& sequence);
 
     /**
+      @brief A ProForma string read by OpenMS::ProForma::parseIon, after dropping the alternative "-" of a tag ("+42.010565|-" becomes
+      "+42.010565"): FLASHTnT writes a fixed modification without an accession that way, and ProForma has no "-" tag.
+      @throw Exception::ParseError as OpenMS::ProForma::parseIon
+    */
+    static ProForma::PeptidoformIon parseProForma(const std::string& text);
+
+    /**
       @brief The proteoform @p sequence with @p modifications as a ProForma::Peptidoform, to be written by ProForma::toString (lossless):
       each tag as written (a mass formatted by formatProFormaMass), modifications of one residue or range in their order here, global ones
       as one <[tag]@residues> per tag.

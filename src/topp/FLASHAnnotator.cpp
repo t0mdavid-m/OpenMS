@@ -336,7 +336,7 @@ protected:
         try
         {
           using Site = FLASHHelperClasses::ProFormaModification::Site;
-          const ProForma::PeptidoformIon proforma = ProForma::parseIon(StringUtils::trimmed(field(row, col_proforma)));
+          const ProForma::PeptidoformIon proforma = FLASHHelperClasses::parseProForma(StringUtils::trimmed(field(row, col_proforma)));
           std::string sequence;
           const auto modifications = FLASHHelperClasses::getProFormaModifications(proforma, sequence);
           prsm.sequence = sequence;
