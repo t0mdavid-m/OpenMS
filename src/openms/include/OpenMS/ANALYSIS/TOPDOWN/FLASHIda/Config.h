@@ -402,6 +402,11 @@ namespace OpenMS
     /// identification.flashtnt -- the matcher's tagger/extender tuning.
     FlashTnTSettings flashtnt;
 
+    /// identification.search_threads (ADR-0062 d.1) -- the size of the search pool that matches MS2s
+    /// beside the analysis thread. Unauthored: the core count minus two (the acquisition PC also runs
+    /// the instrument software), at least 1. Authored: an integer >= 1.
+    int search_threads = 1;
+
     /// Whether MS2s are matched at all.
     bool enabled() const { return !sequence.empty(); }
   };

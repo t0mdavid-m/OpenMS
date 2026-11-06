@@ -45,6 +45,7 @@
 #include <stdexcept>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 #include <nlohmann/json.hpp>
 
@@ -473,7 +474,8 @@ namespace OpenMS
       const auto& ident = config["identification"];
       if (!ident.is_object())
         throw std::invalid_argument("Config: identification must be an object.");
-      rejectUnknownKeys(ident, {"reference", "method", "flashtnt", "refine", "characterization"}, "identification");
+      rejectUnknownKeys(ident, {"reference", "method", "flashtnt", "refine", "search_threads", "characterization"},
+                        "identification");
 
       // An identification that searches nothing would be an inert block: refused rather than carried.
       if (!ident.contains("reference") || ident["reference"].is_null())
@@ -540,6 +542,23 @@ namespace OpenMS
       {
         for (const auto& m : flashtnt["fixed_mod"])
           ft.fixed_mod.push_back(m.get<std::string>());
+      }
+
+      // ADR-0062 d.1: the search pool's size. Unauthored = the core count minus two, at least 1. An
+      // authored value must be a whole number of threads, at least 1: a pool of zero searches nothing.
+      if (ident.contains("search_threads") && !ident["search_threads"].is_null())
+      {
+        const auto& st = ident["search_threads"];
+        if (!st.is_number_integer() || st.get<long long>() < 1)
+          throw std::invalid_argument(
+              "Config: identification.search_threads must be an integer >= 1 (the number of search workers); "
+              "got " + st.dump() + ". Delete the key for the core count minus two (ADR-0062).");
+        identification_.search_threads = st.get<int>();
+      }
+      else
+      {
+        const int cores = static_cast<int>(std::thread::hardware_concurrency());
+        identification_.search_threads = std::max(1, cores - 2);
       }
 
       if (ident.contains("characterization") && !ident["characterization"].is_null())
