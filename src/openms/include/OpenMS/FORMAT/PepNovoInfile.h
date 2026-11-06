@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 #include <OpenMS/CHEMISTRY/ModificationDefinitionsSet.h>
 #include <OpenMS/FORMAT/TextFile.h>
 
@@ -44,15 +44,15 @@ public:
 
     /** stores the experiment data in a PepNovo input file that can be used as input for PepNovo shell execution
 
-        @param filename the file which the input file is stored into
+        @param[out] filename the file which the input file is stored into
         @throw Exception::UnableToCreateFile is thrown if the given file could not be created
     */
-    void store(const String & filename);
+    void store(const std::string & filename);
 
     /** @brief generates the PepNovo Infile for given fixed and variable modifications			 *
      *
-     * @param fixed_mods StringList of fixed modifications unique identifiers
-     * @param variable_mods StringList of variable modifications unique identifiers
+     * @param[in] fixed_mods StringList of fixed modifications unique identifiers
+     * @param[in] variable_mods StringList of variable modifications unique identifiers
      */
     void setModifications(const StringList & fixed_mods, const StringList & variable_mods);
 
@@ -62,20 +62,20 @@ public:
      *  in the PepNovo Infile (origin+rounded monoisotopic mass of modification ).
      *  (e.g. modification_key_map["K+16"]=="Oxidation (K)" )
      */
-    void getModifications(std::map<String, String> & modification_key_map) const;
+    void getModifications(std::map<std::string, std::string> & modification_key_map) const;
 
 private:
     ModificationDefinitionsSet mods_;
-    std::map<String, String> mods_and_keys_;
+    std::map<std::string, std::string> mods_and_keys_;
     TextFile ptm_file_;
 
 
     /** retrieves the name of modification, and generates the corresponding line for the
         PepNovo infile.
-        @param modification the modification
-        @param variable should be set to true if it variable
+        @param[in] modification the modification
+        @param[in] variable should be set to true if it variable
    */
-    String handlePTMs_(const String & modification, const bool variable);
+    std::string handlePTMs_(const std::string & modification, const bool variable);
   };
 
 } // namespace OpenMS

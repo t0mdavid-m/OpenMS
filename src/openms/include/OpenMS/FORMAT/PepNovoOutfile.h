@@ -8,8 +8,7 @@
 
 #pragma once
 
-#include <OpenMS/CONCEPT/Exception.h>
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 #include <OpenMS/METADATA/PeptideIdentification.h>
 #include <OpenMS/METADATA/PeptideIdentificationList.h>
 
@@ -52,29 +51,29 @@ public:
     /**
        @brief loads data from a PepNovo outfile
 
-       @param result_filename the file to be loaded
-       @param peptide_identifications the peptide identifications
-       @param protein_identification the protein identification
-       @param score_threshold cutoff threshold for the PepNovo score (PnvScr)
-       @param id_rt_mz map the spectrum identifiers returned by PepNovo
+       @param[in] result_filename the file to be loaded
+       @param[in] peptide_identifications the peptide identifications
+       @param[in] protein_identification the protein identification
+       @param[in] score_threshold cutoff threshold for the PepNovo score (PnvScr)
+       @param[out] id_rt_mz map the spectrum identifiers returned by PepNovo
        to the rt and mz values of the spectrum (used to map the identifications back to the spectra). key= &lt;PepNovo Id&gt;, value= &lt;pair&lt;rt,mz&gt; &gt;.
        For spectra not present in this map identifications cannot be mapped back.
-       @param mod_id_map map the OpenMS id for modifications (FullId) to the ids returned by PepNovo key= &lt;PepNovo_key&gt;, value= &lt;OpenMS FullId&gt;
+       @param[out] mod_id_map map the OpenMS id for modifications (FullId) to the ids returned by PepNovo key= &lt;PepNovo_key&gt;, value= &lt;OpenMS FullId&gt;
    */
     void load(const std::string & result_filename, PeptideIdentificationList & peptide_identifications,
               ProteinIdentification & protein_identification,
               const double & score_threshold,
               const IndexPosMappingType & id_rt_mz,
-              const std::map<String, String> & mod_id_map);
+              const std::map<std::string, std::string> & mod_id_map);
 
     /** @brief get the search engine version and search parameters from a PepNovo output file
      *
      * search parameters (precursor tolerance, peak mass tolerance, allowed modifications)are stored in the protein_identification.
 
-        @param pepnovo_output_without_parameters_filename
-        @param protein_identification
+        @param[in] pepnovo_output_without_parameters_filename
+        @param[in] protein_identification
     */
-    void getSearchEngineAndVersion(const String & pepnovo_output_without_parameters_filename, ProteinIdentification & protein_identification);
+    void getSearchEngineAndVersion(const std::string & pepnovo_output_without_parameters_filename, ProteinIdentification & protein_identification);
 
   };
 

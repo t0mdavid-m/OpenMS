@@ -6,7 +6,6 @@
 # --------------------------------------------------------------------------
 
 project("OpenMS_TOPP")
-cmake_minimum_required(VERSION 3.15 FATAL_ERROR)
 
 # --------------------------------------------------------------------------
 # OpenMS' TOPP tools
@@ -14,14 +13,17 @@ cmake_minimum_required(VERSION 3.15 FATAL_ERROR)
 # add all the tools. We support two modes
 # 1. either as single MyToolName.cpp file
 # 2. via a subfolder MyToolName/ with MyToolName/MyToolName.cpp and (optionally) additional header/source files
+# executables.cmake declares each tool with openms_topp_tool(), which appends to TOPP_TOOLS
+# and records its category; the registry is generated from those declarations in
+# src/CMakeLists.txt once the GUI tools have been declared too.
 include(executables.cmake)
 
 # Remove DLModel if ONNX is not enabled (it requires onnxruntime headers)
 if(NOT ENABLE_ONNX)
-  list(REMOVE_ITEM TOPP_executables DLModel)
+  list(REMOVE_ITEM TOPP_TOOLS DLModel)
 endif()
 
-foreach(i ${TOPP_executables})  
+foreach(i ${TOPP_TOOLS})  
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${i})
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/${i})
 #[[
@@ -30,8 +32,8 @@ cmake_minimum_required(VERSION 3.15 FATAL_ERROR)
 project(NameOfTheTool)
 
 # allow building separately from OpenMS
-if(NOT TARGET OpenMS)
-  find_package(OpenMS)
+if(NOT TARGET OpenMS::OpenMS_CLI)
+  find_package(OpenMS CONFIG REQUIRED)
 endif()
 
 set(tool_sources
@@ -41,11 +43,14 @@ set(tool_sources
   additional_header2.h
 )
 add_executable(${PROJECT_NAME} ${PROJECT_NAME}.cpp ${tool_sources}) # Add the main cpp file and additional files
-target_link_libraries(${PROJECT_NAME} OpenMS) # Link the executable with OpenMS
+target_link_libraries(${PROJECT_NAME} OpenMS::OpenMS_CLI) # Link the executable with the TOPP tool framework (which brings OpenMS::OpenMS)
+if(COMMAND openms_add_executable_compiler_flags) # not defined when building this tool standalone
+  openms_add_executable_compiler_flags(${PROJECT_NAME})
+endif()
 #]] 
   else()
     add_executable(${i} ${i}.cpp)
-    target_link_libraries(${i} OpenMS)
+    target_link_libraries(${i} OpenMS_CLI)
     openms_add_executable_compiler_flags(${i})
   endif()  
   
@@ -56,35 +61,18 @@ target_link_libraries(${PROJECT_NAME} OpenMS) # Link the executable with OpenMS
   endif()
 endforeach(i)
 
-# some regular TOPP tools need the GUI lib, only build them when WITH_GUI is enabled
-if(WITH_GUI)
-  foreach(i ${TOPP_executables_with_GUIlib})
-    add_executable(${i} ${i}.cpp)
-    # we also want to install each topp tool
-    openms_add_executable_compiler_flags(${i})
-    install_tool(${i})
-    target_link_libraries(${i} OpenMS OpenMS_GUI)
-  endforeach(i)
-
-  set(TOPP_executables ${TOPP_executables} ${TOPP_executables_with_GUIlib})
-endif()
-
 # special requirements of some tools
-target_link_libraries(FileMerger Boost::regex)
-target_link_libraries(DecoyDatabase Boost::regex)
-target_link_libraries(NucleicAcidSearchEngine Boost::regex)
+# FuzzyDiff wraps the FuzzyStringComparator, which lives in the (static) class-test framework library
+target_link_libraries(FuzzyDiff OpenMSTestFramework)
 if(ENABLE_ONNX)
   target_link_libraries(DLModel onnxruntime::onnxruntime)
 endif()
 target_link_libraries(IsobaricWorkflow Eigen3::Eigen)
 target_link_libraries(MetaProSIP Eigen3::Eigen)
 
+
 # collection target
 add_custom_target(TOPP)
-add_dependencies(TOPP ${TOPP_executables})
-
-## export the list of TOPP tools into CACHE
-set(TOPP_TOOLS ${TOPP_executables}
-    CACHE INTERNAL "OpenMS' TOPP tools" FORCE)
+add_dependencies(TOPP ${TOPP_TOOLS})
 
 openms_doc_path("${PROJECT_SOURCE_DIR}")

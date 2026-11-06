@@ -70,8 +70,8 @@ public:
     /**
        @brief Constructor
 
-       @param max_intensity Maximum intensity of features (for normalization)
-       @param force_constraints Check "max. difference" constraints given in the parameters and return @ref infinity if violated?
+       @param[in] max_intensity Maximum intensity of features (for normalization)
+       @param[in] force_constraints Check "max. difference" constraints given in the parameters and return @ref infinity if violated?
     */
     FeatureDistance(double max_intensity = 1.0,
                     bool force_constraints = false);
@@ -99,7 +99,7 @@ protected:
     {
       DistanceParams_() {}
 
-      DistanceParams_(const String & what, const Param & global)
+      DistanceParams_(const std::string & what, const Param & global)
       {
         Param param = global.copy("distance_" + what + ":", true);
         if (what == "MZ")

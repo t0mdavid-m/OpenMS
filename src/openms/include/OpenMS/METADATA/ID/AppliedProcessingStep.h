@@ -60,7 +60,7 @@ namespace OpenMS
         The order is defined in the @p ProcessingSoftware referenced by the processing step (if available).
         Scores not listed there are included at the end of the output.
 
-        @param primary_only Only return the primary score (ignoring any others)?
+        @param[in] primary_only Only return the primary score (ignoring any others)?
       */
       std::vector<std::pair<ScoreTypeRef, double>>
       getScoresInOrder(bool primary_only = false) const
@@ -84,7 +84,7 @@ namespace OpenMS
         }
         for (const auto& pair: scores)
         {
-          if (!scores_done.count(pair.first))
+          if (!scores_done.contains(pair.first))
           {
             result.push_back(pair);
             if (primary_only) return result;

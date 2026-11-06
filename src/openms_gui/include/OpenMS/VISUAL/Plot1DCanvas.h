@@ -12,6 +12,7 @@
 #include <OpenMS/VISUAL/OpenMS_GUIConfig.h>
 
 // OpenMS
+#include <OpenMS/ANALYSIS/QUANTITATION/IsobaricQuantitationMethod.h>
 #include <OpenMS/VISUAL/LayerData1DBase.h>
 #include <OpenMS/VISUAL/LayerDataChrom.h>
 #include <OpenMS/VISUAL/PlotCanvas.h>
@@ -65,20 +66,20 @@ namespace OpenMS
     /// Which axis is pulling a point downwards (e.g. when plotting sticks)
     /// Note that pulling (see gravitateDown()) will only change the value for the gravity axis.
     /// E.g. with gravity on Y, a Point(X=10, Y=10), will be pulled to Point(X=10, Y=min)
-    /// @param axis Either X, or Y
+    /// @param[in] axis Either X, or Y
     /// @throws Exception::InvalidValue if @p axis is not X or Y
     void setGravityAxis(DIM axis)
     {
       if (axis != DIM::X && axis != DIM::Y)
       {
-        throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Not a valid axis for 1D plotting", String((int)axis));
+        throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Not a valid axis for 1D plotting",StringUtils::toStr((int)axis));
       }
       gravity_axis_ = axis;
     }
 
     /**
      * @brief Convenience function, which picks the Intensity dimension from a DimMapper as gravity axis
-     * @param unit_mapper
+     * @param[in] unit_mapper
      * @throw Exception::NotImplemented if @p unit_mapper does not have an Intensity dimension
      */
     void setIntensityAsGravity(const DimMapper<2>& unit_mapper)
@@ -114,8 +115,8 @@ namespace OpenMS
 
     /// Pull the point @p p to the current gravity axis, i.e. the lowest point on the Area
     ///
-    /// @param p A X-Y data point 
-    /// @param area An area which contains the min/max range of X and Y axis
+    /// @param[in] p A X-Y data point 
+    /// @param[in] area An area which contains the min/max range of X and Y axis
     /// @return A X-Y data point identical to @p p, but with its gravity-axis value changed to the minimum given in @p area
     QPoint gravitateMin(QPoint p, const AreaXYType& area) const
     {
@@ -132,8 +133,8 @@ namespace OpenMS
 
     /// Add value of @p delta's gravity dimension to the gravity dimension of point @p p. Other dimensions remain untouched.
     ///
-    /// @param p A X-Y data point
-    /// @param delta A distance, of which we only use the gravity dimension's part.
+    /// @param[in] p A X-Y data point
+    /// @param[in] delta A distance, of which we only use the gravity dimension's part.
     /// @return A X-Y data point identical to @p p, but with its gravity-axis value changed by adding delta.
     QPoint gravitateWith(QPoint p, const QPoint& delta) const
     {
@@ -158,8 +159,8 @@ namespace OpenMS
 
     /// Change the value of @p p's gravity dimension to the value of @p targets'. Other dimensions remain untouched.
     ///
-    /// @param p A X-Y data point
-    /// @param target A target value, of which we only use the gravity dimension's part.
+    /// @param[in] p A X-Y data point
+    /// @param[out] target A target value, of which we only use the gravity dimension's part.
     /// @return A X-Y data point identical to @p p, but with its gravity-axis value changed by target's value.
     QPoint gravitateTo(QPoint p, const QPoint& target) const
     {
@@ -199,7 +200,7 @@ namespace OpenMS
 
     /// Pull the point @p p to zero (0) on the current gravity axis.
     ///
-    /// @param p A X-Y data point
+    /// @param[in] p A X-Y data point
     /// @return A X-Y data point with its gravity axis set to '0'
     QPoint gravitateZero(QPoint p) const
     {
@@ -216,7 +217,7 @@ namespace OpenMS
 
     /// Pull the point @p p to zero (0) on the current gravity axis.
     ///
-    /// @param p A X-Y data point
+    /// @param[in] p A X-Y data point
     /// @return A X-Y data point with its gravity axis set to '0'
     template<UInt D>
     DPosition<D> gravitateZero(DPosition<D> p) const
@@ -227,7 +228,7 @@ namespace OpenMS
 
     /// Pull the point @p p to NAN on the current gravity axis.
     ///
-    /// @param p A X-Y data point
+    /// @param[in] p A X-Y data point
     /// @return A X-Y data point with its gravity axis set to NAN
     template<UInt D>
     DPosition<D> gravitateNAN(DPosition<D> p) const
@@ -238,7 +239,7 @@ namespace OpenMS
 
     /// Get the value of the gravity dimension
     ///
-    /// @param p A X-Y data point
+    /// @param[in] p A X-Y data point
     /// @return Either the X or Y component, depending on gravity
     int gravityValue(const QPoint& p) const
     {
@@ -255,18 +256,18 @@ namespace OpenMS
     }
     /// Get the value of the gravity dimension
     ///
-    /// @param p A X-Y data point
+    /// @param[in] p A X-Y data point
     /// @return Either the X or Y component, depending on gravity
     template<UInt D>
-    int gravityValue(const DPosition<D>& p) const
+    auto gravityValue(const DPosition<D>& p) const
     {
       return p[(int)gravity_axis_];
     }
 
     /// Get the difference of values in the gravity dimension
     ///
-    /// @param start The start point in XY coordinates
-    /// @param end The end point in XY coordinates
+    /// @param[in] start The start point in XY coordinates
+    /// @param[in] end The end point in XY coordinates
     /// @return The difference of (end-start) in the X or Y component, depending on gravity
     template<UInt D>
     auto gravityDiff(const DPosition<D>& start, const DPosition<D>& end) const
@@ -334,22 +335,22 @@ public:
     const DimBase& getNonGravityDim() const;
 
     /// add a chromatogram layer
-    /// @param chrom_exp_sptr An MSExperiment with chromatograms
-    /// @param ondisc_sptr OnDisk experiment, as fallback to read the chromatogram from, should @p chrom_exp_sptr.getChromatograms(index) be empty
-    /// @param chrom_annotation If OSWData was loaded, pass the shared_pointer from the LayerData. Otherwise leave empty.
-    /// @param index Index of the chromatogram to show
-    /// @param filename For file change watcher (can be empty, if need be)
-    /// @param basename Name of layer (usually the basename of the file)
-    /// @param basename_extra Optional suffix of the layer name (e.g. a peptide sequence, or an index '[39]).
+    /// @param[in] chrom_exp_sptr An MSExperiment with chromatograms
+    /// @param[in] ondisc_sptr OnDisk experiment, as fallback to read the chromatogram from, should @p chrom_exp_sptr.getChromatograms(index) be empty
+    /// @param[in] chrom_annotation If OSWData was loaded, pass the shared_pointer from the LayerData. Otherwise leave empty.
+    /// @param[in] index Index of the chromatogram to show
+    /// @param[in] filename For file change watcher (can be empty, if need be)
+    /// @param[in] basename Name of layer (usually the basename of the file)
+    /// @param[in] basename_extra Optional suffix of the layer name (e.g. a peptide sequence, or an index '[39]).
     /// @return true on success, false if data was missing etc
     /// @note: this does NOT trigger layerActivated signal for efficiency-reasons. Do it manually afterwards!
     bool addChromLayer(ExperimentSharedPtrType chrom_exp_sptr,
                        ODExperimentSharedPtrType ondisc_sptr, 
                        OSWDataSharedPtrType chrom_annotation,
                        const int index,
-                       const String& filename, 
-                       const String& basename,
-                       const String& basename_extra);
+                       const std::string& filename, 
+                       const std::string& basename,
+                       const std::string& basename_extra);
 
     
     ///Enumerate all available paint styles
@@ -491,6 +492,12 @@ public:
     /// Return true if interesting m/s are annotated
     bool isDrawInterestingMZs() const;
 
+    /// Enable TMT reporter-ion annotation overlay for the given method (MethodType::UNKNOWN = disabled).
+    void setTMTAnnotationMethod(IsobaricQuantitationMethod::MethodType method);
+
+    /// Returns the currently active TMT annotation method (UNKNOWN = disabled).
+    IsobaricQuantitationMethod::MethodType getTMTAnnotationMethod() const;
+
     // Show/hide ion ladder on top right corner (Identification view)
     void setIonLadderVisible(bool show);
 
@@ -541,9 +548,9 @@ protected:
       @brief Convert chart to widget coordinates
 
       Translates chart (unit) coordinates to widget (pixel) coordinates.
-      @param x the chart coordinate x
-      @param y the chart coordinate y
-      @param point returned widget coordinates
+      @param[in] x the chart coordinate x
+      @param[in] y the chart coordinate y
+      @param[out] point returned widget coordinates
     */
     void dataToWidget_(double x, double y, QPoint& point)
     {
@@ -616,7 +623,7 @@ protected:
 
         Sets the visible area to the initial value, such that all data (for the current spec/chrom/...) is shown.
 
-        @param repaint If @em true a repaint is forced. Otherwise only the new area is set.
+        @param[in] repaint If @em true a repaint is forced. Otherwise only the new area is set.
     */
     void resetZoom(bool repaint = true) override
     {
@@ -692,6 +699,14 @@ protected:
     // docu in base class
     void paintGridLines_(QPainter& painter) override;
 
+    /// (Re-)compute TMT reporter-ion annotations for the current spectrum.
+    void updateTMTAnnotations_();
+    /// Remove all annotation items previously added by TMT mode.
+    void removeTMTAnnotations_();
+    /// Vertically stagger the TMT vertical-line labels so neighbouring ones do not overlap horizontally at the
+    /// current zoom level (labels that would overlap are pushed down by whole text-line heights). Cheap; call on zoom.
+    void layoutTMTLabels_();
+
     /// Find peak next to the given position
     PeakIndex findPeakAtPosition_(QPoint);
 
@@ -743,6 +758,14 @@ protected:
     bool ion_ladder_visible_ = true;
     /// annotate interesting peaks with m/z's
     bool draw_interesting_MZs_ = false;
+    /// Active TMT annotation method; UNKNOWN = disabled
+    IsobaricQuantitationMethod::MethodType tmt_method_type_ {IsobaricQuantitationMethod::MethodType::UNKNOWN};
+    /// Raw pointers to Annotation1DItems added by TMT mode (ownership stays in the per-spectrum Annotations1DContainer).
+    /// These stay valid across spectrum navigation because Annotations1DContainer has a move c'tor (no cloning on reallocation).
+    std::vector<Annotation1DItem*> tmt_annotation_items_;
+    /// Spectrum index (within the current layer) that tmt_annotation_items_ were added to; needed to remove them
+    /// from the correct per-spectrum container (the shown spectrum may have changed since they were added).
+    Size tmt_annotation_spectrum_idx_ = 0;
     /// The text box in the upper left corner with the current data coordinates of the cursor
     QTextDocument text_box_content_;
     /// handles pulling/pushing of points to the edges of the widget

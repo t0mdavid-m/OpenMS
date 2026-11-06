@@ -48,7 +48,7 @@ namespace OpenSwath
       else
       {
         // change the member, when the lambda gets called (acts like a callback function)
-        nr_ms1_spectra_ = es.getMetaValue("nr_ms1_spectra");
+        nr_ms1_spectra_ = (size_t)(Int)es.getMetaValue("nr_ms1_spectra");
       }
     };
     return f;
@@ -71,11 +71,11 @@ namespace OpenSwath
       PeakPickerHiRes pp;
       auto t = spec.getType(true);
       MSSpectrum tmp;
-      if (t == MSSpectrum::SpectrumSettings::PROFILE) 
+      if (t == MSSpectrum::SpectrumSettings::SpectrumType::PROFILE) 
       {
         pp.pick(spec, tmp);
       }
-      else if (t == MSSpectrum::SpectrumSettings::CENTROID)
+      else if (t == MSSpectrum::SpectrumSettings::SpectrumType::CENTROID)
       {
         tmp = spec; // make a copy, since deisotopeAndSingleCharge() will modify 
       }
@@ -139,7 +139,7 @@ namespace OpenSwath
   }
 
 
-  void SwathQC::storeJSON(const OpenMS::String& filename)
+  void SwathQC::storeJSON(const std::string& filename)
   {
     using json = nlohmann::json;
 

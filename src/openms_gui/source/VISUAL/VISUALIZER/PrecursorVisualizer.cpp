@@ -44,16 +44,16 @@ namespace OpenMS
 
   void PrecursorVisualizer::update_()
   {
-    mz_->setText(String(temp_.getMZ()).c_str());
-    int_->setText(String(temp_.getIntensity()).c_str());
-    charge_->setText(String(temp_.getCharge()).c_str());
+    mz_->setText(StringUtils::toStr(temp_.getMZ()).c_str());
+    int_->setText(StringUtils::toStr(temp_.getIntensity()).c_str());
+    charge_->setText(StringUtils::toStr(temp_.getCharge()).c_str());
 
-    window_low_->setText(String(temp_.getIsolationWindowLowerOffset()).c_str());
-    window_up_->setText(String(temp_.getIsolationWindowUpperOffset()).c_str());
+    window_low_->setText(StringUtils::toStr(temp_.getIsolationWindowLowerOffset()).c_str());
+    window_up_->setText(StringUtils::toStr(temp_.getIsolationWindowUpperOffset()).c_str());
 
     //actions
     activation_methods_->clear();
-    for (Size i = 0; i < Precursor::SIZE_OF_ACTIVATIONMETHOD; ++i)
+    for (Size i = 0; i < static_cast<Size>(Precursor::ActivationMethod::SIZE_OF_ACTIVATIONMETHOD); ++i)
     {
       QListWidgetItem * item = new QListWidgetItem(activation_methods_);
       item->setText(QString::fromStdString(Precursor::NamesOfActivationMethod[i]));
@@ -76,7 +76,7 @@ namespace OpenMS
       activation_methods_->addItem(item);
     }
 
-    activation_energy_->setText(String(temp_.getActivationEnergy()).c_str());
+    activation_energy_->setText(StringUtils::toStr(temp_.getActivationEnergy()).c_str());
   }
 
   void PrecursorVisualizer::store()
@@ -89,7 +89,7 @@ namespace OpenMS
     ptr_->setIsolationWindowUpperOffset(window_up_->text().toFloat());
 
     ptr_->getActivationMethods().clear();
-    for (UInt i = 0; i < Precursor::SIZE_OF_ACTIVATIONMETHOD; ++i)
+    for (UInt i = 0; i < static_cast<UInt>(Precursor::ActivationMethod::SIZE_OF_ACTIVATIONMETHOD); ++i)
     {
       if (activation_methods_->item(i)->checkState() == Qt::Checked)
       {

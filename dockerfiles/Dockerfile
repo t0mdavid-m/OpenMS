@@ -11,9 +11,10 @@ ARG MAKEFLAGS="-j${NUM_BUILD_CORES}"
 
 
 ### OpenMS base ###
-FROM ubuntu:22.04 AS base
+FROM ubuntu:24.04 AS base
 ARG OPENMS_VERSION_TAG
 ARG CMAKE_VERSION=3.28.1
+ARG TARGETARCH
 
 RUN apt-get update \
     && apt-get install -y software-properties-common \
@@ -30,37 +31,50 @@ RUN apt-get update \
     libglpk-dev \
     libzip-dev \
     zlib1g-dev \
+    libzstd-dev \
     libzip4 \
     zlib1g \
+    # ICU is needed by the .NET SDK/runtime for the openms-thermo-bridge build
+    libicu74 \
     libxerces-c-dev \
     libbz2-dev \
+    libcurl4-openssl-dev \
     libomp-dev \
     libhdf5-dev\
     coinor-libcoinmp-dev \
     libeigen3-dev \
-    libboost-date-time1.74-dev \
-    libboost-iostreams1.74-dev \
-    libboost-regex1.74-dev \
-    libboost-math1.74-dev \
-    libboost-random1.74-dev \
+    # Boost headers only: OpenMS links no compiled Boost library
+    libboost-dev \
     qt6-base-dev \
     libglx-dev \
     libgl1-mesa-dev \
     libqt6opengl6-dev \
-    libqt6svg6-dev \   
+    libqt6svg6-dev \
   && rm -rf /var/lib/apt/lists/* \
   && update-ca-certificates \
   && apt-get update && apt-get install -y --no-install-recommends wget \
-  && wget https://repo1.maven.org/maven2/org/apache/arrow/ubuntu/apache-arrow-apt-source-latest-jammy.deb \
-  && apt-get install -y --no-install-recommends ./apache-arrow-apt-source-latest-jammy.deb \
+  && wget https://packages.apache.org/artifactory/arrow/ubuntu/apache-arrow-apt-source-latest-noble.deb \
+  && apt-get install -y --no-install-recommends ./apache-arrow-apt-source-latest-noble.deb \
+  # Self-heal across Arrow APT key rotations: append the canonical armored KEYS
+  # to the keyring the .deb pins via Signed-By (see issue #9729). wget already
+  # fails the RUN on a bad download, so no extra guard is needed here.
+  && wget -qO- https://downloads.apache.org/arrow/KEYS >> /usr/share/keyrings/apache-arrow-apt-source.asc \
+  # Pin Arrow/Parquet to v23 so build-time dev libs match the runtime SONAME (libarrow2300/libparquet2300)
+  && printf 'Package: libarrow* libparquet*\nPin: version 23.*\nPin-Priority: 999\n' > /etc/apt/preferences.d/arrow \
   && apt-get update && apt-get install -y --no-install-recommends --no-install-suggests libparquet-dev \
-  && rm apache-arrow-apt-source-latest-jammy.deb
+  && rm apache-arrow-apt-source-latest-noble.deb
 
 # installing cmake
 WORKDIR /tmp
-ADD https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.sh cmake.sh
 RUN <<-EOF
     set -eux
+    # Map Docker's TARGETARCH to CMake's architecture naming
+    case "${TARGETARCH}" in
+        amd64) CMAKE_ARCH="x86_64" ;;
+        arm64) CMAKE_ARCH="aarch64" ;;
+        *) echo "Unsupported architecture: ${TARGETARCH}" && exit 1 ;;
+    esac
+    wget https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-${CMAKE_ARCH}.sh -O cmake.sh
     mkdir -p /opt/cmake
     sh cmake.sh --skip-license --prefix=/opt/cmake
     ln -s /opt/cmake/bin/cmake /usr/local/bin/cmake
@@ -68,10 +82,29 @@ RUN <<-EOF
     rm -rf /tmp/*
 EOF
 
+# Install the .NET 8 SDK for the openms-thermo-bridge build (WITH_THERMO_RAW).
+# The bridge's FindDotNetHost.cmake requires the nethost headers/library from
+# the official .NET SDK host pack under /usr/share/dotnet/packs/..., and runs
+# `dotnet publish` to build the managed Thermo wrapper. We use Microsoft's
+# dotnet-install.sh because Ubuntu's own dotnet-sdk-8.0 installs to /usr/lib/dotnet
+# and does not provide the host pack in the expected layout.
+# WITH_THERMO_RAW is ON on every Linux target we build (amd64 and aarch64), so
+# the SDK is needed on both; dotnet-install.sh auto-detects the host architecture.
+ENV DOTNET_ROOT=/usr/share/dotnet
+ENV PATH="${DOTNET_ROOT}:${PATH}"
+RUN <<-EOF
+    set -eux
+    wget https://dot.net/v1/dotnet-install.sh -O /tmp/dotnet-install.sh
+    chmod +x /tmp/dotnet-install.sh
+    /tmp/dotnet-install.sh --channel 8.0 --install-dir "${DOTNET_ROOT}"
+    ln -s "${DOTNET_ROOT}/dotnet" /usr/local/bin/dotnet
+    rm -f /tmp/dotnet-install.sh
+EOF
+
 # The main reason we're pulling this in is to make sure that the metadata
 # below is consistently formatted for releases irrespective of the base image
 LABEL version="${OPENMS_VERSION_TAG}"
-LABEL software.version="${OPENMS_VERSION_TAG}-Ubuntu22.04"
+LABEL software.version="${OPENMS_VERSION_TAG}-Ubuntu24.04"
 LABEL org.opencontainers.image.source https://github.com/OpenMS/OpenMS
 
 
@@ -91,27 +124,57 @@ RUN mkdir -p ${THIRDPARTY_DIR}
 RUN <<-EOF
     set -eux
 
+    # Map Docker's TARGETARCH to THIRDPARTY directory naming
+    case "${TARGETARCH}" in
+        amd64) ARCH_DIR="x86_64" ;;
+        arm64) ARCH_DIR="aarch64" ;;
+        *) echo "Unsupported architecture: ${TARGETARCH}" && exit 1 ;;
+    esac
+
     ALL_DIR=THIRDPARTY/All
-    LINUX_DIR=THIRDPARTY/Linux/x86_64
+    LINUX_DIR=THIRDPARTY/Linux/${ARCH_DIR}
     if [ ! -d "$ALL_DIR" ] || [ ! -d "$LINUX_DIR" ]; then
       git submodule update --depth=1 --init THIRDPARTY
     fi
 
     # copying only the binaries that are relevant to Linux
-    cp -vr "$ALL_DIR"/* "$LINUX_DIR"/* ${THIRDPARTY_DIR}
+    # Copy All directory (platform-independent files)
+    if [ -d "$ALL_DIR" ]; then
+      cp -vr "$ALL_DIR"/* ${THIRDPARTY_DIR}
+    fi
+    
+    # Copy architecture-specific binaries if they exist
+    if [ -d "$LINUX_DIR" ]; then
+      cp -vr "$LINUX_DIR"/* ${THIRDPARTY_DIR}
+    else
+      echo "Warning: No architecture-specific binaries found at $LINUX_DIR"
+      echo "Building without third-party tools for ${ARCH_DIR}"
+    fi
+    
     rm -rf THIRDPARTY
 EOF
 
 # adding thirdparty binaries to the PATH so they will be picked up by the build system
 ENV PATH="${THIRDPARTY_DIR}/LuciPHOr2:${THIRDPARTY_DIR}/MSGFPlus:${THIRDPARTY_DIR}/ThermoRawFileParser:${THIRDPARTY_DIR}/Comet:${THIRDPARTY_DIR}/Fido:${THIRDPARTY_DIR}/MaRaCluster:${THIRDPARTY_DIR}/Percolator:${THIRDPARTY_DIR}/SpectraST:${THIRDPARTY_DIR}/Sage:${PATH}"
-RUN cmake \
-    -DQt6_DIR="/usr/lib/x86_64-linux-gnu/cmake/Qt6" \
-    -DCMAKE_BUILD_TYPE='Release' \
-    -DCMAKE_PREFIX_PATH="/usr/;/usr/local" \
-    -DCMAKE_INSTALL_PREFIX=${INSTALL_DIR} \
-    -DBOOST_USE_STATIC=OFF \
-    -S ${SOURCE_DIR} \
-    -B ${BUILD_DIR}
+RUN <<-EOF
+    set -eux
+    # Map Docker's TARGETARCH to Debian multiarch tuple
+    case "${TARGETARCH}" in
+        amd64) DEB_ARCH="x86_64-linux-gnu" ;;
+        arm64) DEB_ARCH="aarch64-linux-gnu" ;;
+        *) echo "Unsupported architecture: ${TARGETARCH}" && exit 1 ;;
+    esac
+    
+    # dependencies from the apt packages above, not from vcpkg
+    cmake \
+        -DOPENMS_USE_VCPKG=OFF \
+        -DQt6_DIR="/usr/lib/${DEB_ARCH}/cmake/Qt6" \
+        -DCMAKE_BUILD_TYPE='Release' \
+        -DCMAKE_PREFIX_PATH="/usr/;/usr/local" \
+        -DCMAKE_INSTALL_PREFIX=${INSTALL_DIR} \
+        -S ${SOURCE_DIR} \
+        -B ${BUILD_DIR}
+EOF
 
 WORKDIR ${BUILD_DIR}
 RUN make all
@@ -119,27 +182,59 @@ RUN make install/strip
 
 
 ### OpenMS library ###
-FROM ubuntu:22.04 AS library
+FROM ubuntu:24.04 AS library
 ARG INSTALL_DIR
+ARG TARGETARCH
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends --no-install-suggests \
+    ca-certificates \
+    wget \
     qt6-base-dev \
     libqt6opengl6 \
     libsvm3 \
     libzip4 \
     zlib1g \
+    libzstd1 \
     libbz2-1.0 \
+    libcurl4 \
     libgomp1 \
     libqt6svg6 \
     libxerces-c3.2 \
     coinor-libcoinmp1v5 \
-    libboost-date-time1.74-dev  \
-    libboost-iostreams1.74-dev \
-    libboost-regex1.74-dev \
-    libboost-math1.74-dev \
-    libboost-random1.74-dev \
+    # ICU is required by the .NET runtime that hosts the openms-thermo-bridge
+    libicu74 \
+  && wget https://packages.apache.org/artifactory/arrow/ubuntu/apache-arrow-apt-source-latest-noble.deb \
+  && apt-get install -y --no-install-recommends ./apache-arrow-apt-source-latest-noble.deb \
+  # Self-heal across Arrow APT key rotations: append the canonical armored KEYS
+  # to the keyring the .deb pins via Signed-By (see issue #9729). wget already
+  # fails the RUN on a bad download, so no extra guard is needed here.
+  && wget -qO- https://downloads.apache.org/arrow/KEYS >> /usr/share/keyrings/apache-arrow-apt-source.asc \
+  # Pin Arrow/Parquet to v23 so these runtime libs match the build-time dev libs
+  # installed by the same pin in the base stage (see #9890)
+  && printf 'Package: libarrow* libparquet*\nPin: version 23.*\nPin-Priority: 999\n' > /etc/apt/preferences.d/arrow \
+  && apt-get update && apt-get install -y --no-install-recommends --no-install-suggests \
+    libarrow2300 \
+    libparquet2300 \
+  && rm apache-arrow-apt-source-latest-noble.deb \
+  # Install the .NET 8 runtime so the openms-thermo-bridge native library can host
+  # the managed Thermo RawFileReader at runtime (managed assemblies are shipped
+  # under ${INSTALL_DIR}/lib/openms_thermo_bridge/managed). WITH_THERMO_RAW is ON
+  # on every Linux target we build (amd64 and aarch64), so both need the runtime.
+  # A runtime (not SDK) install is sufficient here; dotnet-install.sh auto-detects
+  # the host architecture.
+  && wget https://dot.net/v1/dotnet-install.sh -O /tmp/dotnet-install.sh \
+  && chmod +x /tmp/dotnet-install.sh \
+  && /tmp/dotnet-install.sh --channel 8.0 --runtime dotnet --install-dir /usr/share/dotnet \
+  && ln -s /usr/share/dotnet/dotnet /usr/local/bin/dotnet \
+  && rm -f /tmp/dotnet-install.sh \
+  && apt-get purge -y wget && apt-get autoremove -y \
   && rm -rf /var/lib/apt/lists/*
+
+# Make the .NET runtime discoverable by the bridge's nethost/hostfxr at runtime.
+# Propagates to the tools, tools-thirdparty and test stages (all derived from library).
+ENV DOTNET_ROOT=/usr/share/dotnet
+ENV PATH="${DOTNET_ROOT}:${PATH}"
 
 COPY --from=build ${INSTALL_DIR}/lib ${INSTALL_DIR}/lib
 COPY --from=build ${INSTALL_DIR}/include ${INSTALL_DIR}/include
@@ -154,6 +249,13 @@ ARG INSTALL_DIR
 
 COPY --from=build ${INSTALL_DIR}/bin ${INSTALL_DIR}/bin
 ENV PATH="${INSTALL_DIR}/bin:${PATH}"
+
+# Ensure a writable home directory for config files (e.g., UpdateCheck .ver files).
+# Without this, $HOME may resolve to / in CI environments, causing tools to crash
+# when trying to create $HOME/.config/OpenMS.
+# This ENV propagates to all child stages (tools-thirdparty, test).
+RUN mkdir -p /app && chmod -R 755 /app
+ENV HOME=/app
 
 LABEL software="OpenMS (tools)"
 
@@ -193,20 +295,28 @@ ARG SOURCE_DIR
 ARG BUILD_DIR
 ARG NUM_BUILD_CORES=8
 ARG CMAKE_VERSION=3.28.1
+ARG TARGETARCH
 
 RUN apt-get update \ 
     && apt-get install -y --no-install-recommends --no-install-suggests \
-    # we need Xvfb to run a small subset of tests (eg. TOPP_INIUpdater)
+    # we need Xvfb to run a small subset of GUI tests (eg. TOPPView_test)
     xvfb \
     # needed for TSGDialog_test and TOPPView_test
     libqt6test6 \
+    wget \
   && rm -rf /var/lib/apt/lists/*
 
 # installing cmake
 WORKDIR /tmp
-ADD https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.sh cmake.sh
 RUN <<-EOF
     set -eux
+    # Map Docker's TARGETARCH to CMake's architecture naming
+    case "${TARGETARCH}" in
+        amd64) CMAKE_ARCH="x86_64" ;;
+        arm64) CMAKE_ARCH="aarch64" ;;
+        *) echo "Unsupported architecture: ${TARGETARCH}" && exit 1 ;;
+    esac
+    wget https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-${CMAKE_ARCH}.sh -O cmake.sh
     mkdir -p /opt/cmake
     sh cmake.sh --skip-license --prefix=/opt/cmake
     ln -s /opt/cmake/bin/cmake /usr/local/bin/cmake

@@ -30,29 +30,29 @@ namespace OpenMS
   public:
 
     /// Types of Percolator scores
-    enum ScoreType { QVALUE, POSTERRPROB, SCORE, SIZE_OF_SCORETYPE };
+    enum class ScoreType { QVALUE, POSTERRPROB, SCORE, SIZE_OF_SCORETYPE };
 
     /// Names of Percolator scores (to match ScoreType)
-    static const std::string score_type_names[SIZE_OF_SCORETYPE];
+    static const std::string score_type_names[static_cast<size_t>(ScoreType::SIZE_OF_SCORETYPE)];
 
     /// Return a score type given its name
-    static enum ScoreType getScoreType(String score_type_name);
+    static ScoreType getScoreType(std::string score_type_name);
 
     /// Constructor
     PercolatorOutfile();
 
     /// Loads a Percolator output file
-    void load(const String& filename, ProteinIdentification& proteins,
+    void load(const std::string& filename, ProteinIdentification& proteins,
               PeptideIdentificationList& peptides,
               SpectrumMetaDataLookup& lookup,
-              enum ScoreType output_score = QVALUE);
+              ScoreType output_score = ScoreType::QVALUE);
 
   private:
     /// Converts the peptide string to an 'AASequence' instance
-    void getPeptideSequence_(String peptide, AASequence& seq) const;
+    void getPeptideSequence_(std::string peptide, AASequence& seq) const;
 
     /// Resolve cases where N-terminal modifications may be misassigned to the first residue (for X! Tandem results)
-    void resolveMisassignedNTermMods_(String& peptide) const;
+    void resolveMisassignedNTermMods_(std::string& peptide) const;
   };
 
 } // namespace OpenMS

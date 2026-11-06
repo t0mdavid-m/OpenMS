@@ -11,8 +11,8 @@
 // define to get timings for connected components
 //#define INFERENCE_BENCH
 
-#include <OpenMS/ANALYSIS/ID/MessagePasserFactory.h> //included in BPI
 #include <OpenMS/CONCEPT/Types.h>
+#include <OpenMS/CONCEPT/Exception.h>
 #include <OpenMS/KERNEL/StandardTypes.h>
 #include <OpenMS/METADATA/ExperimentalDesign.h>
 #include <OpenMS/METADATA/ProteinIdentification.h>
@@ -77,7 +77,7 @@ namespace OpenMS
     };
 
     /// an (currently unmodified) peptide sequence
-    BOOST_STRONG_TYPEDEF(String, Peptide);
+    BOOST_STRONG_TYPEDEF(std::string, Peptide);
 
     /// in which run a PSM was observed
     BOOST_STRONG_TYPEDEF(Size, RunIndex);
@@ -134,7 +134,7 @@ namespace OpenMS
       template < typename Edge, typename Graph >
       void examine_edge(Edge e, const Graph & tg)
       {
-        if (m.find(e.m_target) == m.end())
+        if (!m.contains(e.m_target))
         {
           next_v = boost::add_vertex(tg[e.m_target], gs.back());
           m[e.m_target] = next_v;
@@ -156,43 +156,43 @@ namespace OpenMS
     ///@brief Visits nodes in the boost graph (ptrs to an ID Object) and depending on their type creates a label
     /// e.g. for printing to dot format
     class LabelVisitor:
-        public boost::static_visitor<OpenMS::String>
+        public boost::static_visitor<std::string>
     {
     public:
 
-      OpenMS::String operator()(const PeptideHit* pep) const
+      std::string operator()(const PeptideHit* pep) const
       {
         return pep->getSequence().toString() + "_" + pep->getCharge();
       }
 
-      OpenMS::String operator()(const ProteinHit* prot) const
+      std::string operator()(const ProteinHit* prot) const
       {
         return prot->getAccession();
       }
 
-      OpenMS::String operator()(const ProteinGroup& /*protgrp*/) const
+      std::string operator()(const ProteinGroup& /*protgrp*/) const
       {
         return "PG";
       }
 
-      OpenMS::String operator()(const PeptideCluster& /*pc*/) const
+      std::string operator()(const PeptideCluster& /*pc*/) const
       {
         return "PepClust";
       }
 
-      OpenMS::String operator()(const Peptide& peptide) const
+      std::string operator()(const Peptide& peptide) const
       {
         return peptide;
       }
 
-      OpenMS::String operator()(const RunIndex& ri) const
+      std::string operator()(const RunIndex& ri) const
       {
-        return "rep" + String(ri);
+        return "rep" + StringUtils::toStr(ri);
       }
 
-      OpenMS::String operator()(const Charge& chg) const
+      std::string operator()(const Charge& chg) const
       {
-        return "chg" + String(chg);
+        return "chg" + StringUtils::toStr(chg);
       }
 
     };
@@ -312,7 +312,9 @@ namespace OpenMS
 
     /// @brief Visits nodes in the boost graph (either ptrs to an ID Object or some lightweight surrogates)
     /// and depending on their type gets the score (usually the posterior) plus if it is a decoy or a target.
-    /// If not known or not defined, returns (-1.0, false)
+    /// @throw Exception::MissingInformation if a hit's target/decoy status is unknown (the
+    ///        "target_decoy" meta value is not set; run PeptideIndexer first). Previously a
+    ///        missing value was silently misclassified as a decoy.
     class GetScoreTgTVisitor:
     public boost::static_visitor<std::pair<double,bool>>
         {
@@ -320,12 +322,25 @@ namespace OpenMS
 
           std::pair<double,bool> operator()(PeptideHit* pep) const
           {
-            return {pep->getScore(), pep->getMetaValue("target_decoy").toString()[0] == 't'};
+            const PeptideHit::TargetDecoyType td = pep->getTargetDecoyType();
+            if (td == PeptideHit::TargetDecoyType::UNKNOWN)
+            {
+              throw Exception::MissingInformation(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
+                "PeptideHit lacks the 'target_decoy' meta value (run PeptideIndexer first); cannot compute FDR.");
+            }
+            // TARGET_DECOY counts as target, consistent with FalseDiscoveryRate
+            return {pep->getScore(), td != PeptideHit::TargetDecoyType::DECOY};
           }
 
           std::pair<double,bool> operator()(ProteinHit* prot) const
           {
-            return {prot->getScore(), prot->getMetaValue("target_decoy").toString()[0] == 't'};
+            const ProteinHit::TargetDecoyType td = prot->getTargetDecoyType();
+            if (td == ProteinHit::TargetDecoyType::UNKNOWN)
+            {
+              throw Exception::MissingInformation(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
+                "ProteinHit lacks the 'target_decoy' meta value (run PeptideIndexer first); cannot compute FDR.");
+            }
+            return {prot->getScore(), td == ProteinHit::TargetDecoyType::TARGET};
           }
 
           std::pair<double,bool> operator()(ProteinGroup& pg) const
@@ -381,12 +396,12 @@ namespace OpenMS
     /// This has no effect on the graph itself.
     /// @pre Graph must contain ProteinGroup nodes (e.g. with clusterIndistProteinsAndPeptides).
     /// Otherwise it does nothing and you should use calculateAndAnnotateIndistProteins instead.
-    /// @param addSingletons if you want to annotate groups with just one protein entry
+    /// @param[in] addSingletons if you want to annotate groups with just one protein entry
     void annotateIndistProteins(bool addSingletons = true);
 
     /// Annotate indistinguishable proteins by adding the groups to the underlying
     /// ProteinIdentification::ProteinGroups object. This has no effect on the graph itself.
-    /// @param addSingletons if you want to annotate groups with just one protein entry
+    /// @param[in] addSingletons if you want to annotate groups with just one protein entry
     void calculateAndAnnotateIndistProteins(bool addSingletons = true);
 
     /// Splits the initialized graph into connected components and clears it.
@@ -396,8 +411,10 @@ namespace OpenMS
     /// Removes all edges from a peptide (and its PSMs) to its parent protein groups (and its proteins)
     /// except for the best protein group.
     /// @pre Graph must contain PeptideCluster nodes (e.g. with clusterIndistProteinsAndPeptides).
-    /// @param removeAssociationsInData Also removes the corresponding PeptideEvidences in the underlying
+    /// @param[in] removeAssociationsInData Also removes the corresponding PeptideEvidences in the underlying
     ///     ID data structure. Only deactivate if you know what you are doing.
+    /// @throws Exception::MissingInformation if a protein hit has no target/decoy annotation.
+    /// @throws Exception::InvalidValue if a protein hit has an unsupported target/decoy annotation.
     void resolveGraphPeptideCentric(bool removeAssociationsInData = true);
 
 
@@ -406,7 +423,7 @@ namespace OpenMS
     Size getNrConnectedComponents();
 
     /// @brief Returns a specific connected component of the graph as a graph itself
-    /// @param cc the index of the component
+    /// @param[in] cc the index of the component
     /// @return the component as graph
     const Graph& getComponent(Size cc);
 
@@ -418,29 +435,29 @@ namespace OpenMS
     //void buildExtendedGraph(bool use_all_psms, std::pair<int,int> chargeRange, unsigned int nrReplicates);
 
     /// @brief Prints a graph (component or if not split, the full graph) in graphviz (i.e. dot) format
-    /// @param out an ostream to print to
-    /// @param fg the graph to print
+    /// @param[in] out an ostream to print to
+    /// @param[in] fg the graph to print
     static void printGraph(std::ostream& out, const Graph& fg);
 
     /// @brief Searches for all upstream nodes from a (set of) start nodes that are lower
     ///    or equal than a given level. The ordering is the same as in the IDPointer variant typedef.
-    /// @param q a queue of start nodes
-    /// @param graph the graph to look in (q has to be part of it)
-    /// @param lvl the level to start reporting from
-    /// @param stop_at_first do you want to stop at the first node <= lvl or also report its
+    /// @param[in] q a queue of start nodes
+    /// @param[in] graph the graph to look in (q has to be part of it)
+    /// @param[in] lvl the level to start reporting from
+    /// @param[in] stop_at_first do you want to stop at the first node <= lvl or also report its
     ///    upstream "predecessors"
-    /// @param result vector of reported nodes
+    /// @param[in] result vector of reported nodes
     void getUpstreamNodesNonRecursive(std::queue<vertex_t>& q, const Graph& graph, int lvl,
                                       bool stop_at_first, std::vector<vertex_t>& result);
 
     /// @brief Searches for all downstream nodes from a (set of) start nodes that are higher
     ///    or equal than a given level. The ordering is the same as in the IDPointer variant typedef.
-    /// @param q a queue of start nodes
-    /// @param graph the graph to look in (q has to be part of it)
-    /// @param lvl the level to start reporting from
-    /// @param stop_at_first do you want to stop at the first node >= lvl or also report its
+    /// @param[in] q a queue of start nodes
+    /// @param[in] graph the graph to look in (q has to be part of it)
+    /// @param[in] lvl the level to start reporting from
+    /// @param[in] stop_at_first do you want to stop at the first node >= lvl or also report its
     ///    upstream "predecessors"
-    /// @param result vector of reported nodes
+    /// @param[in] result vector of reported nodes
     void getDownstreamNodesNonRecursive(std::queue<vertex_t>& q, const Graph& graph, int lvl,
                                         bool stop_at_first, std::vector<vertex_t>& result);
 
@@ -524,10 +541,10 @@ namespace OpenMS
 
     /// Initialize and store the graph
     /// IMPORTANT: Once the graph is built, editing members like (protein/peptide)_hits_ will invalidate it!
-    /// @param proteins ProteinIdentification object storing IDs and groups
-    /// @param idedSpectra vector of ProteinIdentifications with links to the proteins and PSMs in its PeptideHits
-    /// @param use_top_psms Nr of top PSMs used per spectrum (<= 0 means all)
-    /// @param best_psms_annotated Are the PSMs annotated with the "best_per_peptide" meta value. Otherwise all are
+    /// @param[in] proteins ProteinIdentification object storing IDs and groups
+    /// @param[in] idedSpectra vector of ProteinIdentifications with links to the proteins and PSMs in its PeptideHits
+    /// @param[in] use_top_psms Nr of top PSMs used per spectrum (<= 0 means all)
+    /// @param[in] best_psms_annotated Are the PSMs annotated with the "best_per_peptide" meta value. Otherwise all are
     ///  taken into account.
     /// @todo we could include building the graph in important "main" functions like inferPosteriors
     /// to make the methods safer, but it is also nice to be able to reuse the graph
@@ -620,4 +637,3 @@ namespace OpenMS
     bool operator==(const IDBoostGraph::ProteinGroup& lhs, const IDBoostGraph::ProteinGroup& rhs);
   } //namespace Internal
 } //namespace OpenMS
-

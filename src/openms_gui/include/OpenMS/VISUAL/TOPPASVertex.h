@@ -45,7 +45,7 @@
 // OpenMS_GUI config
 #include <OpenMS/VISUAL/OpenMS_GUIConfig.h>
 
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 
 #include <QPainter>
 #include <QPainterPath>
@@ -113,7 +113,7 @@ public:
 		  /*
 		  @brief Check length of filename and throw Exception::FileNotWritable() if too long
 		
-		  @param filename Full path to file (using relative paths will circumvent the effectiveness)
+		  @param[in] filename Full path to file (using relative paths will circumvent the effectiveness)
 		  @throw Exception::FileNotWritable() if too long (>=255 chars)
 		  */
 		  void check_(const QString& filename);
@@ -172,7 +172,7 @@ public:
     /// get the round package for this node from upstream
     /// -- indices in 'RoundPackage' mapping are thus referring to incoming edges of this node
     /// returns false on failure
-    bool buildRoundPackages(RoundPackages & pkg, String & error_msg);
+    bool buildRoundPackages(RoundPackages & pkg, std::string & error_msg);
 
     /// check if all upstream nodes are ready to go ( 'finished_' is true)
     bool isUpstreamFinished() const;
@@ -216,7 +216,7 @@ public:
     /// Sets the topological sort number (overridden in tool and output vertices)
     virtual void setTopoNr(UInt nr);
     /// Resets the status
-    /// @param reset_all_files Not used in this implementation, but in derived classes
+    /// @param[in] reset_all_files Not used in this implementation, but in derived classes
     virtual void reset(bool reset_all_files = false);
     /// Marks this node (and everything further downstream) as unreachable. Overridden behavior in mergers.
     virtual void markUnreachable();
@@ -235,7 +235,7 @@ public:
     void setRecycling(const bool is_enabled);
 
     // get the name of the vertex (to be overridden by derived classes)
-    virtual String getName() const = 0;
+    virtual std::string getName() const = 0;
 
     /**
       @brief gets filenames for a certain output parameter (from this vertex), for a certain TOPPAS round
@@ -331,10 +331,10 @@ protected:
     /// Moves the target pos of the edge which is just being created to @p pos
     virtual void moveNewEdgeTo_(const QPointF & pos);
     /// Returns a three character string (i.e. 001 instead of 1) for the given @p number
-    String get3CharsNumber_(UInt number) const;
+    std::string get3CharsNumber_(UInt number) const;
 
     /// Displays the debug output @p message, if TOPPAS_DEBUG is defined
-    void debugOut_(const String &
+    void debugOut_(const std::string &
 #ifdef TOPPAS_DEBUG
                    message
 #endif

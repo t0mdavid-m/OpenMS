@@ -6,6 +6,8 @@
 // $Authors: Marc Sturm $
 // --------------------------------------------------------------------------
 
+#include <OpenMS/config.h> // for WITH_WNETALIGN
+
 #include <OpenMS/ANALYSIS/DECHARGING/FeatureDeconvolution.h>
 #include <OpenMS/ANALYSIS/DECHARGING/MetaboliteFeatureDeconvolution.h>
 #include <OpenMS/ANALYSIS/ID/AScore.h>
@@ -30,10 +32,15 @@
 #include <OpenMS/ANALYSIS/MAPMATCHING/FeatureGroupingAlgorithmLabeled.h>
 #include <OpenMS/ANALYSIS/MAPMATCHING/FeatureGroupingAlgorithmQT.h>
 #include <OpenMS/ANALYSIS/MAPMATCHING/FeatureGroupingAlgorithmUnlabeled.h>
+// only part of libOpenMS when the WNet alignment is built
+#ifdef WITH_WNETALIGN
+#include <OpenMS/ANALYSIS/MAPMATCHING/FeatureGroupingAlgorithmWNet.h>
+#endif
 #include <OpenMS/ANALYSIS/MAPMATCHING/LabeledPairFinder.h>
 #include <OpenMS/ANALYSIS/MAPMATCHING/MapAlignmentAlgorithmIdentification.h>
 #include <OpenMS/ANALYSIS/MAPMATCHING/MapAlignmentAlgorithmPoseClustering.h>
 #include <OpenMS/ANALYSIS/MAPMATCHING/MapAlignmentAlgorithmTreeGuided.h>
+#include <OpenMS/ANALYSIS/MAPMATCHING/PipEchoAlgorithm.h>
 #include <OpenMS/ANALYSIS/MAPMATCHING/PoseClusteringAffineSuperimposer.h>
 #include <OpenMS/ANALYSIS/MAPMATCHING/PoseClusteringShiftSuperimposer.h>
 #include <OpenMS/ANALYSIS/MAPMATCHING/QTClusterFinder.h>
@@ -58,6 +65,8 @@
 #include <OpenMS/ANALYSIS/QUANTITATION/TMTSixPlexQuantitationMethod.h>
 #include <OpenMS/ANALYSIS/QUANTITATION/TMTSixteenPlexQuantitationMethod.h>
 #include <OpenMS/ANALYSIS/QUANTITATION/TMTTenPlexQuantitationMethod.h>
+#include <OpenMS/ANALYSIS/QUANTITATION/TMTThirtyTwoPlexQuantitationMethod.h>
+#include <OpenMS/ANALYSIS/QUANTITATION/TMTThirtyFivePlexQuantitationMethod.h>
 #include <OpenMS/ML/SVM/SimpleSVM.h>
 #include <OpenMS/APPLICATIONS/MapAlignerBase.h>
 #include <OpenMS/CHEMISTRY/MASSDECOMPOSITION/MassDecompositionAlgorithm.h>
@@ -88,7 +97,6 @@
 #include <OpenMS/PROCESSING/SMOOTHING/GaussFilter.h>
 #include <OpenMS/PROCESSING/SMOOTHING/LowessSmoothing.h>
 #include <OpenMS/PROCESSING/SMOOTHING/SavitzkyGolayFilter.h>
-#include <OpenMS/PROCESSING/RESAMPLING/LinearResampler.h>
 #include <OpenMS/PROCESSING/FILTERING/NLargest.h>
 #include <OpenMS/PROCESSING/SCALING/Normalizer.h>
 #include <OpenMS/PROCESSING/SPECTRAMERGING/SpectraMerger.h>
@@ -121,9 +129,12 @@
 #include <OpenMS/FEATUREFINDER/IsotopeModel.h>
 #include <OpenMS/FEATUREFINDER/MaxLikeliFitter1D.h>
 #include <OpenMS/FEATUREFINDER/MultiplexDeltaMassesGenerator.h>
+#include <OpenMS/FEATUREFINDER/MultiplexResolverAlgorithm.h>
 #include <OpenMS/FEATUREFINDER/TraceFitter.h>
 #include <OpenMS/PROCESSING/CENTROIDING/PeakPickerHiRes.h>
 #include <OpenMS/PROCESSING/CENTROIDING/PeakPickerIterative.h>
+
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 
 // those are only added if GUI is enabled
 #ifdef WITH_GUI
@@ -160,9 +171,9 @@ void foo()
 //**********************************************************************************
 //Helper method - use this method to generate the actual parameter documentation
 //**********************************************************************************
-void writeParameters(const String& class_name, const Param& param, bool table_only = false)
+void writeParameters(const std::string& class_name, const Param& param, bool table_only = false)
 {
-  const String filename = String("output/OpenMS_") + class_name + ".parameters";
+  const std::string filename = std::string("output/OpenMS_") + class_name + ".parameters";
   ofstream f(filename.c_str());
 
   if (!f)
@@ -177,7 +188,7 @@ void writeParameters(const String& class_name, const Param& param, bool table_on
   }
   f << R"(<table class="doxtable" border="1" width="100%" cellpadding="4">)" << endl;
   f << "<tr><th>Name</th><th>Type</th><th>Default</th><th>Restrictions</th><th>Description</th></tr>" << endl;
-  String type, description, restrictions;
+  std::string type, description, restrictions;
   for (Param::ParamIterator it = param.begin(); it != param.end(); ++it)
   {
     restrictions = "";
@@ -193,7 +204,7 @@ void writeParameters(const String& class_name, const Param& param, bool table_on
       bool first = true;
       if (it->min_int != -(numeric_limits<Int>::max)())
       {
-        restrictions += String("min: ") + it->min_int;
+        restrictions += "min: " + StringUtils::toStr(it->min_int);
         first = false;
       }
       if (it->max_int != (numeric_limits<Int>::max)())
@@ -201,8 +212,8 @@ void writeParameters(const String& class_name, const Param& param, bool table_on
         if (!first)
         {
           restrictions += ' ';
-        }          
-        restrictions += String("max: ") + it->max_int;
+        }
+        restrictions += "max: " + StringUtils::toStr(it->max_int);
       }
     }
     else if (it->value.valueType() == ParamValue::DOUBLE_VALUE || it->value.valueType() == ParamValue::DOUBLE_LIST)
@@ -215,14 +226,14 @@ void writeParameters(const String& class_name, const Param& param, bool table_on
       bool first = true;
       if (it->min_float != -(numeric_limits<double>::max)())
       {
-        restrictions += String("min: ") + it->min_float;
+        restrictions += "min: " + StringUtils::toStr(it->min_float);
         first = false;
       }
       if (it->max_float != (numeric_limits<double>::max)())
       {
         if (!first)
           restrictions += ' ';
-        restrictions += String("max: ") + it->max_float;
+        restrictions += "max: " + StringUtils::toStr(it->max_float);
       }
     }
     else if (it->value.valueType() == ParamValue::STRING_VALUE || it->value.valueType() == ParamValue::STRING_LIST)
@@ -234,8 +245,7 @@ void writeParameters(const String& class_name, const Param& param, bool table_on
       //restrictions
       if (!it->valid_strings.empty())
       {
-        String valid_strings;
-        valid_strings.concatenate(it->valid_strings.begin(), it->valid_strings.end(), ", ");
+        std::string valid_strings = StringUtils::concatenate(it->valid_strings, ", ");
         restrictions += valid_strings;
       }
     }
@@ -245,17 +255,17 @@ void writeParameters(const String& class_name, const Param& param, bool table_on
     }
     //replace #, @ and newline in description
     description = param.getDescription(it.getName());
-    description.substitute("@", "XXnot_containedXX");
-    description.substitute("XXnot_containedXX", "@@");
-    description.substitute("#", "XXnot_containedXX");
-    description.substitute("XXnot_containedXX", "@#");
-    description.substitute("\n", "<BR>");
+    StringUtils::substitute(description, "@", "XXnot_containedXX");
+    StringUtils::substitute(description, "XXnot_containedXX", "@@");
+    StringUtils::substitute(description, "#", "XXnot_containedXX");
+    StringUtils::substitute(description, "XXnot_containedXX", "@#");
+    StringUtils::substitute(description, "\n", "<BR>");
 
     //create tooltips for sections if they are documented
-    String name = it.getName();
-    vector<String> parts;
-    name.split(':', parts);
-    String prefix = "";
+    std::string name = it.getName();
+    vector<std::string> parts;
+    StringUtils::split(name, ':', parts);
+    std::string prefix;
     for (Size i = 0; i + 1 < parts.size(); ++i)
     {
       if (i == 0)
@@ -266,26 +276,26 @@ void writeParameters(const String& class_name, const Param& param, bool table_on
       {
         prefix = prefix + ":" + parts[i];
       }
-      String docu = param.getSectionDescription(prefix);
+      std::string docu = param.getSectionDescription(prefix);
       if (docu != "")
       {
-        parts[i] = String("<span title=\"") + docu + "\">" + parts[i] + "</span>";
+        parts[i] = std::string("<span title=\"") + docu + "\">" + parts[i] + "</span>";
       }
     }
     if (parts.size() != 0)
     {
-      name.concatenate(parts.begin(), parts.end(), ":");
+      name = StringUtils::concatenate(parts, ":");
     }
 
     //replace # and @ in values
-    String value = it->value.toString(true);
-    value.substitute("@", "XXnot_containedXX");
-    value.substitute("XXnot_containedXX", "@@");
-    value.substitute("#", "XXnot_containedXX");
-    value.substitute("XXnot_containedXX", "@#");
+    std::string value = it->value.toString(true);
+    StringUtils::substitute(value, "@", "XXnot_containedXX");
+    StringUtils::substitute(value, "XXnot_containedXX", "@@");
+    StringUtils::substitute(value, "#", "XXnot_containedXX");
+    StringUtils::substitute(value, "XXnot_containedXX", "@#");
 
     //make the advanced parameters cursive, the normal ones bold
-    String style = "b";
+    std::string style = "b";
     if (it->tags.count("advanced") == 1)
       style = "i";
 
@@ -367,6 +377,10 @@ int main(int argc, char** argv)
   DOCME(FeatureGroupingAlgorithmQT);
   DOCME(FeatureGroupingAlgorithmKD);
   DOCME(FeatureGroupingAlgorithmUnlabeled);
+#ifdef WITH_WNETALIGN
+  DOCME(FeatureGroupingAlgorithmWNet);
+#endif
+  DOCME(PipEchoAlgorithm);
   DOCME(MapAlignmentAlgorithmIdentification);
   DOCME(MapAlignmentAlgorithmTreeGuided);
   DOCME(MassTraceDetection);
@@ -383,10 +397,11 @@ int main(int argc, char** argv)
   DOCME(TMTTenPlexQuantitationMethod);
   DOCME(TMTSixteenPlexQuantitationMethod);
   DOCME(TMTEighteenPlexQuantitationMethod);
+  DOCME(TMTThirtyTwoPlexQuantitationMethod);
+  DOCME(TMTThirtyFivePlexQuantitationMethod);
   DOCME(ItraqEightPlexQuantitationMethod);
   DOCME(ItraqFourPlexQuantitationMethod);
   DOCME(LabeledPairFinder);
-  DOCME(LinearResampler);
   DOCME(MSPFile);
   DOCME(MapAlignmentAlgorithmPoseClustering);
   DOCME(SpectrumAnnotator);
@@ -397,6 +412,7 @@ int main(int argc, char** argv)
   DOCME(MRMFeatureFinderScoring);
   DOCME(MRMTransitionGroupPicker);
   DOCME(MultiplexDeltaMassesGenerator);
+  DOCME(MultiplexResolverAlgorithm);
   DOCME(NucleicAcidSpectrumGenerator);
   DOCME(NLargest);
   DOCME(Normalizer);

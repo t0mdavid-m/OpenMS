@@ -140,7 +140,7 @@ namespace OpenMS
         {
           // The same three spellings IsobaricQuantitationMethod treats as "no contribution".
           std::string t;
-          for (char c : tok) if (!std::isspace(static_cast<unsigned char>(c))) t += std::toupper(static_cast<unsigned char>(c));
+          for (char c : tok) if (!std::isspace(static_cast<unsigned char>(c))) t += static_cast<char>(std::toupper(static_cast<unsigned char>(c))); // the char: OpenMS 3.6 makes std::string += int append the number
           if (t.empty() || t == "NA" || t == "-1") continue;
           try { if (std::stod(t) != 0.0) return false; }
           catch (...) { return false; }   // unparseable -> let OpenMS produce the real error

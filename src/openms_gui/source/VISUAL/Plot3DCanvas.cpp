@@ -10,7 +10,7 @@
 #include <OpenMS/VISUAL/Plot3DCanvas.h>
 
 #include <OpenMS/SYSTEM/File.h>
-#include <OpenMS/SYSTEM/FileWatcher.h>
+#include <OpenMS/VISUAL/FileWatcher.h>
 #include <OpenMS/VISUAL/ColorSelector.h>
 #include <OpenMS/VISUAL/DIALOGS/Plot3DPrefDialog.h>
 #include <OpenMS/VISUAL/MISC/GUIHelpers.h>
@@ -18,6 +18,7 @@
 #include <OpenMS/VISUAL/MultiGradientSelector.h>
 #include <OpenMS/VISUAL/Plot3DOpenGLCanvas.h>
 #include <OpenMS/VISUAL/PlotWidget.h>
+#include <OpenMS/VISUAL/MISC/Qt5Port.h>
 
 #include <QResizeEvent>
 #include <QtWidgets/QComboBox>
@@ -54,11 +55,11 @@ namespace OpenMS
     linear_gradient_.fromString(param_.getValue("dot:gradient"));
     openglcanvas_ = new Plot3DOpenGLCanvas(this, *this);
     setFocusProxy(openglcanvas_);
-    connect(this, SIGNAL(actionModeChange()), openglcanvas_, SLOT(actionModeChange()));
+    connect(this, &PlotCanvas::actionModeChange, openglcanvas_, &Plot3DOpenGLCanvas::actionModeChange);
     legend_shown_ = true;
 
     //connect preferences change to the right slot
-    connect(this, SIGNAL(preferencesChange()), this, SLOT(currentLayerParamtersChanged_()));
+    connect(this, &PlotCanvas::preferencesChange, this, &Plot3DCanvas::currentLayerParamtersChanged_);
   }
 
   Plot3DCanvas::~Plot3DCanvas() = default;
@@ -184,7 +185,7 @@ namespace OpenMS
     MultiGradientSelector * gradient = dlg.findChild<MultiGradientSelector *>("gradient");
     QSpinBox * width  = dlg.findChild<QSpinBox *>("width");
 
-    bg_color->setColor(QColor(String(param_.getValue("background_color").toString()).toQString()));
+    bg_color->setColor(QColor(toQString(std::string(param_.getValue("background_color").toString()))));
     shade->setCurrentIndex(layer.param.getValue("dot:shade_mode"));
     gradient->gradient().fromString(layer.param.getValue("dot:gradient"));
     width->setValue(UInt(layer.param.getValue("dot:line_width")));
@@ -220,12 +221,12 @@ namespace OpenMS
     QAction * result = nullptr;
 
     //Display name and warn if current layer invisible
-    String layer_name = String("Layer: ") + getCurrentLayer().getName();
+    std::string layer_name =std::string("Layer: ") + getCurrentLayer().getName();
     if (!getCurrentLayer().visible)
     {
       layer_name += " (invisible)";
     }
-    context_menu->addAction(layer_name.toQString())->setEnabled(false);
+    context_menu->addAction(toQString(layer_name))->setEnabled(false);
     context_menu->addSeparator();
     context_menu->addAction("Layer meta data");
 
@@ -293,7 +294,7 @@ namespace OpenMS
 
   void Plot3DCanvas::intensityModeChange_()
   {
-    String gradient_str;
+    std::string gradient_str;
     if (intensity_mode_ == IM_LOG)
     {
       gradient_str = MultiGradient::getDefaultGradientLogarithmicIntensityMode().toString();

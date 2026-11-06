@@ -8,7 +8,7 @@
 //
 #pragma once
 
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 #include <vector>
 
 
@@ -34,7 +34,7 @@ namespace OpenMS
 public:
 
       /// struct to represent the parameters of a gumbel distribution
-      struct GumbelDistributionFitResult
+      struct OPENMS_DLLAPI GumbelDistributionFitResult
       {
         GumbelDistributionFitResult(double local_a, double local_b) :
           a(local_a),
@@ -64,8 +64,8 @@ public:
           @brief Fits a gumbel distribution to the given data x values. Fills a
           weighted histogram first and generates y values.
 
-          @param x Input x values
-          @param w Input weights
+          @param[in] x Input x values
+          @param[in] w Input weights
 
           @exception Exception::UnableToFit is thrown if fitting cannot be performed
       */
@@ -83,4 +83,3 @@ private:
     };
   }
 }
-

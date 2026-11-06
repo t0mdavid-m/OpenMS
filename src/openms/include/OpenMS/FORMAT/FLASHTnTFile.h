@@ -51,11 +51,11 @@ namespace OpenMS
       Unimod names listed for a blind shift (ModID) are only those of matching mass. Overlapping ranges, which ProForma does not
       allow, are written as one range with their summed mass.
     */
-    static String getProFormaString(const ProteinHit& hit);
+    static std::string getProFormaString(const ProteinHit& hit);
 
     /// the fixed modifications of the whole search (FLASHTnT -fixed_mod) as ProForma global modifications, e.g. "<[+57.021464|UNIMOD:4]@C>",
     /// written before every ProForma string (empty: none)
-    static void setGlobalFixedModifications(const String& proforma_prefix);
+    static void setGlobalFixedModifications(const std::string& proforma_prefix);
 
     static void writeProteoforms(const std::vector<ProteinHit>& hits, std::fstream& fs, double pro_fdr, bool chimeric = false);
   };

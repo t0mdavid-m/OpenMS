@@ -27,7 +27,7 @@ namespace OpenMS
     {
       os << *prot_it << ",";
     }
-    os << std::endl;
+    os << '\n';
     os << "Peptides: ";
     for (std::set<Size>::const_iterator pep_it = conn_comp.pep_indices.begin();
           pep_it != conn_comp.pep_indices.end();
@@ -69,7 +69,7 @@ namespace OpenMS
           "No indistinguishable Groups annotated. Currently this class only resolves across groups.");
     }
 
-    OPENMS_LOG_INFO << "Resolving peptides between " << protein.getHits().size() << " proteins in " << groups.size() << " indistinguishable groups." << std::endl;
+    OPENMS_LOG_INFO << "Resolving peptides between " << protein.getHits().size() << " proteins in " << groups.size() << " indistinguishable groups.\n";
 
     // I don't think we need to assume sortedness here
     //if (!skip_sort) sort(groups.begin(), groups.end());
@@ -89,12 +89,12 @@ namespace OpenMS
         groups.begin();
          group_it != groups.end(); ++group_it)
     {
-      for (vector<String>::const_iterator acc_it = group_it->accessions.begin();
+      for (vector<std::string>::const_iterator acc_it = group_it->accessions.begin();
            acc_it != group_it->accessions.end(); ++acc_it)
       {
         Size idx = group_it - groups.begin();
         prot_acc_to_indist_prot_grp[*acc_it] = idx;
-        if (decoy_accs.find(*acc_it) != decoy_accs.end())
+        if (decoy_accs.contains(*acc_it))
         {
           indist_prot_grp_decoy[idx] = true;
         }
@@ -118,7 +118,7 @@ namespace OpenMS
         for (vector<PeptideEvidence>::const_iterator pepev_it = pepev.begin();
              pepev_it != pepev.end(); ++pepev_it, ++ev_idx)
         {
-          String acc = pepev_it->getProteinAccession();
+          std::string acc = pepev_it->getProteinAccession();
 
           auto found = prot_acc_to_indist_prot_grp.find(acc);
           if (found == prot_acc_to_indist_prot_grp.end())
@@ -208,21 +208,21 @@ namespace OpenMS
           evToKeep = grpIdxToEvIdx[*toResolve->begin()];
           if (toResolve->size() > 1)
           {
-           OPENMS_LOG_INFO << "Resolution: Peptide " << pep.getHits()[0].getSequence().toString() << " had groups:" << std::endl;
+           OPENMS_LOG_INFO << "Resolution: Peptide " << pep.getHits()[0].getSequence().toString() << " had groups:\n";
 
            OPENMS_LOG_INFO << "tgt: ";
             for (const auto& g : bestNonDecoyGrpTie)
             {
               OPENMS_LOG_INFO << g << "=" << groups[g].probability << ", ";
             }
-           OPENMS_LOG_INFO << std::endl;
+           OPENMS_LOG_INFO << '\n';
            OPENMS_LOG_INFO << "dec: ";
             for (const auto& g : bestDecoyGrpTie)
             {
               OPENMS_LOG_INFO << g << "=" << groups[g].probability << ", ";
             }
-           OPENMS_LOG_INFO << std::endl;
-           OPENMS_LOG_INFO << "Kept: " << *toResolve->begin() << std::endl;
+           OPENMS_LOG_INFO << '\n';
+           OPENMS_LOG_INFO << "Kept: " << *toResolve->begin() << '\n';
           }
         }
         else
@@ -243,7 +243,7 @@ namespace OpenMS
       }
       else
       {
-       OPENMS_LOG_WARN << "Warning PeptideProteinResolution: Skipping spectrum without hits." << std::endl;
+       OPENMS_LOG_WARN << "Warning PeptideProteinResolution: Skipping spectrum without hits.\n";
       }
     }
   }
@@ -264,7 +264,7 @@ namespace OpenMS
           "No indistinguishable Groups annotated. Currently this class only resolves across groups.");
     }
 
-   OPENMS_LOG_INFO << "Resolving peptides between " << protein.getHits().size() << " proteins in " << groups.size() << " indistinguishable groups." << std::endl;
+   OPENMS_LOG_INFO << "Resolving peptides between " << protein.getHits().size() << " proteins in " << groups.size() << " indistinguishable groups.\n";
 
 
     if (!skip_sort) sort(groups.begin(), groups.end());
@@ -285,7 +285,7 @@ namespace OpenMS
          groups.begin();
          group_it != groups.end(); ++group_it)
     {
-      for (vector<String>::const_iterator acc_it = group_it->accessions.begin();
+      for (vector<std::string>::const_iterator acc_it = group_it->accessions.begin();
            acc_it != group_it->accessions.end(); ++acc_it)
       {
         Size idx = group_it - groups.begin();
@@ -309,7 +309,7 @@ namespace OpenMS
         for (vector<PeptideEvidence>::const_iterator pepev_it = pepev.begin();
              pepev_it != pepev.end(); ++pepev_it)
         {
-          String acc = pepev_it->getProteinAccession();
+          std::string acc = pepev_it->getProteinAccession();
           auto found = prot_acc_to_indist_prot_grp_.find(acc);
           if (found == prot_acc_to_indist_prot_grp_.end())
           {
@@ -330,7 +330,7 @@ namespace OpenMS
       }
       else
       {
-       OPENMS_LOG_WARN << "Warning PeptideProteinResolution: Skipping spectrum without hits." << std::endl;
+       OPENMS_LOG_WARN << "Warning PeptideProteinResolution: Skipping spectrum without hits.\n";
       }
     }
   }
@@ -530,10 +530,10 @@ namespace OpenMS
        OPENMS_LOG_FATAL_ERROR << "Something went terribly wrong. "
                            "Group with index " << *grp_it << "doesn't exist. "
                                                              " ProteinPeptideResolution: Groups changed"
-                                                             " after building data structures." << std::endl;
+                                                             " after building data structures.\n";
       }
 
-      vector<String> accessions = origin_groups[*grp_it].accessions;
+      vector<std::string> accessions = origin_groups[*grp_it].accessions;
 
       // Put the accessions of the indist. groups into the subsuming
       // ambiguity group
@@ -546,11 +546,11 @@ namespace OpenMS
         if (statistics_)
         {
          OPENMS_LOG_DEBUG << "Group: ";
-          for (const String& s : origin_groups[*grp_it].accessions)
+          for (const std::string& s : origin_groups[*grp_it].accessions)
           {
            OPENMS_LOG_DEBUG << s << ", ";
           }
-         OPENMS_LOG_DEBUG << " steals " << indist_prot_grp_to_pep_[*grp_it].size() << " peptides for itself." << std::endl;
+         OPENMS_LOG_DEBUG << " steals " << indist_prot_grp_to_pep_[*grp_it].size() << " peptides for itself.\n";
         }
         // Update all the peptides the current best point to
         for (set<Size>::iterator pepid_it =
@@ -600,10 +600,10 @@ namespace OpenMS
            OPENMS_LOG_FATAL_ERROR << "Something went terribly wrong. "
                                "Group with index " << *grp_it << "doesn't exist. "
                                                                  " ProteinPeptideResolution: Groups changed"
-                                                                 " after building data structures." << std::endl;
+                                                                 " after building data structures.\n";
           }
 
-          vector<String> accessions = origin_groups[*grp_it].accessions;
+          vector<std::string> accessions = origin_groups[*grp_it].accessions;
 
           // Put the accessions of the indist. groups into the subsuming
           // ambiguity group
@@ -616,11 +616,11 @@ namespace OpenMS
             if (statistics_)
             {
              OPENMS_LOG_DEBUG << "Group: ";
-              for (const String& s : origin_groups[*grp_it].accessions)
+              for (const std::string& s : origin_groups[*grp_it].accessions)
               {
                OPENMS_LOG_DEBUG << s << ", ";
               }
-             OPENMS_LOG_DEBUG << " steals " << indist_prot_grp_to_pep_[*grp_it].size() << " peptides for itself." << std::endl;
+             OPENMS_LOG_DEBUG << " steals " << indist_prot_grp_to_pep_[*grp_it].size() << " peptides for itself.\n";
             }
 
             // Update all the peptides the current best point to
@@ -710,10 +710,10 @@ namespace OpenMS
        OPENMS_LOG_FATAL_ERROR << "Something went terribly wrong. "
                               << "Group with index " << *grp_it << "doesn't exist. "
                               << " ProteinPeptideResolution: Groups changed"
-                              << " after building data structures." << std::endl;
+                              << " after building data structures.\n";
       }
 
-      const vector<String>& accessions = origin_groups[*grp_it].accessions;
+      const vector<std::string>& accessions = origin_groups[*grp_it].accessions;
 
       // Put the accessions of the indist. groups into the subsuming
       // ambiguity group
@@ -723,11 +723,11 @@ namespace OpenMS
       if (statistics_)
       {
         OPENMS_LOG_DEBUG << "Group: ";
-        for (const String& s : accessions)
+        for (const std::string& s : accessions)
         {
           OPENMS_LOG_DEBUG << s << ", ";
         }
-        OPENMS_LOG_DEBUG << " steals " << indist_prot_grp_to_pep_[*grp_it].size() << " peptides for itself." << std::endl;
+        OPENMS_LOG_DEBUG << " steals " << indist_prot_grp_to_pep_[*grp_it].size() << " peptides for itself.\n";
       }
 
       // Update all the peptides the current best point to

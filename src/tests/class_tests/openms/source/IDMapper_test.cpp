@@ -7,6 +7,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/CONCEPT/ClassTest.h>
+#include <OpenMS/TestFileValidation.h>
 #include <OpenMS/test_config.h>
 
 ///////////////////////////
@@ -164,12 +165,12 @@ START_SECTION((void annotate(AnnotatedMSRun& map, const PeptideIdentificationLis
   // load id
   PeptideIdentificationList identifications;
   vector<ProteinIdentification> protein_identifications;
-  String document_id;
+  std::string document_id;
   IdXMLFile().load(OPENMS_GET_TEST_DATA_PATH("IDMapper_1.idXML"), protein_identifications, identifications, document_id);
 
   PeptideIdentificationList identifications2;
   vector<ProteinIdentification> protein_identifications2;
-  String document_id2;
+  std::string document_id2;
   IdXMLFile().load(OPENMS_GET_TEST_DATA_PATH("IDMapper_7.idXML"), protein_identifications2, identifications2, document_id2);
 
   TEST_EQUAL(identifications.size(),3)
@@ -288,7 +289,7 @@ START_SECTION((template < typename FeatureType > void annotate(FeatureMap< Featu
   //load id data
   PeptideIdentificationList identifications;
   vector<ProteinIdentification> protein_identifications;
-  String document_id;
+  std::string document_id;
   IdXMLFile().load(OPENMS_GET_TEST_DATA_PATH("IDMapper_2.idXML"), protein_identifications, identifications, document_id);
 
   //--------------------------------------------------------------------------------------
@@ -461,8 +462,8 @@ START_SECTION((void annotate(ConsensusMap& map, const PeptideIdentificationList&
   std::vector<ProteinIdentification> protein_ids2;
   PeptideIdentificationList peptide_ids;
   PeptideIdentificationList peptide_ids2;
-  String document_id;
-  String document_id2;
+  std::string document_id;
+  std::string document_id2;
   IdXMLFile().load(OPENMS_GET_TEST_DATA_PATH("IDMapper_3.idXML"), protein_ids, peptide_ids, document_id);
   IdXMLFile().load(OPENMS_GET_TEST_DATA_PATH("IDMapper_5.idXML"), protein_ids2, peptide_ids2, document_id2);
 
@@ -664,5 +665,8 @@ END_SECTION
 
 /////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////
+
+/// check the temporary files written above against their XML schema (types without a validator are skipped)
+VALIDATE_TMP_FILES
 
 END_TEST

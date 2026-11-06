@@ -17,6 +17,7 @@
 #include <OpenMS/METADATA/SourceFile.h>
 #include <OpenMS/ANALYSIS/TARGETED/TargetedExperimentHelper.h>
 
+#include <unordered_map>
 #include <vector>
 
 namespace OpenMS
@@ -63,9 +64,9 @@ public:
     typedef ReactionMonitoringTransition Transition;
     typedef Residue IonType; // IonType enum of Interpretation class
 
-    typedef std::map<String, const Protein *> ProteinReferenceMapType;
-    typedef std::map<String, const Peptide *> PeptideReferenceMapType;
-    typedef std::map<String, const Compound *> CompoundReferenceMapType;
+    typedef std::unordered_map<std::string, const Protein *> ProteinReferenceMapType;
+    typedef std::unordered_map<std::string, const Peptide *> PeptideReferenceMapType;
+    typedef std::unordered_map<std::string, const Compound *> CompoundReferenceMapType;
 
     /** @name Constructors and destructors
     */
@@ -107,7 +108,7 @@ public:
     /**
       @brief Add one targeted experiment to another.
 
-      @param rhs The targeted experiment to add to this one.
+      @param[in] rhs The targeted experiment to add to this one.
     */
     TargetedExperiment& operator+=(const TargetedExperiment & rhs);
     TargetedExperiment& operator+=(TargetedExperiment && rhs);
@@ -115,7 +116,7 @@ public:
     /**
       @brief Clears all data and meta data
 
-      @param clear_meta_data If @em true, all meta data is cleared in addition to the data.
+      @param[in] clear_meta_data If @em true, all meta data is cleared in addition to the data.
     */
     void clear(bool clear_meta_data);
 
@@ -153,7 +154,7 @@ public:
 
     void addTargetCVTerm(const CVTerm & cv_term);
 
-    void setTargetMetaValue(const String & name, const DataValue & value);
+    void setTargetMetaValue(const std::string & name, const DataValue & value);
 
     // instrument list
     void setInstruments(const std::vector<Instrument> & instruments);
@@ -175,9 +176,9 @@ public:
 
     const std::vector<Protein> & getProteins() const;
 
-    const Protein & getProteinByRef(const String & ref) const;
+    const Protein & getProteinByRef(const std::string & ref) const;
 
-    bool hasProtein(const String & ref) const;
+    bool hasProtein(const std::string & ref) const;
 
     void addProtein(const Protein & protein);
 
@@ -193,13 +194,13 @@ public:
 
     const std::vector<Peptide> & getPeptides() const;
 
-    bool hasPeptide(const String & ref) const;
+    bool hasPeptide(const std::string & ref) const;
 
-    const Peptide & getPeptideByRef(const String & ref) const;
+    const Peptide & getPeptideByRef(const std::string & ref) const;
 
-    bool hasCompound(const String & ref) const;
+    bool hasCompound(const std::string & ref) const;
 
-    const Compound & getCompoundByRef(const String & ref) const;
+    const Compound & getCompoundByRef(const std::string & ref) const;
 
     void addPeptide(const Peptide & rhs);
 

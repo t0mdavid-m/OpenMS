@@ -41,7 +41,7 @@ namespace OpenMS
     /// TopPIC's name of an activation method: TopPIC knows CID, HCD, ETD, ETCID, ETHCD, MPD and UVPD (res/base_data/activation_base.xml
     /// of TopPIC 2.1) and stops at any other name; ECD gives the c/z-dot ions of ETD, photodissociation those of UVPD, infrared
     /// multiphoton dissociation those of MPD, the other collisional methods those of CID. Empty if unknown.
-    String topPICActivation_(const Precursor::ActivationMethod method)
+    std::string topPICActivation_(const Precursor::ActivationMethod method)
     {
       switch (method)
       {
@@ -113,7 +113,7 @@ namespace OpenMS
 
     /// the rows of the non-empty spectrum @p dspec into @p fs, numbered from @p index on (advanced past them); noise decoys are written as
     /// noiseDecoyCopies_ says, from @p carry on (advanced)
-    void writeDeconvolvedMasses_(DeconvolvedSpectrum& dspec, std::ostream& fs, const String& file_name, const FLASHHelperClasses::PrecalculatedAveragine& avg,
+    void writeDeconvolvedMasses_(DeconvolvedSpectrum& dspec, std::ostream& fs, const std::string& file_name, const FLASHHelperClasses::PrecalculatedAveragine& avg,
                                  const FLASHHelperClasses::PrecalculatedAveragine& decoy_avg, double tol, const bool write_detail, const bool report_decoy,
                                  const double noise_decoy_weight, uint& index, double& carry,
                                  const std::vector<std::pair<double, Size>>* abundances = nullptr)
@@ -124,9 +124,9 @@ namespace OpenMS
     if (dspec.getOriginalSpectrum().getMSLevel() > 1)
     {
       // the decoy precursor mass of the isolation window (FLASHTnT -decoy_precursor) and its weight in the FDR
-      const String decoy_precursor = dspec.getDecoyPrecursorMass() > 0
-                                       ? String(std::to_string(dspec.getDecoyPrecursorMass())) + "\t" + String(dspec.getDecoyPrecursorWeight()) + "\t"
-                                       : String("NaN\tNaN\t");
+      const std::string decoy_precursor = dspec.getDecoyPrecursorMass() > 0
+                                       ? std::to_string(dspec.getDecoyPrecursorMass()) + "\t" + StringUtils::toStr(dspec.getDecoyPrecursorWeight()) + "\t"
+                                       : std::string("NaN\tNaN\t");
       precursor_ss << dspec.getPrecursorScanNumber() << "\t"
                    << (dspec.getPrecursorPeakGroup().getFeatureIndex() == 0 ? "NaN" : std::to_string(dspec.getPrecursorPeakGroup().getFeatureIndex()))
                    << "\t" << std::to_string(dspec.getPrecursor().getMZ()) << "\t"  << dspec.getPrecursor().getIntensity() << "\t";
@@ -388,7 +388,7 @@ namespace OpenMS
   }
   } // namespace
 
-  void FLASHDeconvSpectrumFile::writeDeconvolvedMasses(DeconvolvedSpectrum& dspec, std::fstream& fs, const String& file_name, const FLASHHelperClasses::PrecalculatedAveragine& avg, const FLASHHelperClasses::PrecalculatedAveragine& decoy_avg, double tol,
+  void FLASHDeconvSpectrumFile::writeDeconvolvedMasses(DeconvolvedSpectrum& dspec, std::fstream& fs, const std::string& file_name, const FLASHHelperClasses::PrecalculatedAveragine& avg, const FLASHHelperClasses::PrecalculatedAveragine& decoy_avg, double tol,
                                                        const bool write_detail, const bool report_decoy, const double noise_decoy_weight,
                                                        const std::vector<std::pair<double, Size>>* abundances)
   {
@@ -406,7 +406,7 @@ namespace OpenMS
   }
 
   void FLASHDeconvSpectrumFile::writeDeconvolvedMasses(std::vector<DeconvolvedSpectrum>& spectra, std::vector<std::fstream>& streams,
-                                                       const std::vector<String>& out_files, const String& file_name,
+                                                       const std::vector<std::string>& out_files, const std::string& file_name,
                                                        const FLASHHelperClasses::PrecalculatedAveragine& avg,
                                                        const FLASHHelperClasses::PrecalculatedAveragine& decoy_avg, const std::vector<double>& tols,
                                                        const bool write_detail, const bool report_decoy, const std::vector<double>& noise_decoy_weights,
@@ -749,7 +749,7 @@ namespace OpenMS
 
       ss << total_int << "\t" << dspec.getOriginalSpectrum().getRT() << "\t" << countTargetMasses(dspec) << "\t" << ch_count << "\t"
          << (dspec.getActivationMethod() < Precursor::ActivationMethod::SIZE_OF_ACTIVATIONMETHOD
-               ? Precursor::NamesOfActivationMethodShort[dspec.getActivationMethod()]
+               ? Precursor::NamesOfActivationMethodShort[static_cast<Size>(dspec.getActivationMethod())]
                : "N/A")
          << "\t" << dspec.getPrecursor().getActivationEnergy();
 
@@ -821,7 +821,7 @@ namespace OpenMS
     }
   }
 
-  void FLASHDeconvSpectrumFile::writeMzML(const MSExperiment& map, std::vector<DeconvolvedSpectrum>& deconvolved_spectra, const String& deconvolved_mzML_file, const String& annotated_mzML_file,
+  void FLASHDeconvSpectrumFile::writeMzML(const MSExperiment& map, std::vector<DeconvolvedSpectrum>& deconvolved_spectra, const std::string& deconvolved_mzML_file, const std::string& annotated_mzML_file,
                                           int mzml_charge, DoubleList tols)
   {
     if (deconvolved_mzML_file.empty() && annotated_mzML_file.empty())
@@ -910,7 +910,7 @@ namespace OpenMS
     fs << "####################### Parameters ######################\n";
   }
 
-  void FLASHDeconvSpectrumFile::writeTopFD(DeconvolvedSpectrum& dspec, std::fstream& fs, const String& filename, const double qval_threshold, const uint min_ms_level)
+  void FLASHDeconvSpectrumFile::writeTopFD(DeconvolvedSpectrum& dspec, std::fstream& fs, const std::string& filename, const double qval_threshold, const uint min_ms_level)
   {
     std::stringstream ss;
     UInt ms_level = dspec.getOriginalSpectrum().getMSLevel();
@@ -951,7 +951,7 @@ namespace OpenMS
          << "PRECURSOR_WINDOW_END=" << dspec.getPrecursor().getIsolationWindowUpperOffset() + isolationTargetMz_(dspec.getPrecursor()) << "\n";
 
       // TopPIC's activation name (TopPIC stops at a name it does not know, e.g. ECD or EThcD)
-      const String activation = topPICActivation_(dspec.getActivationMethod());
+      const std::string activation = topPICActivation_(dspec.getActivationMethod());
       if (!activation.empty())
       {
         ss << "ACTIVATION=" << activation << "\n";

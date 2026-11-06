@@ -52,10 +52,10 @@ namespace OpenMS
     OPENMS_LOG_DEBUG << "Traces length: " << traces.size() << "\n";
     setInitialParameters_(traces);
 
-    Eigen::VectorXd x_init(NUM_PARAMS_);
-    x_init(0) = height_;
-    x_init(1) = x0_;
-    x_init(2) = sigma_;
+    std::vector<double> x_init(NUM_PARAMS_);
+    x_init[0] = height_;
+    x_init[1] = x0_;
+    x_init[2] = sigma_;
 
     TraceFitter::ModelData data;
     data.traces_ptr = &traces;
@@ -119,19 +119,19 @@ namespace OpenMS
     return 2.506628 * height_ * sigma_;
   }
 
-  String GaussTraceFitter::getGnuplotFormula(const FeatureFinderAlgorithmPickedHelperStructs::MassTrace& trace, const char function_name, const double baseline, const double rt_shift)
+  std::string GaussTraceFitter::getGnuplotFormula(const FeatureFinderAlgorithmPickedHelperStructs::MassTrace& trace, const char function_name, const double baseline, const double rt_shift)
   {
     std::stringstream s;
-    s << String(function_name)  << "(x)= " << baseline << " + ";
+    s << StringUtils::toStr(function_name)  << "(x)= " << baseline << " + ";
     s << (trace.theoretical_int *  height_) << " * exp(-0.5*(x-" << (rt_shift + x0_) << ")**2/(" << sigma_ << ")**2)";
-    return String(s.str());
+    return s.str();
   }
 
-  void GaussTraceFitter::getOptimizedParameters_(const Eigen::VectorXd& x_init)
+  void GaussTraceFitter::getOptimizedParameters_(const std::vector<double>& x_init)
   {
-    height_ = x_init(0);
-    x0_ = x_init(1);
-    sigma_ = std::fabs(x_init(2));
+    height_ = x_init[0];
+    x0_ = x_init[1];
+    sigma_ = std::fabs(x_init[2]);
   }
 
   GaussTraceFitter::GaussTraceFunctor::GaussTraceFunctor(int dimensions,
@@ -142,11 +142,15 @@ namespace OpenMS
   {
   }
 
-  int GaussTraceFitter::GaussTraceFunctor::operator()(const Eigen::VectorXd& x, Eigen::VectorXd& fvec)
+  int GaussTraceFitter::GaussTraceFunctor::operator()(const double* x, double* fvec)
   {
-    double height = x(0);
-    double x0 = x(1);
-    double sig = x(2);
+    // Create Eigen::Map views for convenient indexing
+    Eigen::Map<const Eigen::VectorXd> x_map(x, m_inputs);
+    Eigen::Map<Eigen::VectorXd> fvec_map(fvec, m_values);
+
+    double height = x_map(0);
+    double x0 = x_map(1);
+    double sig = x_map(2);
     double c_fac = -0.5 / pow2(sig);
 
     Size count = 0;
@@ -156,7 +160,7 @@ namespace OpenMS
       double weight = m_data->weighted ? trace.theoretical_int : 1.0;
       for (Size i = 0; i < trace.peaks.size(); ++i)
       {
-        fvec(count) = (m_data->traces_ptr->baseline + trace.theoretical_int * height
+        fvec_map(count) = (m_data->traces_ptr->baseline + trace.theoretical_int * height
                        * exp(c_fac * pow2(trace.peaks[i].first - x0)) - trace.peaks[i].second->getIntensity()) * weight;
         ++count;
       }
@@ -166,11 +170,15 @@ namespace OpenMS
   }
 
   // compute Jacobian matrix for the different parameters
-  int GaussTraceFitter::GaussTraceFunctor::df(const Eigen::VectorXd& x, Eigen::MatrixXd& J)
+  int GaussTraceFitter::GaussTraceFunctor::df(const double* x, double* J)
   {
-    double height = x(0);
-    double x0 = x(1);
-    double sig = x(2);
+    // Create Eigen::Map views for convenient indexing
+    Eigen::Map<const Eigen::VectorXd> x_map(x, m_inputs);
+    Eigen::Map<Eigen::MatrixXd> J_map(J, m_values, m_inputs);
+
+    double height = x_map(0);
+    double x0 = x_map(1);
+    double sig = x_map(2);
     double sig_sq = pow2(sig);
     double inv_siq2 = 1 / sig_sq;
     double sig_3 = sig * sig_sq;
@@ -186,9 +194,9 @@ namespace OpenMS
       {
         double rt = trace.peaks[i].first;
         double e = exp(c_fac * pow2(rt - x0));
-        J(count, 0) = trace.theoretical_int * e * weight;
-        J(count, 1) = trace.theoretical_int * height * e * (rt - x0) * inv_siq2 * weight;
-        J(count, 2) = 0.125* trace.theoretical_int* height* e* pow2(rt - x0) * inv_sig3 * weight;
+        J_map(count, 0) = trace.theoretical_int * e * weight;
+        J_map(count, 1) = trace.theoretical_int * height * e * (rt - x0) * inv_siq2 * weight;
+        J_map(count, 2) = 0.125* trace.theoretical_int* height* e* pow2(rt - x0) * inv_sig3 * weight;
         ++count;
       }
     }
@@ -221,7 +229,7 @@ namespace OpenMS
     Size max_index = 0; // index of max. smoothed intensity
     if (N <= LEN + 1) // not enough distinct x values for smoothing
     {
-      // throw Exception::UnableToFit(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "UnableToFit-MovingAverage", "Too few time points for smoothing with window size " + String(2 * LEN + 1));
+      // throw Exception::UnableToFit(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "UnableToFit-MovingAverage", "Too few time points for smoothing with window size " + StringUtils::toStr(2 * LEN + 1));
       for (Size i = 0; i < N; ++i)
       {
         smoothed[i] = totals[i + LEN];

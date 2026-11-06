@@ -8,7 +8,7 @@
 //
 #pragma once
 
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 #include <OpenMS/DATASTRUCTURES/DPosition.h>
 
 #include <vector>
@@ -64,7 +64,7 @@ public:
       /**
           @brief Fits a gamma distribution to the given data points
 
-          @param points Input parameter which represents the point used for the fitting
+          @param[in] points Input parameter which represents the point used for the fitting
 
           @exception Exception::UnableToFit is thrown if fitting cannot be performed
       */

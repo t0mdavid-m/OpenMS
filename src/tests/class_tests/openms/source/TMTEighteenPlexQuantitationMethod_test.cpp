@@ -38,7 +38,7 @@ START_SECTION(~TMTEighteenPlexQuantitationMethod())
 }
 END_SECTION
 
-START_SECTION((const String& getMethodName() const ))
+START_SECTION((const std::string& getMethodName() const ))
 {
   TMTEighteenPlexQuantitationMethod quant_meth;
   TEST_EQUAL(quant_meth.getMethodName(), "tmt18plex")
@@ -196,9 +196,9 @@ START_SECTION((virtual Matrix<double> getIsotopeCorrectionMatrix() const ))
   ABORT_IF(m.rows() != 18)
   ABORT_IF(m.cols() != 18)
 
-  for(size_t i = 0; i < m.rows(); ++i)
+  for(Size i = 0; i < m.rows(); ++i)
   {
-    for(size_t j = 0; j < m.cols(); ++j)
+    for(Size j = 0; j < m.cols(); ++j)
     {
       TEST_REAL_SIMILAR(m(i,j), test_Matrix(i,j))
     }

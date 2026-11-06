@@ -8,6 +8,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/ProteoformDatabase.h>
 #include <OpenMS/CHEMISTRY/ModificationsDB.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/CHEMISTRY/ProForma.h>
 #include <OpenMS/CHEMISTRY/Residue.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
@@ -29,13 +30,13 @@ namespace
 // the residues a decoy permutation may move (any other, e.g. X or U, stays in place)
 const std::string movable_residues = "ACDEFGHIKLMNPQRSTVWY";
 // the half cystine of UniPEFF's disulfide bonds: used only through the \DisulfideBond pairs
-const String half_cystine = "MOD:00798";
+const std::string half_cystine = "MOD:00798";
 // at most this many modifications of one residue form its unit (2^n - 1 choices)
 constexpr Size max_mods_per_residue = 8;
 
 // PEFF:00010xx accessions of \Processed (UniPEFF): the kept chain and the removed segments
-const String processed_mature = "PEFF:0001020";
-const std::set<String> processed_removed {"PEFF:0001035", "PEFF:0001021", "PEFF:0001022", "PEFF:0001034"};
+const std::string processed_mature = "PEFF:0001020";
+const std::set<std::string> processed_removed {"PEFF:0001035", "PEFF:0001021", "PEFF:0001022", "PEFF:0001034"};
 
 // a key of a PEFF description: an unescaped backslash followed by [A-Za-z0-9_]+ and '='
 bool isKeyChar(char c)
@@ -49,14 +50,14 @@ bool isEscapable(char c)
 }
 
 // the \Key=value pairs of a PEFF description (values trimmed, still escaped); PEFFFile.cpp:2049-2078 upstream
-std::map<String, String> parseKeys(const String& description)
+std::map<std::string, std::string> parseKeys(const std::string& description)
 {
-  std::map<String, String> keys;
-  String key, value;
+  std::map<std::string, std::string> keys;
+  std::string key, value;
   bool in_value = false;
   auto flush = [&]() {
     if (! in_value) return;
-    value.trim();
+    StringUtils::trim(value);
     if (keys.find(key) == keys.end()) keys[key] = value;
     value.clear();
   };
@@ -90,16 +91,16 @@ std::map<String, String> parseKeys(const String& description)
 
 // the top-level parenthesised tuples of a value, by depth, skipping escaped characters (PEFFFile.cpp:2699-2767 upstream); a value
 // without parentheses is one tuple
-std::vector<String> splitTuples(const String& value)
+std::vector<std::string> splitTuples(const std::string& value)
 {
-  std::vector<String> tuples;
+  std::vector<std::string> tuples;
   if (value.empty() || value[0] != '(')
   {
     if (! value.empty()) tuples.push_back(value);
     return tuples;
   }
   int depth = 0;
-  String current;
+  std::string current;
   for (Size i = 0; i < value.size(); i++)
   {
     const char c = value[i];
@@ -131,9 +132,9 @@ std::vector<String> splitTuples(const String& value)
   return tuples;
 }
 
-String unescape(const String& s)
+std::string unescape(const std::string& s)
 {
-  String out;
+  std::string out;
   out.reserve(s.size());
   for (Size i = 0; i < s.size(); i++)
   {
@@ -149,10 +150,10 @@ String unescape(const String& s)
 }
 
 // the fields of a tuple, split at unescaped '|' and unescaped (PEFFFile.cpp:35-112 upstream)
-std::vector<String> splitFields(const String& tuple)
+std::vector<std::string> splitFields(const std::string& tuple)
 {
-  std::vector<String> fields;
-  String current;
+  std::vector<std::string> fields;
+  std::string current;
   for (Size i = 0; i < tuple.size(); i++)
   {
     if (tuple[i] == '\\' && i + 1 < tuple.size() && isEscapable(tuple[i + 1]))
@@ -174,10 +175,10 @@ std::vector<String> splitFields(const String& tuple)
 }
 
 // the Option B identifier "id:" of the first field: stripped and returned (-1: none)
-long stripIdentifier(String& field)
+long stripIdentifier(std::string& field)
 {
   const Size colon = field.find(':');
-  if (colon == String::npos || colon == 0) return -1;
+  if (colon == std::string::npos || colon == 0) return -1;
   for (Size i = 0; i < colon; i++)
   {
     if (field[i] < '0' || field[i] > '9') return -1;
@@ -187,10 +188,10 @@ long stripIdentifier(String& field)
   return id;
 }
 
-bool toInt(const String& s, int& value)
+bool toInt(const std::string& s, int& value)
 {
-  String t = s;
-  t.trim();
+  std::string t = s;
+  StringUtils::trim(t);
   if (t.empty()) return false;
   for (char c : t)
   {
@@ -201,13 +202,13 @@ bool toInt(const String& s, int& value)
 }
 
 // the accession of an identifier: ACC of sp:ACC, sp|ACC|ID or ACC|..., else the identifier
-String accessionOf(const String& identifier)
+std::string accessionOf(const std::string& identifier)
 {
-  std::vector<String> parts;
-  identifier.split('|', parts);
+  std::vector<std::string> parts;
+  StringUtils::split(identifier, '|', parts);
   if (parts.size() >= 3) return parts[1];
   const Size colon = identifier.find(':');
-  if (colon != String::npos) return identifier.substr(colon + 1);
+  if (colon != std::string::npos) return identifier.substr(colon + 1);
   return identifier;
 }
 
@@ -216,7 +217,7 @@ struct SiteModification
 {
   int position = 0;
   double mass = 0;
-  String accession, name;
+  std::string accession, name;
   int sites = 1;  // the sites of the residue it occupies (FixedModification::sites)
   int bond = -1;  // a half cystine: the other one of its bond
 };
@@ -225,14 +226,14 @@ struct SiteModification
 // a Unimod record: MOD:00069 (N-palmitoyl-L-cysteine, N-term) is "Palmitoyl (C)" there, anywhere.
 struct PsiModTerm
 {
-  String term_spec, origin;
+  std::string term_spec, origin;
 };
 
-const std::map<String, PsiModTerm>& psiModTerms()
+const std::map<std::string, PsiModTerm>& psiModTerms()
 {
-  static const std::map<String, PsiModTerm> terms = [] {
-    std::map<String, PsiModTerm> t;
-    String path;
+  static const std::map<std::string, PsiModTerm> terms = [] {
+    std::map<std::string, PsiModTerm> t;
+    std::string path;
     try
     {
       path = File::find("CHEMISTRY/PSI-MOD.obo");
@@ -243,9 +244,9 @@ const std::map<String, PsiModTerm>& psiModTerms()
     }
     std::ifstream in(path);
     std::string line;
-    String id;
+    std::string id;
     // property_value: TermSpec: "N-term" xsd:string
-    auto value = [&line](const std::string& key, String& out) {
+    auto value = [&line](const std::string& key, std::string& out) {
       const std::string prefix = "property_value: " + key + ": \"";
       if (line.compare(0, prefix.size(), prefix) != 0) return;
       const Size end = line.find('"', prefix.size());
@@ -261,7 +262,7 @@ const std::map<String, PsiModTerm>& psiModTerms()
       if (line.compare(0, 4, "id: ") == 0)
       {
         id = line.substr(4);
-        id.trim();
+        StringUtils::trim(id);
         continue;
       }
       if (id.empty() || line.compare(0, 16, "property_value: ") != 0) continue;
@@ -276,7 +277,7 @@ const std::map<String, PsiModTerm>& psiModTerms()
 // The sites of its residue a modification occupies (bits: 1 side chain, 2 alpha-amino, 4 alpha-carboxyl group), by PSI-MOD's TermSpec.
 // Without one (a term the bundled PSI-MOD lacks, a Unimod accession): the side chain, and on a residue where a form starts (kind 2) or
 // ends (kind 3) also that terminus.
-int sitesOf(const String& accession, int kind)
+int sitesOf(const std::string& accession, int kind)
 {
   const auto& terms = psiModTerms();
   if (const auto it = terms.find(accession); it != terms.end())
@@ -290,25 +291,25 @@ int sitesOf(const String& accession, int kind)
 
 // whether a modification can sit on a residue: its origin (PSI-MOD Origin; the residues of the Unimod records) is the residue or any
 // residue (X); unknown: yes
-bool residueFits(const String& accession, char residue)
+bool residueFits(const std::string& accession, char residue)
 {
-  if (accession.hasPrefix("MOD:"))
+  if (StringUtils::hasPrefix(accession, "MOD:"))
   {
     const auto& terms = psiModTerms();
     const auto it = terms.find(accession);
     if (it == terms.end() || it->second.origin.empty()) return true;
-    std::vector<String> origins;
-    it->second.origin.split(',', origins);
+    std::vector<std::string> origins;
+    StringUtils::split(it->second.origin, ',', origins);
     for (auto o : origins)
     {
-      o.trim();
+      StringUtils::trim(o);
       if (o == "X" || (o.size() == 1 && o[0] == residue)) return true;
     }
     return false;
   }
-  if (accession.hasPrefix("UNIMOD:"))
+  if (StringUtils::hasPrefix(accession, "UNIMOD:"))
   {
-    const String name = "UniMod:" + accession.substr(7);
+    const std::string name = "UniMod:" + accession.substr(7);
     const auto* mdb = ModificationsDB::getInstance();
     if (! mdb->has(name)) return true;
     std::set<const ResidueModification*> mods;
@@ -324,15 +325,15 @@ bool residueFits(const String& accession, char residue)
 }
 
 // the identifier without its decoy prefix (DECOY_ or DECOY)
-String withoutDecoyPrefix(const String& identifier)
+std::string withoutDecoyPrefix(const std::string& identifier)
 {
-  if (identifier.hasPrefix("DECOY_")) return identifier.substr(6);
-  if (identifier.hasPrefix("DECOY")) return identifier.substr(5);
+  if (StringUtils::hasPrefix(identifier, "DECOY_")) return identifier.substr(6);
+  if (StringUtils::hasPrefix(identifier, "DECOY")) return identifier.substr(5);
   return identifier;
 }
 } // namespace
 
-std::uint64_t ProteoformDatabase::fnv1a64(const String& s)
+std::uint64_t ProteoformDatabase::fnv1a64(const std::string& s)
 {
   std::uint64_t h = 14695981039346656037ULL;
   for (const char c : s)
@@ -343,18 +344,18 @@ std::uint64_t ProteoformDatabase::fnv1a64(const String& s)
   return h;
 }
 
-String ProteoformDatabase::proformaTag(const String& accession, double mass)
+std::string ProteoformDatabase::proformaTag(const std::string& accession, double mass)
 {
-  return ProForma::formatMass(mass) + "|" + accession;
+  return FLASHHelperClasses::formatProFormaMass(mass) + "|" + accession;
 }
 
-bool ProteoformDatabase::isPEFF(const String& file)
+bool ProteoformDatabase::isPEFF(const std::string& file)
 {
-  if (String(file).toLower().hasSuffix(".peff")) return true;
+  if (StringUtils::hasSuffix(StringUtils::toLowered(file), ".peff")) return true;
   std::ifstream in(file);
-  String line;
+  std::string line;
   if (! std::getline(in, line)) return false;
-  return line.hasPrefix("# PEFF");
+  return StringUtils::hasPrefix(line, "# PEFF");
 }
 
 ProteoformDatabase ProteoformDatabase::fromFASTA(const std::vector<FASTAFile::FASTAEntry>& fasta_entries)
@@ -373,12 +374,12 @@ ProteoformDatabase ProteoformDatabase::fromFASTA(const std::vector<FASTAFile::FA
     p.identifier = fe.identifier;
     p.description = fe.description;
     p.sequence = fe.sequence;
-    p.decoy = fe.identifier.hasPrefix("DECOY");
+    p.decoy = StringUtils::hasPrefix(fe.identifier, "DECOY");
     p.entries = {i};
     p.forms = {{1, (int)fe.sequence.size()}};
     std::vector<std::string> names;
-    if (fe.identifier.hasPrefix("DECOY_")) { names.push_back(fe.identifier.substr(6)); }
-    else if (fe.identifier.hasPrefix("DECOY")) { names.push_back(fe.identifier.substr(5)); }
+    if (StringUtils::hasPrefix(fe.identifier, "DECOY_")) { names.push_back(fe.identifier.substr(6)); }
+    else if (StringUtils::hasPrefix(fe.identifier, "DECOY")) { names.push_back(fe.identifier.substr(5)); }
     else { names = {"DECOY_" + fe.identifier, "DECOY" + fe.identifier}; }
     for (const auto& name : names)
     {
@@ -432,7 +433,7 @@ void ProteoformDatabase::finish_()
   }
 }
 
-void ProteoformDatabase::loadPEFF(const String& file, int max_mods, const std::vector<String>& mod_masses,
+void ProteoformDatabase::loadPEFF(const std::string& file, int max_mods, const std::vector<std::string>& mod_masses,
                                   std::vector<FASTAFile::FASTAEntry>& fasta_entries)
 {
   std::vector<FASTAFile::FASTAEntry> input;
@@ -440,7 +441,7 @@ void ProteoformDatabase::loadPEFF(const String& file, int max_mods, const std::v
   build(input, max_mods, mod_masses, fasta_entries);
 }
 
-void ProteoformDatabase::build(const std::vector<FASTAFile::FASTAEntry>& input, int max_mods, const std::vector<String>& mod_masses,
+void ProteoformDatabase::build(const std::vector<FASTAFile::FASTAEntry>& input, int max_mods, const std::vector<std::string>& mod_masses,
                                std::vector<FASTAFile::FASTAEntry>& fasta_entries)
 {
   entries.clear();
@@ -450,27 +451,27 @@ void ProteoformDatabase::build(const std::vector<FASTAFile::FASTAEntry>& input, 
   max_mods = std::max(0, max_mods);
 
   // masses by accession given by the user: a mass, or "skip"
-  std::map<String, double> given_masses;
-  std::set<String> skipped;
+  std::map<std::string, double> given_masses;
+  std::set<std::string> skipped;
   for (const auto& item : mod_masses)
   {
-    String s = item;
-    s.trim();
+    std::string s = item;
+    StringUtils::trim(s);
     if (s.empty()) continue;
     const Size eq = s.find('=');
-    if (eq == String::npos)
+    if (eq == std::string::npos)
     {
       throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "peff_mod_masses: expected accession=mass or accession=skip", s);
     }
-    String acc = s.substr(0, eq), value = s.substr(eq + 1);
-    acc.trim();
-    value.trim();
-    if (String(value).toLower() == "skip") { skipped.insert(acc); }
-    else { given_masses[acc] = value.toDouble(); }
+    std::string acc = s.substr(0, eq), value = s.substr(eq + 1);
+    StringUtils::trim(acc);
+    StringUtils::trim(value);
+    if (StringUtils::toLowered(value) == "skip") { skipped.insert(acc); }
+    else { given_masses[acc] = StringUtils::toDouble(value); }
   }
   // the mass of an accession on a residue (cached per accession and residue); false: none (or skipped)
-  std::map<std::pair<String, char>, std::pair<bool, double>> mass_cache;
-  auto massOf = [&](const String& acc, char residue, double& mass) {
+  std::map<std::pair<std::string, char>, std::pair<bool, double>> mass_cache;
+  auto massOf = [&](const std::string& acc, char residue, double& mass) {
     if (skipped.count(acc) > 0) return false;
     if (const auto it = given_masses.find(acc); it != given_masses.end())
     {
@@ -484,7 +485,7 @@ void ProteoformDatabase::build(const std::vector<FASTAFile::FASTAEntry>& input, 
       std::pair<bool, double> result {false, 0.0};
       try
       {
-        result.second = ProForma::getTagMass(acc, residue);
+        result.second = FLASHHelperClasses::getProFormaTagMass(acc, residue);
         result.first = std::abs(result.second) >= 1e-6;
       }
       catch (const Exception::BaseException&)
@@ -513,7 +514,7 @@ void ProteoformDatabase::build(const std::vector<FASTAFile::FASTAEntry>& input, 
   };
   struct ParsedProtein
   {
-    String identifier, description, sequence, accession;
+    std::string identifier, description, sequence, accession;
     bool decoy = false;
     std::vector<Form> forms;
     // per form, its entries: the fixed modifications of each (1-based positions, kind)
@@ -529,28 +530,28 @@ void ProteoformDatabase::build(const std::vector<FASTAFile::FASTAEntry>& input, 
     const bool peff = keys.count("PName") > 0 || keys.count("ModResPsi") > 0 || keys.count("Processed") > 0 || keys.count("ID") > 0
                       || keys.count("ModResUnimod") > 0 || keys.count("NcbiTaxId") > 0;
     // the identifier sp|ACC|ID (as UniProt FASTA files) and a FASTA-like description; a decoy keeps its prefix
-    String prefix, id = fe.identifier;
+    std::string prefix, id = fe.identifier;
     if (is_decoy)
     {
-      prefix = id.hasPrefix("DECOY_") ? "DECOY_" : "DECOY";
+      prefix = StringUtils::hasPrefix(id, "DECOY_") ? "DECOY_" : "DECOY";
       id = id.substr(prefix.size());
     }
     if (peff)
     {
       const auto it = keys.find("ID");
       const Size colon = id.find(':');
-      if (it != keys.end() && colon != String::npos) id = id.substr(0, colon) + "|" + id.substr(colon + 1) + "|" + unescape(it->second);
-      String description;
+      if (it != keys.end() && colon != std::string::npos) id = id.substr(0, colon) + "|" + id.substr(colon + 1) + "|" + unescape(it->second);
+      std::string description;
       if (const auto pn = keys.find("PName"); pn != keys.end())
       {
         const auto names = splitTuples(pn->second);
         if (! names.empty()) description = unescape(names[0]);
       }
-      auto append = [&](const String& key, const String& label) {
+      auto append = [&](const std::string& key, const std::string& label) {
         const auto k = keys.find(key);
         if (k == keys.end()) return;
-        String v = unescape(k->second);
-        if (v.hasPrefix("(") && v.hasSuffix(")")) v = v.substr(1, v.size() - 2);
+        std::string v = unescape(k->second);
+        if (StringUtils::hasPrefix(v, "(") && StringUtils::hasSuffix(v, ")")) v = v.substr(1, v.size() - 2);
         description += (description.empty() ? "" : " ") + label + "=" + v;
       };
       append("TaxName", "OS");
@@ -581,8 +582,8 @@ void ProteoformDatabase::build(const std::vector<FASTAFile::FASTAEntry>& input, 
         stripIdentifier(fields[0]);
         int b = 0, e = 0;
         if (! toInt(fields[0], b) || ! toInt(fields[1], e) || b < 1 || e > L || b > e) continue;
-        String acc = fields[2];
-        acc.trim();
+        std::string acc = fields[2];
+        StringUtils::trim(acc);
         if (acc == processed_mature) form_set.insert({b, e});
         else if (processed_removed.count(acc) > 0)
         {
@@ -603,7 +604,7 @@ void ProteoformDatabase::build(const std::vector<FASTAFile::FASTAEntry>& input, 
     std::map<int, std::vector<SiteModification>> site_mods;
     std::map<long, int> half_cystine_of; // tuple identifier -> position
     Size half_cystines = 0;
-    for (const String key : {"ModResPsi", "ModResUnimod"})
+    for (const std::string key : {"ModResPsi", "ModResUnimod"})
     {
       const auto it = keys.find(key);
       if (it == keys.end()) continue;
@@ -614,8 +615,8 @@ void ProteoformDatabase::build(const std::vector<FASTAFile::FASTAEntry>& input, 
         const long tuple_id = stripIdentifier(fields[0]);
         int pos = 0;
         if (! toInt(fields[0], pos) || pos < 1 || pos > L) continue; // '?' and positions outside the sequence
-        String acc = fields[1];
-        acc.trim();
+        std::string acc = fields[1];
+        StringUtils::trim(acc);
         if (acc.empty()) continue;
         const char residue = fe.sequence[pos - 1];
         if (! residueFits(acc, residue))
@@ -637,7 +638,7 @@ void ProteoformDatabase::build(const std::vector<FASTAFile::FASTAEntry>& input, 
         }
         auto& mods = site_mods[pos];
         if (mods.size() >= max_mods_per_residue) continue;
-        mods.push_back({pos, mass, acc, fields.size() > 2 ? fields[2] : String()});
+        mods.push_back({pos, mass, acc, fields.size() > 2 ? fields[2] : std::string()});
         mods.back().sites = sitesOf(acc, starts.count(pos) > 0 ? 2 : (ends.count(pos) > 0 ? 3 : 1));
         if (! is_decoy) statistics_.modification_sites++;
       }
@@ -651,8 +652,8 @@ void ProteoformDatabase::build(const std::vector<FASTAFile::FASTAEntry>& input, 
       {
         auto fields = splitFields(tuple);
         stripIdentifier(fields[0]);
-        std::vector<String> ids;
-        fields[0].split(',', ids);
+        std::vector<std::string> ids;
+        StringUtils::split(fields[0], ',', ids);
         if (ids.size() != 2) continue;
         int a = 0, b = 0;
         if (! toInt(ids[0], a) || ! toInt(ids[1], b)) continue;
@@ -846,14 +847,14 @@ void ProteoformDatabase::build(const std::vector<FASTAFile::FASTAEntry>& input, 
     for (Size fi = 0; fi < pp.forms.size(); fi++)
     {
       const auto& f = pp.forms[fi];
-      const String letters = pp.sequence.substr(f.start - 1, f.end - f.start + 1);
+      const std::string letters = pp.sequence.substr(f.start - 1, f.end - f.start + 1);
       for (const auto& fixed : pp.form_entries[fi])
       {
         ProteoformEntry entry;
         entry.protein = p;
         entry.offset = f.start - 1;
         entry.length = f.end - f.start + 1;
-        entry.id = pp.identifier + " " + String(f.start) + "-" + String(f.end);
+        entry.id = pp.identifier + " " + StringUtils::toStr(f.start) + "-" + StringUtils::toStr(f.end);
         for (const auto& [m, kind] : fixed)
         {
           FixedModification fm;
@@ -868,9 +869,16 @@ void ProteoformDatabase::build(const std::vector<FASTAFile::FASTAEntry>& input, 
         }
         try
         {
-          ProForma pf(letters);
-          for (const auto& fm : entry.fixed) pf.addModification(fm.position, fm.position, fm.mass, proformaTag(fm.accession, fm.mass));
-          entry.proforma = pf.toString();
+          std::vector<FLASHHelperClasses::ProFormaModification> mods;
+          for (const auto& fm : entry.fixed)
+          {
+            FLASHHelperClasses::ProFormaModification mod;
+            mod.start = mod.end = fm.position;
+            mod.mass = fm.mass;
+            mod.tag = proformaTag(fm.accession, fm.mass);
+            mods.push_back(mod);
+          }
+          entry.proforma = ProForma::toString(FLASHHelperClasses::toPeptidoform(letters, mods));
         }
         catch (const Exception::BaseException&)
         {
@@ -897,7 +905,7 @@ void ProteoformDatabase::build(const std::vector<FASTAFile::FASTAEntry>& input, 
       statistics_.empty_sequences++;
       continue;
     }
-    parsed.push_back(parseProtein(fe, fe.identifier.hasPrefix("DECOY")));
+    parsed.push_back(parseProtein(fe, StringUtils::hasPrefix(fe.identifier, "DECOY")));
   }
   std::unordered_map<std::string, Size> first_of_name;
   std::unordered_map<std::string, long> target_of_accession; // -1: the accession of several targets
@@ -932,7 +940,7 @@ void ProteoformDatabase::build(const std::vector<FASTAFile::FASTAEntry>& input, 
   for (Size i = 0; i < parsed.size(); i++)
   {
     if (parsed[i].decoy) continue;
-    for (const String& prefix : {"DECOY_", "DECOY"})
+    for (const std::string& prefix : {"DECOY_", "DECOY"})
     {
       const auto it = first_of_name.find(prefix + parsed[i].identifier);
       if (it == first_of_name.end()) continue;

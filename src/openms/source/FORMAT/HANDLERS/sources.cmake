@@ -9,6 +9,9 @@ set(sources_list
   FidHandler.cpp
   FeatureXMLHandler.cpp
   IndexedMzMLDecoder.cpp
+  ImzMLHandler.cpp
+  ImzMLHandlerHelper.cpp
+  ImzMLWriter.cpp
   IndexedMzMLHandler.cpp
   MascotXMLHandler.cpp
   MzDataHandler.cpp
@@ -20,18 +23,18 @@ set(sources_list
   MzMLSqliteHandler.cpp
   MzMLSqliteSwathHandler.cpp
   MzXMLHandler.cpp
+  PASEFHillCentroider.cpp
   PTMXMLHandler.cpp
   ParamXMLHandler.cpp
-  ToolDescriptionHandler.cpp
+  ThermoRawFileMetadata.cpp
   TraMLHandler.cpp
   UnimodXMLHandler.cpp
+  StringManager.cpp
   UniProtXMLHandler.cpp
+  XMLAttributes.cpp
   XMLHandler.cpp
   XQuestResultXMLHandler.cpp
 )
-if (WITH_THERMO_RAW)
-  list(APPEND sources_list ThermoRawFileMetadata.cpp ThermoRawScanReader.cpp)
-endif()
 
 ### add path to the filenames
 set(sources)

@@ -9,10 +9,11 @@
 #pragma once
 
 #include <OpenMS/DATASTRUCTURES/Param.h>
-#include <OpenMS/DATASTRUCTURES/ListUtils.h>
+#include <OpenMS/DATASTRUCTURES/TypeAliases.h>
 #include <OpenMS/ANALYSIS/MAPMATCHING/TransformationModel.h>
 #include <iosfwd>
 #include <map>
+#include <memory>
 
 namespace OpenMS
 {
@@ -85,7 +86,7 @@ public:
     TransformationDescription& operator=(const TransformationDescription& rhs);
 
     /// Fits a model to the data
-    void fitModel(const String& model_type, const Param& params = Param());
+    void fitModel(const std::string& model_type, const Param& params = Param());
 
     /**
       @brief Applies the transformation to @p value.
@@ -96,7 +97,7 @@ public:
     double apply(double value) const;
 
     /// Gets the type of the fitted model
-    const String& getModelType() const;
+    const std::string& getModelType() const;
 
     /// Gets the possible types of models
     static void getModelTypes(StringList& result);
@@ -127,9 +128,9 @@ public:
     /**
        @brief Get the deviations between the data pairs
 
-       @param diffs Output
-       @param do_apply Get deviations after applying the model?
-       @param do_sort Sort @p diffs before returning?
+       @param[out] diffs Output
+       @param[in] do_apply Get deviations after applying the model?
+       @param[in] do_sort Sort @p diffs before returning?
     */
     void getDeviations(std::vector<double>& diffs, bool do_apply = false,
                        bool do_sort = true) const;
@@ -171,11 +172,11 @@ public:
       - RT: set invert = true to obtain residuals in seconds (original x units). \n
       - IM: same pattern; units are the instrument’s native mobility units (e.g., 1/k0). \n
 
-      @param quantile     Quantile of |residual| to use (0 < quantile ≤ 1), e.g. 0.99.
-      @param invert       If true, compute residuals in original x-units via T^{-1};
+      @param[in] quantile     Quantile of |residual| to use (0 < quantile ≤ 1), e.g. 0.99.
+      @param[in] invert       If true, compute residuals in original x-units via T^{-1};
                           otherwise compute in transformed y-units via T.
-      @param full_window  If true, return full width (2·half-width); else return half-width.
-      @param padding_factor A padding factor to add to the estimated window.
+      @param[in] full_window  If true, return full width (2·half-width); else return half-width.
+      @param[in] padding_factor A padding factor to add to the estimated window.
       @return             Estimated window (in the units implied by @p invert).
                           If no data points are available, returns 0.0.
     */
@@ -188,9 +189,9 @@ protected:
     /// Data points
     DataPoints data_;
     /// Type of model
-    String model_type_;
-    /// Pointer to model
-    TransformationModel* model_;
+    std::string model_type_;
+    /// Owned model instance (std::unique_ptr)
+    std::unique_ptr<TransformationModel> model_;
   };
 
 } // end of namespace OpenMS

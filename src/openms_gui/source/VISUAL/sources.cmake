@@ -12,6 +12,7 @@ DIATreeTab.cpp
 EnhancedTabBar.cpp
 EnhancedTabBarWidgetInterface.cpp
 EnhancedWorkspace.cpp
+FileWatcher.cpp
 FilterList.cpp
 FilterList.ui
 GUIProgressLoggerImpl.cpp
@@ -58,8 +59,6 @@ SequenceVisualizer.cpp
 SequenceVisualizer.ui
 SpectraIDViewTab.cpp
 SpectraTreeTab.cpp
-SwathLibraryStats.cpp
-SwathLibraryStats.ui
 TableView.cpp
 TOPPASEdge.cpp
 TOPPASInputFileListVertex.cpp

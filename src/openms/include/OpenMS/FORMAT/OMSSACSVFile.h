@@ -17,7 +17,6 @@
 
 namespace OpenMS
 {
-  class String;
   /**
       @brief File adapter for OMSSACSV files.
 
@@ -38,14 +37,14 @@ public:
     /**
               @brief Loads a OMSSA file
 
-              @param filename the name of the file to read from
-              @param protein_identification the protein ProteinIdentification data
-              @param id_data the peptide ids of the file
+              @param[in] filename the name of the file to read from
+              @param[in] protein_identification the protein ProteinIdentification data
+              @param[in] id_data the peptide ids of the file
 
               @throw FileNotFound is thrown if the given file could not be found
               @throw ParseError is thrown if the given file could not be parsed
     */
-    void load(const String & filename, ProteinIdentification & protein_identification, PeptideIdentificationList & id_data) const;
+    void load(const std::string & filename, ProteinIdentification & protein_identification, PeptideIdentificationList & id_data) const;
   };
 } // namespace OpenMS
 

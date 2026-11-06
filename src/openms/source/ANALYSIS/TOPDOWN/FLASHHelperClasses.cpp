@@ -7,11 +7,14 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
+#include <OpenMS/CHEMISTRY/EmpiricalFormula.h>
 #include <OpenMS/CHEMISTRY/ModificationsDB.h>
+#include <OpenMS/CHEMISTRY/ResidueModification.h>
 #include <OpenMS/FORMAT/FileHandler.h>
 #include <OpenMS/FORMAT/MzMLFile.h>
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <map>
 #include <set>
 #include <exception>
@@ -265,7 +268,7 @@ namespace OpenMS
   {
   }
 
-  void FLASHHelperClasses::loadExperiment(const String& file, PeakMap& map, const PeakFileOptions& options, ProgressLogger::LogType log)
+  void FLASHHelperClasses::loadExperiment(const std::string& file, PeakMap& map, const PeakFileOptions& options, ProgressLogger::LogType log)
   {
     if (FileHandler::getTypeByFileName(file) == FileTypes::RAW)
     {
@@ -286,18 +289,18 @@ namespace OpenMS
     mzml.load(file, map);
   }
 
-  const ResidueModification* FLASHHelperClasses::resolveVariableModification(const String& spec_in, bool& protein_n_term)
+  const ResidueModification* FLASHHelperClasses::resolveVariableModification(const std::string& spec_in, bool& protein_n_term)
   {
     protein_n_term = false;
-    String spec = spec_in;
-    spec.trim();
+    std::string spec = spec_in;
+    StringUtils::trim(spec);
     // a name with the site "Protein N-term <residue>" that the database does not know: the same modification at any N-terminus, if the
     // database has it there (looked up without the name as given, whose failed lookup ModificationsDB would log as a warning)
-    const String tag = "(Protein N-term ";
+    const std::string tag = "(Protein N-term ";
     const Size at = spec.find(tag);
     if (at != std::string::npos && ! ModificationsDB::getInstance()->has(spec))
     {
-      const String any_n_term = spec.substr(0, at) + "(N-term " + spec.substr(at + tag.size());
+      const std::string any_n_term = spec.substr(0, at) + "(N-term " + spec.substr(at + tag.size());
       if (ModificationsDB::getInstance()->has(any_n_term))
       {
         const ResidueModification* mod = resolveModification(any_n_term);
@@ -311,23 +314,23 @@ namespace OpenMS
     return resolveModification(spec);
   }
 
-  const ResidueModification* FLASHHelperClasses::resolveModification(const String& spec_in)
+  const ResidueModification* FLASHHelperClasses::resolveModification(const std::string& spec_in)
   {
-    String spec = spec_in;
-    spec.trim();
+    std::string spec = spec_in;
+    StringUtils::trim(spec);
     const auto* db = ModificationsDB::getInstance();
-    String upper = spec;
-    upper.toUpper();
+    std::string upper = spec;
+    StringUtils::toUpper(upper);
     // a Unimod accession: its number, with or without "UNIMOD:", with its site in parentheses or bare. Only digits before the site, so
     // that names starting with a digit (e.g. 4-ONE) stay names.
-    String rest = upper.hasPrefix("UNIMOD:") ? spec.substr(7) : spec;
+    std::string rest = StringUtils::hasPrefix(upper, "UNIMOD:") ? spec.substr(7) : spec;
     {
-      String head = rest.substr(0, std::min(rest.find('('), rest.size()));
-      head.trim();
+      std::string head = rest.substr(0, std::min(rest.find('('), rest.size()));
+      StringUtils::trim(head);
       const bool digits = ! head.empty() && std::all_of(head.begin(), head.end(), [](char c) { return std::isdigit((unsigned char)c); });
-      if (! upper.hasPrefix("UNIMOD:") && ! digits) return db->getModification(spec);
+      if (! StringUtils::hasPrefix(upper, "UNIMOD:") && ! digits) return db->getModification(spec);
     }
-    String number = rest, site;
+    std::string number = rest, site;
     const Size open = rest.find('(');
     if (open != std::string::npos)
     {
@@ -336,25 +339,25 @@ namespace OpenMS
       number = rest.substr(0, open);
       site = rest.substr(open + 1, close - open - 1);
     }
-    number.trim();
-    site.trim();
+    StringUtils::trim(number);
+    StringUtils::trim(site);
     if (number.empty() || ! std::all_of(number.begin(), number.end(), [](char c) { return std::isdigit((unsigned char)c); }))
     {
       throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "a Unimod accession is its number (or UNIMOD:<number>), e.g. 35 (M)", spec);
     }
-    String residue;
+    std::string residue;
     ResidueModification::TermSpecificity term = ResidueModification::NUMBER_OF_TERM_SPECIFICITY;
     if (! site.empty())
     {
-      String lower = site;
-      lower.toLower();
+      std::string lower = site;
+      StringUtils::toLower(lower);
       if (lower == "n-term") term = ResidueModification::N_TERM;
       else if (lower == "c-term") term = ResidueModification::C_TERM;
       else if (lower == "protein n-term") term = ResidueModification::PROTEIN_N_TERM;
       else if (lower == "protein c-term") term = ResidueModification::PROTEIN_C_TERM;
       else if (site.size() == 1 && std::isalpha((unsigned char)site[0]))
       {
-        residue = String(1, (char)std::toupper((unsigned char)site[0]));
+        residue = std::string(1, (char)std::toupper((unsigned char)site[0]));
         term = ResidueModification::ANYWHERE;
       }
       else
@@ -369,20 +372,20 @@ namespace OpenMS
     // the sites found (a site can have several records, e.g. from Unimod and PSI-MOD): one site is the modification
     auto siteOf = [](const ResidueModification* m) {
       const auto t = m->getTermSpecificity();
-      if (t == ResidueModification::ANYWHERE) return String(1, m->getOrigin());
-      return String(m->getTermSpecificityName(t));
+      if (t == ResidueModification::ANYWHERE) return std::string(1, m->getOrigin());
+      return std::string(m->getTermSpecificityName(t));
     };
-    std::map<String, const ResidueModification*> by_site;
+    std::map<std::string, const ResidueModification*> by_site;
     for (const auto* m : found)
     {
-      const String key = siteOf(m);
+      const std::string key = siteOf(m);
       auto it = by_site.find(key);
       // prefer the Unimod record of that number
-      if (it == by_site.end() || (it->second->getUniModRecordId() != number.toInt() && m->getUniModRecordId() == number.toInt())) by_site[key] = m;
+      if (it == by_site.end() || (it->second->getUniModRecordId() != StringUtils::toInt32(number) && m->getUniModRecordId() == StringUtils::toInt32(number))) by_site[key] = m;
     }
     if (by_site.size() > 1)
     {
-      String list;
+      std::string list;
       for (const auto& [key, m] : by_site) list += (list.empty() ? "" : ", ") + number + " (" + key + ")";
       throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "the modification has several sites; give one: " + list, spec);
     }
@@ -398,24 +401,24 @@ namespace OpenMS
   {
     return quantities.empty();
   }
-  FLASHHelperClasses::Tag::Tag(const String& seq, double n_mass, double c_mass, const std::vector<double>& mzs, const std::vector<int>& scores,  int scan) :
+  FLASHHelperClasses::Tag::Tag(const std::string& seq, double n_mass, double c_mass, const std::vector<double>& mzs, const std::vector<int>& scores,  int scan) :
       seq_(std::move(seq)), n_mass_(n_mass), c_mass_(c_mass), mzs_(mzs), scores_(scores), scan_(scan), length_(mzs.size() - 1)
   {
-    upper_seq_ = seq_.toUpper();
+    upper_seq_ = StringUtils::toUpper(seq_);
   }
 
-  FLASHHelperClasses::Tag::Tag(String seq, double n_mass, double c_mass, std::vector<double>& mzs, std::vector<int>& scores, int scan, Size length) :
+  FLASHHelperClasses::Tag::Tag(std::string seq, double n_mass, double c_mass, std::vector<double>& mzs, std::vector<int>& scores, int scan, Size length) :
       seq_(std::move(seq)), n_mass_(n_mass), c_mass_(c_mass), mzs_(mzs), scores_(scores), scan_(scan), length_(length)
   {
-    upper_seq_ = seq_.toUpper();
+    upper_seq_ = StringUtils::toUpper(seq_);
   }
 
-  const String& FLASHHelperClasses::Tag::getSequence() const
+  const std::string& FLASHHelperClasses::Tag::getSequence() const
   {
     return seq_;
   }
 
-  const String& FLASHHelperClasses::Tag::getUppercaseSequence() const
+  const std::string& FLASHHelperClasses::Tag::getUppercaseSequence() const
   {
     return upper_seq_;
   }
@@ -511,9 +514,9 @@ namespace OpenMS
   }
 
 
-  String FLASHHelperClasses::Tag::toString() const
+  std::string FLASHHelperClasses::Tag::toString() const
   {
-    String ret;
+    std::string ret;
     if (n_mass_ >= 0)
       ret = '[' + std::to_string(n_mass_) + "]\t";
     ret += seq_;
@@ -529,7 +532,7 @@ namespace OpenMS
     return ret;
   }
 
-  FLASHHelperClasses::MassTag::MassTag(const String& full_seq, const std::vector<int>& positions, int scan)
+  FLASHHelperClasses::MassTag::MassTag(const std::string& full_seq, const std::vector<int>& positions, int scan)
   {
     if (positions.size() < 2) return;
     seq_ = std::move(full_seq);
@@ -565,7 +568,7 @@ namespace OpenMS
     return false;
   }
 
-    const String& FLASHHelperClasses::MassTag::getSequence() const
+    const std::string& FLASHHelperClasses::MassTag::getSequence() const
     {
       return seq_;
     }
@@ -580,4 +583,500 @@ namespace OpenMS
       return scan_;
     }
 
-  } // namespace OpenMS
+    // ProForma: read and written by OpenMS::ProForma; the masses of the tags as computed for the top-down tools
+  namespace
+  {
+    using PFM = FLASHHelperClasses::ProFormaModification;
+
+    /// the residues ProForma is read and written with here
+    const std::string proforma_residues = "ACDEFGHIKLMNPQRSTVWYUO";
+
+    [[noreturn]] void proformaFail(const std::string& input, const std::string& message)
+    {
+      throw Exception::ParseError(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, input, message);
+    }
+
+    /// the mass of a glycan composition from the monosaccharide names of ProForma; names that follow each other without a count
+    /// (HexHexNAc) count once each, the count of a component applying to its last name
+    double glycanMass(const ProForma::GlycanComposition& glycan, const std::string& input)
+    {
+      // longest names first, as several share a prefix (HexNAc, HexN, HexA, HexS, Hex)
+      static const std::vector<std::pair<std::string, std::string>> monosaccharides = {
+        {"HexNAcS", "C8H13NO8S"}, {"HexNAc", "C8H13NO5"}, {"NeuAc", "C11H17NO8"}, {"NeuGc", "C11H17NO9"}, {"HexS", "C6H10O8S"},
+        {"HexP", "C6H11O8P"},     {"HexN", "C6H11NO4"},   {"HexA", "C6H8O6"},     {"dHex", "C6H10O4"},   {"Hex", "C6H10O5"},
+        {"Fuc", "C6H10O4"},       {"Neu", "C9H15NO7"},    {"Pen", "C5H8O4"},      {"Kdn", "C9H14O8"},    {"Phosphate", "HPO3"},
+        {"Sulfate", "SO3"}};
+      double mass = 0;
+      for (const auto& [monosaccharide, count] : glycan.components)
+      {
+        const auto* name = std::get_if<std::string>(&monosaccharide);
+        if (name == nullptr) proformaFail(input, "a formula in a glycan composition is not supported");
+        Size pos = 0;
+        while (pos < name->size())
+        {
+          if ((*name)[pos] == ' ')
+          {
+            pos++;
+            continue;
+          }
+          bool found = false;
+          for (const auto& [mono_name, formula] : monosaccharides)
+          {
+            if (name->compare(pos, mono_name.size(), mono_name) != 0) continue;
+            pos += mono_name.size();
+            mass += (pos >= name->size() ? count : 1) * EmpiricalFormula(formula).getMonoWeight();
+            found = true;
+            break;
+          }
+          if (! found) proformaFail(input, "unknown monosaccharide in glycan composition");
+        }
+      }
+      return mass;
+    }
+
+    /// a modification name or accession looked up in ModificationsDB (residue-specific first)
+    bool lookUpMass(const std::string& name, char residue, double& mass)
+    {
+      const auto* db = ModificationsDB::getInstance();
+      if (! db->has(name)) return false; // searchModifications would log every miss
+      std::set<const ResidueModification*> mods;
+      if (residue != 0) db->searchModifications(mods, name, std::string(1, residue));
+      if (mods.empty()) db->searchModifications(mods, name);
+      if (mods.empty()) return false;
+      mass = (*mods.begin())->getDiffMonoMass();
+      return true;
+    }
+
+    /// a number with an optional sign; false if the whole string is not a number
+    bool toNumber(const std::string& s, double& value)
+    {
+      if (s.empty()) return false;
+      try
+      {
+        Size used = 0;
+        value = std::stod(s, &used);
+        return used == s.size();
+      }
+      catch (const std::exception&)
+      {
+        return false;
+      }
+    }
+
+    /// a name without a score suffix: Phospho(0.9) -> Phospho
+    std::string withoutScore(std::string name)
+    {
+      StringUtils::trim(name);
+      if (! name.empty() && name.back() == ')')
+      {
+        const Size open = name.rfind('(');
+        double score;
+        if (open != std::string::npos && toNumber(name.substr(open + 1, name.size() - open - 2), score)) name = name.substr(0, open);
+      }
+      StringUtils::trim(name);
+      return name;
+    }
+
+    /// cross-links and branches are not supported
+    void checkLabels(const ProForma::Modification& mod, const std::string& input)
+    {
+      for (const auto& [tag, label] : mod.alternatives)
+      {
+        if (label.has_value() && (label->type == ProForma::Label::Type::CROSSLINK || label->type == ProForma::Label::Type::BRANCH))
+        {
+          proformaFail(input, "cross-links and branches are not supported");
+        }
+      }
+    }
+
+    /// the mass of one alternative of a tag; false if it gives none (INFO, a localisation group label alone, a position, an accession of
+    /// RESID, XL-MOD or GNOme, which are not in ModificationsDB)
+    bool alternativeMass(const ProForma::ModificationTag& tag, char residue, double& mass, const std::string& input)
+    {
+      if (const auto* md = std::get_if<ProForma::MassDelta>(&tag))
+      {
+        switch (md->source)
+        {
+          case ProForma::MassDelta::Source::NONE:
+          case ProForma::MassDelta::Source::OBS:
+            mass = md->mass;
+            return true;
+          case ProForma::MassDelta::Source::U:
+          case ProForma::MassDelta::Source::M:
+            return lookUpMass(md->original_text, residue, mass); // a name lookup of what follows U: or M:
+          default:
+            return false;
+        }
+      }
+      if (const auto* formula = std::get_if<ProForma::FormulaTag>(&tag))
+      {
+        if (formula->charge.has_value()) proformaFail(input, "invalid formula");
+        std::string f = formula->formula_string;
+        StringUtils::substitute(f, " ", "");
+        try
+        {
+          mass = EmpiricalFormula(f).getMonoWeight();
+        }
+        catch (const Exception::BaseException&)
+        {
+          proformaFail(input, "invalid formula");
+        }
+        return true;
+      }
+      if (const auto* glycan = std::get_if<ProForma::GlycanComposition>(&tag))
+      {
+        mass = glycanMass(*glycan, input);
+        return true;
+      }
+      if (const auto* cv = std::get_if<ProForma::CvAccession>(&tag))
+      {
+        if (cv->database == ProForma::CvDatabase::UNIMOD) return lookUpMass("UniMod:" + cv->accession, residue, mass);
+        if (cv->database == ProForma::CvDatabase::MOD) return lookUpMass("MOD:" + cv->accession, residue, mass);
+        return false;
+      }
+      if (const auto* named = std::get_if<ProForma::NamedMod>(&tag))
+      {
+        if (named->cv_hint.has_value() && named->cv_hint != ProForma::CvDatabase::UNIMOD && named->cv_hint != ProForma::CvDatabase::MOD)
+        {
+          return false;
+        }
+        const std::string name = withoutScore(named->name);
+        if (name.empty()) return false;
+        if (toNumber(name, mass)) return true;
+        // a name without source, or one with a colon of its own (Cation:Na): Unimod, then PSI-MOD
+        return lookUpMass(name, residue, mass);
+      }
+      return false; // INFO, a label alone, a position constraint
+    }
+
+    /// the mass of a modification: of the first alternative that gives one
+    double modificationMass(const ProForma::Modification& mod, char residue, const std::string& input)
+    {
+      checkLabels(mod, input);
+      for (const auto& [tag, label] : mod.alternatives)
+      {
+        double mass = 0;
+        if (alternativeMass(tag, residue, mass, input)) return mass;
+      }
+      proformaFail(input, "no mass for the modification");
+    }
+
+    /// a ProForma string of one residue with @p mod, written by OpenMS::ProForma
+    std::string writeOnResidue(const ProForma::Modification& mod)
+    {
+      ProForma::Peptidoform pf;
+      ProForma::SequenceElement element;
+      element.amino_acid = 'A';
+      element.modifications.push_back(mod);
+      pf.sequence.emplace_back(std::move(element));
+      return ProForma::toString(pf);
+    }
+
+    /// the tag content of @p mod as written by OpenMS::ProForma (without its brackets)
+    std::string tagText(const ProForma::Modification& mod)
+    {
+      const std::string written = writeOnResidue(mod);
+      return written.substr(2, written.size() - 3);
+    }
+
+    /// the modification of a tag content read by OpenMS::ProForma; false if it cannot be read as one modification on a residue
+    bool readModification(const std::string& tag, ProForma::Modification& mod)
+    {
+      ProForma::Peptidoform pf;
+      try
+      {
+        pf = ProForma::parse("A[" + tag + "]");
+      }
+      catch (const Exception::BaseException&)
+      {
+        return false;
+      }
+      if (pf.sequence.size() != 1 || ! pf.global_mods.empty() || ! pf.unlocalised_mods.empty() || ! pf.labile_mods.empty() ||
+          ! pf.n_term_mods.empty() || ! pf.c_term_mods.empty() || pf.name.has_value() || pf.charge.has_value())
+      {
+        return false;
+      }
+      const auto* element = std::get_if<ProForma::SequenceElement>(&pf.sequence[0]);
+      if (element == nullptr || element->modifications.size() != 1) return false;
+      mod = element->modifications[0];
+      return true;
+    }
+
+    /// the ProForma::Modification written as @p m: a mass as formatProFormaMass writes it, or the tag as given (each alternative as
+    /// OpenMS::ProForma reads it if it writes it back the same, else as a name with that text)
+    ProForma::Modification toModification(const PFM& m)
+    {
+      ProForma::Modification mod;
+      if (m.tag.empty())
+      {
+        ProForma::MassDelta delta;
+        delta.mass = m.mass;
+        delta.original_text = FLASHHelperClasses::formatProFormaMass(m.mass);
+        mod.alternatives.emplace_back(delta, std::nullopt);
+        return mod;
+      }
+      if (readModification(m.tag, mod) && tagText(mod) == m.tag) return mod;
+      mod = ProForma::Modification();
+      std::vector<std::string> parts;
+      StringUtils::split(m.tag, '|', parts);
+      for (const auto& part : parts)
+      {
+        ProForma::Modification alternative;
+        if (readModification(part, alternative) && alternative.alternatives.size() == 1 && tagText(alternative) == part)
+        {
+          mod.alternatives.push_back(alternative.alternatives[0]);
+          continue;
+        }
+        ProForma::NamedMod named;
+        named.name = part;
+        mod.alternatives.emplace_back(named, std::nullopt);
+      }
+      return mod;
+    }
+
+    /// a modification on residues start..end with its mass and its tag as written
+    PFM residueModification(int start, int end, const ProForma::Modification& mod, double mass, bool global = false)
+    {
+      PFM m;
+      m.site = PFM::Site::RESIDUE;
+      m.start = start;
+      m.end = end;
+      m.mass = mass;
+      m.tag = tagText(mod);
+      m.global = global;
+      return m;
+    }
+
+    /// a modification at a site other than residues
+    PFM siteModification(PFM::Site site, const ProForma::Modification& mod, double mass)
+    {
+      PFM m;
+      m.site = site;
+      m.mass = mass;
+      m.tag = tagText(mod);
+      return m;
+    }
+  } // namespace
+
+  std::string FLASHHelperClasses::formatProFormaMass(double mass)
+  {
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), "%+.6f", mass);
+    std::string s(buffer);
+    while (s.size() > 3 && s.back() == '0' && s[s.size() - 2] != '.') s.pop_back();
+    return s;
+  }
+
+  double FLASHHelperClasses::getProFormaTagMass(const std::string& tag, char residue)
+  {
+    ProForma::Modification mod;
+    if (readModification(tag, mod)) return modificationMass(mod, residue, tag);
+    // a name or an accession that OpenMS::ProForma does not read, e.g. a Unimod name starting with a digit (2-methylbutyryl), with a '+'
+    // (Met-loss+Acetyl), or OpenMS's spelling of a Unimod accession (UniMod:35): looked up as it is
+    double mass = 0;
+    if (lookUpMass(withoutScore(tag), residue, mass)) return mass;
+    proformaFail(tag, "no mass for the modification");
+  }
+
+  std::vector<FLASHHelperClasses::ProFormaModification> FLASHHelperClasses::getProFormaModifications(const ProForma::PeptidoformIon& ion,
+                                                                                                      std::string& sequence)
+  {
+    const std::string input = ProForma::toString(ion);
+    if (ion.is_chimeric || ion.chains.size() != 1) proformaFail(input, "chimeric spectra (+) and several chains (//) are not supported");
+    if (ion.charge.has_value() && std::get_if<int>(&ion.charge.value()) == nullptr) proformaFail(input, "only an integer charge is supported after '/'");
+    const ProForma::Peptidoform& pf = ion.chains[0];
+    if (ion.name.has_value() || pf.name.has_value()) proformaFail(input, "names are not supported");
+    if (pf.charge.has_value()) proformaFail(input, "a charge per chain is not supported");
+
+    // the sequence
+    sequence.clear();
+    auto add_residue = [&](char residue) {
+      if (proforma_residues.find(residue) == std::string::npos) proformaFail(input, std::string("unsupported residue '") + residue + "'");
+      sequence += residue;
+    };
+    for (const auto& section : pf.sequence)
+    {
+      if (const auto* element = std::get_if<ProForma::SequenceElement>(&section)) add_residue(element->amino_acid);
+      else if (const auto* range = std::get_if<ProForma::ModifiedRange>(&section))
+      {
+        if (range->elements.empty()) proformaFail(input, "empty range");
+        if (range->modifications.empty()) proformaFail(input, "a range must be followed by its modification");
+        for (const auto& element : range->elements) add_residue(element.amino_acid);
+      }
+      else proformaFail(input, "ambiguous residues are not supported");
+    }
+    if (sequence.empty()) proformaFail(input, "no sequence");
+
+    // a residue tag without mass ([#g1], [INFO:x]) marks only another possible site
+    auto has_mass = [&input](const ProForma::Modification& mod) {
+      checkLabels(mod, input);
+      for (const auto& [tag, label] : mod.alternatives)
+      {
+        if (! std::holds_alternative<ProForma::InfoTag>(tag)) return true;
+      }
+      return false;
+    };
+
+    std::vector<ProFormaModification> mods;
+    for (const auto& entry : pf.global_mods)
+    {
+      const auto* global = std::get_if<ProForma::GlobalModification>(&entry);
+      if (global == nullptr) proformaFail(input, "isotope labels <...> are not supported");
+      std::vector<char> residues;
+      for (auto location : global->locations)
+      {
+        StringUtils::trim(location);
+        if (location.size() != 1 || proforma_residues.find(location[0]) == std::string::npos)
+        {
+          proformaFail(input, "global modification on '" + location + "' is not supported");
+        }
+        residues.push_back(location[0]);
+      }
+      if (residues.empty()) proformaFail(input, "global modification without residues");
+      for (int i = 0; i < (int)sequence.size(); i++)
+      {
+        if (std::find(residues.begin(), residues.end(), sequence[i]) == residues.end()) continue;
+        mods.push_back(residueModification(i, i, global->modification, modificationMass(global->modification, sequence[i], input), true));
+      }
+    }
+    for (const auto& unlocalised : pf.unlocalised_mods)
+    {
+      for (int c = 0; c < unlocalised.occurrence.value_or(1); c++)
+      {
+        for (const auto& mod : unlocalised.modifications) mods.push_back(siteModification(PFM::Site::UNKNOWN, mod, modificationMass(mod, 0, input)));
+      }
+    }
+    for (const auto& labile : pf.labile_mods)
+    {
+      mods.push_back(siteModification(PFM::Site::LABILE, labile.modification, modificationMass(labile.modification, 0, input)));
+    }
+    for (const auto& mod : pf.n_term_mods) mods.push_back(siteModification(PFM::Site::N_TERM, mod, modificationMass(mod, sequence[0], input)));
+    int index = 0;
+    for (const auto& section : pf.sequence)
+    {
+      if (const auto* element = std::get_if<ProForma::SequenceElement>(&section))
+      {
+        for (const auto& mod : element->modifications)
+        {
+          if (has_mass(mod)) mods.push_back(residueModification(index, index, mod, modificationMass(mod, sequence[index], input)));
+        }
+        index++;
+        continue;
+      }
+      const auto& range = std::get<ProForma::ModifiedRange>(section);
+      const int start = index;
+      for (const auto& element : range.elements)
+      {
+        for (const auto& mod : element.modifications)
+        {
+          if (has_mass(mod)) mods.push_back(residueModification(index, index, mod, modificationMass(mod, sequence[index], input)));
+        }
+        index++;
+      }
+      for (const auto& mod : range.modifications)
+      {
+        if (! has_mass(mod)) continue;
+        const int end = index - 1;
+        mods.push_back(residueModification(start, end, mod, modificationMass(mod, start == end ? sequence[start] : 0, input)));
+      }
+    }
+    for (const auto& mod : pf.c_term_mods) mods.push_back(siteModification(PFM::Site::C_TERM, mod, modificationMass(mod, sequence.back(), input)));
+    return mods;
+  }
+
+  ProForma::Peptidoform FLASHHelperClasses::toPeptidoform(const std::string& sequence, const std::vector<ProFormaModification>& modifications)
+  {
+    for (char c : sequence)
+    {
+      if (proforma_residues.find(c) == std::string::npos) proformaFail(sequence, std::string("unsupported residue '") + c + "'");
+    }
+    // residue modifications: within the sequence, ranges the same or disjoint (a range may hold no other range)
+    std::vector<ProFormaModification> mods;
+    for (auto m : modifications)
+    {
+      if (m.site == ProFormaModification::Site::RESIDUE)
+      {
+        if (m.start > m.end) std::swap(m.start, m.end);
+        if (m.start < 0 || m.end >= (int)sequence.size())
+        {
+          throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "modification outside the sequence",
+                                        StringUtils::toStr(m.start) + "-" + StringUtils::toStr(m.end));
+        }
+        if (m.end > m.start)
+        {
+          for (const auto& other : mods)
+          {
+            if (other.site != ProFormaModification::Site::RESIDUE || other.end == other.start || (other.start == m.start && other.end == m.end)) continue;
+            if (other.start <= m.end && m.start <= other.end)
+            {
+              throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "overlapping ranges",
+                                            StringUtils::toStr(m.start) + "-" + StringUtils::toStr(m.end));
+            }
+          }
+        }
+      }
+      mods.push_back(m);
+    }
+
+    ProForma::Peptidoform pf;
+    // global fixed modifications, one per tag, with their residues
+    std::map<std::string, std::pair<ProForma::Modification, std::set<char>>> globals;
+    for (const auto& m : mods)
+    {
+      if (! m.global) continue;
+      const auto mod = toModification(m);
+      auto& global = globals.emplace(writeOnResidue(mod), std::make_pair(mod, std::set<char>())).first->second;
+      global.second.insert(sequence[m.start]);
+    }
+    for (const auto& [text, global] : globals)
+    {
+      ProForma::GlobalModification g;
+      g.modification = global.first;
+      for (char r : global.second) g.locations.emplace_back(1, r);
+      pf.global_mods.emplace_back(std::move(g));
+    }
+    ProForma::UnlocalisedMod unknown;
+    for (const auto& m : mods)
+    {
+      if (m.site == ProFormaModification::Site::UNKNOWN) unknown.modifications.push_back(toModification(m));
+      if (m.site == ProFormaModification::Site::LABILE) pf.labile_mods.push_back(ProForma::LabileModification {toModification(m)});
+      if (m.site == ProFormaModification::Site::N_TERM) pf.n_term_mods.push_back(toModification(m));
+      if (m.site == ProFormaModification::Site::C_TERM) pf.c_term_mods.push_back(toModification(m));
+    }
+    if (! unknown.modifications.empty()) pf.unlocalised_mods.push_back(std::move(unknown));
+
+    // the residues, a range with its residues and then its modifications
+    auto element_at = [&](int i) {
+      ProForma::SequenceElement element;
+      element.amino_acid = sequence[i];
+      for (const auto& m : mods)
+      {
+        if (m.site == ProFormaModification::Site::RESIDUE && ! m.global && m.start == i && m.end == i) element.modifications.push_back(toModification(m));
+      }
+      return element;
+    };
+    for (int i = 0; i < (int)sequence.size(); i++)
+    {
+      int range_end = -1;
+      for (const auto& m : mods)
+      {
+        if (m.site == ProFormaModification::Site::RESIDUE && ! m.global && m.start == i && m.end > i) range_end = m.end;
+      }
+      if (range_end < 0)
+      {
+        pf.sequence.emplace_back(element_at(i));
+        continue;
+      }
+      ProForma::ModifiedRange range;
+      for (int j = i; j <= range_end; j++) range.elements.push_back(element_at(j));
+      for (const auto& m : mods)
+      {
+        if (m.site == ProFormaModification::Site::RESIDUE && ! m.global && m.start == i && m.end == range_end) range.modifications.push_back(toModification(m));
+      }
+      pf.sequence.emplace_back(std::move(range));
+      i = range_end;
+    }
+    return pf;
+  }
+
+} // namespace OpenMS

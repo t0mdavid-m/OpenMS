@@ -10,6 +10,7 @@
 
 #include <OpenMS/METADATA/CVTerm.h>
 #include <OpenMS/METADATA/MetaInfoInterface.h>
+#include <OpenMS/CONCEPT/HashUtils.h>
 #include <map>
 
 namespace OpenMS
@@ -60,16 +61,16 @@ public:
     void replaceCVTerm(const CVTerm& cv_term);
 
     /// replaces the specified CV terms using the given accession number
-    void replaceCVTerms(const std::vector<CVTerm>& cv_terms, const String& accession);
+    void replaceCVTerms(const std::vector<CVTerm>& cv_terms, const std::string& accession);
 
     /// replaces all cv terms with a map (can be obtained via getCVTerms)
-    void replaceCVTerms(const std::map<String, std::vector<CVTerm> >& cv_term_map);
+    void replaceCVTerms(const std::map<std::string, std::vector<CVTerm> >& cv_term_map);
 
     /// merges the given map into the member map, no duplicate checking
-    void consumeCVTerms(const std::map<String, std::vector<CVTerm> >& cv_term_map);
+    void consumeCVTerms(const std::map<std::string, std::vector<CVTerm> >& cv_term_map);
 
     /// returns the accession string of the term
-    const std::map<String, std::vector<CVTerm> >& getCVTerms() const;
+    const std::map<std::string, std::vector<CVTerm> >& getCVTerms() const;
 
     /// adds a CV term
     void addCVTerm(const CVTerm& term);
@@ -91,7 +92,7 @@ public:
     bool operator!=(const CVTermList& cv_term_list) const;
 
     /// checks whether the term has a value
-    bool hasCVTerm(const String& accession) const;
+    bool hasCVTerm(const std::string& accession) const;
 
     /// checks whether the stored terms fulfill a given CVMappingRule
     /// TODO : implement
@@ -103,9 +104,76 @@ public:
 
 protected:
 
-  std::map<String, std::vector<CVTerm> > cv_terms_;
+  std::map<std::string, std::vector<CVTerm> > cv_terms_;
 
   };
 
+  /// Helper template to hash any type with getCVTerms() method (CVTermList, CVTermListInterface)
+  template<typename T>
+  inline std::size_t hashCVTerms(const T& obj) noexcept
+  {
+    std::size_t seed = 0;
+    const auto& cv_terms = obj.getCVTerms();
+    for (const auto& [accession, terms] : cv_terms)
+    {
+      hash_combine(seed, fnv1a_hash_string(accession));
+      for (const auto& term : terms)
+      {
+        hash_combine(seed, fnv1a_hash_string(term.getAccession()));
+        hash_combine(seed, fnv1a_hash_string(term.getName()));
+        hash_combine(seed, fnv1a_hash_string(term.getCVIdentifierRef()));
+        if (term.hasValue())
+        {
+          hash_combine(seed, fnv1a_hash_string(term.getValue().toString()));
+        }
+        if (term.hasUnit())
+        {
+          hash_combine(seed, fnv1a_hash_string(term.getUnit().accession));
+        }
+      }
+    }
+    return seed;
+  }
+
+  // Convenience wrappers for backward compatibility
+  inline std::size_t hashCVTermList(const CVTermList& cvtl) noexcept { return hashCVTerms(cvtl); }
+
 } // namespace OpenMS
+
+// Hash function specialization for CVTermList
+namespace std
+{
+  /**
+   * @brief Hash function for CVTermList.
+   *
+   * Hashes based on the MetaInfoInterface base class and all CV terms.
+   * Iterates through the map of accession -> vector<CVTerm>.
+   *
+   * @note std::map iteration order is deterministic (sorted by key), so
+   *       equal CVTermList objects will produce identical hash values without
+   *       explicit sorting.
+   */
+  template<>
+  struct hash<OpenMS::CVTermList>
+  {
+    std::size_t operator()(const OpenMS::CVTermList& list) const noexcept
+    {
+      // Start with MetaInfoInterface base class hash
+      std::size_t seed = std::hash<OpenMS::MetaInfoInterface>{}(list);
+
+      // Hash all CV terms
+      for (const auto& entry : list.getCVTerms())
+      {
+        // Hash the accession string
+        OpenMS::hash_combine(seed, OpenMS::fnv1a_hash_string(entry.first));
+        // Hash each CV term in the vector
+        for (const auto& term : entry.second)
+        {
+          OpenMS::hash_combine(seed, std::hash<OpenMS::CVTerm>{}(term));
+        }
+      }
+      return seed;
+    }
+  };
+} // namespace std
 

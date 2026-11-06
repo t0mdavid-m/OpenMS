@@ -12,7 +12,9 @@
 #include <OpenMS/VISUAL/ParamEditor.h>
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
 #include <OpenMS/SYSTEM/File.h>
+#include <OpenMS/SYSTEM/SystemSettings.h>
 #include <OpenMS/FORMAT/ParamXMLFile.h>
+#include <OpenMS/VISUAL/MISC/Qt5Port.h>
 
 #include <QtCore/QStringList>
 #include <QtWidgets/QPushButton>
@@ -29,7 +31,7 @@ using namespace std;
 
 namespace OpenMS
 {
-  TOPPASToolConfigDialog::TOPPASToolConfigDialog(QWidget* parent, Param& param, const String& default_dir, const String& tool_name, const String& tool_type, const String& tool_desc, const QVector<String>& hidden_entries) :
+  TOPPASToolConfigDialog::TOPPASToolConfigDialog(QWidget* parent, Param& param, const std::string& default_dir, const std::string& tool_name, const std::string& tool_type, const std::string& tool_desc, const QVector<std::string>& hidden_entries) :
     QDialog(parent),
     param_(&param),
     default_dir_(default_dir),
@@ -42,7 +44,7 @@ namespace OpenMS
     QLabel* description = new QLabel;
     description->setAlignment(Qt::AlignTop | Qt::AlignLeft);
     description->setWordWrap(true);
-    description->setText(tool_desc.toQString());
+    description->setText(toQString(tool_desc));
     main_grid->addWidget(description, 0, 0, 1, 1);
 
     //Add advanced mode check box
@@ -52,21 +54,21 @@ namespace OpenMS
 
     QHBoxLayout* hbox = new QHBoxLayout;
     QPushButton* load_button = new QPushButton(tr("&Load config from .INI file"));
-    connect(load_button, SIGNAL(clicked()), this, SLOT(loadINI_()));
+    connect(load_button, &QPushButton::clicked, this, &TOPPASToolConfigDialog::loadINI_);
     hbox->addWidget(load_button);
     QPushButton* store_button = new QPushButton(tr("&Store config to .INI file"));
-    connect(store_button, SIGNAL(clicked()), this, SLOT(storeINI_()));
+    connect(store_button, &QPushButton::clicked, this, &TOPPASToolConfigDialog::storeINI_);
     hbox->addWidget(store_button);
     hbox->addStretch();
 
     // cancel button
     QPushButton* cancel_button = new QPushButton(tr("&Cancel"));
-    connect(cancel_button, SIGNAL(clicked()), this, SLOT(reject()));
+    connect(cancel_button, &QPushButton::clicked, this, &QDialog::reject);
     hbox->addWidget(cancel_button);
 
     // ok button
     QPushButton* ok_button_ = new QPushButton(tr("&Ok"));
-    connect(ok_button_, SIGNAL(clicked()), this, SLOT(ok_()));
+    connect(ok_button_, &QPushButton::clicked, this, &TOPPASToolConfigDialog::ok_);
     hbox->addWidget(ok_button_);
 
     main_grid->addLayout(hbox, 2, 0, 1, 1);
@@ -76,7 +78,7 @@ namespace OpenMS
     editor_->load(*param_);
     editor_->setFocus(Qt::MouseFocusReason);
 
-    setWindowTitle(tool_name.toQString() + " " + tr("configuration"));
+    setWindowTitle(toQString(tool_name) + " " + tr("configuration"));
   }
 
   TOPPASToolConfigDialog::~TOPPASToolConfigDialog() = default;
@@ -116,7 +118,7 @@ namespace OpenMS
     }
     catch (Exception::BaseException& e)
     {
-      QMessageBox::critical(this, "Error", (String("Error loading INI file: ") + e.what()).c_str());
+      QMessageBox::critical(this, "Error", (std::string("Error loading INI file: ") + e.what()).c_str());
       arg_param_.clear();
       return;
     }
@@ -127,7 +129,7 @@ namespace OpenMS
     //param_->remove("debug");
 
     //remove parameters already explained by edges and the "type" parameter
-    for (const String &name : hidden_entries_)
+    for (const std::string &name : hidden_entries_)
     {
       param_->remove(name);
     }
@@ -158,33 +160,33 @@ namespace OpenMS
     arg_param_.insert(tool_name_ + ":1:", *param_);
     try
     {
-      QString tmp_ini_file = File::getTempDirectory().toQString() + QDir::separator() + "TOPPAS_" + tool_name_.toQString() + "_";
+      QString tmp_ini_file = toQString(SystemSettings::getTempDirectory()) + QDir::separator() + "TOPPAS_" + toQString(tool_name_) + "_";
       if (!tool_type_.empty())
       {
-        tmp_ini_file += tool_type_.toQString() + "_";
+        tmp_ini_file += toQString(tool_type_) + "_";
       }
-      tmp_ini_file += File::getUniqueName().toQString() + "_tmp.ini";
+      tmp_ini_file += toQString(File::getUniqueName()) + "_tmp.ini";
       //store current parameters
       ParamXMLFile paramFile;
       paramFile.store(tmp_ini_file.toStdString(), arg_param_);
       //restore other parameters that might be missing
-      QString executable = File::findSiblingTOPPExecutable(tool_name_).toQString();
+      QString executable = toQString(File::findSiblingTOPPExecutable(tool_name_));
       QStringList args;
       args << "-write_ini" << filename_ << "-ini" << tmp_ini_file;
       if (!tool_type_.empty())
       {
-        args << "-type" << tool_type_.toQString();
+        args << "-type" << toQString(tool_type_);
       }
 
       if (QProcess::execute(executable, args) != 0)
       {
-        QMessageBox::critical(nullptr, "Error", (String("Could not execute '\"")  + executable + "\" \"" + args.join("\" \"") + "\"'!\n\nMake sure the TOPP tools are present in '" + File::getExecutablePath() + "', that you have permission to write to the temporary file path, and that there is space left in the temporary file path.").c_str());
+        QMessageBox::critical(nullptr, "Error", (std::string("Could not execute '\"")  + fromQString(executable) + "\" \"" + fromQString(args.join("\" \"")) + "\"'!\n\nMake sure the TOPP tools are present in '" + File::getExecutablePath() + "', that you have permission to write to the temporary file path, and that there is space left in the temporary file path.").c_str());
         return;
       }
     }
     catch (Exception::BaseException& e)
     {
-      QMessageBox::critical(this, "Error", (String("Error storing INI file: ") + e.what()).c_str());
+      QMessageBox::critical(this, "Error", (std::string("Error storing INI file: ") + e.what()).c_str());
       return;
     }
   }

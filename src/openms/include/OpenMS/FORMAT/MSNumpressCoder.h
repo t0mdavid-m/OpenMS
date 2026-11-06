@@ -9,7 +9,7 @@
 #pragma once
 
 #include <OpenMS/CONCEPT/Exception.h>
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 
 #include <algorithm>
 #include <string>
@@ -116,7 +116,7 @@ public:
       /**
         @brief Set compression using a string mapping to enum NumpressCompression.
 
-        @param compression A string from NamesOfNumpressCompression[]. Valid strings are "none", "linear", "pic" and "slof".
+        @param[in] compression A string from NamesOfNumpressCompression[]. Valid strings are "none", "linear", "pic" and "slof".
 
         @throws Exception::InvalidParameter if compression is unknown.
       */
@@ -142,20 +142,20 @@ public:
      *
      * @note In case of error, result string is empty
      *
-     * @param in The vector of floating point numbers to be encoded
-     * @param result The resulting string
-     * @param zlib_compression Whether to apply zlib compression after numpress compression
-     * @param config The numpress configuration defining the compression strategy
+     * @param[in] in The vector of floating point numbers to be encoded
+     * @param[out] result The resulting string
+     * @param[in] zlib_compression Whether to apply zlib compression after numpress compression
+     * @param[in] config The numpress configuration defining the compression strategy
      *
     */
     void encodeNP(const std::vector<double> & in,
-                  String & result,
+                  std::string & result,
                   bool zlib_compression,
                   const NumpressConfig & config);
 
     /// encodeNP from a float (convert first to double)
     void encodeNP(const std::vector<float> & in,
-                  String & result,
+                  std::string & result,
                   bool zlib_compression,
                   const NumpressConfig & config);
 
@@ -169,15 +169,15 @@ public:
      * zlib decompression after decoding) and then apply numpress decoding to
      * the data.
      *
-     * @param in The base64 encoded string
-     * @param out The resulting vector of doubles
-     * @param zlib_compression Whether to apply zlib de-compression before numpress de-compression
-     * @param config The numpress configuration defining the compression strategy
+     * @param[in] in The base64 encoded string
+     * @param[out] out The resulting vector of doubles
+     * @param[in] zlib_compression Whether to apply zlib de-compression before numpress de-compression
+     * @param[in] config The numpress configuration defining the compression strategy
      *
      * @throw throws Exception::ConversionError if the string cannot be converted
      *
     */
-    void decodeNP(const String & in,
+    void decodeNP(const std::string & in,
                   std::vector<double> & out,
                   bool zlib_compression,
                   const NumpressConfig & config);
@@ -195,13 +195,13 @@ public:
      * Please use the safe versions above unless you need access to the raw
      * byte arrays.
      *
-     * @param in The vector of floating point numbers to be encoded
-     * @param result The resulting string
-     * @param config The numpress configuration defining the compression strategy
+     * @param[in] in The vector of floating point numbers to be encoded
+     * @param[out] result The resulting string
+     * @param[in] config The numpress configuration defining the compression strategy
      *
     */
     void encodeNPRaw(const std::vector<double> & in,
-                     String & result,
+                     std::string & result,
                      const NumpressConfig & config);
 
     /**
@@ -217,9 +217,9 @@ public:
      * Please use the safe versions above unless you only have the raw byte
      * arrays.
      *
-     * @param in The base64 encoded string
-     * @param out The resulting vector of doubles
-     * @param config The numpress configuration defining the compression strategy
+     * @param[in] in The base64 encoded string
+     * @param[out] out The resulting vector of doubles
+     * @param[in] config The numpress configuration defining the compression strategy
      *
      * @throw throws Exception::ConversionError if the string cannot be converted
      *

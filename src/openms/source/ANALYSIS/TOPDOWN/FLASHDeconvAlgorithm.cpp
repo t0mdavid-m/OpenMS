@@ -169,7 +169,7 @@ void FLASHDeconvAlgorithm::filterLowPeaks_(MSExperiment& map)
       auto& it = map[i];
       mower.filterSpectrum(it);
       if (it.empty()) continue;
-      Size count = it.getType(false) == SpectrumSettings::CENTROID ? max_peak_count_for_centroid_ : max_peak_count_for_profile_;
+      Size count = it.getType(false) == SpectrumSettings::SpectrumType::CENTROID ? max_peak_count_for_centroid_ : max_peak_count_for_profile_;
       // The same result without the two sorts below: with strictly increasing m/z and no data arrays, the sort by position restores
       // the m/z order of the peaks the sort by intensity left, so the result is the peaks above the threshold in their order. The
       // threshold is the intensity of rank count (0-based) in descending order (none with at most count peaks) and the highest
@@ -221,9 +221,9 @@ void FLASHDeconvAlgorithm::filterLowPeaks_(MSExperiment& map)
 int FLASHDeconvAlgorithm::getScanNumber(const MSExperiment& map, Size index)
 {
   auto native_id_str = map[index].getNativeID();
-  std::vector<String> native_ids;
-  native_id_str.split(",", native_ids);
-  String type_accession = "MS:1000768";
+  std::vector<std::string> native_ids;
+  StringUtils::split(native_id_str, ",", native_ids);
+  std::string type_accession = "MS:1000768";
 
   if (!map.getSourceFiles().empty())
   {
@@ -271,7 +271,7 @@ void FLASHDeconvAlgorithm::deconvolveSpectrum_(const MSExperiment& map, Spectrum
   const auto& spec = map[job.index];
   const uint ms_level = spec.getMSLevel();
   const int scan_number = job.scan_number;
-  const String& native_id = spec.getNativeID();
+  const std::string& native_id = spec.getNativeID();
 
   PeakGroup precursor_pg;
   const auto precursor_pg_it = native_id_precursor_peak_group_map_.find(native_id);
@@ -468,7 +468,7 @@ void FLASHDeconvAlgorithm::deconvolveSpectrum_(const MSExperiment& map, Spectrum
 
 void FLASHDeconvAlgorithm::commitSpectrum_(const MSExperiment& map, const SpectrumJob_& job)
 {
-  const String& native_id = map[job.index].getNativeID();
+  const std::string& native_id = map[job.index].getNativeID();
   if (job.several_window_masses) spectra_with_several_window_masses_++;
   if (job.precursor_by_fragments)
   {
@@ -567,7 +567,7 @@ void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vec
     if (! workers.empty())
     {
       std::vector<SpectrumJob_> jobs;
-      std::set<String> native_ids;
+      std::set<std::string> native_ids;
       bool unique_native_ids = true;
       Size progress_count = 0;
       Size lower_index = map.size(); // the last spectrum of the lower MS level so far
@@ -702,17 +702,17 @@ void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vec
   // each part only if its case occurred in this run (decoy masses in a window only with report_FDR)
   if (spectra_with_several_window_masses_ > 0 || spectra_with_window_decoys_ > 0)
   {
-    String by_fragments = "Precursors by the fragments", sep = ": ";
+    std::string by_fragments = "Precursors by the fragments", sep = ": ";
     if (spectra_with_several_window_masses_ > 0)
     {
-      by_fragments += sep + "masses chosen among the target masses of the isolation window in " + String(precursors_by_fragments_) + " of "
-                      + String(spectra_with_several_window_masses_) + " MSn spectra with several";
+      by_fragments += sep + "masses chosen among the target masses of the isolation window in " + StringUtils::toStr(precursors_by_fragments_) + " of "
+                      + StringUtils::toStr(spectra_with_several_window_masses_) + " MSn spectra with several";
       sep = "; ";
     }
     if (spectra_with_window_decoys_ > 0)
     {
-      by_fragments += sep + "decoy precursors in " + String(decoy_precursors_) + " (a decoy mass of the window beat the chosen precursor in " + String(decoy_precursors_by_fragments_) + ")"
-                      + " of " + String(spectra_with_window_decoys_) + " MSn spectra with a precursor and decoy masses in the window";
+      by_fragments += sep + "decoy precursors in " + StringUtils::toStr(decoy_precursors_) + " (a decoy mass of the window beat the chosen precursor in " + StringUtils::toStr(decoy_precursors_by_fragments_) + ")"
+                      + " of " + StringUtils::toStr(spectra_with_window_decoys_) + " MSn spectra with a precursor and decoy masses in the window";
     }
     OPENMS_LOG_INFO << by_fragments << std::endl;
   }
@@ -864,9 +864,9 @@ void FLASHDeconvAlgorithm::determineTolerance_(const MSExperiment& map, const Pa
   // Per window, spectra are sampled in rounds, each doubling the sample, until 20,000 errors or every 4th spectrum.
   const std::vector<std::pair<Size, Size>> rounds {{64, 0}, {64, 32}, {32, 16}, {16, 8}, {8, 4}};
   const std::vector<double> sample_tols {30.0, 100.0, 300.0};
-  const String unit = centroid ? "peak errors" : "slot errors (profile)";
+  const std::string unit = centroid ? "peak errors" : "slot errors (profile)";
   std::vector<double> sampled;   // the errors of the window taken
-  String trace;                  // the windows tried, for the log
+  std::string trace;                  // the windows tried, for the log
   Size sampled_spectra = 0, max_error_count = 0;
   double half_width = -1, sample_tol = 0, centre_excess = 0;
   bool within_window = false; // the window taken holds the true errors well inside (not only the widest with a half-width)
@@ -883,13 +883,13 @@ void FLASHDeconvAlgorithm::determineTolerance_(const MSExperiment& map, const Pa
       if (errors.size() >= 20000) break;
     }
     max_error_count = std::max(max_error_count, errors.size());
-    trace += String(trace.empty() ? "" : ", ") + String((int)tol) + " ppm: " + String(errors.size()) + " errors";
+    trace += std::string(trace.empty() ? "" : ", ") + StringUtils::toStr((int)tol) + " ppm: " + StringUtils::toStr(errors.size()) + " errors";
     if (errors.size() < 1000) continue;
     std::vector<double> abs_errors(errors.size());
     std::transform(errors.begin(), errors.end(), abs_errors.begin(), [](double e) { return std::abs(e); });
     double excess = 0;
     const double hw = trueErrorHalfWidth(abs_errors, recruit * tol, coverage, excess);
-    trace += ", half-width " + (hw > 0 ? String::number(hw, 1) : String("none")) + ", centre " + String::number(excess, 1) + " x background";
+    trace += ", half-width " + (hw > 0 ? StringUtils::number(hw, 1) : std::string("none")) + ", centre " + StringUtils::number(excess, 1) + " x background";
     // no random peak in the band (an infinite centre excess) means the window is not measured beyond the true peaks: not taken
     if (hw <= 0 || excess < min_centre_excess || std::isinf(excess)) continue;
     half_width = hw;
@@ -925,10 +925,10 @@ void FLASHDeconvAlgorithm::determineTolerance_(const MSExperiment& map, const Pa
   const double sigma = 1.4826 * sorted[sorted.size() / 2];
   const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
   OPENMS_LOG_INFO << "done. Determined tolerance: " << tols_[ms_level - 1] << " ppm (" << (int)std::round(100 * coverage) << "% of " << sampled.size() << " " << unit
-                  << " within +-" << String::number(half_width, 1) << " ppm = " << recruit << " x tol; " << sampled_spectra << " of " << spectra.size()
+                  << " within +-" << StringUtils::number(half_width, 1) << " ppm = " << recruit << " x tol; " << sampled_spectra << " of " << spectra.size()
                   << " spectra deconvolved at " << sample_tol << " ppm" << (within_window ? "" : ", the widest window: may be underestimated")
-                  << "; true peaks " << String::number(centre_excess, 1) << " x background at the centre; centre " << String::number(median, 2)
-                  << " ppm, robust sigma " << String::number(sigma, 2) << " ppm; " << String::number(seconds, 1) << " s; windows " << trace << ")." << std::endl;
+                  << "; true peaks " << StringUtils::number(centre_excess, 1) << " x background at the centre; centre " << StringUtils::number(median, 2)
+                  << " ppm, robust sigma " << StringUtils::number(sigma, 2) << " ppm; " << StringUtils::number(seconds, 1) << " s; windows " << trace << ")." << std::endl;
 }
 
 void FLASHDeconvAlgorithm::run(MSExperiment& map,
@@ -1009,8 +1009,8 @@ void FLASHDeconvAlgorithm::run(MSExperiment& map,
   noise_decoy_weights_ = Qvalue::updatePeakGroupQvalues(deconvolved_spectra);
   if (report_decoy_)
   {
-    String weights;
-    for (const auto& [level, weight] : noise_decoy_weights_) weights += " MS" + String(level) + " " + String::number(weight, 3);
+    std::string weights;
+    for (const auto& [level, weight] : noise_decoy_weights_) weights += " MS" + StringUtils::toStr(level) + " " + StringUtils::number(weight, 3);
     OPENMS_LOG_INFO << "Noise decoy weights:" << weights << std::endl;
   }
   for (auto& dspec : deconvolved_spectra)
@@ -1119,9 +1119,9 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
   auto cv_of = [](const MSSpectrum& sp) {
     auto fs = sp.getMetaValue("filter string").toString();
     Size p = fs.find("cv=");
-    if (p == String::npos) return 1e5;
+    if (p == std::string::npos) return 1e5;
     Size e = fs.find(" ", p);
-    if (e == String::npos) e = fs.length() - 1;
+    if (e == std::string::npos) e = fs.length() - 1;
     return std::stod(fs.substr(p + 3, e - p));
   };
   // the CV of every spectrum of this level and the one below, parsed once (the search below reads them for many neighbours of each scan)
@@ -1140,7 +1140,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
     if (spec.getMSLevel() != ms_level) { continue; }
 
     int scan_number = getScanNumber(map, index);
-    String native_id = spec.getNativeID();
+    std::string native_id = spec.getNativeID();
 
     // ADR-0046: a commanded MS2 is located by its command. Null for an uncommanded scan, for MSn > 2, and when
     // the survey the command names is not in this data file (an RT crop) -- those keep the search below unchanged.

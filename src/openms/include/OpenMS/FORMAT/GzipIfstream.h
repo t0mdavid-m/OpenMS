@@ -10,7 +10,15 @@
 
 #include <OpenMS/config.h>
 
-#include <zlib.h>
+#include <cstddef>  // for size_t (used to come in through <zlib.h>)
+
+// <zlib.h> is deliberately not included here: zlib is a PRIVATE dependency of
+// libOpenMS, so no installed header may require its include directory. The only
+// zlib type this class needs is gzFile, which both zlib and zlib-ng's drop-in
+// compatibility header declare as `typedef struct gzFile_s *gzFile;`, so a
+// forward declaration of that opaque struct is enough. GzipIfstream.cpp includes
+// <zlib.h> and calls the API.
+struct gzFile_s;
 
 namespace OpenMS
 {
@@ -31,15 +39,15 @@ public:
 
     /**
       * @brief Reads n bytes from the bzip2 compressed file into buffer s
-      * 
-      * @param s Buffer to be filled with the output 
-      * @param n The size of the buffer s
+      *
+      * @param[out] s Buffer to be filled with the output
+      * @param[in] n The size of the buffer s
       * @return The number of actually read bytes. If it is less than n, the end of the file was reached and the stream is closed
-      * 
+      *
       * @note This returns a raw byte stream that is *not* null-terminated. Be careful here.
       * @note The length of the buffer needs to at least n
       * @note Closes the stream if the end of file is reached. Check isOpen before reading from the file again
-      * 
+      *
       * @exception Exception::ConversionError is thrown if decompression fails
       * @exception Exception::IllegalArgument is thrown if no file for decompression is given. This can happen even happen if a file was already open but read until the end.
     */
@@ -72,8 +80,8 @@ public:
     /*
         @brief updates crc32 check sum whether the buffer is corrupted
         @note if this function is used it has to be called after every call of function read
-        @param s the buffer which will be checked
-        @param n the size of the buffer
+        @param[in] s the buffer which will be checked
+        @param[in] n the size of the buffer
     *
     //void updateCRC32(const char* s,const size_t n);
 
@@ -89,8 +97,10 @@ public:
 
 protected:
 
-    ///a gzFile object(void*) . Necessary for decompression
-    gzFile gzfile_;
+    ///the open zlib file handle; this is zlib's @c gzFile, spelled as a pointer to
+    ///the opaque @c gzFile_s forward-declared above so that this header does not
+    ///have to include @c <zlib.h> . Necessary for decompression
+    gzFile_s * gzfile_;
     ///counts the last read duffer
     int n_buffer_;
     ///saves the last returned error by the read function

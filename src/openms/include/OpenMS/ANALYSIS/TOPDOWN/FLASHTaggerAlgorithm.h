@@ -148,7 +148,7 @@ public:
   static void fillMatchedPositionsAndFlankingMassDiffs(std::vector<int>& positions,
                                                       std::vector<double>& masses,
                                                       double flanking_mass_tol,
-                                                      const String& seq,
+                                                      const std::string& seq,
                                                       const FLASHHelperClasses::Tag& tag,
                                                       const std::vector<std::pair<int, double>>* fixed = nullptr);
 
@@ -194,19 +194,19 @@ private:
 
 
   void updateTagSet_(std::set<FLASHHelperClasses::Tag>& tag_set,
-                     std::map<String, std::vector<FLASHHelperClasses::Tag>>& seq_tag,
+                     std::map<std::string, std::vector<FLASHHelperClasses::Tag>>& seq_tag,
                      const std::vector<Size>& path,
                      const std::vector<double>& mzs,
                      const std::vector<int>& scores,
                      int scan,
                      double ppm, int mode);
 
-  static Size find_with_X_(const std::string_view& A, const String& B, Size pos = 0);
+  static Size find_with_X_(const std::string_view& A, const std::string& B, Size pos = 0);
 
   std::set<const Residue*> aas_ = ResidueDB::getInstance()->getResidues("Natural19WithoutI");
   std::map<double, std::vector<Residue>> aa_mass_map_;
   std::map<double, std::vector<std::vector<Residue>>> gap_mass_map_;
-  std::map<int, std::map<int, std::vector<String>>> edge_aa_map_;
+  std::map<int, std::map<int, std::vector<std::string>>> edge_aa_map_;
 
   std::vector<FLASHHelperClasses::Tag> tags_; // from scan to tags
 
@@ -214,7 +214,7 @@ private:
   std::set<double> n_term_shifts_;
   std::set<double> c_term_shifts_;
 
-  std::map<String, std::set<Size>> indexed_fasta_;
+  std::map<std::string, std::set<Size>> indexed_fasta_;
   bool consider_diff_ion_jumps_ = false;
   std::vector<Size> max_tag_counts_ {0, 0, 0, 50, 100, 200}; // tag count for length 0, 1, 2, 3, 4, 5
 

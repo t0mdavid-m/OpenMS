@@ -9,7 +9,10 @@
 #pragma once
 
 #include <OpenMS/CONCEPT/Types.h>
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/CONCEPT/HashUtils.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
+
+#include <functional>
 
 namespace OpenMS
 {
@@ -38,7 +41,7 @@ public:
     PeptideEvidence();
 
     /// Constructor
-    explicit PeptideEvidence(const String& accession, Int start=UNKNOWN_POSITION, Int end=UNKNOWN_POSITION, char aa_before=UNKNOWN_AA, char aa_after=UNKNOWN_AA);
+    explicit PeptideEvidence(const std::string& accession, Int start=UNKNOWN_POSITION, Int end=UNKNOWN_POSITION, char aa_before=UNKNOWN_AA, char aa_after=UNKNOWN_AA);
 
     /// Copy constructor
     PeptideEvidence(const PeptideEvidence&) = default;
@@ -68,10 +71,10 @@ public:
     bool hasValidLimits() const;
 
     /// get the protein accession the peptide matches to. If not available the empty string is returned.
-    const String& getProteinAccession() const;
+    const std::string& getProteinAccession() const;
 
     /// set the protein accession the peptide matches to. If not available set to empty string.
-    void setProteinAccession(const String& s);
+    void setProteinAccession(const std::string& s);
 
     /// set the position of the last AA of the peptide in protein coordinates (starting at 0 for the N-terminus). If not available, set to UNKNOWN_POSITION. N-terminal positions must be marked with N_TERMINAL_AA
     void setStart(const Int a);
@@ -98,7 +101,7 @@ public:
     char getAAAfter() const;
 
 protected:
-    String accession_;
+    std::string accession_;
 
     Int start_;
 
@@ -109,5 +112,23 @@ protected:
     char aa_after_;
   };
 
+} // namespace OpenMS
+
+// Hash function specialization for PeptideEvidence
+namespace std
+{
+  template<>
+  struct hash<OpenMS::PeptideEvidence>
+  {
+    std::size_t operator()(const OpenMS::PeptideEvidence& pe) const noexcept
+    {
+      std::size_t seed = OpenMS::fnv1a_hash_string(pe.getProteinAccession());
+      OpenMS::hash_combine(seed, OpenMS::hash_int(pe.getStart()));
+      OpenMS::hash_combine(seed, OpenMS::hash_int(pe.getEnd()));
+      OpenMS::hash_combine(seed, OpenMS::hash_int(static_cast<int>(pe.getAABefore())));
+      OpenMS::hash_combine(seed, OpenMS::hash_int(static_cast<int>(pe.getAAAfter())));
+      return seed;
+    }
+  };
 }
 

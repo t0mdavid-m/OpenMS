@@ -23,11 +23,11 @@ using namespace OpenSwath;
 
 void getMRMFeatureTest(MockMRMFeature * imrmfeature_test)
 {
-  boost::shared_ptr<MockFeature> f1_ptr = boost::shared_ptr<MockFeature>(new MockFeature());
-  boost::shared_ptr<MockFeature> f2_ptr = boost::shared_ptr<MockFeature>(new MockFeature());
+  std::shared_ptr<MockFeature> f1_ptr = std::shared_ptr<MockFeature>(new MockFeature());
+  std::shared_ptr<MockFeature> f2_ptr = std::shared_ptr<MockFeature>(new MockFeature());
   f1_ptr->m_intensity = 0.3f;
   f2_ptr->m_intensity = 0.7f;
-  std::map<std::string, boost::shared_ptr<MockFeature> > features;
+  std::map<std::string, std::shared_ptr<MockFeature> > features;
   features["group1"] = f1_ptr;
   features["group2"] = f2_ptr;
   imrmfeature_test->m_features = features;
@@ -223,7 +223,7 @@ END_SECTION
 START_SECTION(([EXTRA] void MRMFeatureScoring::getBYSeries(AASequence& a, int charge, std::vector<double>& bseries, std::vector<double>& yseries)))
 {
   OpenMS::DIAScoring diascoring;
-  String sequence = "SYVAWDR";
+  std::string sequence = "SYVAWDR";
   std::vector<double> bseries, yseries;
   OpenMS::AASequence a = OpenMS::AASequence::fromString(sequence);
 
@@ -782,7 +782,7 @@ START_SECTION ( void dia_by_ion_score(std::vector<SpectrumType> spectrum, AASequ
 
   DIAScoring diascoring;
   diascoring.setParameters(p_dia);
-  String sequence = "SYVAWDR";
+  std::string sequence = "SYVAWDR";
   std::vector<double> bseries, yseries;
   AASequence a = AASequence::fromString(sequence);
 

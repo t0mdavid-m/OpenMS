@@ -17,7 +17,7 @@ namespace OpenMS
 
   Instrument::Instrument() :
     MetaInfoInterface(),
-    ion_optics_(UNKNOWN)
+    ion_optics_(IonOpticsType::UNKNOWN)
   {
 
   }
@@ -43,42 +43,42 @@ namespace OpenMS
     return !(operator==(rhs));
   }
 
-  const String & Instrument::getName() const
+  const std::string & Instrument::getName() const
   {
     return name_;
   }
 
-  void Instrument::setName(const String & name)
+  void Instrument::setName(const std::string & name)
   {
     name_ = name;
   }
 
-  const String & Instrument::getVendor() const
+  const std::string & Instrument::getVendor() const
   {
     return vendor_;
   }
 
-  void Instrument::setVendor(const String & vendor)
+  void Instrument::setVendor(const std::string & vendor)
   {
     vendor_ = vendor;
   }
 
-  const String & Instrument::getModel() const
+  const std::string & Instrument::getModel() const
   {
     return model_;
   }
 
-  void Instrument::setModel(const String & model)
+  void Instrument::setModel(const std::string & model)
   {
     model_ = model;
   }
 
-  const String & Instrument::getCustomizations() const
+  const std::string & Instrument::getCustomizations() const
   {
     return customizations_;
   }
 
-  void Instrument::setCustomizations(const String & customizations)
+  void Instrument::setCustomizations(const std::string & customizations)
   {
     customizations_ = customizations;
   }
@@ -151,6 +151,17 @@ namespace OpenMS
   void Instrument::setIonOptics(Instrument::IonOpticsType ion_optics)
   {
     ion_optics_ = ion_optics;
+  }
+
+  StringList Instrument::getAllNamesOfIonOpticsType()
+  {
+    StringList names;
+    names.reserve(static_cast<size_t>(IonOpticsType::SIZE_OF_IONOPTICSTYPE));
+    for (size_t i = 0; i < static_cast<size_t>(IonOpticsType::SIZE_OF_IONOPTICSTYPE); ++i)
+    {
+      names.push_back(NamesOfIonOpticsType[i]);
+    }
+    return names;
   }
 
 }

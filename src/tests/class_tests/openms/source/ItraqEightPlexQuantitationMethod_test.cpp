@@ -39,7 +39,7 @@ START_SECTION(~ItraqEightPlexQuantitationMethod())
 }
 END_SECTION
 
-START_SECTION((const String& getMethodName() const ))
+START_SECTION((const std::string& getMethodName() const ))
 {
   ItraqEightPlexQuantitationMethod quant_meth;
   TEST_EQUAL(quant_meth.getMethodName(), "itraq8plex")
@@ -129,9 +129,9 @@ START_SECTION((virtual Matrix<double> getIsotopeCorrectionMatrix() const ))
     { 0, 0, 0, 0, 0, 0, 0, 0.9211 }
   };
   
-  for(size_t i = 0; i < m.rows(); ++i)
+  for(Size i = 0; i < m.rows(); ++i)
   {
-    for(size_t j = 0; j < m.cols(); ++j)
+    for(Size j = 0; j < m.cols(); ++j)
     {
       TEST_REAL_SIMILAR(m(i,j), real_m[i][j])
     }
@@ -154,6 +154,11 @@ START_SECTION((Size getReferenceChannel() const ))
   quant_meth.setParameters(p);
 
   TEST_EQUAL(quant_meth.getReferenceChannel(), 7)
+
+  // 120 is within the accepted parameter range but is not a valid 8-plex channel:
+  // it must throw instead of warning and leaving a stale reference channel (regression)
+  p.setValue("reference_channel",120);
+  TEST_EXCEPTION(Exception::InvalidParameter, quant_meth.setParameters(p))
 }
 END_SECTION
 

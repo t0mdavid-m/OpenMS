@@ -85,7 +85,7 @@ namespace
   // The report's cytochrome c scan (150 masses) and its supplied sequence: Met 1 plus the 104 residues of horse cytochrome c.
   const std::string FI_REFINE_CYTC = "../../FlashIDA/test-data/refine/cytc_grp1_prec1.tsv";
   const std::string FI_REFINE_JULY = "../../FlashIDA/test-data/refine/july_ms3_pieces.tsv";
-  const String CYTC105 = "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
+  const std::string CYTC105 = "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
 
   // july_ms3_pieces.tsv: `target_ion\tmass\tintensity`, '#' lines and the header skipped; one spectrum per target ion.
   std::map<std::string, DeconvolvedSpectrum> loadJulyPieces(const std::string& path)
@@ -761,7 +761,7 @@ START_SECTION(piece_shared_when_masses_coincide)
   // Two paths put a mass shift on residue 1 of PEPTIDEK: +42.0106 (path a) and +42.0106 + CO + 1 ppm (path b). Path a's
   // piece b3 and path b's piece a3 (a = b - CO) then sit 1 ppm apart: one piece, labelled two ways. Seen alone it is
   // shared -- it calibrates, but it fits neither path.
-  const String seq = "PEPTIDEK";
+  const std::string seq = "PEPTIDEK";
   const Refine::Ladder lad = Refine::ladder(seq, {"b", "y"});
   const double delta = 42.010565, co = 27.994915;
   const double b3 = lad.prefix[2] + delta;
@@ -794,7 +794,7 @@ START_SECTION(piece_test_calibrates_on_shared_pieces_only)
 {
   // Both paths explain the target as b6 of PEPTIDEK with +42.0106 Da, path a on residue 1, path b on residue 3. So b1+d and
   // b2+d are path a's discriminating, shift-carrying pieces, while b3+d and b4+d are shared. The MS3 masses read 30 ppm high.
-  const String seq = "PEPTIDEK";
+  const std::string seq = "PEPTIDEK";
   const Refine::Ladder lad = Refine::ladder(seq, {"b", "y"});
   const double delta = 42.010565, off = 1.0 + 30e-6;
   Refine::Path pa, pb;
@@ -844,7 +844,7 @@ START_SECTION(piece_test_ignores_an_unannotatable_side)
   //
   // FAILS UNDER: no annotatability guard in pieceTest's predict -- getMS3IonTypes('c') yields the same a/b pieces of
   // the same subsequence as 'b', so this returns shared_seen 2 and fits_a true, exactly the b6 section's verdict.
-  const String seq = "PEPTIDEK";
+  const std::string seq = "PEPTIDEK";
   const Refine::Ladder lad = Refine::ladder(seq, {"b", "y"});
   const double delta = 42.010565, off = 1.0 + 30e-6;
   Refine::Path pa, pb;
@@ -990,7 +990,7 @@ auto corpusCriterionA = [&](const std::string& key) {
   TEST_EQUAL(std::is_sorted(m.masses.begin(), m.masses.end()), true)
   RefineSettings s;
   s.tolerance_ppm = e.tolerance_ppm;
-  const Refine::Ladder lad = Refine::ladder(String(e.backbone), FragmentAnalysis::getIonTypesForFragmentationMethod(String(e.activation)));
+  const Refine::Ladder lad = Refine::ladder(std::string(e.backbone), FragmentAnalysis::getIonTypesForFragmentationMethod(std::string(e.activation)));
   TEST_EQUAL(lad.residues.size(), e.backbone.size())
   const Refine::Detect d = Refine::detect(m.masses, m.intensities, lad, s);
   const Refine::Assemble a = Refine::assemble(m.masses, m.intensities, lad, d, s);

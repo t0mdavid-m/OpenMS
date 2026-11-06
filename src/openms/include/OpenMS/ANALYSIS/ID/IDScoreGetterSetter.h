@@ -60,42 +60,42 @@ namespace OpenMS
      * @brief  Fills the scores_labels vector from an ProteinIdentification @p id for picked protein FDR.
      *  I.e. it only takes the better of the two scores for each target-decoy pair (based on the accession after
      *  removal of the @p decoy_prefix.
-     * @param  picked_scores Target accessions to pairs of scores and target decoy labels (usually 1.0 for target and 0.0 for decoy) to be filled.
-     * @param  id The hits to iterate over
-     * @param  decoy_string The decoy string to remove before comparing accesions for pairs.
-     * @param  decoy_prefix If the @p decoy_string is a prefix (true) or suffix.
+     * @param[out]  picked_scores Target accessions to pairs of scores and target decoy labels (usually 1.0 for target and 0.0 for decoy) to be filled.
+     * @param[in]  id The hits to iterate over
+     * @param[in]  decoy_string The decoy string to remove before comparing accesions for pairs.
+     * @param[in]  decoy_prefix If the @p decoy_string is a prefix (true) or suffix.
      */
     static void getPickedProteinScores_(
-        std::unordered_map<String, ScoreToTgtDecLabelPair>& picked_scores,
+        std::unordered_map<std::string, ScoreToTgtDecLabelPair>& picked_scores,
         const ProteinIdentification& id,
-        const String& decoy_string,
+        const std::string& decoy_string,
         bool decoy_prefix);
 
     /**
      * @brief  Fills the scores_labels vector from a vector of ProteinGroups @p grps for picked protein group FDR.
      *  @todo describe more
-     * @param  picked_scores Target accessions to pairs of scores and target decoy labels (usually 1.0 for target and 0.0 for decoy) to be used for lookup.
-     * @param  scores_labels Scores and target-decoy value for all groups that had at least one picked protein. Targets preferred.
-     * @param  grps The groups to iterate over
-     * @param  decoy_string The decoy string to remove before comparing accesions for pairs.
-     * @param  decoy_prefix If the @p decoy_string is a prefix (true) or suffix.
+     * @param[out]  picked_scores Target accessions to pairs of scores and target decoy labels (usually 1.0 for target and 0.0 for decoy) to be used for lookup.
+     * @param[out]  scores_labels Scores and target-decoy value for all groups that had at least one picked protein. Targets preferred.
+     * @param[in]  grps The groups to iterate over
+     * @param[in]  decoy_string The decoy string to remove before comparing accesions for pairs.
+     * @param[in]  decoy_prefix If the @p decoy_string is a prefix (true) or suffix.
      */
     static void getPickedProteinGroupScores_(
-        const std::unordered_map<String, ScoreToTgtDecLabelPair>& picked_scores,
+        const std::unordered_map<std::string, ScoreToTgtDecLabelPair>& picked_scores,
         ScoreToTgtDecLabelPairs& scores_labels,
         const std::vector<ProteinIdentification::ProteinGroup>& grps,
-        const String& decoy_string,
+        const std::string& decoy_string,
         bool decoy_prefix);
 
     /// removes the @p decoy_string from @p acc if present. Returns if string was removed and the new string.
-    static std::pair<bool,String> removeDecoyStringIfPresent_(const String& acc, const String& decoy_string, bool decoy_prefix);
+    static std::pair<bool, std::string> removeDecoyStringIfPresent_(const std::string& acc, const std::string& decoy_string, bool decoy_prefix);
 
     static void fillPeptideScoreMap_(
-      std::unordered_map<String, ScoreToTgtDecLabelPair>& seq_to_score_labels,
+      std::unordered_map<std::string, ScoreToTgtDecLabelPair>& seq_to_score_labels,
       PeptideIdentificationList const& ids);
 
     static void fillPeptideScoreMap_(
-      std::unordered_map<String, ScoreToTgtDecLabelPair>& seq_to_score_labels,
+      std::unordered_map<std::string, ScoreToTgtDecLabelPair>& seq_to_score_labels,
       ConsensusMap const& map,
       bool include_unassigned);
 
@@ -103,7 +103,7 @@ namespace OpenMS
     /**
     * \defgroup getScoresFunctions Get scores from ID structures for FDR
     * @brief  Fills the scores_labels vector from an ID data structure
-    * @param  scores_labels Pairs of scores and boolean target decoy labels to be filled. target = true.
+    * @param[out]  scores_labels Pairs of scores and boolean target decoy labels to be filled. target = true.
     *
     * Just use the one you need.
     * @{
@@ -243,15 +243,15 @@ namespace OpenMS
      */
     static bool getTDLabel_(const MetaInfoInterface &idOrHit)
     {
-      return std::string(idOrHit.getMetaValue("target_decoy"))[0] == 't';
+      return idOrHit.getMetaValue("target_decoy").toString()[0] == 't';
     }
 
     /**
      * \defgroup setScoresFunctions Sets scores to FDRs/qVals in ID data structures to the closest in a given mapping
      * @brief  Sets FDRs/qVals from a scores_to_FDR map in the ID data structures
-     * @param  scores_to_FDR Maps original score to calculated FDR or q-Value
-     * @param  score_type e.g. FDR or q-Value
-     * @param  higher_better the new ordering, should usually be false for FDR/qval
+     * @param[in]  scores_to_FDR Maps original score to calculated FDR or q-Value
+     * @param[in]  score_type e.g. FDR or q-Value
+     * @param[in]  higher_better the new ordering, should usually be false for FDR/qval
      *
      * Just use the one you need.
      * @{
@@ -271,10 +271,10 @@ namespace OpenMS
     }
 
     template<typename IDType>
-    static String setScoreType_(IDType &id, const std::string &score_type,
+    static std::string setScoreType_(IDType &id, const std::string &score_type,
                          bool higher_better)
     {
-      String old_score_type = id.getScoreType() + "_score";
+      std::string old_score_type = id.getScoreType() + "_score";
       id.setScoreType(score_type);
       id.setHigherScoreBetter(higher_better);
       return old_score_type;
@@ -285,7 +285,7 @@ namespace OpenMS
                     bool higher_better, bool keep_decoy)
     {
       bool old_higher_better = id.isHigherScoreBetter();
-      String old_score_type = setScoreType_(id, score_type, higher_better);
+      std::string old_score_type = setScoreType_(id, score_type, higher_better);
 
       if (keep_decoy) //in-place set scores
       {
@@ -313,7 +313,7 @@ namespace OpenMS
 
     template<typename IDType>
     static void setScores_(const std::map<double, double> &scores_to_FDR, IDType &id,
-                    const String &old_score_type)
+                    const std::string &old_score_type)
     {
       std::vector<typename IDType::HitType> &hits = id.getHits();
       for (auto &hit : hits)
@@ -324,7 +324,7 @@ namespace OpenMS
 
     template<typename IDType>
     static void setScoresHigherWorse_(const std::map<double, double> &scores_to_FDR, IDType &id,
-                           const String &old_score_type)
+                           const std::string &old_score_type)
     {
       std::vector<typename IDType::HitType> &hits = id.getHits();
       for (auto &hit : hits)
@@ -335,7 +335,7 @@ namespace OpenMS
 
     template<typename IDType, class ...Args>
     static void setScoresAndRemoveDecoys_(const std::map<double, double> &scores_to_FDR, IDType &id,
-                                   const String &old_score_type, Args&& ... args)
+                                   const std::string &old_score_type, Args&& ... args)
     {
       std::vector<typename IDType::HitType> &hits = id.getHits();
       std::vector<typename IDType::HitType> new_hits;
@@ -349,7 +349,7 @@ namespace OpenMS
 
     template<typename IDType, class ...Args>
     static void setScoresHigherWorseAndRemoveDecoys_(const std::map<double, double> &scores_to_FDR, IDType &id,
-                                          const String &old_score_type, Args&& ... args)
+                                          const std::string &old_score_type, Args&& ... args)
     {
       std::vector<typename IDType::HitType> &hits = id.getHits();
       std::vector<typename IDType::HitType> new_hits;
@@ -382,7 +382,7 @@ namespace OpenMS
                     bool higher_better)
     {
       bool old_higher_better = id.isHigherScoreBetter();
-      String old_score_type = setScoreType_(id, score_type, higher_better);
+      std::string old_score_type = setScoreType_(id, score_type, higher_better);
       setScores_(scores_to_FDR, id, old_score_type, old_higher_better);
     }*/
 
@@ -393,7 +393,7 @@ namespace OpenMS
                     bool keep_decoy,
                     int charge)
     {
-      String old_score_type = setScoreType_(id, score_type, higher_better);
+      std::string old_score_type = setScoreType_(id, score_type, higher_better);
       if (keep_decoy) //in-place set scores
       {
         setScores_(scores_to_FDR, id, old_score_type, higher_better, charge);
@@ -410,7 +410,7 @@ namespace OpenMS
                     bool higher_better,
                     bool keep_decoy,
                     int charge,
-                    const String &identifier)
+                    const std::string &identifier)
     {
       if (id.getIdentifier() == identifier)
       {
@@ -420,7 +420,7 @@ namespace OpenMS
 
     template<typename IDType>
     static void setScores_(const std::map<double, double> &scores_to_FDR, IDType &id, const std::string &score_type,
-                    bool higher_better, bool keep_decoy, const String &identifier)
+                    bool higher_better, bool keep_decoy, const std::string &identifier)
     {
       if (id.getIdentifier() == identifier)
       {
@@ -433,7 +433,7 @@ namespace OpenMS
                     const std::string &score_type,
                     bool higher_better,
                     int charge,
-                    const String &identifier)
+                    const std::string &identifier)
     {
       if (id.getIdentifier() == identifier)
       {
@@ -443,7 +443,7 @@ namespace OpenMS
 
     template<typename IDType>
     static void setScores_(const std::map<double, double> &scores_to_FDR, IDType &id, const std::string &score_type,
-                    bool higher_better, const String &identifier)
+                    bool higher_better, const std::string &identifier)
     {
       if (id.getIdentifier() == identifier)
       {
@@ -483,10 +483,10 @@ namespace OpenMS
     /**
      * @brief Used when keep_decoy_peptides or proteins is false
      * @tparam HitType ProteinHit or PeptideHit
-     * @param scores_to_FDR map from original score to FDR/qVal
-     * @param hit The hit (moved to @p new_hits if its a target hit)
-     * @param old_score_type to save it in metavalue
-     * @param new_hits where to move if target (i.e. target or target+decoy)
+     * @param[in] scores_to_FDR map from original score to FDR/qVal
+     * @param[in] hit The hit (moved to @p new_hits if its a target hit)
+     * @param[in] old_score_type to save it in metavalue
+     * @param[out] new_hits where to move if target (i.e. target or target+decoy)
      */
     template<typename HitType>
     static void setScoreAndMoveIfTarget_(const std::map<double, double> &scores_to_FDR,
@@ -494,7 +494,7 @@ namespace OpenMS
                                   const std::string &old_score_type,
                                   std::vector<HitType> &new_hits)
     {
-      const String &target_decoy(hit.getMetaValue("target_decoy"));
+      const std::string &target_decoy(hit.getMetaValue("target_decoy"));
       if (target_decoy[0] == 't')
       {
         hit.setMetaValue(old_score_type, hit.getScore());
@@ -509,7 +509,7 @@ namespace OpenMS
                                          const std::string &old_score_type,
                                          std::vector<HitType> &new_hits)
     {
-      const String &target_decoy(hit.getMetaValue("target_decoy"));
+      const std::string &target_decoy(hit.getMetaValue("target_decoy"));
       if (target_decoy[0] == 't')
       {
         hit.setMetaValue(old_score_type, hit.getScore());
@@ -523,11 +523,11 @@ namespace OpenMS
 
     /**
     * @brief Used when keep_decoy_peptides is false and charge states are considered
-    * @param scores_to_FDR map from original score to FDR/qVal
-    * @param hit the PeptideHit itself
-    * @param old_score_type to save it in metavalue
-    * @param new_hits where to move if target (i.e. target or target+decoy)
-    * @param charge If only peptides with charge X are currently considered
+    * @param[in] scores_to_FDR map from original score to FDR/qVal
+    * @param[out] hit the PeptideHit itself
+    * @param[in] old_score_type to save it in metavalue
+    * @param[out] new_hits where to move if target (i.e. target or target+decoy)
+    * @param[in] charge If only peptides with charge X are currently considered
     */
     static void setScoreAndMoveIfTarget_(const std::map<double, double> &scores_to_FDR,
                                   PeptideHit &hit,
@@ -537,7 +537,7 @@ namespace OpenMS
     {
       if (charge == hit.getCharge())
       {
-        const String &target_decoy(hit.getMetaValue("target_decoy"));
+        const std::string &target_decoy(hit.getMetaValue("target_decoy"));
         if (target_decoy[0] == 't')
         {
           hit.setMetaValue(old_score_type, hit.getScore());
@@ -554,13 +554,13 @@ namespace OpenMS
     /**
      * @brief Helper for applying set Scores on ConsensusMaps
      * @tparam Args optional additional arguments (charge, run ID)
-     * @param scores_to_FDR maps original scores to FDR
-     * @param cmap the ConsensusMap
-     * @param include_unassigned_peptides Also modify unassigned peptide IDs in @p cmap?
-     * @param score_type FDR or q-Value
-     * @param higher_better usually false
-     * @param keep_decoy read from Param object
-     * @param args optional additional arguments (int charge, string run ID)
+     * @param[in] scores_to_FDR maps original scores to FDR
+     * @param[in] cmap the ConsensusMap
+     * @param[in] include_unassigned_peptides Also modify unassigned peptide IDs in @p cmap?
+     * @param[in] score_type FDR or q-Value
+     * @param[in] higher_better usually false
+     * @param[in] keep_decoy read from Param object
+     * @param[in] args optional additional arguments (int charge, string run ID)
     */
     template<class ...Args>
     static void setPeptideScoresForMap_(const std::map<double, double>& scores_to_FDR,
@@ -581,7 +581,7 @@ namespace OpenMS
 
     /**
      * @brief To check the metavalues before we do anything
-     * @param id_or_hit Any Object with MetaInfoInterface. Specifically ID or Hit Type here.
+     * @param[in] id_or_hit Any Object with MetaInfoInterface. Specifically ID or Hit Type here.
      * @throws Exception::MissingInformation if target_decoy annotation does not exist
      */
     static void checkTDAnnotation_(const MetaInfoInterface &id_or_hit)
@@ -595,12 +595,12 @@ namespace OpenMS
       }
     }
 
-    static void setPeptideScoresFromMap_(std::unordered_map<String, ScoreToTgtDecLabelPair> const& seq_to_fdr,
+    static void setPeptideScoresFromMap_(std::unordered_map<std::string, ScoreToTgtDecLabelPair> const& seq_to_fdr,
                                          PeptideIdentificationList& ids,
                                          std::string const& score_type,
                                          bool keep_decoys);
 
-    static void setPeptideScoresFromMap_(std::unordered_map<String, ScoreToTgtDecLabelPair> const& seq_to_fdr,
+    static void setPeptideScoresFromMap_(std::unordered_map<std::string, ScoreToTgtDecLabelPair> const& seq_to_fdr,
                                          ConsensusMap& map,
                                          std::string const& score_type,
                                          bool keep_decoys,

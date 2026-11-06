@@ -38,7 +38,7 @@ START_SECTION(~ItraqFourPlexQuantitationMethod())
 }
 END_SECTION
 
-START_SECTION((const String& getMethodName() const ))
+START_SECTION((const std::string& getMethodName() const ))
 {
   ItraqFourPlexQuantitationMethod quant_meth;
   TEST_STRING_EQUAL(quant_meth.getMethodName(), "itraq4plex")
@@ -140,9 +140,9 @@ START_SECTION((virtual Matrix<double> getIsotopeCorrectionMatrix() const ))
     {0.002, 0.056, 0.924, 0.04},
     {0, 0.001, 0.045, 0.923}};
   
-  for (size_t i = 0; i < m.rows(); ++i)
+  for (Size i = 0; i < m.rows(); ++i)
   {
-    for (size_t j = 0; j < m.cols(); ++j)
+    for (Size j = 0; j < m.cols(); ++j)
     {
       TEST_REAL_SIMILAR(m(i,j), real_m[i][j])
     }

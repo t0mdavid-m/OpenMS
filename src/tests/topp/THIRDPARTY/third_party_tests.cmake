@@ -14,28 +14,15 @@ macro (OPENMS_FINDBINARY varname binaryname name)
   endif()
 endmacro (OPENMS_FINDBINARY)
 
-macro (openms_check_tandem_version binary valid)
-  if(NOT (${XTANDEM_BINARY} STREQUAL "XTANDEM_BINARY-NOTFOUND"))
-    set(${valid} FALSE)
-    execute_process(COMMAND "${XTANDEM_BINARY}"
-      RESULT_VARIABLE _tandem_result
-      OUTPUT_VARIABLE _tandem_output
-      ERROR_VARIABLE _tandem_output  ## write to the same variable, in case Tandem decides to use std::cerr one day
-      INPUT_FILE ${DATA_DIR_TOPP}/THIRDPARTY/tandem_break.txt  ## provide some input, otherwise tandem.exe will block and not finish
-    )
-
-    # we are looking for something like (2013.09.01.1)
-    string(REGEX MATCH "\([0-9]+[.][0-9]+[.][0-9]+([.][0-9]+)\)"
-          _tandem_version "${_tandem_output}")
-
-    if("${_tandem_version}" VERSION_LESS "2013.09.01")
-      message(STATUS "  - X! Tandem too old (${_tandem_version}). Please provide an X! Tandem version >= 2013.09.01 to enable the tests.")
-    else()
-      message(STATUS "  + X! Tandem version: ${_tandem_version}.")
-      set(${valid} TRUE)
-    endif()
-  endif()
-endmacro (openms_check_tandem_version)
+# Build PATH environment for tests that need to find built TOPP tools at runtime.
+# On Windows, semicolons in PATH must be escaped to prevent CMake from interpreting
+# them as list separators in set_tests_properties(ENVIRONMENT ...).
+if(WIN32)
+  string(REPLACE ";" "\\;" _escaped_path "$ENV{PATH}")
+  set(TOPP_PATH_ENV "PATH=${TOPP_BIN_PATH}\;${_escaped_path}")
+else()
+  set(TOPP_PATH_ENV "PATH=${TOPP_BIN_PATH}:$ENV{PATH}")
+endif()
 
 message(STATUS "Searching for third party tools...")
 
@@ -50,11 +37,6 @@ OPENMS_FINDBINARY(COMET_BINARY "comet.exe" "Comet")
 #------------------------------------------------------------------------------
 # Sage
 OPENMS_FINDBINARY(SAGE_BINARY "sage;sage.exe" "Sage")
-
-#------------------------------------------------------------------------------
-# X!Tandem
-OPENMS_FINDBINARY(XTANDEM_BINARY "tandem;tandem.exe" "X! Tandem")
-openms_check_tandem_version(${XTANDEM_BINARY} xtandem_valid)
 
 #------------------------------------------------------------------------------
 # MS-GF+
@@ -85,10 +67,6 @@ OPENMS_FINDBINARY(THERMORAWFILEPARSER_BINARY "ThermoRawFileParser.exe" "ThermoRa
 OPENMS_FINDBINARY(LUCIPHOR_BINARY "luciphor2.jar" "LuciPHOr2")
 
 #------------------------------------------------------------------------------
-# CometAdapter (Used in DatabaseSuitability)
-OPENMS_FINDBINARY(COMET_ADAPTER_BINARY "CometAdapter" "CometAdapter")
-
-#------------------------------------------------------------------------------
 ## optional tests
 #------------------------------------------------------------------------------
 
@@ -101,7 +79,19 @@ if (NOT (${MSGFPLUS_BINARY} STREQUAL "MSGFPLUS_BINARY-NOTFOUND"))
   
   ## MS2 profile spectra are not allowed
   add_test("TOPP_MSGFPlusAdapter_PROFILE" ${TOPP_BIN_PATH}/MSGFPlusAdapter -test -database ${DATA_DIR_TOPP}/THIRDPARTY/proteinslong.fasta -in ${DATA_DIR_TOPP}/THIRDPARTY/MS2_profile.mzML -out MSGFPlusAdapter_3_out.tmp.idXML -executable "${MSGFPLUS_BINARY}")
-  set_tests_properties("TOPP_MSGFPlusAdapter_PROFILE" PROPERTIES WILL_FAIL 1) 
+  set_tests_properties("TOPP_MSGFPlusAdapter_PROFILE" PROPERTIES WILL_FAIL 1)
+
+  ## smoke test for the new -allow_dense_centroided_peaks flag: same input/output as test 1, only the flag differs.
+  ## The flag does not change the search result for these (non-dense) spectra, so the output equals MSGFPlusAdapter_1_out
+  ## except for the recorded parameter value (allow_dense_centroided_peaks=true instead of false), which is whitelisted.
+  ## Must run after test 1: both share the same proteins.fasta and spectra.mzML; MSGF+ creates temp/cache files
+  ## alongside those inputs, causing file-access conflicts on Windows when the two tests run in parallel.
+  add_test("TOPP_MSGFPlusAdapter_2" ${TOPP_BIN_PATH}/MSGFPlusAdapter -test -ini ${DATA_DIR_TOPP}/THIRDPARTY/MSGFPlusAdapter_1.ini -database ${DATA_DIR_TOPP}/THIRDPARTY/proteins.fasta -in ${DATA_DIR_TOPP}/THIRDPARTY/spectra.mzML -out MSGFPlusAdapter_2_out1.tmp.idXML -mzid_out MSGFPlusAdapter_2_out2.tmp.mzid -executable "${MSGFPLUS_BINARY}" -allow_dense_centroided_peaks)
+  set_tests_properties("TOPP_MSGFPlusAdapter_2" PROPERTIES DEPENDS "TOPP_MSGFPlusAdapter_1")
+  add_test("TOPP_MSGFPlusAdapter_2_out1" ${DIFF} -in1 MSGFPlusAdapter_2_out1.tmp.idXML -in2 ${DATA_DIR_TOPP}/THIRDPARTY/MSGFPlusAdapter_1_out.idXML -whitelist "IdentificationRun date" "SearchParameters id=\"SP_0\" db=" "UserParam type=\"stringList\" name=\"spectra_data\" value=" "UserParam type=\"string\" name=\"MSGFPlusAdapter:1:in\" value=" "UserParam type=\"string\" name=\"MSGFPlusAdapter:1:executable\" value=" "UserParam type=\"string\" name=\"MSGFPlusAdapter:1:database\" value=" "MSGFPlusAdapter:1:out\"" "MSGFPlusAdapter:1:mzid_out\"" "MSGFPlusAdapter:1:allow_dense_centroided_peaks")
+  set_tests_properties("TOPP_MSGFPlusAdapter_2_out1" PROPERTIES DEPENDS "TOPP_MSGFPlusAdapter_2")
+  add_test("TOPP_MSGFPlusAdapter_2_out2" ${DIFF} -in1 MSGFPlusAdapter_2_out2.tmp.mzid -in2 ${DATA_DIR_TOPP}/THIRDPARTY/MSGFPlusAdapter_1_out.mzid -whitelist "creationDate=" "SearchDatabase numDatabaseSequences=\"10\" location=" "SpectraData location=" "AnalysisSoftware")
+  set_tests_properties("TOPP_MSGFPlusAdapter_2_out2" PROPERTIES DEPENDS "TOPP_MSGFPlusAdapter_2")
 endif()
 ## test returncode when MSGFPlus not found:
 add_test("TOPP_MSGFPlusAdapter_missing" ${TOPP_BIN_PATH}/MSGFPlusAdapter -test -database ${DATA_DIR_TOPP}/THIRDPARTY/proteins.fasta -in ${DATA_DIR_TOPP}/THIRDPARTY/spectra.mzML -out MSGFPlusAdapter_1_out.tmp.idXML -executable "/does/not/exists/path.exe")
@@ -157,45 +147,84 @@ if (NOT (${COMET_BINARY} STREQUAL "COMET_BINARY-NOTFOUND"))
   add_test("TOPP_CometAdapter_PROFILE" ${TOPP_BIN_PATH}/CometAdapter -test -database ${DATA_DIR_TOPP}/THIRDPARTY/proteinslong.fasta -in ${DATA_DIR_TOPP}/THIRDPARTY/MS2_profile.mzML -out CometAdapter_out.tmp.idXML -comet_executable "${COMET_BINARY}")
   set_tests_properties("TOPP_CometAdapter_PROFILE" PROPERTIES WILL_FAIL 1)
 
-  if (NOT (${COMET_ADAPTER_BINARY} STREQUAL "COMET_ADAPTER_BINARY-NOTFOUND"))
-    #------------------------------------------------------------------------------
-    # DatabaseSuitability tests (internally calls CometAdapter)
-    # test default
-    add_test("TOPP_DatabaseSuitability_1" ${TOPP_BIN_PATH}/DatabaseSuitability -test -in_id ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_in_id.idXML -in_spec ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_in_spec.mzML -in_novo ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_in_novo.idXML -database ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_database.fasta -novo_database ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_novo_database.FASTA -out DatabaseSuitability_1.tmp.tsv)
-    add_test("TOPP_DatabaseSuitability_1_out" ${DIFF} -in1 DatabaseSuitability_1.tmp.tsv -in2 ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_out_1.tsv )
-    set_tests_properties("TOPP_DatabaseSuitability_1_out" PROPERTIES DEPENDS "TOPP_DatabaseSuitability_1")
-    # test with custom reranking_cutoff_percentile
-    add_test("TOPP_DatabaseSuitability_2" ${TOPP_BIN_PATH}/DatabaseSuitability -test -in_id ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_in_id.idXML -in_spec ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_in_spec.mzML -in_novo ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_in_novo.idXML -database ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_database.fasta -novo_database ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_novo_database.FASTA -algorithm:FDR 0.05 -out DatabaseSuitability_2.tmp.tsv)
-    add_test("TOPP_DatabaseSuitability_2_out" ${DIFF} -whitelist ${INDEX_WHITELIST} -in1 DatabaseSuitability_2.tmp.tsv -in2 ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_out_2.tsv )
-    set_tests_properties("TOPP_DatabaseSuitability_2_out" PROPERTIES DEPENDS "TOPP_DatabaseSuitability_2")
-    # test with custom FDR
-    add_test("TOPP_DatabaseSuitability_3" ${TOPP_BIN_PATH}/DatabaseSuitability -test -in_id ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_in_id.idXML -in_spec ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_in_spec.mzML -in_novo ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_in_novo.idXML -database ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_database.fasta -novo_database ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_novo_database.FASTA -algorithm:FDR 0.5 -algorithm:reranking_cutoff_percentile 0.5 -out DatabaseSuitability_3.tmp.tsv)
-    add_test("TOPP_DatabaseSuitability_3_out" ${DIFF} -whitelist ${INDEX_WHITELIST} -in1 DatabaseSuitability_3.tmp.tsv -in2 ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_out_3.tsv )
-    set_tests_properties("TOPP_DatabaseSuitability_3_out" PROPERTIES DEPENDS "TOPP_DatabaseSuitability_3")
-  endif()
+  #------------------------------------------------------------------------------
+  # DatabaseSuitability tests (internally calls CometAdapter)
+  # These tests need CometAdapter in PATH since DatabaseSuitability calls it via ExternalProcess::run()
+  # which searches PATH, rather than using a direct binary path.
+  # test default
+  add_test("TOPP_DatabaseSuitability_1" ${TOPP_BIN_PATH}/DatabaseSuitability -test -in_id ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_in_id.idXML -in_spec ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_in_spec.mzML -in_novo ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_in_novo.idXML -database ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_database.fasta -novo_database ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_novo_database.FASTA -out DatabaseSuitability_1.tmp.tsv)
+  set_tests_properties("TOPP_DatabaseSuitability_1" PROPERTIES ENVIRONMENT "${TOPP_PATH_ENV}")
+  # Use relaxed tolerance because DatabaseSuitability uses random subsampling (getSubsampledFasta_)
+  # for correction_factor calculation, making results non-deterministic across runs.
+  add_test("TOPP_DatabaseSuitability_1_out" ${DIFF} -ratio 1.05 -absdiff 0.05 -in1 DatabaseSuitability_1.tmp.tsv -in2 ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_out_1.tsv )
+  set_tests_properties("TOPP_DatabaseSuitability_1_out" PROPERTIES DEPENDS "TOPP_DatabaseSuitability_1")
+  # test with custom reranking_cutoff_percentile
+  add_test("TOPP_DatabaseSuitability_2" ${TOPP_BIN_PATH}/DatabaseSuitability -test -in_id ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_in_id.idXML -in_spec ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_in_spec.mzML -in_novo ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_in_novo.idXML -database ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_database.fasta -novo_database ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_novo_database.FASTA -algorithm:FDR 0.05 -out DatabaseSuitability_2.tmp.tsv)
+  set_tests_properties("TOPP_DatabaseSuitability_2" PROPERTIES ENVIRONMENT "${TOPP_PATH_ENV}")
+  add_test("TOPP_DatabaseSuitability_2_out" ${DIFF} -ratio 1.05 -absdiff 0.05 -whitelist ${INDEX_WHITELIST} -in1 DatabaseSuitability_2.tmp.tsv -in2 ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_out_2.tsv )
+  set_tests_properties("TOPP_DatabaseSuitability_2_out" PROPERTIES DEPENDS "TOPP_DatabaseSuitability_2")
+  # test with custom FDR
+  add_test("TOPP_DatabaseSuitability_3" ${TOPP_BIN_PATH}/DatabaseSuitability -test -in_id ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_in_id.idXML -in_spec ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_in_spec.mzML -in_novo ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_in_novo.idXML -database ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_database.fasta -novo_database ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_novo_database.FASTA -algorithm:FDR 0.5 -algorithm:reranking_cutoff_percentile 0.5 -out DatabaseSuitability_3.tmp.tsv)
+  set_tests_properties("TOPP_DatabaseSuitability_3" PROPERTIES ENVIRONMENT "${TOPP_PATH_ENV}")
+  add_test("TOPP_DatabaseSuitability_3_out" ${DIFF} -ratio 1.05 -absdiff 0.05 -whitelist ${INDEX_WHITELIST} -in1 DatabaseSuitability_3.tmp.tsv -in2 ${DATA_DIR_TOPP}/THIRDPARTY/DatabaseSuitability_out_3.tsv )
+  set_tests_properties("TOPP_DatabaseSuitability_3_out" PROPERTIES DEPENDS "TOPP_DatabaseSuitability_3")
 endif()
 ## test returncode when Comet not found:
 add_test("TOPP_CometAdapter_missing" ${TOPP_BIN_PATH}/CometAdapter -test -database ${DATA_DIR_TOPP}/THIRDPARTY/proteins.fasta -in ${DATA_DIR_TOPP}/THIRDPARTY/spectra.mzML -out Comet_1_out.tmp.idXML -comet_executable "/does/not/exists/path.exe")
 set_tests_properties("TOPP_CometAdapter_missing" PROPERTIES SKIP_RETURN_CODE 14) ## EXTERNAL_PROGRAM_NOTFOUND
 
+## test returncode when the external program is present but FAILS to run: must be EXTERNAL_PROGRAM_ERROR (9),
+## distinct from EXTERNAL_PROGRAM_NOTFOUND (14) above. The false executable exits 1,
+## so the adapter runs it and maps the non-zero exit to code 9. Unix-only (no portable always-failing exe on Windows).
+if (NOT WIN32)
+  find_program(FALSE_EXECUTABLE false)
+  if (FALSE_EXECUTABLE)
+    add_test("TOPP_CometAdapter_failing" ${TOPP_BIN_PATH}/CometAdapter -test -database ${DATA_DIR_TOPP}/THIRDPARTY/proteins.fasta -in ${DATA_DIR_TOPP}/THIRDPARTY/spectra.mzML -out Comet_failing_out.tmp.idXML -comet_executable "${FALSE_EXECUTABLE}")
+    set_tests_properties("TOPP_CometAdapter_failing" PROPERTIES SKIP_RETURN_CODE 9) ## EXTERNAL_PROGRAM_ERROR
+  endif()
+endif()
+
 
 #------------------------------------------------------------------------------
 if (NOT (${MARACLUSTER_BINARY} STREQUAL "MARACLUSTER_BINARY-NOTFOUND"))
   ### NOT needs to be added after the binarys have been included
+  ## MaRaCluster's macOS arm64 build computes some consensus m/z values one bit off the Linux
+  ## x86_64 build the reference comes from (436.1713680071879 vs 436.17136800718794). FuzzyDiff
+  ## compares the base64-encoded peak arrays as text, so macOS skips them, as
+  ## ZLIB_NG_MZML_WHITELIST does for zlib-ng; the spectra and precursors are still compared.
+  set(_maracluster_consensus_whitelist "")
+  if (APPLE)
+    set(_maracluster_consensus_whitelist "<binary>")
+  endif()
   add_test("TOPP_MaRaClusterAdapter_1" ${TOPP_BIN_PATH}/MaRaClusterAdapter -test -ini ${DATA_DIR_TOPP}/THIRDPARTY/MaRaClusterAdapter_1.ini -in ${DATA_DIR_TOPP}/THIRDPARTY/MaRaClusterAdapter_1_in_1.mzML ${DATA_DIR_TOPP}/THIRDPARTY/MaRaClusterAdapter_1_in_2.mzML -consensus_out MaRaClusterAdapter_1_out_1.tmp.mzML -maracluster_executable "${MARACLUSTER_BINARY}")
-  add_test("TOPP_MaRaClusterAdapter_1_out_1" ${DIFF} -in1 MaRaClusterAdapter_1_out_1.tmp.part1.mzML -in2 ${DATA_DIR_TOPP}/THIRDPARTY/MaRaClusterAdapter_1_out_1.part1.mzML -whitelist "IdentificationRun date" "SearchParameters id=\"SP_0\" db=" "UserParam type=\"stringList\" name=\"spectra_data\" value=" "sourceFile id=" "fileChecksum" "cvParam cvRef=\"MS\" accession=\"MS:1000569\" name=\"SHA-1\"" "software id=\"MaRaCluster\" version=" "cvParam cvRef=\"MS\" accession=\"MS:1000747\" name=\"completion time\"" "cv id=\"MS\" fullName=\"Proteomics Standards Initiative Mass Spectrometry Ontology\" version=" "software id=\"pwiz_3.0" "processingMethod order=\"0\" softwareRef=")
+  add_test("TOPP_MaRaClusterAdapter_1_out_1" ${DIFF} -in1 MaRaClusterAdapter_1_out_1.tmp.part1.mzML -in2 ${DATA_DIR_TOPP}/THIRDPARTY/MaRaClusterAdapter_1_out_1.part1.mzML -whitelist "IdentificationRun date" "SearchParameters id=\"SP_0\" db=" "UserParam type=\"stringList\" name=\"spectra_data\" value=" "sourceFile id=" "fileChecksum" "cvParam cvRef=\"MS\" accession=\"MS:1000569\" name=\"SHA-1\"" "software id=\"MaRaCluster\" version=" "cvParam cvRef=\"MS\" accession=\"MS:1000747\" name=\"completion time\"" "cv id=\"MS\" fullName=\"Proteomics Standards Initiative Mass Spectrometry Ontology\" version=" "software id=\"pwiz_3.0" "processingMethod order=\"0\" softwareRef=" ${_maracluster_consensus_whitelist})
   set_tests_properties("TOPP_MaRaClusterAdapter_1_out_1" PROPERTIES DEPENDS "TOPP_MaRaClusterAdapter_1")
   add_test("TOPP_MaRaClusterAdapter_2" ${TOPP_BIN_PATH}/MaRaClusterAdapter -test -ini ${DATA_DIR_TOPP}/THIRDPARTY/MaRaClusterAdapter_2.ini -in ${DATA_DIR_TOPP}/THIRDPARTY/MaRaClusterAdapter_1_in_1.mzML ${DATA_DIR_TOPP}/THIRDPARTY/MaRaClusterAdapter_1_in_2.mzML -id_in ${DATA_DIR_TOPP}/THIRDPARTY/MaRaClusterAdapter_1_in_3.idXML -out MaRaClusterAdapter_2_out_1.tmp.idXML -maracluster_executable "${MARACLUSTER_BINARY}")
   add_test("TOPP_MaRaClusterAdapter_2_out_1" ${DIFF} -in1 MaRaClusterAdapter_2_out_1.tmp.idXML -in2 ${DATA_DIR_TOPP}/THIRDPARTY/MaRaClusterAdapter_2_out_1.idXML -whitelist "IdentificationRun date" "SearchParameters id=\"SP_0\" db=" "UserParam type=\"stringList\" name=\"spectra_data\" value=" "UserParam type=\"string\" name=\"file_origin\" value=")
   set_tests_properties("TOPP_MaRaClusterAdapter_2_out_1" PROPERTIES DEPENDS "TOPP_MaRaClusterAdapter_2")
+  ## -precursor_tolerance_units has to reach MaRaCluster as the unit suffix of -p, which it
+  ## reads as ppm without one; -debug 4 makes the adapter log the command line it runs.
+  add_test("TOPP_MaRaClusterAdapter_3" ${TOPP_BIN_PATH}/MaRaClusterAdapter -test -debug 4 -ini ${DATA_DIR_TOPP}/THIRDPARTY/MaRaClusterAdapter_1.ini -in ${DATA_DIR_TOPP}/THIRDPARTY/MaRaClusterAdapter_1_in_1.mzML ${DATA_DIR_TOPP}/THIRDPARTY/MaRaClusterAdapter_1_in_2.mzML -consensus_out MaRaClusterAdapter_3_out_1.tmp.mzML -precursor_tolerance 0.05 -precursor_tolerance_units Da -maracluster_executable "${MARACLUSTER_BINARY}")
+  set_tests_properties("TOPP_MaRaClusterAdapter_3" PROPERTIES PASS_REGULAR_EXPRESSION " -p 0\\.05Da ")
 endif()
 
 #------------------------------------------------------------------------------
+# Shared by the in-process tests in CMakeLists.txt and the subprocess tests below,
+# so it must be defined outside the PERCOLATOR_BINARY gate.
+set(_topp_percolator_diff_whitelist "IdentificationRun date" "SearchParameters id=\"SP_0\" db=" "UserParam type=\"stringList\" name=\"spectra_data\" value=" "search_engine_version=" "Percolator:cpos" "Percolator:cneg")
 if (NOT (${PERCOLATOR_BINARY} STREQUAL "PERCOLATOR_BINARY-NOTFOUND"))
   ### NOT needs to be added after the binarys have been included
-  add_test("TOPP_PercolatorAdapter_1" ${TOPP_BIN_PATH}/PercolatorAdapter -test -ini ${DATA_DIR_TOPP}/THIRDPARTY/PercolatorAdapter_1.ini -in ${DATA_DIR_TOPP}/THIRDPARTY/PercolatorAdapter_1.idXML -out PercolatorAdapter_1_out1.tmp.idXML -out_type idXML -percolator_executable "${PERCOLATOR_BINARY}")
-  add_test("TOPP_PercolatorAdapter_1_out1" ${DIFF} -in1 PercolatorAdapter_1_out1.tmp.idXML -in2 ${DATA_DIR_TOPP}/THIRDPARTY/PercolatorAdapter_1_out.idXML -whitelist "IdentificationRun date" "SearchParameters id=\"SP_0\" db=" "UserParam type=\"stringList\" name=\"spectra_data\" value=")
-  set_tests_properties("TOPP_PercolatorAdapter_1_out1" PROPERTIES DEPENDS "TOPP_PercolatorAdapter_1")
+  ### TOPP_PercolatorAdapter_1 has TWO variants — one per backend — so a
+  ### regression in either path (in-process Percolator library OR subprocess
+  ### binary post-processing) gets caught by its own test, not masked by the
+  ### other. Each compares against its own reference idXML; the in-process
+  ### path also stamps additional metadata via stampPercolatorAdapterMetadata_
+  ### that previously only the subprocess path produced.
+  ### in-process backend (default — no -use_subprocess flag)
+  ### subprocess backend (forced via -use_subprocess true)
+  add_test("TOPP_PercolatorAdapter_1_subprocess" ${TOPP_BIN_PATH}/PercolatorAdapter -test -ini ${DATA_DIR_TOPP}/THIRDPARTY/PercolatorAdapter_1.ini -use_subprocess true -in ${DATA_DIR_TOPP}/THIRDPARTY/PercolatorAdapter_1.idXML -out PercolatorAdapter_1_subprocess_out.tmp.idXML -out_type idXML -percolator_executable "${PERCOLATOR_BINARY}")
+  add_test("TOPP_PercolatorAdapter_1_subprocess_out" ${DIFF} -in1 PercolatorAdapter_1_subprocess_out.tmp.idXML -in2 ${DATA_DIR_TOPP}/THIRDPARTY/PercolatorAdapter_1_subprocess_out.idXML -whitelist ${_topp_percolator_diff_whitelist})
+  set_tests_properties("TOPP_PercolatorAdapter_1_subprocess_out" PROPERTIES DEPENDS "TOPP_PercolatorAdapter_1_subprocess")
   add_test("TOPP_PercolatorAdapter_2" ${TOPP_BIN_PATH}/PercolatorAdapter -test -osw_level ms1 -in_osw ${DATA_DIR_TOPP}/THIRDPARTY/PercolatorAdapter_2.osw -out PercolatorAdapter_2_out1.osw -out_type osw -percolator_executable "${PERCOLATOR_BINARY}")
   add_test("TOPP_PercolatorAdapter_3" ${TOPP_BIN_PATH}/PercolatorAdapter -test -osw_level ms2 -in_osw PercolatorAdapter_2_out1.osw -out PercolatorAdapter_3_out1.osw -out_type osw -percolator_executable "${PERCOLATOR_BINARY}")
   set_tests_properties("TOPP_PercolatorAdapter_3" PROPERTIES DEPENDS "TOPP_PercolatorAdapter_2")
@@ -203,8 +232,41 @@ if (NOT (${PERCOLATOR_BINARY} STREQUAL "PERCOLATOR_BINARY-NOTFOUND"))
   set_tests_properties("TOPP_PercolatorAdapter_4" PROPERTIES DEPENDS "TOPP_PercolatorAdapter_3")
   add_test("TOPP_PercolatorAdapter_5" ${TOPP_BIN_PATH}/PercolatorAdapter -test -ini ${DATA_DIR_TOPP}/THIRDPARTY/PercolatorAdapter_1.ini -in ${DATA_DIR_TOPP}/THIRDPARTY/PercolatorAdapter_1.idXML -out PercolatorAdapter_1_out1.tmp.idXML -out_type idXML -percolator_executable "${PERCOLATOR_BINARY}" -out_pin PercolatorAdapter_1_out1.tsv )
   set_tests_properties("TOPP_PercolatorAdapter_5" PROPERTIES DEPENDS "TOPP_PercolatorAdapter_4")
+  add_test("TOPP_PercolatorAdapter_score_fdr"
+    ${TOPP_BIN_PATH}/PercolatorAdapter -test
+      -ini ${DATA_DIR_TOPP}/THIRDPARTY/PercolatorAdapter_1.ini
+      -in ${DATA_DIR_TOPP}/THIRDPARTY/PercolatorAdapter_1.idXML
+      -out PercolatorAdapter_score_fdr_out.tmp.idXML
+      -out_type idXML
+      -score:fdr 0.01
+      -percolator_executable "${PERCOLATOR_BINARY}")
+  set_tests_properties("TOPP_PercolatorAdapter_score_fdr" PROPERTIES DEPENDS "TOPP_PercolatorAdapter_5")
   ### TOPP_PercolatorAdapter_2-4 do not validate output, but checks whether OSW files can be read and written to.
   ### same for TOPP_PercolatorAdapter_5 which tests if pin file can be written
+  ### TOPP_PercolatorAdapter_score_fdr tests the score:fdr post-filter option
+
+  # idparquet round-trip test: run Percolator on idparquet input, convert output back to idXML and diff
+  add_test("TOPP_PercolatorAdapter_idparquet"
+    ${TOPP_BIN_PATH}/PercolatorAdapter -test
+      -ini ${DATA_DIR_TOPP}/THIRDPARTY/PercolatorAdapter_1.ini
+      -in ${DATA_DIR_TOPP}/THIRDPARTY/PercolatorAdapter_idparquet_in.idparquet
+      -out PercolatorAdapter_idparquet_out.tmp.idparquet
+      -out_type idparquet
+      -percolator_executable "${PERCOLATOR_BINARY}")
+  set_tests_properties("TOPP_PercolatorAdapter_idparquet" PROPERTIES DEPENDS "TOPP_PercolatorAdapter_score_fdr")
+
+  add_test("TOPP_PercolatorAdapter_idparquet_convert"
+    ${TOPP_BIN_PATH}/IDFileConverter
+      -in PercolatorAdapter_idparquet_out.tmp.idparquet
+      -out PercolatorAdapter_idparquet_out.tmp.idXML)
+  set_tests_properties("TOPP_PercolatorAdapter_idparquet_convert" PROPERTIES DEPENDS "TOPP_PercolatorAdapter_idparquet")
+
+  add_test("TOPP_PercolatorAdapter_idparquet_diff"
+    ${DIFF}
+      -in1 PercolatorAdapter_idparquet_out.tmp.idXML
+      -in2 ${DATA_DIR_TOPP}/THIRDPARTY/PercolatorAdapter_idparquet_out.idXML
+      -whitelist "IdentificationRun date" "SearchParameters id=\"SP_0\" db=")
+  set_tests_properties("TOPP_PercolatorAdapter_idparquet_diff" PROPERTIES DEPENDS "TOPP_PercolatorAdapter_idparquet_convert")
 endif()
 ## test returncode when Percolator not found:
 add_test("TOPP_PercolatorAdapter_missing" ${TOPP_BIN_PATH}/PercolatorAdapter -test -in ${DATA_DIR_TOPP}/THIRDPARTY/PercolatorAdapter_1.idXML -out Percolator_1_out.tmp.idXML -percolator_executable "/does/not/exists/path.exe")
@@ -248,19 +310,6 @@ add_test("TOPP_MSFraggerAdapter_missing" ${TOPP_BIN_PATH}/MSFraggerAdapter -test
 set_tests_properties("TOPP_MSFraggerAdapter_missing" PROPERTIES SKIP_RETURN_CODE 14) ## EXTERNAL_PROGRAM_NOTFOUND
 
 
-
-#------------------------------------------------------------------------------
-# RAW file conversion
-# Test data was made available for software developers and data processing workflow testing by Stephen Brockman
-option(WITH_THERMORAWFILEPARSER_TEST "Runs the Thermo Raw file conversion test." ON)
-if (WITH_THERMORAWFILEPARSER_TEST)
-  if (NOT (${THERMORAWFILEPARSER_BINARY} STREQUAL "THERMORAWFILEPARSER_BINARY-NOTFOUND"))
-    add_test("TOPP_THERMORAWFILEPARSER_1" ${TOPP_BIN_PATH}/FileConverter -test -in ${DATA_DIR_TOPP}/THIRDPARTY/ginkgotoxin-ms-switching.raw -RawToMzML:ThermoRaw_executable "${THERMORAWFILEPARSER_BINARY}" -out ginkgotoxin-ms-switching_out_tmp.mzML)
-    add_test("TOPP_THERMORAWFILEPARSER_1_out" ${DIFF} -in1 ginkgotoxin-ms-switching_out_tmp.mzML -in2 ${DATA_DIR_TOPP}/THIRDPARTY/ginkgotoxin-ms-switching_out.mzML -whitelist "offset" "sourceFile" "fileChecksum" "version") 
-    set_tests_properties("TOPP_THERMORAWFILEPARSER_1_out" PROPERTIES DEPENDS "TOPP_THERMORAWFILEPARSER_1")
-  endif()
-endif()
-
 #------------------------------------------------------------------------------
 if (NOT (${NOVOR_BINARY} STREQUAL "NOVOR_BINARY-NOTFOUND"))
   add_test("TOPP_NovorAdapter_1" ${TOPP_BIN_PATH}/NovorAdapter -test -java_memory 512 -executable "${NOVOR_BINARY}" -in ${DATA_DIR_TOPP}/THIRDPARTY/NovorAdapter_in.mzML -out NovorAdapter_1_out.tmp.idXML -variable_modifications "Acetyl (K)" -fixed_modifications "Carbamidomethyl (C)" -forbiddenResidues "I")
@@ -285,4 +334,3 @@ if (NOT (${LUCIPHOR_BINARY} STREQUAL "LUCIPHOR_BINARY-NOTFOUND"))
   add_test("TOPP_LuciphorAdapter_1_out1" ${DIFF} -in1 LuciphorAdapter_1_output.tmp.idXML -in2 ${DATA_DIR_TOPP}/THIRDPARTY/LuciphorAdapter_1_output.idXML -whitelist "IdentificationRun date" "SearchParameters id=\"SP_0\" db=" "UserParam type=\"stringList\" name=\"spectra_data\" value=")
   set_tests_properties("TOPP_LuciphorAdapter_1_out1" PROPERTIES DEPENDS "TOPP_LuciphorAdapter_1")
 endif()
-

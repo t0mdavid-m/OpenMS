@@ -1037,7 +1037,7 @@ namespace
 
 namespace OpenMS
 {
-  Size UniPEFFConverter::convert(const String& in_xml, const String& out_peff, const Options& options)
+  Size UniPEFFConverter::convert(const std::string& in_xml, const std::string& out_peff, const Options& options)
   {
     const std::string in_file = in_xml;
     const std::string out_file = out_peff;

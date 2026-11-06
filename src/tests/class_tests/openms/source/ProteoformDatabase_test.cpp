@@ -25,11 +25,11 @@ using namespace std;
 namespace
 {
 // the default of FLASHTnT -peff_mod_masses
-const std::vector<String> default_mod_masses {"MOD:01819=100.016044", "MOD:01893=86.000394", "MOD:01614=329.05252", "MOD:01956=15.994915",
+const std::vector<std::string> default_mod_masses {"MOD:01819=100.016044", "MOD:01893=86.000394", "MOD:01614=329.05252", "MOD:01956=15.994915",
                                               "MOD:00657=14.999666",  "MOD:00017=skip",       "MOD:00223=skip",      "MOD:01976=skip",
                                               "MOD:01780=skip"};
 
-const String lpp_seq = "MKATKLVLGAVILGSTLLAGCSSNAKIDQLSSDVQTLNAKVDQLSNDVNAMRSDVQAAKDDAARANQRLDNMATKYRK";
+const std::string lpp_seq = "MKATKLVLGAVILGSTLLAGCSSNAKIDQLSSDVQTLNAKVDQLSNDVNAMRSDVQAAKDDAARANQRLDNMATKYRK";
 const FASTAFile::FASTAEntry lpp("sp:P69776",
                                 "\\PName=(Major outer membrane lipoprotein Lpp) \\GName=lpp \\NcbiTaxId=83333 \\TaxName=Escherichia coli (strain K12) "
                                 "\\Length=78 \\SV=1 \\EV=157 \\PE=1 \\ID=LPP_ECOLI \\AltAC=(P02937)(Q53272) \\ModResPsi=(0:1|MOD:00482|N-formyl-L-methionine "
@@ -37,13 +37,13 @@ const FASTAFile::FASTAEntry lpp("sp:P69776",
                                 "\\VariantSimple=(4:29|E) \\Processed=(5:1|20|PEFF:0001021|signal peptide)(6:21|78|PEFF:0001020|mature protein)",
                                 lpp_seq);
 
-const String dsba_seq = "MKKIWLALAGLVLAFSASAAQYEDGKQYTTLEKPVAGAPQVLEFFSFFCPHCYQFEEVLHISDNVKKKLPEGVKMTKYHVNFMGGDLGKDLTQAWAVAMALGVEDKVTVPLFEGVQKTQT"
+const std::string dsba_seq = "MKKIWLALAGLVLAFSASAAQYEDGKQYTTLEKPVAGAPQVLEFFSFFCPHCYQFEEVLHISDNVKKKLPEGVKMTKYHVNFMGGDLGKDLTQAWAVAMALGVEDKVTVPLFEGVQKTQT"
                         "IRSASDIRDVFINAGIKGEEYDAAWNSFVVKSLVAQQEKAAADVQLRGVPAMFVNGKYQLNPQGMDTSNMDVFVQQYADTVKYLSEKK";
-const String dsba_keys = "\\PName=(Thiol:disulfide interchange protein DsbA) \\GName=dsbA \\NcbiTaxId=83333 \\TaxName=Escherichia coli (strain K12) "
+const std::string dsba_keys = "\\PName=(Thiol:disulfide interchange protein DsbA) \\GName=dsbA \\NcbiTaxId=83333 \\TaxName=Escherichia coli (strain K12) "
                          "\\Length=208 \\ID=DSBA_ECOLI \\ModResPsi=(0:49|MOD:00798|half cystine)(1:52|MOD:00798|half cystine) "
                          "\\Processed=(2:1|19|PEFF:0001021|signal peptide)(3:20|208|PEFF:0001020|mature protein)";
 
-const String if3_seq = "MKGGKRVQTARPNRINGEIRAQEVRLTGLEGEQLGIVSLREALEKAEEAGVDLVEISPNAEPPVCRIMDYGKFLYEKSKSSKEQKKKQKVIQVKEIKFRPGTDEGDYQVKLRSLIRFLEE"
+const std::string if3_seq = "MKGGKRVQTARPNRINGEIRAQEVRLTGLEGEQLGIVSLREALEKAEEAGVDLVEISPNAEPPVCRIMDYGKFLYEKSKSSKEQKKKQKVIQVKEIKFRPGTDEGDYQVKLRSLIRFLEE"
                        "GDKAKITLRFRGREMAHQQIGMEVLNRVKDDLQELAVVESFPTKIEGRQMIMVLAPKKKQ";
 const FASTAFile::FASTAEntry if3("sp:P0A707",
                                 "\\PName=(Translation initiation factor IF-3) \\ID=IF3_ECOLI \\ModResPsi=(0:1|MOD:00073|N-methyl-L-methionine) "
@@ -51,7 +51,7 @@ const FASTAFile::FASTAEntry if3("sp:P0A707",
                                 "protein)(4:7|180|PEFF:0001020|mature protein)",
                                 if3_seq);
 
-double residueSum(const String& seq)
+double residueSum(const std::string& seq)
 {
   double sum = 0;
   for (char c : seq) sum += ResidueDB::getInstance()->getResidue(c)->getMonoWeight(Residue::Internal);
@@ -66,7 +66,7 @@ double entryMass(const ProteoformDatabase& db, const std::vector<FASTAFile::FAST
   return mass;
 }
 
-String sorted(String s)
+std::string sorted(std::string s)
 {
   std::sort(s.begin(), s.end());
   return s;
@@ -75,7 +75,7 @@ String sorted(String s)
 
 START_TEST(ProteoformDatabase, "$Id$")
 
-START_SECTION(static std::uint64_t fnv1a64(const String& s))
+START_SECTION(static std::uint64_t fnv1a64(const std::string& s))
 {
   TEST_EQUAL(ProteoformDatabase::fnv1a64(""), 14695981039346656037ULL)
   TEST_EQUAL(ProteoformDatabase::fnv1a64("a"), 12638187200555641996ULL)
@@ -98,7 +98,7 @@ START_SECTION(static ProteoformDatabase fromFASTA(const std::vector<FASTAFile::F
 }
 END_SECTION
 
-START_SECTION(void build(const std::vector<FASTAFile::FASTAEntry>& input, int max_mods, const std::vector<String>& mod_masses, std::vector<FASTAFile::FASTAEntry>& fasta_entries))
+START_SECTION(void build(const std::vector<FASTAFile::FASTAEntry>& input, int max_mods, const std::vector<std::string>& mod_masses, std::vector<FASTAFile::FASTAEntry>& fasta_entries))
 {
   // keys, escaping and the FASTA-like identifier and description
   {
@@ -312,7 +312,7 @@ START_SECTION(void build(const std::vector<FASTAFile::FASTAEntry>& input, int ma
 }
 END_SECTION
 
-START_SECTION(static bool isPEFF(const String& file))
+START_SECTION(static bool isPEFF(const std::string& file))
 {
   TEST_EQUAL(ProteoformDatabase::isPEFF("db.peff"), true)
   TEST_EQUAL(ProteoformDatabase::isPEFF(OPENMS_GET_TEST_DATA_PATH("FastaIterator_test.fasta")), false)
@@ -325,7 +325,7 @@ END_SECTION
 START_SECTION(FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs with fixed modifications)
 {
   // N6-acetyl-K at position 1: the flanking residue mass of a tag after it includes the acetyl
-  const String seq = "AKPEPTLDE";
+  const std::string seq = "AKPEPTLDE";
   const double ak = residueSum("AK"), acetyl = 42.010565;
   const FLASHHelperClasses::Tag tag("PEP", ak + acetyl, -1, {100.0, 197.0, 326.0, 423.0}, {1, 1, 1, 1}, 1);
   std::vector<int> positions;
@@ -365,7 +365,7 @@ START_SECTION(MassLadderAlgorithm precursor windows of several entries per prote
 {
   // the windows of the processed forms of IF-3 (1-180, 2-180, 7-180) are one hypothesis each, as in the FASTA database
   const double h2o = Residue::getInternalToFull().getMonoWeight();
-  String reversed = if3_seq;
+  std::string reversed = if3_seq;
   std::reverse(reversed.begin(), reversed.end());
   const FASTAFile::FASTAEntry decoy("DECOY_sp:P0A707", "", reversed);
   const std::vector<FASTAFile::FASTAEntry> fasta {{"sp:P0A707", "", if3_seq}, decoy};
@@ -384,7 +384,7 @@ START_SECTION(MassLadderAlgorithm precursor windows of several entries per prote
   const Size identity1 = windows(identity, fasta, mass1), identity2 = windows(identity, fasta, mass2);
   TEST_EQUAL(identity1 >= 1, true)
 
-  const String forms = "\\ID=IF3_ECOLI \\Processed=(1:1|180|PEFF:0001020|mature protein)(2:1|1|PEFF:0001035|initiator methionine)(4:7|180|PEFF:0001020|mature protein)";
+  const std::string forms = "\\ID=IF3_ECOLI \\Processed=(1:1|180|PEFF:0001020|mature protein)(2:1|1|PEFF:0001035|initiator methionine)(4:7|180|PEFF:0001020|mature protein)";
   ProteoformDatabase db;
   std::vector<FASTAFile::FASTAEntry> entries;
   db.build({{"sp:P0A707", forms, if3_seq}, decoy}, 1, default_mod_masses, entries);
@@ -407,8 +407,8 @@ START_SECTION(FLASHTnTFile::getProFormaString with fixed modifications)
   hit.setMetaValue("Modifications", std::vector<double> {42.010565, 14.999666});
   hit.setMetaValue("ModificationStarts", std::vector<int> {2, 6});
   hit.setMetaValue("ModificationEnds", std::vector<int> {2, 6});
-  hit.setMetaValue("ModificationIDs", std::vector<String> {"N6-acetyl-L-lysine", "L-glutamic acid 5-methyl ester (Gln)"});
-  hit.setMetaValue("ModificationACCs", std::vector<String> {"MOD:00064", "MOD:00657"});
+  hit.setMetaValue("ModificationIDs", std::vector<std::string> {"N6-acetyl-L-lysine", "L-glutamic acid 5-methyl ester (Gln)"});
+  hit.setMetaValue("ModificationACCs", std::vector<std::string> {"MOD:00064", "MOD:00657"});
   hit.setMetaValue("ModificationVariable", std::vector<int> {2, 2});
   // the mass searched, with the accession as an alternative (MOD:00657 gives 0.984 in the bundled PSI-MOD)
   TEST_EQUAL(FLASHTnTFile::getProFormaString(hit), "MAK[+42.010565|MOD:00064]LLKQ[+14.999666|MOD:00657]")

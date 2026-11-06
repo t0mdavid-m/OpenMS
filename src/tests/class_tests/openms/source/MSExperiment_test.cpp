@@ -8,6 +8,7 @@
 
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/CONCEPT/Constants.h>
+#include <OpenMS/DATASTRUCTURES/ListUtils.h>
 #include <OpenMS/test_config.h>
 
 ///////////////////////////
@@ -342,7 +343,7 @@ START_SECTION((template <bool add_mass_traces, class Container> void set2DData(c
   inputr.push_back(pr3);
 
   // create float data arrays for these two meta values (missing values in data will be set to NaN)
-  exp.set2DData(inputr, ListUtils::create<String>("meta1,meta3"));
+  exp.set2DData(inputr, ListUtils::create<std::string>("meta1,meta3"));
   TEST_EQUAL(exp.getNrSpectra(), 3);
   // retrieve data again and check for changes
   std::vector<Peak2D> outputr;
@@ -1042,6 +1043,45 @@ START_SECTION((void sortSpectra(bool sort_mz = true)))
 }
 END_SECTION
 
+START_SECTION([EXTRA] void sortSpectra() keeps spectra of equal retention time in their input order)
+{
+  // An ion mobility frame, a FAIMS split and Bruker TIMS data all produce many spectra with the
+  // same retention time. std::sort gives no guarantee for those, so they came out in an order that
+  // depends on the standard library, and consumers that walk the spectra in order saw them
+  // shuffled (#10054). Enough spectra to get past the insertion sort std::sort uses for short
+  // ranges, which is stable by accident.
+  PeakMap exp;
+  const Size frames = 4;
+  const Size per_frame = 250;
+  for (Size i = 0; i < frames * per_frame; ++i)
+  {
+    MSSpectrum s;
+    s.setRT(double(frames - 1 - (i % frames))); // frames arrive in reverse order
+    s.setNativeID("scan=" + std::to_string(i));
+    s.setMSLevel(1);
+    exp.addSpectrum(s);
+  }
+
+  exp.sortSpectra(false);
+
+  TEST_EQUAL(exp.size(), frames * per_frame)
+  TEST_EQUAL(exp.isSorted(false), true)
+  // inside each retention time the spectra must still be in the order they were added, i.e. their
+  // native IDs ascend
+  bool order_kept = true;
+  for (Size i = 1; i < exp.size(); ++i)
+  {
+    if (exp[i - 1].getRT() != exp[i].getRT()) continue;
+    const std::string id_before = exp[i - 1].getNativeID();
+    const std::string id_now = exp[i].getNativeID();
+    const Size before = std::stoul(id_before.substr(id_before.find('=') + 1));
+    const Size now = std::stoul(id_now.substr(id_now.find('=') + 1));
+    if (before > now) order_kept = false;
+  }
+  TEST_EQUAL(order_kept, true)
+}
+END_SECTION
+
 START_SECTION(bool isSorted(bool check_mz = true ) const)
 {
   //make test dataset
@@ -1104,9 +1144,19 @@ START_SECTION((void reset()))
   exp.set2DData(plist);
   exp.updateRanges();
 
+  // Add a chromatogram to verify it gets cleared too
+  MSChromatogram chrom;
+  ChromatogramPeak cp;
+  cp.setRT(1.0);
+  cp.setIntensity(100.0);
+  chrom.push_back(cp);
+  exp.addChromatogram(chrom);
+  TEST_EQUAL(exp.getChromatograms().size(), 1);
+
   exp.reset();
 
   TEST_EQUAL(exp.empty(),true);
+  TEST_EQUAL(exp.getChromatograms().empty(), true);
 }
 END_SECTION
 
@@ -1375,7 +1425,7 @@ START_SECTION(void clear(bool clear_meta_data))
   edit.getSample().setName("bla");
   edit.resize(5);
   edit.updateRanges();
-  edit.setMetaValue("label",String("bla"));
+  edit.setMetaValue("label",std::string("bla"));
   vector<MSChromatogram > tmp;
   tmp.resize(5);
   edit.setChromatograms(tmp);
@@ -1627,6 +1677,51 @@ START_SECTION((const MSChromatogram calculateTIC(float rt_bin_size=0) const))
 }
 END_SECTION
 
+START_SECTION([EXTRA] binned TIC preserves duplicate RTs and MS level selection)
+{
+  MSExperiment exp;
+  const std::vector<double> rts {10.0, 10.0, 11.0, 13.0};
+  const std::vector<UInt> levels {1, 1, 2, 1};
+  const std::vector<float> intensities {1.0f, 2.0f, 4.0f, 8.0f};
+  for (Size i = 0; i < rts.size(); ++i)
+  {
+    MSSpectrum spectrum;
+    spectrum.setRT(rts[i]);
+    spectrum.setMSLevel(levels[i]);
+    Peak1D peak;
+    peak.setMZ(100.0);
+    peak.setIntensity(intensities[i]);
+    spectrum.push_back(peak);
+    exp.addSpectrum(spectrum);
+  }
+
+  const auto ms1 = exp.calculateTIC(2.0f, 1);
+  TEST_EQUAL(ms1.size(), 3)
+  ABORT_IF(ms1.size() != 3)
+  TEST_EQUAL(ms1[0].getRT(), 10.0)
+  TEST_EQUAL(ms1[1].getRT(), 12.0)
+  TEST_EQUAL(ms1[2].getRT(), 14.0)
+  TEST_EQUAL(ms1[0].getIntensity(), 3.0f)
+  TEST_EQUAL(ms1[1].getIntensity(), 4.0f)
+  TEST_EQUAL(ms1[2].getIntensity(), 4.0f)
+
+  const auto all = exp.calculateTIC(2.0f, 0);
+  TEST_EQUAL(all.size(), 3)
+  ABORT_IF(all.size() != 3)
+  TEST_EQUAL(all[0].getIntensity(), 5.0f)
+  TEST_EQUAL(all[1].getIntensity(), 6.0f)
+  TEST_EQUAL(all[2].getIntensity(), 4.0f)
+
+  const auto ms2 = exp.calculateTIC(2.0f, 2);
+  TEST_EQUAL(ms2.size(), 1)
+  ABORT_IF(ms2.size() != 1)
+  TEST_EQUAL(ms2[0].getRT(), 11.0)
+  TEST_EQUAL(ms2[0].getIntensity(), 4.0f)
+  TEST_TRUE(exp.calculateTIC(2.0f, 3).empty())
+  TEST_TRUE(MSExperiment().calculateTIC(2.0f).empty())
+}
+END_SECTION
+
 START_SECTION( std::ostream& operator<<(std::ostream& os, const MSExperiment& chrom)) 
 {
   PeakMap tmp;
@@ -1648,11 +1743,11 @@ START_SECTION( std::ostream& operator<<(std::ostream& os, const MSExperiment& ch
   std::ostringstream os;
   os << tmp;
 
-  TEST_EQUAL(String(os.str()).hasSubstring("MSEXPERIMENT BEGIN"), true);
-  TEST_EQUAL(String(os.str()).hasSubstring("MSSPECTRUM BEGIN"), true);
-  TEST_EQUAL(String(os.str()).hasSubstring("MSCHROMATOGRAM BEGIN"), true);
-  TEST_EQUAL(String(os.str()).hasSubstring("47.11"), true);
-  TEST_EQUAL(String(os.str()).hasSubstring("10.77"), true);
+  TEST_EQUAL(StringUtils::hasSubstring(os.str(), "MSEXPERIMENT BEGIN"), true);
+  TEST_EQUAL(StringUtils::hasSubstring(os.str(), "MSSPECTRUM BEGIN"), true);
+  TEST_EQUAL(StringUtils::hasSubstring(os.str(), "MSCHROMATOGRAM BEGIN"), true);
+  TEST_EQUAL(StringUtils::hasSubstring(os.str(), "47.11"), true);
+  TEST_EQUAL(StringUtils::hasSubstring(os.str(), "10.77"), true);
 }
 END_SECTION
 
@@ -1904,12 +1999,12 @@ START_SECTION((void get2DPeakDataIMPerSpectrum(CoordinateType min_rt, Coordinate
   s1.setRT(1.0);
   s1.setMSLevel(1);
   DataArrays::FloatDataArray im1;
-  im1.setName("Ion Mobility");
+  im1.setName(Constants::UserParam::ION_MOBILITY);
   im1.push_back(0.8f);  // IM value for first peak
   im1.push_back(1.2f);  // IM value for second peak
   im1.setMetaValue("unit", "millisecond");
   s1.getFloatDataArrays().push_back(im1);
-  
+
   MSSpectrum s2{
     {150.0, 1500.0},
     {250.0, 2500.0}
@@ -1917,19 +2012,19 @@ START_SECTION((void get2DPeakDataIMPerSpectrum(CoordinateType min_rt, Coordinate
   s2.setRT(2.0);
   s2.setMSLevel(1);
   DataArrays::FloatDataArray im2;
-  im2.setName("Ion Mobility");
+  im2.setName(Constants::UserParam::ION_MOBILITY);
   im2.push_back(1.5f);  // IM value for first peak
   im2.push_back(2.0f);  // IM value for second peak
   im2.setMetaValue("unit", "millisecond");
   s2.getFloatDataArrays().push_back(im2);
-  
+
   MSSpectrum s3{
     {175.0, 1750.0}
   };
   s3.setRT(3.0);
   s3.setMSLevel(2);
   DataArrays::FloatDataArray im3;
-  im3.setName("Ion Mobility");
+  im3.setName(Constants::UserParam::ION_MOBILITY);
   im3.push_back(1.8f);  // IM value for single peak
   im3.setMetaValue("unit", "millisecond");
   s3.getFloatDataArrays().push_back(im3);
@@ -2390,12 +2485,12 @@ START_SECTION((void get2DPeakDataIM(CoordinateType min_rt, CoordinateType max_rt
   s1.setRT(1.0);
   s1.setMSLevel(1);
   DataArrays::FloatDataArray im1;
-  im1.setName("Ion Mobility");
+  im1.setName(Constants::UserParam::ION_MOBILITY);
   im1.push_back(0.8f);
   im1.push_back(1.2f);
   im1.setMetaValue("unit", "millisecond");
   s1.getFloatDataArrays().push_back(im1);
-  
+
   MSSpectrum s2{
     {150.0, 1500.0},
     {250.0, 2500.0}
@@ -2403,15 +2498,15 @@ START_SECTION((void get2DPeakDataIM(CoordinateType min_rt, CoordinateType max_rt
   s2.setRT(2.0);
   s2.setMSLevel(1);
   DataArrays::FloatDataArray im2;
-  im2.setName("Ion Mobility");
+  im2.setName(Constants::UserParam::ION_MOBILITY);
   im2.push_back(1.5f);
   im2.push_back(2.0f);
   im2.setMetaValue("unit", "millisecond");
   s2.getFloatDataArrays().push_back(im2);
-  
+
   exp.addSpectrum(s1);
   exp.addSpectrum(s2);
-  
+
   // Test 1: Full range, MS level 1
   {
     std::vector<float> rt, mz, intensity, ion_mobility;

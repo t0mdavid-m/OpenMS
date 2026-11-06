@@ -13,6 +13,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/ProteoformDatabase.h>
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
+#include <OpenMS/DATASTRUCTURES/ListUtils.h>
 #include <OpenMS/CHEMISTRY/ModificationsDB.h>
 #include <OpenMS/CHEMISTRY/Residue.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
@@ -25,7 +26,7 @@
 #include <OpenMS/FORMAT/UniPEFFConverter.h>
 #include <OpenMS/METADATA/SpectrumLookup.h>
 #include <OpenMS/SYSTEM/File.h>
-#include <QFileInfo>
+#include <OpenMS/SYSTEM/TempFiles.h>
 #include <cctype>
 #include <chrono>
 #include <fstream>
@@ -55,7 +56,7 @@ namespace
 
   /// the format of @p file by its content (gzip: a UniProtKB .xml.gz download; '# PEFF'; an XML declaration or <uniprot>), else by its
   /// name (.peff; .xml); FASTA otherwise
-  DatabaseFormat databaseFormat_(const String& file)
+  DatabaseFormat databaseFormat_(const std::string& file)
   {
     std::ifstream in(file, std::ios::binary);
     char magic[2] = {0, 0};
@@ -63,17 +64,17 @@ namespace
     if (in.gcount() == 2 && (unsigned char)magic[0] == 0x1f && (unsigned char)magic[1] == 0x8b) return DatabaseFormat::UNIPROT_XML;
     in.clear();
     in.seekg(0);
-    String line;
+    std::string line;
     while (std::getline(in, line))
     {
-      line.trim();
+      StringUtils::trim(line);
       if (! line.empty()) break;
     }
-    if (line.hasPrefix("# PEFF")) return DatabaseFormat::PEFF;
-    if (line.hasPrefix("<?xml") || line.hasPrefix("<uniprot")) return DatabaseFormat::UNIPROT_XML;
-    const String name = String(file).toLower();
-    if (name.hasSuffix(".peff")) return DatabaseFormat::PEFF;
-    if (name.hasSuffix(".xml") || name.hasSuffix(".xml.gz")) return DatabaseFormat::UNIPROT_XML;
+    if (StringUtils::hasPrefix(line, "# PEFF")) return DatabaseFormat::PEFF;
+    if (StringUtils::hasPrefix(line, "<?xml") || StringUtils::hasPrefix(line, "<uniprot")) return DatabaseFormat::UNIPROT_XML;
+    const std::string name = StringUtils::toLowered(file);
+    if (StringUtils::hasSuffix(name, ".peff")) return DatabaseFormat::PEFF;
+    if (StringUtils::hasSuffix(name, ".xml") || StringUtils::hasSuffix(name, ".xml.gz")) return DatabaseFormat::UNIPROT_XML;
     return DatabaseFormat::FASTA;
   }
 } // namespace
@@ -83,8 +84,7 @@ class TOPPFLASHTnT : public TOPPBase
 public:
   TOPPFLASHTnT():
       TOPPBase("FLASHTnT",
-               "FLASHTnT to generate de novo sequence tags from TDP spectrum and match them against proteome DB for proteoform identification.",
-               false)
+               "FLASHTnT to generate de novo sequence tags from TDP spectrum and match them against proteome DB for proteoform identification.")
   {
   }
 
@@ -101,7 +101,7 @@ protected:
                        "the other, without reading the raw file twice or writing the deconvolved mzML. A Thermo .raw file (recognised by its "
                        "extension) is a raw input too: it is read with Thermo's peak picking, so centroided, as ThermoRawFileParser converts it "
                        "by default (needs OpenMS built with WITH_THERMO_RAW and the .NET 8 runtime).", true);
-    setValidFormats_("in", ListUtils::create<String>("mzML,raw"));
+    setValidFormats_("in", ListUtils::create<std::string>("mzML,raw"));
 
     registerInputFile_("db", "<file>", "",
                        "Protein database. Three formats, recognised from the file content (else from the file name):\n"
@@ -121,7 +121,7 @@ protected:
                        "A UniProtKB XML file gives the same results as the PEFF converted from it.",
                        true);
 
-    registerStringList_("fixed_mod", "<name>", std::vector<String>(),
+    registerStringList_("fixed_mod", "<name>", std::vector<std::string>(),
                         "Fixed modifications, by name with the residue (e.g. 'Carbamidomethyl (C)' for alkylated cysteines, 'TMT6plex (K)') or by Unimod "
                         "accession number with the residue (e.g. '4 (C)'; 'UNIMOD:4 (C)' is the same). "
                         "The residue's mass is changed for the whole search: every occurrence in targets and decoys, in sequence tags (a tag reads "
@@ -136,7 +136,7 @@ protected:
                        "a form.", false);
     setMinInt_("peff_max_mods", 0);
     registerStringList_("peff_mod_masses", "<accession=mass>",
-                        ListUtils::create<String>("MOD:01819=100.016044,MOD:01893=86.000394,MOD:01614=329.05252,MOD:01956=15.994915,"
+                        ListUtils::create<std::string>("MOD:01819=100.016044,MOD:01893=86.000394,MOD:01614=329.05252,MOD:01956=15.994915,"
                                                   "MOD:00657=14.999666,MOD:00017=skip,MOD:00223=skip,MOD:01976=skip,MOD:01780=skip"),
                         "PEFF or UniProtKB XML database: masses of modification accessions that replace those of the modification database (PSI-MOD, Unimod), or "
                         "'skip' to leave the modification out. The default fills the gaps of the bundled PSI-MOD for E. coli (UniProt ptmlist "
@@ -148,20 +148,20 @@ protected:
                        "spectrum (fragment isotope envelopes at every charge, as FLASHAnnotator) before the FDR, and ranked by its extension score "
                        "plus 8 times its raw score. The raw annotation columns are written in the PrSM and proteoform files.",
                        false);
-    setValidFormats_("in_raw", ListUtils::create<String>("mzML,raw"));
+    setValidFormats_("in_raw", ListUtils::create<std::string>("mzML,raw"));
 
     registerOutputFile_("out_pro", "<file>", "", "Output proteoform-level tsv file containing proteoform IDs. ", true);
-    setValidFormats_("out_pro", ListUtils::create<String>("tsv"));
+    setValidFormats_("out_pro", ListUtils::create<std::string>("tsv"));
 
     registerOutputFile_("out_prsm", "<file>", "", "Output PrSM-level tsv file containing PrSMs.");
-    setValidFormats_("out_prsm", ListUtils::create<String>("tsv"));
+    setValidFormats_("out_prsm", ListUtils::create<std::string>("tsv"));
 
     registerOutputFile_("out_tag", "<file>", "", "Output tag-level tsv file containing matched tags.", false);
-    setValidFormats_("out_tag", ListUtils::create<String>("tsv"));
+    setValidFormats_("out_tag", ListUtils::create<std::string>("tsv"));
 
     registerOutputFile_("out_protein", "<file>", "", "Output protein-level tsv file containing the candidate proteins and "
                         "their scores, as ranked before proteoform characterization.", false);
-    setValidFormats_("out_protein", ListUtils::create<String>("tsv"));
+    setValidFormats_("out_protein", ListUtils::create<std::string>("tsv"));
 
     auto tnt_param = FLASHTnTAlgorithm().getDefaults();
     tnt_param.removeAll("tag:");
@@ -176,7 +176,7 @@ protected:
                               "isobaric quantification keep their defaults, and decoy masses are made with -decoy_precursor)");
   }
 
-  Param getSubsectionDefaults_(const String& prefix) const override
+  Param getSubsectionDefaults_(const std::string& prefix) const override
   {
     if (prefix == "tag")
     {
@@ -212,15 +212,15 @@ protected:
     // parsing parameters
     //-------------------------------------------------------------
 
-    String in_file = getStringOption_("in");
-    const String in_db = getStringOption_("db");
+    std::string in_file = getStringOption_("in");
+    const std::string in_db = getStringOption_("db");
 
     // Fixed modifications change the residue masses of the search, the in-process amino acid set (ResidueDB), before anything reads them:
     // every mass of the search -- tags, ladders, the extension, the raw annotation, the reported masses -- is that residue's.
-    String fixed_proforma;
+    std::string fixed_proforma;
     {
       std::set<char> fixed_residues;
-      for (const String& name : getStringList_("fixed_mod"))
+      for (const std::string& name : getStringList_("fixed_mod"))
       {
         if (name.empty()) continue;
         const ResidueModification* mod = nullptr;
@@ -247,9 +247,9 @@ protected:
         Residue* residue = const_cast<Residue*>(ResidueDB::getInstance()->getResidue((unsigned char)origin));
         const double before = residue->getMonoWeight(Residue::Internal);
         residue->setMonoWeight(residue->getMonoWeight(Residue::Full) + mod->getDiffMonoMass());
-        String accession = mod->getUniModAccession();
-        accession.substitute("UniMod:", "UNIMOD:");
-        fixed_proforma += "<[" + ProteoformDatabase::proformaTag(accession, mod->getDiffMonoMass()) + "]@" + String(origin) + ">";
+        std::string accession = mod->getUniModAccession();
+        StringUtils::substitute(accession, "UniMod:", "UNIMOD:");
+        fixed_proforma += "<[" + ProteoformDatabase::proformaTag(accession, mod->getDiffMonoMass()) + "]@" + std::string(1, origin) + ">";
         OPENMS_LOG_INFO << "Fixed modification " << mod->getFullId() << ": residue " << origin << " " << before << " -> "
                         << residue->getMonoWeight(Residue::Internal) << " Da" << endl;
       }
@@ -258,7 +258,7 @@ protected:
     // variable modifications: checked here, so that a name or an accession the database does not know stops the run with a clear message
     for (const auto& name : getParam_().getValue("var_mod").toStringVector())
     {
-      if (String(name).trim().empty()) continue;
+      if (StringUtils::trimmed(name).empty()) continue;
       try
       {
         bool protein_n_term = false;
@@ -270,12 +270,12 @@ protected:
         return ILLEGAL_PARAMETERS;
       }
     }
-    String in_raw = getStringOption_("in_raw");
+    std::string in_raw = getStringOption_("in_raw");
 
-    String out_tag_file = getStringOption_("out_tag");
-    String out_prsm_file = getStringOption_("out_prsm");
-    String out_pro_file = getStringOption_("out_pro");
-    String out_protein_file = getStringOption_("out_protein");
+    std::string out_tag_file = getStringOption_("out_tag");
+    std::string out_prsm_file = getStringOption_("out_prsm");
+    std::string out_pro_file = getStringOption_("out_pro");
+    std::string out_protein_file = getStringOption_("out_protein");
 
     //-------------------------------------------------------------
     // reading input
@@ -297,14 +297,14 @@ protected:
     if (raw_input)
     {
       OPENMS_LOG_INFO << "-in has no deconvolved masses: deconvolving it with FLASHDeconv's algorithm (fd: parameters)" << endl;
-      String type_accession = "MS:1000768";
+      std::string type_accession = "MS:1000768";
       if (! map.getSourceFiles().empty() && ! map.getSourceFiles()[0].getNativeIDTypeAccession().empty())
       {
         type_accession = map.getSourceFiles()[0].getNativeIDTypeAccession();
       }
       auto scanOf = [&type_accession](const MSSpectrum& spec) {
-        std::vector<String> native_ids;
-        spec.getNativeID().split(",", native_ids);
+        std::vector<std::string> native_ids;
+        StringUtils::split(spec.getNativeID(), ",", native_ids);
         return native_ids.empty() ? -1 : SpectrumLookup::extractScanNumber(native_ids.back(), type_accession);
       };
       // scan numbers from the native IDs; if an MSn spectrum has none, every spectrum's index + 1 instead (unless its native ID has one)
@@ -364,10 +364,10 @@ protected:
     // PEFF (or UniProtKB XML, converted to PEFF): its proteoform entries (ProteoformDatabase); FASTA: its entries are the proteins
     ProteoformDatabase database;
     const DatabaseFormat db_format = databaseFormat_(in_db);
-    String peff_file = in_db;
+    std::string peff_file = in_db;
     if (db_format == DatabaseFormat::UNIPROT_XML)
     {
-      peff_file = File::getTemporaryFile();
+      peff_file = TempFiles::getTemporaryFile();
       UniPEFFConverter::Options conversion;
       conversion.annotation_identifiers = true; // the disulfide bond pairs
       const Size converted = UniPEFFConverter::convert(in_db, peff_file, conversion);
@@ -408,26 +408,26 @@ protected:
                            "file, mirrored ones are generated"
                         << endl;
       }
-      auto siteList = [](const std::map<String, Size>& counts, Size& sites) {
-        String list;
+      auto siteList = [](const std::map<std::string, Size>& counts, Size& sites) {
+        std::string list;
         sites = 0;
         for (const auto& [acc, n] : counts)
         {
           sites += n;
-          list += (list.empty() ? "" : ", ") + acc + " (" + String(n) + ")";
+          list += (list.empty() ? "" : ", ") + acc + " (" + StringUtils::toStr(n) + ")";
         }
         return list;
       };
       if (! st.unresolved.empty())
       {
         Size sites = 0;
-        const String list = siteList(st.unresolved, sites);
+        const std::string list = siteList(st.unresolved, sites);
         OPENMS_LOG_INFO << "PEFF database: " << sites << " modification sites without a mass left out (peff_mod_masses): " << list << endl;
       }
       if (! st.wrong_residue.empty())
       {
         Size sites = 0;
-        const String list = siteList(st.wrong_residue, sites);
+        const std::string list = siteList(st.wrong_residue, sites);
         OPENMS_LOG_WARN << "PEFF database: " << sites << " modification sites on a residue that is not the modification's origin left out: " << list
                         << endl;
       }

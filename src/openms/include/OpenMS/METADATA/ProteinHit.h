@@ -15,8 +15,8 @@
 #include <map>
 
 #include <OpenMS/CHEMISTRY/ResidueModification.h>
+#include <OpenMS/CONCEPT/HashUtils.h>
 #include <OpenMS/CONCEPT/Types.h>
-#include <OpenMS/DATASTRUCTURES/String.h>
 #include <OpenMS/METADATA/MetaInfoInterface.h>
 
 namespace OpenMS
@@ -99,7 +99,7 @@ public:
     ProteinHit();
 
     /// Values constructor
-    ProteinHit(double score, UInt rank, String accession, String sequence);
+    ProteinHit(double score, UInt rank, std::string accession, std::string sequence);
 
     /// Copy constructor
     ProteinHit(const ProteinHit &) = default;
@@ -135,13 +135,13 @@ public:
     UInt getRank() const;
 
     /// returns the protein sequence
-    const String & getSequence() const;
+    const std::string & getSequence() const;
 
     /// returns the accession of the protein
-    const String & getAccession() const;
+    const std::string & getAccession() const;
     
     /// returns the description of the protein
-    String getDescription() const;
+    std::string getDescription() const;
 
     /// returns the coverage (in percent) of the protein hit based upon matched peptides
     double getCoverage() const;
@@ -153,14 +153,14 @@ public:
     void setRank(UInt newrank);
 
     /// sets the protein sequence
-    void setSequence(const String & sequence);
-    void setSequence(String && sequence);
+    void setSequence(const std::string & sequence);
+    void setSequence(std::string && sequence);
 
     /// sets the accession of the protein
-    void setAccession(const String & accession);
+    void setAccession(const std::string & accession);
 
     /// sets the description of the protein
-    void setDescription(const String & description);
+    void setDescription(const std::string & description);
 
     /// sets the coverage (in percent) of the protein hit based upon matched peptides
     void setCoverage(const double coverage);
@@ -179,7 +179,7 @@ public:
      * This method provides a type-safe way to annotate protein hits with their
      * target/decoy status.
      *
-     * @param type The target/decoy classification:
+     * @param[in] type The target/decoy classification:
      *   - TARGET: Target protein
      *   - DECOY: Decoy protein
      *   - UNKNOWN: Target/decoy status is unknown; the "target_decoy" meta value is removed
@@ -204,8 +204,8 @@ public:
 protected:
     double score_;       ///< the score of the protein hit
     UInt rank_;          ///< the position(rank) where the hit appeared in the hit list
-    String accession_;   ///< the protein identifier
-    String sequence_;    ///< the amino acid sequence of the protein hit
+    std::string accession_;   ///< the protein identifier
+    std::string sequence_;    ///< the amino acid sequence of the protein hit
     double coverage_;    ///< coverage of the protein based upon the matched peptide sequences
     std::set<std::pair<Size, ResidueModification> > modifications_; ///< modified positions in a protein
   };
@@ -214,4 +214,47 @@ protected:
   OPENMS_DLLAPI std::ostream& operator<< (std::ostream& stream, const ProteinHit& hit);
 
 } // namespace OpenMS
+
+// Hash function specialization for ProteinHit
+namespace std
+{
+  /**
+   * @brief Hash function for OpenMS::ProteinHit.
+   *
+   * Computes a hash based on all fields used in operator==:
+   * - score (double)
+   * - rank (UInt)
+   * - accession (std::string)
+   * - sequence (std::string)
+   * - coverage (double)
+   * - modifications (set of position-modification pairs)
+   *
+   * @note MetaInfoInterface is not included in the hash for performance reasons.
+   *       This means two ProteinHit objects that differ only in meta values will
+   *       have the same hash but compare unequal with operator==. This is valid
+   *       as the hash contract only requires that equal objects have equal hashes.
+   */
+  template<>
+  struct hash<OpenMS::ProteinHit>
+  {
+    std::size_t operator()(const OpenMS::ProteinHit& hit) const noexcept
+    {
+      std::size_t seed = OpenMS::hash_float(hit.getScore());
+      OpenMS::hash_combine(seed, OpenMS::hash_int(hit.getRank()));
+      OpenMS::hash_combine(seed, OpenMS::fnv1a_hash_string(hit.getAccession()));
+      OpenMS::hash_combine(seed, OpenMS::fnv1a_hash_string(hit.getSequence()));
+      OpenMS::hash_combine(seed, OpenMS::hash_float(hit.getCoverage()));
+
+      // Hash modifications (set of pairs: position + ResidueModification)
+      for (const auto& mod_pair : hit.getModifications())
+      {
+        OpenMS::hash_combine(seed, OpenMS::hash_int(mod_pair.first)); // position (Size)
+        // Use getFullId() for the modification, consistent with AASequence hashing
+        OpenMS::hash_combine(seed, OpenMS::fnv1a_hash_string(mod_pair.second.getFullId()));
+      }
+
+      return seed;
+    }
+  };
+} // namespace std
 

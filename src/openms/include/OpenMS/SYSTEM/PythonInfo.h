@@ -10,9 +10,10 @@
 
 #include <OpenMS/config.h>
 
+#include <string>
+
 namespace OpenMS
 {
-  class String;
   /**
     @brief Detect Python and retrieve information.
 
@@ -30,11 +31,11 @@ namespace OpenMS
       If Python is found, the executable name will be modified to the absolute path.
       If Python is not found, an error message will be put into @p error_msg
 
-      @param python_executable Path to Python executable. Can be absolute, relative or just a filename
-      @param error_msg On error, contains detailed error description (e.g. 
+      @param[in,out] python_executable Path to Python executable. Can be absolute, relative or just a filename
+      @param[out] error_msg On error, contains detailed error description (e.g. 
       @return Returns false if Python executable can not be called; true if Python executable can be executed
     **/
-    static bool canRun(String& python_executable, String& error_msg);
+    static bool canRun(std::string& python_executable, std::string& error_msg);
 
 
     /**
@@ -43,11 +44,11 @@ namespace OpenMS
      If Python cannot be found, the function will just return false.
      Thus, make sure that PythonInfo::canRun() succeeds before calling this function.
 
-     @param python_executable As determined by canRun()...
-     @param package_name The package you want to test (mind lower/upper case!)
+     @param[in] python_executable As determined by canRun()...
+     @param[in] package_name The package you want to test (mind lower/upper case!)
      @return true if package is installed
     */
-    static bool isPackageInstalled(const String& python_executable, const String& package_name);
+    static bool isPackageInstalled(const std::string& python_executable, const std::string& package_name);
 
     /**
      @brief Determine the version of Python given in @p python_executable by calling '--version'
@@ -55,10 +56,10 @@ namespace OpenMS
      If Python cannot be found, the function will return the empty string.
      Thus, make sure that PythonInfo::canRun() succeeds before calling this function.
 
-     @param python_executable As determined by canRun()...
+     @param[in] python_executable As determined by canRun()...
      @return the output of 'python --version'
     */
-    static String getVersion(const String& python_executable);
+    static std::string getVersion(const std::string& python_executable);
   };
 
 }

@@ -8,6 +8,8 @@
 
 #include <OpenMS/METADATA/Sample.h>
 
+#include <algorithm>
+
 using namespace std;
 
 namespace OpenMS
@@ -17,7 +19,7 @@ namespace OpenMS
 
   Sample::Sample() :
     MetaInfoInterface(),
-    state_(SAMPLENULL),
+    state_(SampleState::SAMPLENULL),
     mass_(0.0),
     volume_(0.0),
     concentration_(0.0)
@@ -79,42 +81,42 @@ namespace OpenMS
     return true;
   }
 
-  const String & Sample::getName() const
+  const std::string & Sample::getName() const
   {
     return name_;
   }
 
-  void Sample::setName(const String & name)
+  void Sample::setName(const std::string & name)
   {
     name_ = name;
   }
 
-  const String & Sample::getOrganism() const
+  const std::string & Sample::getOrganism() const
   {
     return organism_;
   }
 
-  void Sample::setOrganism(const String & organism)
+  void Sample::setOrganism(const std::string & organism)
   {
     organism_ = organism;
   }
 
-  const String & Sample::getNumber() const
+  const std::string & Sample::getNumber() const
   {
     return number_;
   }
 
-  void Sample::setNumber(const String & number)
+  void Sample::setNumber(const std::string & number)
   {
     number_ = number;
   }
 
-  const String & Sample::getComment() const
+  const std::string & Sample::getComment() const
   {
     return comment_;
   }
 
-  void Sample::setComment(const String & comment)
+  void Sample::setComment(const std::string & comment)
   {
     comment_ = comment;
   }
@@ -173,5 +175,38 @@ namespace OpenMS
   {
     subsamples_ = subsamples;
   }
+
+  StringList Sample::getAllNamesOfSampleState()
+  {
+    StringList names;
+    names.reserve(static_cast<size_t>(SampleState::SIZE_OF_SAMPLESTATE));
+    for (size_t i = 0; i < static_cast<size_t>(SampleState::SIZE_OF_SAMPLESTATE); ++i)
+    {
+      names.push_back(NamesOfSampleState[i]);
+    }
+    return names;
+  }
+
+  const std::string& Sample::sampleStateToString(SampleState state)
+  {
+    if (state == SampleState::SIZE_OF_SAMPLESTATE)
+    {
+      throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Value not allowed", "SIZE_OF_SAMPLESTATE");
+    }
+    return NamesOfSampleState[static_cast<size_t>(state)];
+  }
+
+  Sample::SampleState Sample::toSampleState(const std::string& name)
+  {
+    auto first = &NamesOfSampleState[0];
+    auto last = &NamesOfSampleState[static_cast<size_t>(SampleState::SIZE_OF_SAMPLESTATE)];
+    const auto it = std::find(first, last, name);
+    if (it == last)
+    {
+      throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Value unknown", name);
+    }
+    return static_cast<SampleState>(it - first);
+  }
+
 }
 

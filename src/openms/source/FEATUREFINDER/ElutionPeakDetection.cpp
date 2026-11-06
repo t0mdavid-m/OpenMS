@@ -49,7 +49,7 @@ namespace OpenMS
   {
     // compute RMSE
     double squared_sum(0.0);
-    std::vector<double> smooth_ints(tr.getSmoothedIntensities());
+    const std::vector<double>& smooth_ints(tr.getSmoothedIntensities());
 
     for (Size i = 0; i < smooth_ints.size(); ++i)
     {
@@ -109,12 +109,26 @@ namespace OpenMS
     if (mt_length != tr.getSize())
     {
       throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
-          "MassTrace was not smoothed before! Aborting...", String(smoothed_ints_vec.size()));
+          "MassTrace was not smoothed before! Aborting...",StringUtils::toStr(smoothed_ints_vec.size()));
     }
 
     // first make sure that everything is cleared
     chrom_maxes.clear();
     chrom_mins.clear();
+
+    // Handle empty traces to avoid crash
+    if (mt_length == 0)
+    {
+      return;
+    }
+
+    if (mt_length < 3)
+    {
+      // determine the index of maximum intensity
+      Size max_idx = tr.findMaxByIntPeak(true);
+      chrom_maxes.push_back(max_idx);
+      return;
+    }
 
     // Remember which indices we have already used
     boost::dynamic_bitset<> used_idx(mt_length);
@@ -250,12 +264,12 @@ namespace OpenMS
 
         // out debug info
 #ifdef DEBUG_EPD
-        std::cout << "findLocalExtrema: Identified potential minimum " << std::endl;
+        std::cout << "findLocalExtrema: Identified potential minimum \n";
         std::cout << "    " << tr.getLabel() << ": left_idx,right_idx " << left_idx << "," << right_idx << 
           ":" << left_max_int << " min: " << min_int << " " << right_max_int << 
-          " l " << left_rt << " r " << right_rt << " m " << mid_rt << std::endl;
-        std::cout << "    Int: min " << min_int << ", left: " << left_max_int << ", right: " << right_max_int << std::endl;
-        std::cout << "    Distance: min " << min_dist << ", left: " << left_dist << ", right: " << right_dist << std::endl;
+          " l " << left_rt << " r " << right_rt << " m " << mid_rt << '\n';
+        std::cout << "    Int: min " << min_int << ", left: " << left_max_int << ", right: " << right_max_int << '\n';
+        std::cout << "    Distance: min " << min_dist << ", left: " << left_dist << ", right: " << right_dist << '\n';
 #endif
 
         // 2.4 Decide whether to split the masstrace (introduce a minimum):
@@ -268,7 +282,7 @@ namespace OpenMS
         {
 #ifdef DEBUG_EPD
         std::cout << "    -> add new minima " << ": left_idx,right_idx " << left_idx << "," << right_idx << 
-          " l " << left_rt << " r " << right_rt << " m " << mid_rt << std::endl;
+          " l " << left_rt << " r " << right_rt << " m " << mid_rt << '\n';
 #endif
 
           chrom_mins.push_back(min_rt);
@@ -299,7 +313,6 @@ namespace OpenMS
   {
     // make sure that single_mtraces is empty
     single_mtraces.clear();
-
     detectElutionPeaks_(mt, single_mtraces);
     return;
   }
@@ -353,19 +366,21 @@ namespace OpenMS
     {
       if (count_mt >= lower_quartile_idx && count_mt <= upper_quartile_idx)
       {
-        // std::cout << "pw added " << width_pair.first << std::endl;
+        // std::cout << "pw added " << width_pair.first << '\n';
         filt_mtraces.push_back(mt_vec[width_pair.second]);
       }
       ++count_mt;
     }
 
-    std::cout << "pw low: " << filt_mtraces[0].estimateFWHM(true) << " " << " pw high: " << filt_mtraces[filt_mtraces.size() - 1].estimateFWHM(true) << std::endl;
+    // (removed stray debug output that printed to std::cout and indexed filt_mtraces[0] /
+    //  filt_mtraces[size()-1] without an empty check -> out-of-bounds when no trace passed the width filter)
 
     return;
   }
 
   void ElutionPeakDetection::detectElutionPeaks_(MassTrace& mt, std::vector<MassTrace>& single_mtraces)
   {
+
     // *********************************************************************
     // Step 1: Smooth data
     // *********************************************************************
@@ -378,16 +393,16 @@ namespace OpenMS
 
 #ifdef DEBUG_EPD
     Size i = 0;
-    std::cout << "*****" << std::endl;
-    std::cout << "   finding elution peaks in mass traces RT "  << mt.getCentroidRT()  << " / mz " << mt.getCentroidMZ() << std::endl;
-    std::cout << "   used for smoothing: win_size "  << win_size << " FWHM scan num " /* << mt.getFWHMScansNum() */ << std::endl;
-    std::cout << "*****" << std::endl;
+    std::cout << "*****\n";
+    std::cout << "   finding elution peaks in mass traces RT "  << mt.getCentroidRT()  << " / mz " << mt.getCentroidMZ() << '\n';
+    std::cout << "   used for smoothing: win_size "  << win_size << " FWHM scan num " /* << mt.getFWHMScansNum() */ << '\n';
+    std::cout << "*****\n";
     for (const auto& peak : mt)
     {
-      // std::cout << peak.getIntensity() << " " << mt.getSmoothedIntensities()[i] << std::endl;
+      // std::cout << peak.getIntensity() << " " << mt.getSmoothedIntensities()[i] << '\n';
       ++i;
     }
-    std::cout << "*****" << std::endl;
+    std::cout << "*****\n";
 #endif
 
     // *********************************************************************
@@ -397,7 +412,7 @@ namespace OpenMS
     findLocalExtrema(mt, win_size / 2, maxes, mins);
 
 #ifdef DEBUG_EPD
-    std::cout << "findLocalExtrema returned: maxima " << maxes.size() << " / minima " << mins.size() << std::endl;
+    std::cout << "findLocalExtrema returned: maxima " << maxes.size() << " / minima " << mins.size() << '\n';
 #endif
 
     // *********************************************************************
@@ -483,8 +498,7 @@ namespace OpenMS
         MassTrace new_mt(tmp_mt);
         new_mt.setSmoothedIntensities(smoothed_tmp);
         // copy ion mobility centroid and peak fwhm to split traces
-//        new_mt.centroid_im_ = mt.centroid_im_;
-        new_mt.setCentroidIM(mt.getCentroidIM());
+        if (mt.containsIMData()) new_mt.setCentroidIM(mt.getCentroidIM());
         new_mt.fwhm_mz_avg = mt.fwhm_mz_avg;
         new_mt.fwhm_im_avg = mt.fwhm_im_avg;
 
@@ -518,7 +532,7 @@ namespace OpenMS
         if (pw_ok && snr_ok)
         {
           // set label of sub-trace
-          new_mt.setLabel(mt.getLabel() + "." + String(min_idx + 1));
+          new_mt.setLabel(mt.getLabel() + "." + StringUtils::toStr(min_idx + 1));
           new_mt.updateSmoothedMaxRT();
           new_mt.updateWeightedMeanMZ();
           new_mt.updateWeightedMZsd();
@@ -536,7 +550,6 @@ namespace OpenMS
           }
         }
       }
-
     }
     return;
   }
@@ -546,6 +559,19 @@ namespace OpenMS
     // alternative smoothing using SavitzkyGolay
     // looking at the unit test, this method gives better fits than lowess smoothing
     // reference paper uses lowess smoothing
+
+    // Handle traces with fewer than 3 points - Savitzky-Golay requires minimum frame length of 3
+    if (mt.getSize() < 3)
+    {
+      std::vector<double> smoothed;
+      smoothed.reserve(mt.getSize());
+      for (Size i = 0; i < mt.getSize(); ++i)
+      {
+        smoothed.push_back(mt[i].getIntensity());
+      }
+      mt.setSmoothedIntensities(smoothed);
+      return;
+    }
 
     MSSpectrum spectrum;
     for (Size i = 0; i != mt.getSize(); ++i)
@@ -568,7 +594,7 @@ namespace OpenMS
     mt.setSmoothedIntensities(smoothed_intensities);
     //alternative end
 
-    // std::cout << "win_size elution: " << scan_time << " " << win_size << std::endl;
+    // std::cout << "win_size elution: " << scan_time << " " << win_size << '\n';
 
     // if there is no previous FWHM estimation... do it now
     //    if (win_size == 0)

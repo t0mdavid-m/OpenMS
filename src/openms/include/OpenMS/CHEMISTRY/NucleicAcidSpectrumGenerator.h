@@ -54,10 +54,10 @@ namespace OpenMS
     /**
        @brief Generates spectra in multiple charge states for an oligonucleotide sequence
 
-       @param spectra Output spectra
-       @param oligo Target oligonucleotide sequence
-       @param charges Set of charge states to generate
-       @param base_charge Minimum charge for peaks in each spectrum
+       @param[out] spectra Output spectra
+       @param[out] oligo Target oligonucleotide sequence
+       @param[in] charges Set of charge states to generate
+       @param[in] base_charge Minimum charge for peaks in each spectrum
 
        One spectrum per element in @p charges is generated in @p spectra.
 
@@ -74,7 +74,7 @@ namespace OpenMS
     protected:
 
     /// Helper function to add (uncharged) fragment peaks to a spectrum
-    void addFragmentPeaks_(MSSpectrum& spectrum, const std::vector<double>& fragment_masses, const String& ion_type, double offset, double intensity, Size start = 0) const;
+    void addFragmentPeaks_(MSSpectrum& spectrum, const std::vector<double>& fragment_masses, const std::string& ion_type, double offset, double intensity, Size start = 0) const;
 
     /// Special version of addFragmentPeaks_() for a-B ions
     void addAMinusBPeaks_(MSSpectrum& spectrum, const std::vector<double>& fragment_masses, const NASequence& oligo, Size start = 0) const;

@@ -15,13 +15,15 @@ EmgModel.h
 EmgScoring.h
 ExtendedIsotopeFitter1D.h
 ExtendedIsotopeModel.h
+FeatureFinderAlgorithm.h
+FeatureFinderDefs.h
 FeatureFinderAlgorithmPicked.h
 FeatureFinderAlgorithmPickedHelperStructs.h
 FeatureFinderIdentificationAlgorithm.h
+Biosaur2Algorithm.h
 FeatureFinderAlgorithmMetaboIdent.h
 FeatureFinderMultiplexAlgorithm.h
 FeatureFindingMetabo.h
-FFIDAlgoExternalIDHandler.h
 Fitter1D.h
 GaussFitter1D.h
 GaussModel.h
@@ -42,6 +44,7 @@ MultiplexFiltering.h
 MultiplexFilteringCentroided.h
 MultiplexFilteringProfile.h
 MultiplexIsotopicPeakPattern.h
+MultiplexResolverAlgorithm.h
 MultiplexSatelliteCentroided.h
 MultiplexSatelliteProfile.h
 PeakWidthEstimator.h

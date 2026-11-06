@@ -14,9 +14,10 @@
 ///////////////////////////
 
 #include <OpenMS/FORMAT/MzMLFile.h>
+#include <OpenMS/FORMAT/SqliteConnector.h>
 #include <OpenMS/KERNEL/MSExperiment.h>
 
-#include <QFile>
+#include <filesystem>
 
 using namespace OpenMS;
 using namespace OpenMS::Internal;
@@ -125,7 +126,7 @@ START_TEST(MzMLSqliteHandler, "$Id$")
 
 MzMLSqliteHandler* ptr = nullptr;
 MzMLSqliteHandler* nullPointer = nullptr;
-START_SECTION((MzMLSqliteHandler(const String& filename, const UInt64 run_id)))
+START_SECTION((MzMLSqliteHandler(const std::string& filename, const UInt64 run_id)))
   ptr = new MzMLSqliteHandler(OPENMS_GET_TEST_DATA_PATH("SqliteMassFile_1.sqMass"), 0);
   TEST_NOT_EQUAL(ptr, nullPointer)
 END_SECTION
@@ -317,8 +318,7 @@ START_SECTION(void readChromatograms(std::vector<MSChromatogram> & exp, const st
     NEW_TMP_FILE(tmp_filename);
 
     // delete file if present
-    QFile file (String(tmp_filename).toQString());
-    file.remove();
+    std::filesystem::remove(tmp_filename);
 
     auto chroms = exp_orig.getChromatograms();
     chroms.push_back(exp_orig.getChromatograms()[0]);
@@ -442,8 +442,7 @@ START_SECTION(void writeExperiment(const MSExperiment & exp))
   NEW_TMP_FILE(tmp_filename);
 
   // delete file if present
-  QFile file (String(tmp_filename).toQString());
-  file.remove();
+  std::filesystem::remove(tmp_filename);
 
   {
     MzMLSqliteHandler handler(tmp_filename, 12345);
@@ -506,6 +505,37 @@ START_SECTION(void writeExperiment(const MSExperiment & exp))
 }
 END_SECTION
 
+START_SECTION([EXTRA] writeRunLevelInformation is safe against SQL injection via the loaded file path)
+{
+  // Regression test for GH #9730: the loaded file path was concatenated into an
+  // INSERT executed via sqlite3_exec, so a path containing a single quote broke
+  // the statement and a crafted path could inject arbitrary SQL.
+  MSExperiment exp_orig;
+  MzMLFile().load(OPENMS_GET_TEST_DATA_PATH("MzMLSqliteHandler_1.mzML"), exp_orig);
+
+  // Leading '/' => setLoadedFilePath keeps it verbatim (treated absolute on all
+  // platforms) instead of prepending the CWD.
+  const std::string evil_path = "/tmp/o'brien'; DROP TABLE RUN;--/run.mzML";
+  exp_orig.setLoadedFilePath(evil_path);
+  TEST_EQUAL(exp_orig.getLoadedFilePath(), evil_path) // sanity: stored verbatim
+
+  std::string tmp_filename;
+  NEW_TMP_FILE(tmp_filename);
+  std::filesystem::remove(tmp_filename);
+
+  MzMLSqliteHandler handler(tmp_filename, 12345);
+  handler.createTables();
+  // With the old concatenating code this throws (malformed SQL) or runs the
+  // injected DROP; with the parameterized fix it must simply succeed.
+  handler.writeExperiment(exp_orig);
+
+  // The RUN table must still exist and hold exactly the one row we wrote: if the
+  // injected "DROP TABLE RUN" had executed, countTableRows() would instead throw.
+  SqliteConnector conn(tmp_filename);
+  TEST_EQUAL(conn.countTableRows("RUN"), 1)
+}
+END_SECTION
+
 START_SECTION(void writeSpectra(const std::vector<MSSpectrum>& spectra))
 {
   MSExperiment exp_orig;
@@ -515,8 +545,7 @@ START_SECTION(void writeSpectra(const std::vector<MSSpectrum>& spectra))
   NEW_TMP_FILE(tmp_filename);
 
   // delete file if present
-  QFile file (String(tmp_filename).toQString());
-  file.remove();
+  std::filesystem::remove(tmp_filename);
 
   {
     MzMLSqliteHandler handler(tmp_filename, 12345);
@@ -564,8 +593,7 @@ START_SECTION(void writeChromatograms(const std::vector<MSChromatogram>& chroms)
   NEW_TMP_FILE(tmp_filename);
 
   // delete file if present
-  QFile file (String(tmp_filename).toQString());
-  file.remove();
+  std::filesystem::remove(tmp_filename);
 
   {
     MzMLSqliteHandler handler(tmp_filename, 12345);
@@ -603,7 +631,7 @@ START_SECTION(void writeChromatograms(const std::vector<MSChromatogram>& chroms)
   // now test with numpress (accuracy is lower)
   TOLERANCE_RELATIVE(1+2e-4)
   // delete file if present
-  file.remove();
+  std::filesystem::remove(tmp_filename);
   {
     MzMLSqliteHandler handler(tmp_filename, 12345);
     handler.setConfig(true, true, 0.0001);

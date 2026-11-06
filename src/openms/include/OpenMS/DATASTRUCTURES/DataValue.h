@@ -8,13 +8,13 @@
 
 #pragma once
 
-#include <OpenMS/DATASTRUCTURES/String.h>
-#include <OpenMS/DATASTRUCTURES/ListUtils.h>
+#include <OpenMS/DATASTRUCTURES/TypeAliases.h>
 
 #include <OpenMS/CONCEPT/Types.h>
+#include <OpenMS/CONCEPT/HashUtils.h>
 #include <OpenMS/OpenMSConfig.h>
 
-class QString;
+#include <cmath>
 
 namespace OpenMS
 {
@@ -73,10 +73,6 @@ public:
     DataValue(const char*);
     /// specific constructor for std::string values
     DataValue(const std::string&);
-    /// specific constructor for string values
-    DataValue(const String&);
-    /// specific constructor for QString values
-    DataValue(const QString&);
     /// specific constructor for string lists
     DataValue(const StringList&);
     /// specific constructor for integer lists
@@ -123,6 +119,17 @@ public:
 
     /**
       @brief conversion operator to string
+
+      @warning This cast is STRICT: it only succeeds for a STRING_VALUE and throws
+      Exception::ConversionError for any other type (Int, Double, StringList, Empty).
+      This differs from the removed @c String(const DataValue&) constructor, which was
+      LENIENT (it stringified numbers, lists and EMPTY without throwing). Code that used
+      to write @c String s = dv; (or @c String s = obj.getMetaValue(k);) must NOT be
+      ported to @c std::string s = dv; / @c (std::string)dv — that reintroduces the strict
+      cast and will throw at runtime as soon as the value is not a plain string.
+      To reproduce the old lenient behaviour use @c StringUtils::toStr(dv) (see StringUtils.h),
+      which never throws and is a no-op for genuine strings. See the "Class B" note in
+      StringUtils.h::toStr(const DataValue&).
 
       @exception Exception::ConversionError is thrown if a cast from the the wrong type is requested
     */
@@ -299,10 +306,6 @@ public:
     DataValue& operator=(const char*);
     /// specific assignment for std::string values
     DataValue& operator=(const std::string&);
-    /// specific assignment for string values
-    DataValue& operator=(const String&);
-    /// specific assignment for QString values
-    DataValue& operator=(const QString&);
     /// specific assignment for string lists
     DataValue& operator=(const StringList&);
     /// specific assignment for integer lists
@@ -342,10 +345,8 @@ public:
       @brief Conversion to String
       @p full_precision Controls number of fractional digits for all double types or lists of double, 3 digits when false, and 15 when true.
     **/
-    String toString(bool full_precision = true) const;
+    std::string toString(bool full_precision = true) const;
 
-    ///Conversion to QString
-    QString toQString() const;
     //@}
 
     /// returns the type of value stored
@@ -409,7 +410,7 @@ protected:
     {
       SignedSize ssize_;
       double dou_;
-      String* str_;
+      std::string* str_;
       StringList* str_list_;
       IntList* int_list_;
       DoubleList* dou_list_;
@@ -420,5 +421,62 @@ private:
     /// Clears the current state of the DataValue and release every used memory.
     void clear_() noexcept;
   };
-}
+} // namespace OpenMS
+
+// Hash function specialization for DataValue
+namespace std
+{
+  /**
+   * @brief Hash function for DataValue.
+   *
+   * Hashes based on the value type, value content, and unit information.
+   * This ensures consistency with operator== which compares all these fields.
+   *
+   * @note For DOUBLE_VALUE, operator== uses epsilon comparison (fabs < 1e-6),
+   *       so we round to 6 decimal places before hashing to maintain consistency.
+   *       For DOUBLE_LIST, we use toString() since list comparison is exact.
+   */
+  template<>
+  struct hash<OpenMS::DataValue>
+  {
+    std::size_t operator()(const OpenMS::DataValue& dv) const noexcept
+    {
+      std::size_t seed = 0;
+
+      // Hash the value type
+      OpenMS::hash_combine(seed, OpenMS::hash_int(static_cast<int>(dv.valueType())));
+
+      // Hash the value content based on type
+      if (!dv.isEmpty())
+      {
+        switch (dv.valueType())
+        {
+          case OpenMS::DataValue::DOUBLE_VALUE:
+          {
+            // operator== uses fabs(a - b) < 1e-6 for doubles, so we round to 6 decimal places
+            // to ensure equal values (per operator==) produce identical hashes
+            double val = static_cast<double>(dv);
+            // Round to 6 decimal places: multiply by 1e6, round, then hash as int64
+            int64_t rounded = static_cast<int64_t>(std::round(val * 1e6));
+            OpenMS::hash_combine(seed, OpenMS::hash_int(rounded));
+            break;
+          }
+          default:
+            // For all other types (string, int, lists), use toString() which is consistent with operator==
+            OpenMS::hash_combine(seed, OpenMS::fnv1a_hash_string(dv.toString()));
+            break;
+        }
+      }
+
+      // Hash unit information if present
+      if (dv.hasUnit())
+      {
+        OpenMS::hash_combine(seed, OpenMS::hash_int(static_cast<int>(dv.getUnitType())));
+        OpenMS::hash_combine(seed, OpenMS::hash_int(dv.getUnit()));
+      }
+
+      return seed;
+    }
+  };
+} // namespace std
 

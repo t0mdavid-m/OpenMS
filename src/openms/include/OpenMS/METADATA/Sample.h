@@ -8,9 +8,10 @@
 
 #pragma once
 
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 #include <OpenMS/METADATA/MetaInfoInterface.h>
 #include <OpenMS/CONCEPT/Exception.h>
+#include <OpenMS/DATASTRUCTURES/TypeAliases.h>
 
 namespace OpenMS
 {
@@ -29,9 +30,20 @@ namespace OpenMS
   {
 public:
     ///state of aggregation of the sample
-    enum SampleState {SAMPLENULL, SOLID, LIQUID, GAS, SOLUTION, EMULSION, SUSPENSION, SIZE_OF_SAMPLESTATE};
+    enum class SampleState {SAMPLENULL, SOLID, LIQUID, GAS, SOLUTION, EMULSION, SUSPENSION, SIZE_OF_SAMPLESTATE};
     /// Names of sample states
-    static const std::string NamesOfSampleState[SIZE_OF_SAMPLESTATE];
+    static const std::string NamesOfSampleState[static_cast<size_t>(SampleState::SIZE_OF_SAMPLESTATE)];
+
+    /// returns all sample state names known to OpenMS
+    static StringList getAllNamesOfSampleState();
+
+    /// convert a SampleState enum to String
+    /// @throws Exception::InvalidValue if @p state is SIZE_OF_SAMPLESTATE
+    static const std::string& sampleStateToString(SampleState state);
+
+    /// convert an entry in NamesOfSampleState[] to SampleState enum
+    /// @throws Exception::InvalidValue if @p name is not contained in NamesOfSampleState[]
+    static SampleState toSampleState(const std::string& name);
 
     /// Default constructor
     Sample();
@@ -51,24 +63,24 @@ public:
     bool operator==(const Sample & rhs) const;
 
     /// returns the sample name (default: "")
-    const String & getName() const;
+    const std::string & getName() const;
     /// sets the sample name
-    void setName(const String & name);
+    void setName(const std::string & name);
 
     /// returns the sample name (default: "")
-    const String & getOrganism() const;
+    const std::string & getOrganism() const;
     /// sets the sample name
-    void setOrganism(const String & organism);
+    void setOrganism(const std::string & organism);
 
     /// returns the sample number (default: "")
-    const String & getNumber() const;
+    const std::string & getNumber() const;
     /// sets the sample number (e.g. sample ID)
-    void setNumber(const String & number);
+    void setNumber(const std::string & number);
 
     /// returns the comment (default: "")
-    const String & getComment() const;
+    const std::string & getComment() const;
     /// sets the comment (may contain newline characters)
-    void setComment(const String & comment);
+    void setComment(const std::string & comment);
 
     /// returns the state of aggregation (default: SAMPLENULL)
     SampleState getState() const;
@@ -98,10 +110,10 @@ public:
     void setSubsamples(const std::vector<Sample> & subsamples);
 
 protected:
-    String name_;
-    String number_;
-    String comment_;
-    String organism_;
+    std::string name_;
+    std::string number_;
+    std::string comment_;
+    std::string organism_;
     SampleState state_;
     double mass_;
     double volume_;

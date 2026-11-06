@@ -104,7 +104,7 @@ public:
     /// Float data array vector type
     typedef OpenMS::DataArrays::FloatDataArray FloatDataArray ;
     typedef std::vector<FloatDataArray> FloatDataArrays;
-    /// String data array vector type
+    /// std::string data array vector type
     typedef OpenMS::DataArrays::StringDataArray StringDataArray ;
     typedef std::vector<StringDataArray> StringDataArrays;
     /// Integer data array vector type
@@ -225,7 +225,7 @@ public:
     DriftTimeUnit getDriftTimeUnit() const;
 
     /// returns the ion mobility drift time unit as string
-    String getDriftTimeUnitAsString() const;
+    std::string getDriftTimeUnitAsString() const;
 
     /**
       @brief Sets the ion mobility drift time unit
@@ -243,10 +243,10 @@ public:
     void setMSLevel(UInt ms_level);
 
     /// Returns the name
-    const String& getName() const;
+    const std::string& getName() const;
 
     /// Sets the name
-    void setName(const String& name);
+    void setName(const std::string& name);
 
     //@}
 
@@ -321,7 +321,7 @@ public:
 
     /**
       @brief Sort the spectrum, but uses the fact, that certain chunks are presorted
-      @param chunks a Chunk is an object that contains the start and end of a sublist of peaks in the spectrum, that is or isn't sorted yet (is_sorted member)
+      @param[in] chunks a Chunk is an object that contains the start and end of a sublist of peaks in the spectrum, that is or isn't sorted yet (is_sorted member)
     */
     void sortByPositionPresorted(const std::vector<Chunk>& chunks);
 
@@ -357,13 +357,22 @@ public:
     /// You can pass any @p lambda function with <tt>[](Size index_1, Size index_2) --> bool</tt>
     /// which given two indices into MSSpectrum (either for peaks or data arrays) returns a weak-ordering.
     /// (you need to capture the MSSpectrum in the lambda and operate on it, based on the indices)
-    template<class Predicate> 
+    ///
+    /// @exception Exception::Precondition if a non-empty data array's size differs from the number
+    ///            of peaks. This is checked up front, before @p lambda is ever invoked, so the
+    ///            spectrum is left unchanged.
+    template<class Predicate>
     void sort(const Predicate& lambda)
     {
+      // Validate up front, before running the (possibly data-array-indexing) predicate, so a
+      // mis-sized array throws instead of being read out of bounds during the sort.
+      checkDataArraySizes_();
       std::vector<Size> indices(this->size());
       std::iota(indices.begin(), indices.end(), 0);
       std::stable_sort(indices.begin(), indices.end(), lambda);
-      select(indices);
+      // 'indices' is a permutation of [0, size): in range and duplicate-free by construction,
+      // so the unchecked path is safe and skips the redundant bounds re-scan.
+      selectUnchecked(indices);
     }
 
     //@}
@@ -373,7 +382,7 @@ public:
     /**
       @brief Binary search for the peak nearest to a specific m/z
 
-      @param mz The searched for mass-to-charge ratio searched
+      @param[in] mz The searched for mass-to-charge ratio searched
       @return Returns the index of the peak.
 
       @note Make sure the spectrum is sorted with respect to m/z! Otherwise the result is undefined.
@@ -385,8 +394,8 @@ public:
     /**
       @brief Binary search for the peak nearest to a specific m/z given a +/- tolerance windows in Th
 
-      @param mz The searched for mass-to-charge ratio searched
-      @param tolerance The non-negative tolerance applied to both sides of mz
+      @param[in] mz The searched for mass-to-charge ratio searched
+      @param[in] tolerance The non-negative tolerance applied to both sides of mz
 
       @return Returns the index of the peak or -1 if no peak present in tolerance window or if spectrum is empty
 
@@ -398,9 +407,9 @@ public:
     /**
       @brief Search for the peak nearest to a specific m/z given two +/- tolerance windows in Th
 
-      @param mz The searched for mass-to-charge ratio searched
-      @param tolerance_left The non-negative tolerance applied left of mz
-      @param tolerance_right The non-negative tolerance applied right of mz
+      @param[in] mz The searched for mass-to-charge ratio searched
+      @param[in] tolerance_left The non-negative tolerance applied left of mz
+      @param[in] tolerance_right The non-negative tolerance applied right of mz
 
       @return Returns the index of the peak or -1 if no peak present in tolerance window or if spectrum is empty
 
@@ -413,9 +422,9 @@ public:
     /**
       @brief Search for the peak with highest intensity among the peaks near to a specific m/z given two +/- tolerance windows in Th
 
-      @param mz The searched for mass-to-charge ratio searched
-      @param tolerance_left The non-negative tolerance applied left of mz
-      @param tolerance_right The non-negative tolerance applied right of mz
+      @param[in] mz The searched for mass-to-charge ratio searched
+      @param[in] tolerance_left The non-negative tolerance applied left of mz
+      @param[in] tolerance_right The non-negative tolerance applied right of mz
       @return Returns the index of the peak or -1 if no peak present in tolerance window or if spectrum is empty
 
       @note Make sure the spectrum is sorted with respect to m/z! Otherwise the result is undefined.
@@ -585,18 +594,51 @@ public:
       also all meta data (such as RT, drift time, ms level etc) will be
       deleted.
 
-      @param clear_meta_data If @em true, all meta data is cleared in addition to the data.
+      @param[in] clear_meta_data If @em true, all meta data is cleared in addition to the data.
     */
     void clear(bool clear_meta_data);
 
-    /*
-      @brief Select a (subset of) spectrum and its data_arrays, only retaining the indices given in @p indices
+    /**
+      @brief Select (a subset of) the spectrum and its data arrays, retaining only the peaks named in
+             @p indices, in the given order.
 
-      @param indices Vector of indices to keep
+      Every index is bounds-checked before any storage is touched, so an out-of-range index is rejected
+      with the spectrum left unchanged. This is the safe, default entry point (and the one exposed to
+      Python). Callers that already know their indices are in range can use selectUnchecked() to skip
+      the check.
+
+      @param[in] indices Indices of the peaks to keep. Must all be < size(); see selectUnchecked() for
+                 the duplicate-index restriction that applies to both overloads.
       @return Reference to this MSSpectrum
 
+      @exception Exception::Precondition if an index is out of range, or if a non-empty float, string or
+                 integer data array's size differs from the number of peaks.
     */
     MSSpectrum& select(const std::vector<Size>& indices);
+
+    /**
+      @brief Like select(), but without the per-index range check.
+
+      For hot paths whose indices are in range by construction (e.g. a sort permutation). The data-array
+      size consistency is still checked, as it is cheap and guards a separate out-of-bounds.
+
+      @note @p indices must be duplicate-free. Repeating an index is undefined behaviour: the peaks and
+            data-array entries are moved, so a second reference would read a moved-from value. A debug
+            build asserts uniqueness via OPENMS_PRECONDITION; release builds do not pay for the check.
+            Duplicates are memory-safe (unlike an out-of-range index), so the only caller that can supply
+            them is Python: the nanobind select() binding rejects out-of-range indices with an IndexError
+            and duplicates with a ValueError up front, which is why this C++ path only asserts uniqueness
+            in debug rather than validating unconditionally.
+
+      @note Not a strong exception guarantee: peaks are moved into place before the data arrays, so a
+            std::bad_alloc while reordering an array can leave peaks and arrays permuted.
+
+      @param[in] indices Indices of the peaks to keep. Every index must be < size() and unique.
+      @return Reference to this MSSpectrum
+
+      @exception Exception::Precondition if a non-empty data array's size differs from the number of peaks.
+    */
+    MSSpectrum& selectUnchecked(const std::vector<Size>& indices);
 
 
     /**
@@ -623,7 +665,80 @@ public:
     /// compute the total ion count (sum of all peak intensities)
     PeakType::IntensityType calculateTIC() const;
 
+    /**
+     * @brief Aggregation mode for rasterizeIMFrame
+     */
+    enum class RasterAggregation
+    {
+      SUM,  ///< Sum intensities of all peaks falling into a pixel
+      MAX   ///< Take maximum intensity of all peaks falling into a pixel
+    };
+
+    /**
+     * @brief Rasterizes an ion mobility frame into a 2D intensity matrix (IM vs m/z).
+     *
+     * This method creates a 2D heatmap/image representation of an IM frame by binning peak
+     * intensities into a regular grid of pixels. It is designed for spectra in IM_PEAK
+     * format where each peak has an associated ion mobility value stored in a float data array.
+     *
+     * The output matrix has dimensions [mz_bins x im_bins] where:
+     * - Rows correspond to m/z bins (y-axis in visualization)
+     * - Columns correspond to IM bins (x-axis in visualization)
+     * - Values are aggregated intensities (sum or max)
+     *
+     * The output buffer must be pre-allocated with size (mz_bins * im_bins) and will be
+     * filled in row-major order (C-style: mz varies slowest, im varies fastest).
+     *
+     * @param[out] output Pre-allocated buffer of size (mz_bins * im_bins) to store the
+     *                    aggregated intensity values. Must not be nullptr.
+     * @param[in] im_bins Number of bins along the IM axis (image width)
+     * @param[in] mz_bins Number of bins along the m/z axis (image height)
+     * @param[in] min_im Minimum IM value for the output range
+     * @param[in] max_im Maximum IM value for the output range
+     * @param[in] min_mz Minimum m/z value for the output range
+     * @param[in] max_mz Maximum m/z value for the output range
+     * @param[in] aggregation RasterAggregation mode: SUM (default) or MAX
+     *
+     * @note This method requires the spectrum to have IM data (containsIMData() returns true).
+     * @note Unlike rasterizeRTMZ, this method does NOT require the spectrum to be sorted by m/z,
+     *       as IM frame data is typically unsorted. All peaks are iterated linearly.
+     * @note The output buffer is zero-initialized at the start of this method.
+     *
+     * @throws Exception::MissingInformation if the spectrum does not contain IM data
+     * @throws Exception::NullPointer if output is nullptr
+     * @throws Exception::InvalidValue if im_bins or mz_bins is zero
+     * @throws Exception::InvalidRange if min_im >= max_im or min_mz >= max_mz
+     *
+     * Example usage with numpy (via pyOpenMS):
+     * @code
+     * import numpy as np
+     * im_bins, mz_bins = 800, 600
+     * output = np.zeros((mz_bins, im_bins), dtype=np.float32)
+     * spec.rasterizeIMFrame(output, im_bins, mz_bins, min_im, max_im, min_mz, max_mz)
+     * @endcode
+     */
+    void rasterizeIMFrame(
+      float* output,
+      Size im_bins,
+      Size mz_bins,
+      CoordinateType min_im,
+      CoordinateType max_im,
+      CoordinateType min_mz,
+      CoordinateType max_mz,
+      RasterAggregation aggregation = RasterAggregation::SUM) const;
+
 protected:
+    /**
+      @brief Throws Exception::Precondition if any non-empty data array's size differs from the peak count.
+
+      Shared by sort() and select() so that permuting the peaks can never mis-associate a parallel
+      data array or index one out of bounds.
+
+      @exception Exception::Precondition if a non-empty float, string or integer data array's size
+                 differs from the number of peaks.
+    */
+    void checkDataArraySizes_() const;
+
     /// Retention time
     double retention_time_ = -1;
 
@@ -637,12 +752,12 @@ protected:
     UInt ms_level_ = 1;
 
     /// Name
-    String name_;
+    std::string name_;
 
     /// Float data arrays
     FloatDataArrays float_data_arrays_;
 
-    /// String data arrays
+    /// std::string data arrays
     StringDataArrays string_data_arrays_;
 
     /// Integer data arrays

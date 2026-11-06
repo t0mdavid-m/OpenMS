@@ -3,16 +3,50 @@
 //
 // --------------------------------------------------------------------------
 // $Maintainer: Hannes Roest $
-// $Authors: Hannes Roest $
+// $Authors: Hannes Roest, Luis Jacob Keller, Alen Saric$
 // --------------------------------------------------------------------------
 
 #pragma once
 
-#include <OpenMS/PROCESSING/RESAMPLING/LinearResampler.h>
+#include <OpenMS/CONCEPT/LogStream.h>
 #include <OpenMS/CONCEPT/Macros.h>
+#include <OpenMS/CONCEPT/ProgressLogger.h>
+#include <OpenMS/DATASTRUCTURES/DefaultParamHandler.h>
+#include <OpenMS/KERNEL/MSExperiment.h>
+#include <OpenMS/KERNEL/StandardTypes.h>
+#include <OpenMS/MATH/MISC/LinearResampling.h>
 
 namespace OpenMS
 {
+  namespace Internal
+  {
+    /**
+      @brief Internal RAII guard for temporary resampling warning suppression.
+
+      Saves the current global warning state on construction and restores it on
+      destruction so OpenSwath can suppress high-volume warnings without
+      leaking the suppression to later work in the same process.
+    */
+    class ScopedResamplingWarningSuppression
+    {
+    public:
+      explicit ScopedResamplingWarningSuppression(bool suppress = true) :
+        previous_(suppress_resampling_spacing_warning.exchange(suppress))
+      {
+      }
+
+      ~ScopedResamplingWarningSuppression()
+      {
+        suppress_resampling_spacing_warning.store(previous_);
+      }
+
+      ScopedResamplingWarningSuppression(const ScopedResamplingWarningSuppression&) = delete;
+      ScopedResamplingWarningSuppression& operator=(const ScopedResamplingWarningSuppression&) = delete;
+
+    private:
+      bool previous_;
+    };
+  } // namespace Internal
 
   /**
     @brief Linear Resampling of raw data with alignment.
@@ -21,20 +55,24 @@ namespace OpenMS
     Therefore the intensity at every position x in the input raw data is spread to the two
     adjacent resampling points.
     This method preserves the area of the input signal and also the centroid position of a peak.
-    Therefore it is recommended for quantitation as well as for ProteinIdentification experiments.
 
-    In addition to the LinearResampler, this class also allows to fix the
+    This class also allows to fix the
     points at which resampling will occur. This is useful if the resampling
     points are known in advance, e.g. if one needs to resample a chromatogram
     at the positions of another chromatogram.
+    Therefore it is recommended for quantitation as well as for ProteinIdentification experiments.
+
+    @warning If the configured @p spacing is smaller than the minimal distance between two adjacent
+    input data points, intensity redistribution may produce spurious peaks. This can occur when
+    the sampling rate is finer than the detector's dead time.
   */
   class OPENMS_DLLAPI LinearResamplerAlign :
-    public LinearResampler
+    public DefaultParamHandler,
+    public ProgressLogger
   {
 
-public:
-
-    LinearResamplerAlign()
+  public:
+    LinearResamplerAlign() : DefaultParamHandler("LinearResamplerAlign")
     {
       defaults_.setValue("spacing", 0.05, "Spacing of the resampled output peaks.");
       defaults_.setValue("ppm", "false", "Whether spacing is in ppm or Th");
@@ -48,32 +86,16 @@ public:
         start and end of the container. The resampling frequency can be
         controlled by the "spacing" parameter.
 
-        @param container The container to be resampled
+        @param[in,out] container The container to be resampled
     */
     template <class PeakContainerT>
     void raster(PeakContainerT& container)
     {
-      //return if nothing to do
-      if (container.empty()) return;
-
-      auto first = container.begin();
-      auto last = container.end();
-
-      double end_pos = (last - 1)->getPos();
-      double start_pos = first->getPos();
-      int number_resampled_points = (int)(ceil((end_pos - start_pos) / spacing_ + 1));
-
-      std::vector<typename PeakContainerT::PeakType> resampled_peak_container;
-      populate_raster_(resampled_peak_container, start_pos, end_pos, number_resampled_points);
-
-      raster(container.begin(), container.end(), resampled_peak_container.begin(), resampled_peak_container.end());
-
-      container.swap(resampled_peak_container);
+      Internal::LinearResampling(spacing_, ppm_).raster(container);
     }
 
     /**
         @brief Applies the resampling algorithm to a container (MSSpectrum or MSChromatogram) with fixed coordinates.
-
         The container will be resampled at equally spaced points between the
         supplied start and end positions. The resampling frequency can be
         controlled by the "spacing" parameter.
@@ -82,9 +104,9 @@ public:
         This is especially useful if multiple spectra or chromatograms need to
         be resampled according to the same raster.
 
-        @param container The container to be resampled
-        @param start_pos The start position to be used for resampling
-        @param end_pos The end position to be used for resampling
+        @param[in,out] container The container to be resampled
+        @param[in] start_pos The start position to be used for resampling
+        @param[in] end_pos The end position to be used for resampling
     */
     template <typename PeakContainerT>
     void raster_align(PeakContainerT& container, double start_pos, double end_pos)
@@ -101,6 +123,8 @@ public:
 
       auto first = container.begin();
       auto last = container.end();
+
+      verifySpacing_(first, last, [](auto x){return x->getPos();});
 
       // get the iterators just before / after the two points start_pos / end_pos
       while (first != container.end() && (first)->getPos() < start_pos) {++first;}
@@ -131,52 +155,16 @@ public:
         outside the range of the output container will simply be added to the
         first or last data point.
 
-        @param raw_it Start of the input container to be resampled (containing the data)
-        @param raw_end End of the input container to be resampled (containing the data)
-        @param resampled_begin Iterator pointing to start of the output spectrum range (m/z need to be populated, intensities should be zero)
-        @param resampled_end Iterator pointing to end of the output spectrum range (m/z need to be populated, intensities should be zero)
+        @param[in] raw_it Start of the input container to be resampled (containing the data)
+        @param[in] raw_end End of the input container to be resampled (containing the data)
+        @param[in,out] resampled_begin Iterator pointing to start of the output spectrum range (m/z need to be populated, intensities should be zero)
+        @param[in,out] resampled_end Iterator pointing to end of the output spectrum range (m/z need to be populated, intensities should be zero)
 
     */
     template <typename PeakTypeIterator, typename ConstPeakTypeIterator>
     void raster(ConstPeakTypeIterator raw_it, ConstPeakTypeIterator raw_end, PeakTypeIterator resampled_begin, PeakTypeIterator resampled_end)
     {
-      OPENMS_PRECONDITION(resampled_begin != resampled_end, "Output iterators cannot be identical") // as we use +1
-      // OPENMS_PRECONDITION(raw_it != raw_end, "Input iterators cannot be identical")
-
-      PeakTypeIterator resample_start = resampled_begin;
-
-      // need to get the raw iterator between two resampled iterators of the raw data
-      while (raw_it != raw_end && raw_it->getPos() < resampled_begin->getPos())
-      {
-        resampled_begin->setIntensity(resampled_begin->getIntensity() + raw_it->getIntensity());
-        raw_it++;
-      }
-
-      while (raw_it != raw_end)
-      {
-        //advance the resample iterator until our raw point is between two resampled iterators
-        while (resampled_begin != resampled_end && resampled_begin->getPos() < raw_it->getPos()) {resampled_begin++;}
-        if (resampled_begin != resample_start) {resampled_begin--;}
-
-        // if we have the last datapoint we break
-        if ((resampled_begin + 1) == resampled_end) {break;}
-
-        double dist_left =  fabs(raw_it->getPos() - resampled_begin->getPos());
-        double dist_right = fabs(raw_it->getPos() - (resampled_begin + 1)->getPos());
-
-        // distribute the intensity of the raw point according to the distance to resample_it and resample_it+1
-        resampled_begin->setIntensity(resampled_begin->getIntensity() + raw_it->getIntensity() * dist_right / (dist_left + dist_right));
-        (resampled_begin + 1)->setIntensity((resampled_begin + 1)->getIntensity() + raw_it->getIntensity() * dist_left / (dist_left + dist_right));
-
-        raw_it++;
-      }
-
-      // add the final intensity to the right
-      while (raw_it != raw_end)
-      {
-        resampled_begin->setIntensity(resampled_begin->getIntensity() + raw_it->getIntensity());
-        raw_it++;
-      }
+      Internal::LinearResampling(spacing_, ppm_).raster(raw_it, raw_end, resampled_begin, resampled_end);
     }
 
     /**
@@ -195,14 +183,14 @@ public:
         outside the range of the output container will simply be added to the
         first or last data point.
 
-        @param mz_raw_it Start of the input container to be resampled (containing the m/z data)
-        @param mz_raw_end End of the input container to be resampled (containing the m/z data)
-        @param int_raw_it Start of the input container to be resampled (containing the intensity data)
-        @param int_raw_end End of the input container to be resampled (containing the intensity data)
-        @param mz_resample_it Iterator pointing to start of the output spectrum range (m/z which need to be populated)
-        @param mz_resample_end Iterator pointing to end of the output spectrum range (m/z which need to be populated)
-        @param int_resample_it Iterator pointing to start of the output spectrum range (intensities)
-        @param int_resample_end Iterator pointing to end of the output spectrum range (intensities)
+        @param[in] mz_raw_it Start of the input container to be resampled (containing the m/z data)
+        @param[in] mz_raw_end End of the input container to be resampled (containing the m/z data)
+        @param[in] int_raw_it Start of the input container to be resampled (containing the intensity data)
+        @param[in] int_raw_end End of the input container to be resampled (containing the intensity data)
+        @param[in] mz_resample_it Iterator pointing to start of the output spectrum range (m/z which need to be populated)
+        @param[in] mz_resample_end Iterator pointing to end of the output spectrum range (m/z which need to be populated)
+        @param[in,out] int_resample_it Iterator pointing to start of the output spectrum range (intensities)
+        @param[in,out] int_resample_end Iterator pointing to end of the output spectrum range (intensities)
 
     */
     template <typename PeakTypeIterator, typename ConstPeakTypeIterator>
@@ -219,6 +207,8 @@ public:
       OPENMS_PRECONDITION(std::distance(mz_raw_it, mz_raw_end) == std::distance(int_raw_it, int_raw_end),
           "Raw m/z and intensity iterators need to cover the same distance")
       // OPENMS_PRECONDITION(raw_it != raw_end, "Input iterators cannot be identical")
+
+      verifySpacing_(mz_raw_it, mz_raw_end, [](auto x){return *x;});
 
       PeakTypeIterator mz_resample_start = mz_resample_it;
 
@@ -276,16 +266,18 @@ public:
         The intensities at the resampling point is computed by a linear
         interpolation between the two closest resampling points.
 
-        @param raw_it Start of the input (raw) spectrum to be resampled
-        @param raw_end End of the input (raw) spectrum to be resampled
-        @param resampled_start Iterator pointing to start of the output spectrum range (m/z need to be populated, intensities should be zero)
-        @param resampled_end Iterator pointing to end of the output spectrum range (m/z need to be populated, intensities should be zero)
+        @param[in] raw_it Start of the input (raw) spectrum to be resampled
+        @param[in] raw_end End of the input (raw) spectrum to be resampled
+        @param[in,out] resampled_start Iterator pointing to start of the output spectrum range (m/z need to be populated, intensities should be zero)
+        @param[in,out] resampled_end Iterator pointing to end of the output spectrum range (m/z need to be populated, intensities should be zero)
     */
     template <typename PeakTypeIterator>
     void raster_interpolate(PeakTypeIterator raw_it, PeakTypeIterator raw_end, PeakTypeIterator resampled_start, PeakTypeIterator resampled_end)
     {
       // OPENMS_PRECONDITION(resampled_start != resampled_end, "Output iterators cannot be identical")
       OPENMS_PRECONDITION(raw_it != raw_end, "Input iterators cannot be identical") // as we use +1
+
+      verifySpacing_(raw_it, raw_end, [](PeakTypeIterator x){return x->getPos();});
 
       PeakTypeIterator raw_start = raw_it;
 
@@ -309,9 +301,31 @@ public:
 
     }
 
+    /**
+        @brief Applies the resampling algorithm to all spectra of an MSExperiment.
+
+        Chromatograms stored in @p exp are not resampled.
+
+        @param[in,out] exp The experiment whose spectra will be resampled in place.
+    */
+    void rasterExperiment(PeakMap& exp)
+    {
+      startProgress(0, exp.size(), "resampling of data");
+      for (Size i = 0; i < exp.size(); ++i)
+      {
+        raster(exp[i]);
+        setProgress(i);
+      }
+      endProgress();
+    }
+
+
 protected:
 
     /// Spacing of the resampled data
+    double spacing_;
+
+    /// Whether spacing_ is interpreted in ppm (true) or Th (false)
     bool ppm_;
 
     void updateMembers_() override
@@ -325,35 +339,16 @@ protected:
     void populate_raster_(std::vector<PeakType>& resampled_peak_container,
         double start_pos, double end_pos, int number_resampled_points)
     {
-      if (!ppm_)
-      {
-        // generate the resampled peaks at positions origin+i*spacing_
-        resampled_peak_container.resize(number_resampled_points);
-        typename std::vector<PeakType>::iterator it = resampled_peak_container.begin();
-        for (int i = 0; i < number_resampled_points; ++i)
-        {
-          it->setPos(start_pos + i * spacing_);
-          ++it;
-        }
-      }
-      else
-      {
-        // generate resampled peaks with ppm distance (not fixed)
-        double current_mz = start_pos;
-        while (current_mz < end_pos)
-        {
-          PeakType p;
-          p.setIntensity(0);
-          p.setPos(current_mz);
-          resampled_peak_container.push_back(p);
-
-          // increment current_mz
-          current_mz += current_mz * (spacing_ / 1e6);
-        }
-      }
+      Internal::LinearResampling(spacing_, ppm_).populateRaster(resampled_peak_container, start_pos, end_pos, number_resampled_points);
     }
+
+
+    /// helper function to warn the user when the resampling rate is too high
+    template <typename PeakTypeIterator>
+    void verifySpacing_(PeakTypeIterator it, PeakTypeIterator end, auto access)
+    {
+      Internal::LinearResampling(spacing_, ppm_).verifySpacing(it, end, access);
+    }
+
   };
-
 }
-
-

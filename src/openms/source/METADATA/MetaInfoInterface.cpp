@@ -14,12 +14,6 @@ using namespace std;
 
 namespace OpenMS
 {
-
-  MetaInfoInterface::MetaInfoInterface() :
-    meta_(nullptr)
-  {
-  }
-
   /// Copy constructor
   MetaInfoInterface::MetaInfoInterface(const MetaInfoInterface& rhs) :
     meta_(nullptr)
@@ -121,7 +115,7 @@ namespace OpenMS
     return !(operator==(rhs));
   }
 
-  const DataValue& MetaInfoInterface::getMetaValue(const String& name) const
+  const DataValue& MetaInfoInterface::getMetaValue(const std::string& name) const
   {
     if (meta_ == nullptr)
     {
@@ -130,7 +124,7 @@ namespace OpenMS
     return meta_->getValue(name, DataValue::EMPTY);
   }
 
-  DataValue MetaInfoInterface::getMetaValue(const String& name, const DataValue& default_value) const
+  DataValue MetaInfoInterface::getMetaValue(const std::string& name, const DataValue& default_value) const
   {
     if (meta_ == nullptr)
     {
@@ -157,7 +151,7 @@ namespace OpenMS
     return meta_->getValue(index, default_value);
   }
 
-  bool MetaInfoInterface::metaValueExists(const String& name) const
+  bool MetaInfoInterface::metaValueExists(const std::string& name) const
   {
     if (meta_ == nullptr)
     {
@@ -175,7 +169,7 @@ namespace OpenMS
     return meta_->exists(index);
   }
 
-  void MetaInfoInterface::setMetaValue(const String& name, const DataValue& value)
+  void MetaInfoInterface::setMetaValue(const std::string& name, const DataValue& value)
   {
     createIfNotExists_();
     meta_->setValue(name, value);
@@ -200,7 +194,7 @@ namespace OpenMS
     }
   }
 
-  void MetaInfoInterface::getKeys(std::vector<String>& keys) const
+  void MetaInfoInterface::getKeys(std::vector<std::string>& keys) const
   {
     if (meta_ != nullptr)
     {
@@ -231,7 +225,7 @@ namespace OpenMS
     meta_ = nullptr;
   }
 
-  void MetaInfoInterface::removeMetaValue(const String& name)
+  void MetaInfoInterface::removeMetaValue(const std::string& name)
   {
     if (meta_ != nullptr)
     {
@@ -249,15 +243,29 @@ namespace OpenMS
 
   void MetaInfoInterface::addMetaValues(const MetaInfoInterface& from)
   {
-    if (from.meta_ == nullptr)
+    if (from.meta_ == nullptr || from.meta_->empty())
     {
-      return; // nothing to copy
+      return;
     }
-    if (meta_ == nullptr)
-    {
-      meta_ = new MetaInfo();
-    }
-    *meta_ += *from.meta_;
+    createIfNotExists_();
+    *meta_ += *(from.meta_);
+  }
+
+  MetaInfoInterface::MetaInfoConstIterator MetaInfoInterface::metaBegin() const
+  {
+    static const MetaInfo empty;
+    return meta_ ? meta_->begin() : empty.begin();
+  }
+
+  MetaInfoInterface::MetaInfoConstIterator MetaInfoInterface::metaEnd() const
+  {
+    static const MetaInfo empty;
+    return meta_ ? meta_->end() : empty.end();
+  }
+
+  Size MetaInfoInterface::metaSize() const
+  {
+    return meta_ ? meta_->size() : 0;
   }
 
 } //namespace

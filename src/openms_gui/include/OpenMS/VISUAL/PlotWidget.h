@@ -124,7 +124,7 @@ signals:
     /// Emits a status message that should be displayed for @p time ms. If @p time is 0 the message should be displayed until the next message is emitted.
     void sendStatusMessage(std::string, OpenMS::UInt);
     /// Emitted when the cursor position changes (for displaying e.g. in status bar)
-    void sendCursorStatus(const String& x_value, const String& y_value);
+    void sendCursorStatus(const std::string& x_value, const std::string& y_value);
     /// Message about the destruction of this widget
     void aboutToBeDestroyed(int window_id);
     /// Shows the main preferences dialog
@@ -138,25 +138,25 @@ public slots:
     /// Shows the intensity distribution of the current layer
     void showIntensityDistribution(const Math::Histogram<>& dist);
     /// Shows the meta data distribution of value @p name of the current layer
-    void showMetaDistribution(const String& name, const Math::Histogram<>& dist);
+    void showMetaDistribution(const std::string& name, const Math::Histogram<>& dist);
     /// Updates the axes by setting the right labels and calling recalculateAxes_();
     void updateAxes();
     /**
         @brief Updates the horizontal scrollbar
 
-        @param min The overall minimum of the range
-        @param disp_min The displayed minimum
-        @param disp_max The displayed maximum
-        @param max The overall maximum of the range
+        @param[in] min The overall minimum of the range
+        @param[in] disp_min The displayed minimum
+        @param[in] disp_max The displayed maximum
+        @param[in] max The overall maximum of the range
     */
     void updateHScrollbar(float min, float disp_min, float disp_max, float max);
     /**
         @brief Updates the vertical scrollbar
 
-        @param min The overall minimum of the range
-        @param disp_min The displayed minimum
-        @param disp_max The displayed maximum
-        @param max The overall maximum of the range
+        @param[in] min The overall minimum of the range
+        @param[in] disp_min The displayed minimum
+        @param[in] disp_max The displayed maximum
+        @param[in] max The overall maximum of the range
     */
     void updateVScrollbar(float min, float disp_min, float disp_max, float max);
     /// Shows a goto dialog

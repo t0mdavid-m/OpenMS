@@ -12,6 +12,12 @@
 #include <OpenMS/FORMAT/XQuestResultXMLFile.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
 #include <OpenMS/FORMAT/FileHandler.h>
+#include <OpenMS/CONCEPT/LogStream.h>
+#include <OpenMS/DATASTRUCTURES/ListUtils.h>
+#include <OpenMS/KERNEL/MSExperiment.h>
+#include <OpenMS/METADATA/PeptideIdentificationList.h>
+#include <OpenMS/METADATA/ProteinIdentification.h>
+#include <OpenMS/KERNEL/ConsensusMap.h>
 
 
 using namespace std;
@@ -106,7 +112,7 @@ class TOPPOpenPepXL :
 {
 public:
   TOPPOpenPepXL() :
-    TOPPBase("OpenPepXL", "Protein-protein cross-linking identification using labeled linkers.", true)
+    TOPPBase("OpenPepXL", "Protein-protein cross-linking identification using labeled linkers.")
   {
   }
 
@@ -115,31 +121,35 @@ protected:
   {
     // input files
     registerInputFile_("in", "<file>", "", "Input file containing the spectra.", true, false);
-    setValidFormats_("in", ListUtils::create<String>("mzML"));
+    setValidFormats_("in", {"mzML",
+#ifdef WITH_THERMO_RAW
+      "raw",
+#endif
+    });
 
     registerInputFile_("consensus", "<file>", "", "Input file containing the linked mass peaks.", true, false);
-    setValidFormats_("consensus", ListUtils::create<String>("consensusXML"));
+    setValidFormats_("consensus", ListUtils::create<std::string>("consensusXML"));
 
     registerInputFile_("database", "<file>", "", "Input file containing the protein database.", true, false);
-    setValidFormats_("database", ListUtils::create<String>("fasta"));
+    setValidFormats_("database", ListUtils::create<std::string>("fasta"));
 
     registerInputFile_("decoy_database", "<file>", "", "Input file containing the decoy protein database. Decoys can also be included in the normal database file instead (or additionally).", false, true);
-    setValidFormats_("decoy_database", ListUtils::create<String>("fasta"));
+    setValidFormats_("decoy_database", ListUtils::create<std::string>("fasta"));
 
     registerFullParam_(OpenPepXLAlgorithm().getDefaults());
 
     // output file
     registerOutputFile_("out_idXML", "<idXML_file>", "", "Results in idXML format (at least one of these output parameters should be set, otherwise you will not have any results)", false, false);
-    setValidFormats_("out_idXML", ListUtils::create<String>("idXML"));
+    setValidFormats_("out_idXML", ListUtils::create<std::string>("idXML"));
 
     registerOutputFile_("out_mzIdentML", "<mzIdentML_file>","", "Results in mzIdentML (.mzid) format (at least one of these output parameters should be set, otherwise you will not have any results)", false, false);
-    setValidFormats_("out_mzIdentML", ListUtils::create<String>("mzid"));
+    setValidFormats_("out_mzIdentML", ListUtils::create<std::string>("mzid"));
 
     registerOutputFile_("out_xquestxml", "<xQuestXML_file>", "", "Results in the xquest.xml format (at least one of these output parameters should be set, otherwise you will not have any results).", false, false);
-    setValidFormats_("out_xquestxml", ListUtils::create<String>("xquest.xml"));
+    setValidFormats_("out_xquestxml", ListUtils::create<std::string>("xquest.xml"));
 
     registerOutputFile_("out_xquest_specxml", "<xQuestSpecXML_file>", "", "Matched spectra in the xQuest .spec.xml format for spectra visualization in the xQuest results manager.", false, false);
-    setValidFormats_("out_xquest_specxml", ListUtils::create<String>("spec.xml"));
+    setValidFormats_("out_xquest_specxml", ListUtils::create<std::string>("spec.xml"));
   }
 
   ExitCodes main_(int, const char**) override
@@ -168,7 +178,7 @@ protected:
     options.addMSLevel(1);
     options.addMSLevel(2);
     f.getOptions() = options;
-    f.loadExperiment(in_mzml, unprocessed_spectra, {FileTypes::MZML}, log_type_);
+    f.loadExperiment(in_mzml, unprocessed_spectra, {FileTypes::MZML, FileTypes::RAW}, log_type_);
 
     // load linked features
     ConsensusMap cfeatures;
@@ -203,7 +213,7 @@ protected:
     OpenPepXLAlgorithm search_algorithm;
     Param this_param = getParam_();
     Param algo_param = search_algorithm.getParameters();
-    algo_param.update(this_param, false, false, false, false, OpenMS_Log_debug); // suppress param. update message
+    algo_param.update(this_param, false, false, false, false, getGlobalLogDebug()); // suppress param. update message
     search_algorithm.setParameters(algo_param);
     search_algorithm.setLogType(this->log_type_);
 
@@ -223,9 +233,9 @@ protected:
     // run algorithm
     OpenPepXLAlgorithm::ExitCodes exit_code = search_algorithm.run(unprocessed_spectra, cfeatures, fasta_db, protein_ids, peptide_ids, preprocessed_pair_spectra, spectrum_pairs, all_top_csms, spectra);
 
-    if (exit_code != OpenPepXLAlgorithm::EXECUTION_OK)
+    if (exit_code != OpenPepXLAlgorithm::ExitCodes::EXECUTION_OK)
     {
-      if (exit_code == OpenPepXLAlgorithm::ILLEGAL_PARAMETERS)
+      if (exit_code == OpenPepXLAlgorithm::ExitCodes::ILLEGAL_PARAMETERS)
       {
         return ILLEGAL_PARAMETERS;
       }
@@ -244,11 +254,11 @@ protected:
 
     if (!out_xquest.empty() || !out_xquest_specxml.empty())
     {
-      vector<String> input_split_dir;
-      vector<String> input_split;
-      getStringOption_("in").split(String("/"), input_split_dir);
-      input_split_dir[input_split_dir.size()-1].split(String("."), input_split);
-      String base_name = input_split[0];
+      vector<std::string> input_split_dir;
+      vector<std::string> input_split;
+      StringUtils::split(getStringOption_("in"), "/", input_split_dir);
+      StringUtils::split(input_split_dir.back(), ".", input_split);
+      std::string base_name = input_split[0];
 
       if (!out_xquest.empty())
       {

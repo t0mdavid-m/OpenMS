@@ -369,25 +369,25 @@ namespace OpenMS
     // they change nothing about the matching itself, so results are byte-identical to the direct calls.
 
     /// MS2 exploration scoring: forward to FragmentAnalysis::getTopFragmentMatches (see computeFragmentMatch_).
-    static int identifyExplorationFragments(FragmentAnalysis& frag, const String& protein_sequence, int n,
+    static int identifyExplorationFragments(FragmentAnalysis& frag, const std::string& protein_sequence, int n,
                                             double* masses, double* qscores, int* charges,
                                             double* window_starts, double* window_ends,
                                             char* ion_types, int* fragment_indices,
                                             DeconvolvedSpectrum& stored_ms2,
                                             FragmentAnalysis::ProteoformMatch& result,
-                                            const String& fragmentation_method,
+                                            const std::string& fragmentation_method,
                                             double tolerance_ppm,
                                             FragmentAnalysis::FragmentScores* frag_scores = nullptr);
 
     /// Next-level target selection: the metric->matcher switch, moved verbatim from initiateNextLevel.
     static int selectNextLevelTargets(FragmentAnalysis& frag, SelectionMetric selection,
-                                      const String& protein_sequence, int n,
+                                      const std::string& protein_sequence, int n,
                                       double* masses, double* qscores, int* charges,
                                       double* window_starts, double* window_ends,
                                       char* ion_types, int* fragment_indices,
                                       DeconvolvedSpectrum& stored_ms2,
                                       FragmentAnalysis::ProteoformMatch& result,
-                                      const String& fragmentation_method,
+                                      const std::string& fragmentation_method,
                                       double tolerance_ppm,
                                       FragmentAnalysis::FragmentScores* frag_scores);
 

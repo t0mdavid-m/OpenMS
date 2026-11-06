@@ -36,8 +36,8 @@ public:
     The the filtered identifications are added to the vector of unassigned peptides
     and also reduced to a single best hit.
 
-    @param features Features to work on
-    @param keep_matching Keeps all IDs that match the modified sequence of the best
+    @param[in] features Features to work on
+    @param[in,out] keep_matching Keeps all IDs that match the modified sequence of the best
     hit in the feature (e.g. keeps all IDs in a ConsensusMap if id'd same across multiple runs)
   **/
   static void resolve(FeatureMap& features, bool keep_matching = false);
@@ -46,11 +46,47 @@ public:
     The the filtered identifications are added to the vector of unassigned peptides
     and also reduced to a single best hit.
     
-    @param features Features to work on
-    @param keep_matching Keeps all IDs that match the modified sequence of the best
+    @param[in] features Features to work on
+    @param[in,out] keep_matching Keeps all IDs that match the modified sequence of the best
     hit in the feature (e.g. keeps all IDs in a ConsensusMap if id'd same across multiple runs)
   **/
   static void resolve(ConsensusMap& features, bool keep_matching = false);
+
+  /** @brief Resolves ambiguous annotations of features with peptide identifications using rank aggregation.
+
+    For each feature, peptide hits across all identifications are aggregated by rank.
+    Each unique sequence is assigned a rank in every identification in which it appears
+    (rank 0 = best hit, 1 = second best, etc.). Sequences not found in an identification
+    receive a penalty rank equal to the maximum number of considered hits. The aggregate
+    score for each sequence is computed as:
+    @code
+      1.0 - (sum_of_ranks + penalty_for_missing_runs) / (max_hits * n_runs)
+    @endcode
+    The sequence with the highest aggregate score is selected as the winner and the
+    corresponding best-scoring identification is kept with only that hit.
+    All other identifications are moved to the unassigned list.
+
+    @param[in] features FeatureMap to work on
+  **/
+  static void resolveAllHitRankAggregation(FeatureMap& features);
+
+  /** @brief Resolves ambiguous annotations of consensus features with peptide identifications using rank aggregation.
+
+    For each consensus feature, peptide hits across all identifications are aggregated by rank.
+    Each unique sequence is assigned a rank in every identification in which it appears
+    (rank 0 = best hit, 1 = second best, etc.). Sequences not found in an identification
+    receive a penalty rank equal to the maximum number of considered hits. The aggregate
+    score for each sequence is computed as:
+    @code
+      1.0 - (sum_of_ranks + penalty_for_missing_runs) / (max_hits * n_runs)
+    @endcode
+    The sequence with the highest aggregate score is selected as the winner and the
+    corresponding best-scoring identification is kept with only that hit.
+    All other identifications are moved to the unassigned list.
+
+    @param[in] features ConsensusMap to work on
+  **/
+  static void resolveAllHitRankAggregation(ConsensusMap& features);
 
   /** @brief In a single (feature/consensus) map, features with the same (possibly modified) sequence and charge state may appear.
    This filter removes the peptide sequence annotations from features, if a higher-intensity feature with the same (charge, sequence)
@@ -65,7 +101,48 @@ public:
    appears only once, i.e. no multiplicities.
    **/
   static void resolveBetweenFeatures(ConsensusMap& features);
-  
+
+  /// What reduceToOnePerSpectrum() found and did. All counts are over the input list.
+  struct OPENMS_DLLAPI UnresolvedIdentifications
+  {
+    /// Identifications removed because another one claimed the same
+    /// (spectrum reference, top-hit sequence, top-hit charge).
+    Size removed = 0;
+    /// Spectra that still carry more than one identification AFTER the reduction, i.e. ones
+    /// whose identifications name different peptidoforms (a chimeric spectrum, or search
+    /// engines that disagree). Not reduced - both are quantifiable - but worth reporting.
+    Size multiply_identified_spectra = 0;
+    /// Identifications that could not be keyed because they carry no spectrum reference.
+    /// Left untouched: without a reference there is nothing to tell them apart by.
+    Size without_spectrum_reference = 0;
+    /// Identifications whose group disagreed on isHigherScoreBetter(), so "best" was undefined.
+    /// Left untouched rather than reduced by a coin flip.
+    Size inconsistent_score_direction = 0;
+    /// First reduced group, as "<spectrum reference> / <sequence> / charge <n>", for logging.
+    std::string example;
+  };
+
+  /**
+    @brief Reduce identifications a quantification workflow cannot tell apart to one per spectrum.
+
+    Quantification tools measure one value per (spectrum, peptidoform, charge). Where the input
+    carries several identifications of that same triple - e.g. two search engines that agree,
+    concatenated rather than combined - only one of them can own the measurement, and keeping
+    all of them counts one measurement several times.
+
+    This keeps the best-scoring identification of each such group and removes the rest. That is a
+    tie-break on scores something upstream already assigned, not a scoring decision: combining
+    scores from different engines is ConsensusIDAlgorithm's job and is deliberately not done here.
+
+    Identifications are keyed on the top hit as stored; hits are never re-sorted, so the key
+    matches what the exporters and quantifiers read. Surviving identifications keep their
+    original relative order.
+
+    @param[in,out] ids One identification run's peptide identifications.
+    @return What was found and removed; see UnresolvedIdentifications.
+  **/
+  static UnresolvedIdentifications reduceToOnePerSpectrum(PeptideIdentificationList& ids);
+
 protected:
 
   template<class T>
@@ -79,7 +156,7 @@ protected:
 
     for (auto& c : map)
     {
-      c.setMetaValue("feature_id", String(c.getUniqueId()));
+      c.setMetaValue("feature_id",StringUtils::toStr(c.getUniqueId()));
       if (!keep_matching)
       {
         resolveConflict_(c.getPeptideIdentifications(),
@@ -110,7 +187,30 @@ protected:
       PeptideIdentificationList & peptides,
       PeptideIdentificationList & removed,
       UInt64 uid);
-  
+
+  static void resolveAggregateConflict_(
+      PeptideIdentificationList & peptides,
+      PeptideIdentificationList & removed,
+      UInt64 uid);
+
+  template<class T>
+  static void rankAggregation_(T& map)
+  {
+    // annotate unassigned IDs as not part of the resolution
+    for (PeptideIdentification& p : map.getUnassignedPeptideIdentifications())
+    {
+      p.setMetaValue("feature_id", "not mapped"); // not mapped to a feature
+    }
+
+    for (auto& c : map)
+    {
+      c.setMetaValue("feature_id",StringUtils::toStr(c.getUniqueId()));
+      resolveAggregateConflict_(c.getPeptideIdentifications(),
+                                map.getUnassignedPeptideIdentifications(),
+                                c.getUniqueId());
+    }
+  }
+
   template<class T>
   static void resolveBetweenFeatures_(T & map)
   {

@@ -10,8 +10,7 @@
 
 #include <OpenMS/config.h>
 #include <OpenMS/CONCEPT/Types.h>
-#include <OpenMS/CONCEPT/Exception.h>
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 
 namespace OpenMS 
 {
@@ -43,15 +42,15 @@ namespace OpenMS
       this tag from the given the indexedmzML file. It stores the result in the
       spectra and chromatogram offset vectors.
 
-      @param filename Filename of the input indexedmzML file
-      @param indexoffset Offset at which position in the file the XML tag '\<indexList\>' is expected to occur
-      @param spectra_offsets Output vector containing the positions of all spectra in the file
-      @param chromatograms_offsets Output vector containing the positions of all chromatograms in the file
+      @param[in] filename Filename of the input indexedmzML file
+      @param[in] indexoffset Offset at which position in the file the XML tag '\<indexList\>' is expected to occur
+      @param[out] spectra_offsets Output vector containing the positions of all spectra in the file
+      @param[out] chromatograms_offsets Output vector containing the positions of all chromatograms in the file
 
       @return 0 in case of success and -1 otherwise (failure, no offset was found)
 
     */
-    int parseOffsets(const String& filename, std::streampos indexoffset, OffsetVector& spectra_offsets, OffsetVector& chromatograms_offsets);
+    int parseOffsets(const std::string& filename, std::streampos indexoffset, OffsetVector& spectra_offsets, OffsetVector& chromatograms_offsets);
 
     /**
       @brief Tries to extract the indexList offset from an indexedmzML.
@@ -67,8 +66,8 @@ namespace OpenMS
       regex to do its job. It matches the \<indexListOffset\> part and any
       numerical characters that follow. 
 
-      @param filename Filename of the input indexedmzML file
-      @param buffersize How many bytes of the input file should be searched for the tag
+      @param[in] filename Filename of the input indexedmzML file
+      @param[in] buffersize How many bytes of the input file should be searched for the tag
 
       @return A positive integer containing the content of the indexListOffset
       tag, returns -1 in case of failure no tag was found (you can re-try with
@@ -78,7 +77,7 @@ namespace OpenMS
       @throw FileNotFound is thrown if file cannot be found
       @throw ParseError if offset cannot be parsed
     */
-    std::streampos findIndexListOffset(const String& filename, int buffersize = 1023);
+    std::streampos findIndexListOffset(const std::string& filename, int buffersize = 1023);
 
   protected:
 
@@ -113,9 +112,9 @@ namespace OpenMS
 
       @endcode
       
-      @param in String containing the XML with a indexedmzML parent and an indexList child tag
-      @param spectra_offsets Output vector containing the positions of all spectra in the file
-      @param chromatograms_offsets Output vector containing the positions of all chromatograms in the file
+      @param[in] in std::string containing the XML with a indexedmzML parent and an indexList child tag
+      @param[out] spectra_offsets Output vector containing the positions of all spectra in the file
+      @param[out] chromatograms_offsets Output vector containing the positions of all chromatograms in the file
     */
     int domParseIndexedEnd_(const std::string& in, OffsetVector & spectra_offsets, OffsetVector& chromatograms_offsets);
   };

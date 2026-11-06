@@ -14,7 +14,7 @@
 #include <OpenMS/CONCEPT/ProgressLogger.h>
 #include <OpenMS/CONCEPT/Exception.h>
 
-#include <OpenMS/DATASTRUCTURES/ListUtils.h> // StringList
+#include <OpenMS/DATASTRUCTURES/TypeAliases.h> // StringList
 #include <OpenMS/INTERFACES/IMSDataConsumer.h>
 
 #include <map>
@@ -50,13 +50,13 @@ public:
     /**
       @brief Loads a map from a MzML file. Spectra and chromatograms are sorted by default (this can be disabled using PeakFileOptions).
 
-      @param filename The filename with the data
-      @param map Is an MSExperiment
+      @param[in] filename The filename with the data
+      @param[out] map Is an MSExperiment
 
       @exception Exception::FileNotFound is thrown if the file could not be opened
       @exception Exception::ParseError is thrown if an error occurs during parsing
     */
-    void load(const String& filename, PeakMap& map);
+    void load(const std::string& filename, PeakMap& map);
 
     /**
       @brief Loads a map from a MzML file stored in a buffer (in memory).
@@ -78,7 +78,7 @@ public:
       parsing skips all intermediate data and ends as soon as both counts are available).
 
     */
-    void loadSize(const String & filename, Size& scount, Size& ccount);
+    void loadSize(const std::string & filename, Size& scount, Size& ccount);
 
     /**
       @brief Stores a map in an MzML file.
@@ -87,7 +87,7 @@ public:
 
       @exception Exception::UnableToCreateFile is thrown if the file could not be created
     */
-    void store(const String& filename, const PeakMap& map) const;
+    void store(const std::string& filename, const PeakMap& map) const;
 
     /**
       @brief Stores a map in an output string.
@@ -111,12 +111,12 @@ public:
       does not require a full first pass through the file to compute the
       correct number of spectra and chromatograms in the input file.
 
-      @param filename_in Filename of input mzML file to transform
-      @param consumer Consumer class to operate on the input filename (implementing a transformation)
-      @param skip_full_count Whether to skip computing the correct number of spectra and chromatograms in the input file
-      @param skip_first_pass Skip first file parsing pass, which hands only meta-data (number of spectra/chroms and experimental settings) to the consumer
+      @param[in] filename_in Filename of input mzML file to transform
+      @param[in] consumer Consumer class to operate on the input filename (implementing a transformation)
+      @param[in] skip_full_count Whether to skip computing the correct number of spectra and chromatograms in the input file
+      @param[in] skip_first_pass Skip first file parsing pass, which hands only meta-data (number of spectra/chroms and experimental settings) to the consumer
     */
-    void transform(const String& filename_in, Interfaces::IMSDataConsumer * consumer, bool skip_full_count = false, bool skip_first_pass = false);
+    void transform(const std::string& filename_in, Interfaces::IMSDataConsumer * consumer, bool skip_full_count = false, bool skip_first_pass = false);
 
     /**
       @brief Transforms a map while loading using the supplied MSDataConsumer
@@ -127,40 +127,40 @@ public:
       applied to the data before storing them in a map (e.g. if data-reduction
       should be applied to the data before loading all data into memory).
 
-      @param filename_in Filename of input mzML file to transform
-      @param consumer Consumer class to operate on the input filename (implementing a transformation)
-      @param map Map to store the resulting spectra and chromatograms
-      @param skip_full_count Whether to skip computing the correct number of spectra and chromatograms in the input file
-      @param skip_first_pass Skip first file parsing pass, which hands only meta-data (number of spectra/chroms and experimental settings) to the consumer
+      @param[in] filename_in Filename of input mzML file to transform
+      @param[in] consumer Consumer class to operate on the input filename (implementing a transformation)
+      @param[in] map Map to store the resulting spectra and chromatograms
+      @param[in] skip_full_count Whether to skip computing the correct number of spectra and chromatograms in the input file
+      @param[in] skip_first_pass Skip first file parsing pass, which hands only meta-data (number of spectra/chroms and experimental settings) to the consumer
     */
-    void transform(const String& filename_in, Interfaces::IMSDataConsumer * consumer, PeakMap& map, bool skip_full_count = false, bool skip_first_pass = false);
+    void transform(const std::string& filename_in, Interfaces::IMSDataConsumer * consumer, PeakMap& map, bool skip_full_count = false, bool skip_first_pass = false);
 
     /**
       @brief Checks if a file validates against the XML schema.
 
       @exception Exception::FileNotFound is thrown if the file cannot be found.
     */
-    bool isValid(const String& filename, std::ostream& os = std::cerr);
+    bool isValid(const std::string& filename, std::ostream& os = std::cerr);
 
     /**
       @brief Checks if a file is valid with respect to the mapping file and the controlled vocabulary.
 
-      @param filename File name of the file to be checked.
-      @param errors Errors during the validation are returned in this output parameter.
-      @param warnings Warnings during the validation are returned in this output parameter.
+      @param[in] filename File name of the file to be checked.
+      @param[out] errors Errors during the validation are returned in this output parameter.
+      @param[out] warnings Warnings during the validation are returned in this output parameter.
 
       @exception Exception::FileNotFound is thrown if the file could not be opened
     */
-    bool isSemanticallyValid(const String& filename, StringList& errors, StringList& warnings);
+    bool isSemanticallyValid(const std::string& filename, StringList& errors, StringList& warnings);
 
     /**
       @brief Checks if a file is an indexed MzML file or not.
 
-      @param filename File name of the file to be checked.
+      @param[in] filename File name of the file to be checked.
 
       @exception Exception::FileNotFound is thrown if the file could not be opened
     */
-    bool hasIndex(const String& filename);
+    bool hasIndex(const std::string& filename);
 
     struct SpecInfo
     {
@@ -179,22 +179,22 @@ public:
        You can use this function to estimate the spectrum type, but it should be done for each MS-level separately.
        Otherwise you might get mixed (PROFILE+CENTROIDED) results.
        
-       @param filename File name of the mzML file to be checked
-       @param first_n_spectra_only Only inspect this many spectra (UNKNOWN spectra do not count) and then end parsing the file
+       @param[in] filename File name of the mzML file to be checked
+       @param[in] first_n_spectra_only Only inspect this many spectra (UNKNOWN spectra do not count) and then end parsing the file
        
        @return Map of MS level to counts (centroided, profile, unknown)
        
        @exception Exception::FileNotFound is thrown if the file could not be opened
     */
-    std::map<UInt, SpecInfo> getCentroidInfo(const String& filename, const Size first_n_spectra_only = 10);
+    std::map<UInt, SpecInfo> getCentroidInfo(const std::string& filename, const Size first_n_spectra_only = 10);
 
 protected:
 
     /// Perform first pass through the file and retrieve the meta-data to initialize the consumer
-    void transformFirstPass_(const String& filename_in, Interfaces::IMSDataConsumer * consumer, bool skip_full_count);
+    void transformFirstPass_(const std::string& filename_in, Interfaces::IMSDataConsumer * consumer, bool skip_full_count);
 
     /// Safe parse that catches exceptions and handles them accordingly
-    void safeParse_(const String & filename, Internal::XMLHandler * handler);
+    void safeParse_(const std::string & filename, Internal::XMLHandler * handler);
 
 private:
 
@@ -202,7 +202,7 @@ private:
     PeakFileOptions options_;
 
     /// Location of indexed mzML schema
-    String indexed_schema_location_;
+    std::string indexed_schema_location_;
   };
 
 } // namespace OpenMS

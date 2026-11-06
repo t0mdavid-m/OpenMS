@@ -9,6 +9,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHAnnotatorAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
+#include <OpenMS/DATASTRUCTURES/ListUtils.h>
 #include <OpenMS/CHEMISTRY/ProForma.h>
 #include <OpenMS/CONCEPT/Constants.h>
 #include <OpenMS/KERNEL/MSSpectrum.h>
@@ -82,8 +83,7 @@ public:
   TOPPFLASHAnnotator():
       TOPPBase("FLASHAnnotator",
                "Annotates FLASHTnT PrSMs on the raw MS2 spectra with fragment isotope envelopes and scores them against the chance "
-               "match rate.",
-               false)
+               "match rate.")
   {
   }
 
@@ -94,16 +94,16 @@ protected:
                        "Input raw mzML file (profile or centroid) the PrSMs were identified from, or the Thermo .raw file (recognised by its "
                        "extension; read with Thermo's peak picking, so centroided, as ThermoRawFileParser converts it by default; needs OpenMS "
                        "built with WITH_THERMO_RAW and the .NET 8 runtime).", true);
-    setValidFormats_("in", ListUtils::create<String>("mzML,raw"));
+    setValidFormats_("in", ListUtils::create<std::string>("mzML,raw"));
 
     registerInputFile_("in_prsm", "<file>", "", "Input PrSM tsv file: -out_prsm of FLASHTnT, or any tsv with the columns Scan and ProForma (optionally PrecursorMass).", true);
-    setValidFormats_("in_prsm", ListUtils::create<String>("tsv"));
+    setValidFormats_("in_prsm", ListUtils::create<std::string>("tsv"));
 
     registerOutputFile_("out", "<file>", "", "Output PrSM tsv file: the input rows followed by the raw annotation columns.", true);
-    setValidFormats_("out", ListUtils::create<String>("tsv"));
+    setValidFormats_("out", ListUtils::create<std::string>("tsv"));
 
     registerOutputFile_("out_annotation", "<file>", "", "Output tsv file with one row per accepted fragment isotope envelope.", false);
-    setValidFormats_("out_annotation", ListUtils::create<String>("tsv"));
+    setValidFormats_("out_annotation", ListUtils::create<std::string>("tsv"));
 
     registerStringList_("ion_type", "<types>", ListUtils::toStringList(std::vector<std::string> {"b", "y"}),
                         "Ion types to annotate (as for FLASHTnT).", false);
@@ -121,7 +121,7 @@ protected:
     registerSubsection_("algorithm", "Annotation algorithm parameters");
   }
 
-  Param getSubsectionDefaults_(const String& prefix) const override
+  Param getSubsectionDefaults_(const std::string& prefix) const override
   {
     if (prefix == "algorithm")
     {
@@ -132,12 +132,12 @@ protected:
     throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Unknown subsection", prefix);
   }
 
-  static double toDouble_(String s, double default_value)
+  static double toDouble_(std::string s, double default_value)
   {
     try
     {
-      s.trim();
-      return s.empty() ? default_value : s.toDouble();
+      StringUtils::trim(s);
+      return s.empty() ? default_value : StringUtils::toDouble(s);
     }
     catch (Exception::BaseException&)
     {
@@ -145,12 +145,12 @@ protected:
     }
   }
 
-  static int toInt_(String s, int default_value)
+  static int toInt_(std::string s, int default_value)
   {
     try
     {
-      s.trim();
-      return s.empty() ? default_value : (int)std::lround(s.toDouble());
+      StringUtils::trim(s);
+      return s.empty() ? default_value : (int)std::lround(StringUtils::toDouble(s));
     }
     catch (Exception::BaseException&)
     {
@@ -159,13 +159,13 @@ protected:
   }
 
   /// ';'-separated values, empty ones skipped
-  static std::vector<String> splitList_(const String& s)
+  static std::vector<std::string> splitList_(const std::string& s)
   {
-    std::vector<String> tokens, values;
-    s.split(";", tokens);
+    std::vector<std::string> tokens, values;
+    StringUtils::split(s, ";", tokens);
     for (auto& t : tokens)
     {
-      t.trim();
+      StringUtils::trim(t);
       if (! t.empty()) values.push_back(t);
     }
     return values;
@@ -195,10 +195,10 @@ protected:
   ExitCodes main_(int, const char**) override
   {
     const auto start_time = std::chrono::steady_clock::now();
-    String in_file = getStringOption_("in");
-    String in_prsm_file = getStringOption_("in_prsm");
-    String out_file = getStringOption_("out");
-    String out_annotation_file = getStringOption_("out_annotation");
+    std::string in_file = getStringOption_("in");
+    std::string in_prsm_file = getStringOption_("in_prsm");
+    std::string out_file = getStringOption_("out");
+    std::string out_annotation_file = getStringOption_("out_annotation");
     const int fixed_precursor_charge = getIntOption_("precursor_charge");
 
     Param algorithm_param = getParam_().copy("algorithm:", true);
@@ -212,9 +212,9 @@ protected:
     auto time = std::chrono::steady_clock::now();
     std::ifstream prsm_stream(in_prsm_file);
     if (! prsm_stream) { throw Exception::FileNotReadable(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, in_prsm_file); }
-    String header;
-    std::vector<String> lines;
-    std::vector<std::vector<String>> rows;
+    std::string header;
+    std::vector<std::string> lines;
+    std::vector<std::vector<std::string>> rows;
     {
       std::string line;
       bool first = true;
@@ -227,19 +227,19 @@ protected:
           first = false;
           continue;
         }
-        if (String(line).trim().empty()) continue;
+        if (StringUtils::trimmed(line).empty()) continue;
         lines.emplace_back(line);
-        std::vector<String> fields;
-        lines.back().split('\t', fields);
+        std::vector<std::string> fields;
+        StringUtils::split(lines.back(), '\t', fields);
         rows.push_back(fields);
       }
     }
-    std::vector<String> columns;
-    header.split('\t', columns);
-    auto column = [&columns](const String& name) -> int {
+    std::vector<std::string> columns;
+    StringUtils::split(header, '\t', columns);
+    auto column = [&columns](const std::string& name) -> int {
       for (Size i = 0; i < columns.size(); i++)
       {
-        if (String(columns[i]).trim() == name) return (int)i;
+        if (StringUtils::trimmed(columns[i]) == name) return (int)i;
       }
       return -1;
     };
@@ -263,7 +263,7 @@ protected:
       OPENMS_LOG_ERROR << "The PrSM file needs a Scan column and either a ProteinSequence (FLASHTnT) or a ProForma column: " << in_prsm_file << endl;
       return INCOMPATIBLE_INPUT_DATA;
     }
-    auto field = [](const std::vector<String>& row, int col) -> String { return (col >= 0 && col < (int)row.size()) ? row[col] : String(); };
+    auto field = [](const std::vector<std::string>& row, int col) -> std::string { return (col >= 0 && col < (int)row.size()) ? row[col] : std::string(); };
 
     std::set<int> needed_scans;
     for (const auto& row : rows)
@@ -335,23 +335,26 @@ protected:
         // spans the sequence, and a labile one is not on the fragments
         try
         {
-          const ProForma proforma = ProForma::fromString(field(row, col_proforma).trim());
-          prsm.sequence = proforma.getSequence();
+          using Site = FLASHHelperClasses::ProFormaModification::Site;
+          const ProForma::PeptidoformIon proforma = ProForma::parseIon(StringUtils::trimmed(field(row, col_proforma)));
+          std::string sequence;
+          const auto modifications = FLASHHelperClasses::getProFormaModifications(proforma, sequence);
+          prsm.sequence = sequence;
           const int last = (int)prsm.sequence.size() - 1;
-          for (const auto& m : proforma.getModifications())
+          for (const auto& m : modifications)
           {
             FLASHAnnotatorAlgorithm::Modification mod;
             mod.mass = m.mass;
-            if (m.site == ProForma::Site::LABILE) continue;
-            if (m.site == ProForma::Site::RESIDUE)
+            if (m.site == Site::LABILE) continue;
+            if (m.site == Site::RESIDUE)
             {
               mod.start = m.start;
               mod.end = m.end;
             }
             else
             {
-              mod.start = m.site == ProForma::Site::C_TERM ? last : 0;
-              mod.end = m.site == ProForma::Site::N_TERM ? 0 : last;
+              mod.start = m.site == Site::C_TERM ? last : 0;
+              mod.end = m.site == Site::N_TERM ? 0 : last;
             }
             prsm.modifications.push_back(mod);
           }
@@ -365,7 +368,7 @@ protected:
       }
       else
       {
-      prsm.sequence = field(row, col_sequence).trim();
+      prsm.sequence = StringUtils::trimmed(field(row, col_sequence));
       const int start = toInt_(field(row, col_start), 1);
       const int end = toInt_(field(row, col_end), 1);
       // FLASHTnT writes -1 for a start or end it could not determine: those fragments have no defined mass
@@ -377,8 +380,8 @@ protected:
       if (start < 0 && end > 0) start_in_seq = std::max(0, end - (int)prsm.sequence.size());
       else if (start < 0 && col_database >= 0)
       {
-        const Size at = field(row, col_database).trim().find(prsm.sequence);
-        if (at != String::npos) start_in_seq = (int)at;
+        const Size at = StringUtils::trimmed(field(row, col_database)).find(prsm.sequence);
+        if (at != std::string::npos) start_in_seq = (int)at;
       }
       const auto mod_masses = splitList_(field(row, col_mod_mass));
       const auto mod_starts = splitList_(field(row, col_mod_start));
@@ -461,12 +464,12 @@ protected:
       const auto& internal_ion_types = annotator.getInternalIonTypes();
       for (Size r = 0; r < rows.size(); r++)
       {
-        const String prsm_index = field(rows[r], col_index);
-        const String scan = field(rows[r], col_scan);
+        const std::string prsm_index = field(rows[r], col_index);
+        const std::string scan = field(rows[r], col_scan);
         std::ostringstream ss;
         for (const auto& e : results[r].envelopes)
         {
-          ss << prsm_index << "\t" << scan << "\t" << (e.first >= 0 ? String("int(") + internal_ion_types[e.ion_type] + ")" : ion_types[e.ion_type]) << "\t" << e.length << "\t" << e.bond << "\t" << e.charge << "\t"
+          ss << prsm_index << "\t" << scan << "\t" << (e.first >= 0 ? std::string("int(") + internal_ion_types[e.ion_type] + ")" : ion_types[e.ion_type]) << "\t" << e.length << "\t" << e.bond << "\t" << e.charge << "\t"
              << std::fixed << std::setprecision(5) << e.mono_mass << "\t" << e.most_abundant_mz << "\t" << e.matched_peaks << "\t"
              << e.predicted_peaks << "\t" << std::setprecision(4) << e.cosine << "\t" << e.pearson << "\t" << std::setprecision(1) << e.intensity
              << "\t" << std::setprecision(2) << e.ppm_error << "\t" << std::setprecision(4) << e.intensity_rank << "\t"

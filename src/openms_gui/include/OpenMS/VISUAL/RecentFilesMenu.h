@@ -23,7 +23,6 @@ class QAction;
 namespace OpenMS
 {
   class Param;
-  class String;
 
   /**
     @brief Manages recent files opened by the user and provides a QMenu to go with it
@@ -37,7 +36,7 @@ namespace OpenMS
   
   signals:
     /// when a recent file action item from the getMenu() was clicked
-    void recentFileClicked(const String& filename);
+    void recentFileClicked(const std::string& filename);
     
   public:
     /// C'tor
@@ -50,7 +49,7 @@ namespace OpenMS
         @brief Extracts all values from all elements in the param object and tries to interpret them as filenames
         If they exist, they will be used in the list of recent files. The name of the param items is ignored.
 
-        @param filenames A Param object of which all values will be tested for being a filename
+        @param[in] filenames A Param object of which all values will be tested for being a filename
         @return The number of items which were successfully interpreted as filenames
 
     */
@@ -70,10 +69,10 @@ namespace OpenMS
 
   public slots:
     /// put a new recent file at the top (removing any duplicates in other positions); will update the QMenu
-    void add(const String& filename);
+    void add(const std::string& filename);
 
   private slots:
-    /// invoked by the QAction when it was clicked; emits recentFileClicked(String filename)
+    /// invoked by the QAction when it was clicked; emits recentFileClicked(std::string filename)
     void itemClicked_();
 
   private:

@@ -30,7 +30,6 @@
 //MISSING:
 // - more than one selected ion per precursor (warning if more than one)
 // - scanWindowList for each acquisition separately (currently for the whole spectrum only)
-// - instrumentConfigurationRef attribute for scan (why should the instrument change between scans? - warning if used)
 // - scanSettingsRef attribute for instrumentConfiguration tag (currently no information there because of missing mapping file entry - warning if used)
 
 // xs:id/xs:idref prefix list
@@ -99,10 +98,10 @@ public:
       //@{
 
       /// Constructor for a read-only  handler
-      MzMLHandler(MapType& exp, const String& filename, const String& version, const ProgressLogger& logger);
+      MzMLHandler(MapType& exp, const std::string& filename, const std::string& version, const ProgressLogger& logger);
 
       /// Constructor for a write-only handler
-      MzMLHandler(const MapType& exp, const String& filename, const String& version, const ProgressLogger& logger);
+      MzMLHandler(const MapType& exp, const std::string& filename, const std::string& version, const ProgressLogger& logger);
 
       /// Destructor
       ~MzMLHandler() override;
@@ -115,13 +114,13 @@ public:
       //@{
 
       /// Docu in base class XMLHandler::endElement
-      void endElement(const XMLCh* const /*uri*/, const XMLCh* const /*local_name*/, const XMLCh* const qname) override;
+      void onEndElement(const char16_t* qname) override;
 
       /// Docu in base class XMLHandler::startElelement
-      void startElement(const XMLCh* const /*uri*/, const XMLCh* const /*local_name*/, const XMLCh* const qname, const xercesc::Attributes& attributes) override;
+      void onStartElement(const char16_t* qname, const XMLAttributes& attributes) override;
 
       /// Docu in base class XMLHandler::characters
-      void characters(const XMLCh* const chars, const XMLSize_t length) override;
+      void onCharacters(const char16_t* chars, Size length) override;
 
       /// Docu in base class XMLHandler::writeTo
       void writeTo(std::ostream& os) override;
@@ -173,7 +172,7 @@ public:
 protected:
 
       /// delegated constructor for the two public versions
-      MzMLHandler(const String& filename, const String& version, const ProgressLogger& logger);
+      MzMLHandler(const std::string& filename, const std::string& version, const ProgressLogger& logger);
 
       /// Peak type
       typedef MapType::PeakType PeakType;
@@ -222,10 +221,10 @@ protected:
           @note This function takes about 50 % of total load time with a
           single thread and parallelizes linearly up to at least 10 threads.
 
-          @param input_data The input data with which to fill the spectra
-          @param length The input data length (number of data points)
-          @param peak_file_options Will be used if only part of the data should be copied (RT, mz or intensity range)
-          @param spectrum The output spectrum
+          @param[out] input_data The input data with which to fill the spectra
+          @param[in] length The input data length (number of data points)
+          @param[in] peak_file_options Will be used if only part of the data should be copied (RT, mz or intensity range)
+          @param[out] spectrum The output spectrum
 
       */
       void populateSpectraWithData_(std::vector<MzMLHandlerHelper::BinaryData>& input_data,
@@ -239,10 +238,10 @@ protected:
           @note Do not modify any internal state variables of the class since
           this function will be executed in parallel.
 
-          @param input_data The input data with which to fill the spectra
-          @param length The input data length (number of data points)
-          @param peak_file_options Will be used if only part of the data should be copied (RT, mz or intensity range)
-          @param chromatogram The output chromatogram
+          @param[out] input_data The input data with which to fill the spectra
+          @param[in] length The input data length (number of data points)
+          @param[in] peak_file_options Will be used if only part of the data should be copied (RT, mz or intensity range)
+          @param[out] chromatogram The output chromatogram
 
       */
       void populateChromatogramsWithData_(std::vector<MzMLHandlerHelper::BinaryData>& input_data,
@@ -254,20 +253,20 @@ protected:
       void fillChromatogramData_();
 
       /// Handles CV terms
-      void handleCVParam_(const String& parent_parent_tag,
-                          const String& parent_tag,
-                          const String& accession,
-                          const String& name,
-                          const String& value,
-                          const String& unit_accession = "");
+      void handleCVParam_(const std::string& parent_parent_tag,
+                          const std::string& parent_tag,
+                          const std::string& accession,
+                          const std::string& name,
+                          const std::string& value,
+                          const std::string& unit_accession = "");
 
       /// Handles user terms
-      void handleUserParam_(const String& parent_parent_tag,
-                            const String& parent_tag,
-                            const String& name,
-                            const String& type,
-                            const String& value,
-                            const String& unit_accession = "");
+      void handleUserParam_(const std::string& parent_parent_tag,
+                            const std::string& parent_tag,
+                            const std::string& name,
+                            const std::string& type,
+                            const std::string& value,
+                            const std::string& unit_accession = "");
       //@}
 
       /**
@@ -298,16 +297,16 @@ protected:
                               const Internal::MzMLValidator& validator);
 
       template <typename ContainerT>
-      void writeContainerData_(std::ostream& os, const PeakFileOptions& pf_options_, const ContainerT& container, const String& array_type);
+      void writeContainerData_(std::ostream& os, const PeakFileOptions& pf_options_, const ContainerT& container, const std::string& array_type);
 
       /**
           @brief Write a single \<binaryDataArray\> element to the output
 
-          @param os The stream into which to write
-          @param options The PeakFileOptions which determines the compression type to use
-          @param data The data to write (32bit float or 64 bit double)
-          @param is32bit Whether data is 32bit
-          @param array_type Which type of data array is written (mz, time, intensity or float_data)
+          @param[in] os The stream into which to write
+          @param[in] options The PeakFileOptions which determines the compression type to use
+          @param[in] data The data to write (32bit float or 64 bit double)
+          @param[in] is32bit Whether data is 32bit
+          @param[in] array_type Which type of data array is written (mz, time, intensity or float_data)
 
           @note The data argument may be modified by the function (see Base64 for reasons why)
 
@@ -317,7 +316,7 @@ protected:
                                  const PeakFileOptions& options,
                                  std::vector<DataType>& data,
                                  bool is32bit,
-                                 String array_type);
+                                 std::string array_type);
 
       /**
           @brief Write a single \<binaryDataArray\> element for a float data array to the output
@@ -325,13 +324,13 @@ protected:
           This is only for non-standard data arrays which are treated slightly
           differently by the standard.
 
-          @param os The stream into which to write
-          @param options The PeakFileOptions which determines the compression type to use
-          @param array The data to write
-          @param spec_chrom_idx The index of the current spectrum or chromatogram
-          @param array_idx The index of the current float data array
-          @param is_spectrum Whether data is associated with a spectrum (if false, a chromatogram is assumed)
-          @param validator Validator object
+          @param[in] os The stream into which to write
+          @param[in] options The PeakFileOptions which determines the compression type to use
+          @param[in] array The data to write
+          @param[in] spec_chrom_idx The index of the current spectrum or chromatogram
+          @param[in] array_idx The index of the current float data array
+          @param[in] is_spectrum Whether data is associated with a spectrum (if false, a chromatogram is assumed)
+          @param[in] validator Validator object
       */
       void writeBinaryFloatDataArray_(std::ostream& os,
                                       const PeakFileOptions& options,
@@ -342,16 +341,20 @@ protected:
                                       const Internal::MzMLValidator& validator);
 
       /// Writes user terms
-      void writeUserParam_(std::ostream& os, const MetaInfoInterface& meta, UInt indent, const String& path, const Internal::MzMLValidator& validator, const std::set<String>& exclude = {}) const;
+      void writeUserParam_(std::ostream& os, const MetaInfoInterface& meta, UInt indent, const std::string& path, const Internal::MzMLValidator& validator, const std::set<std::string>& exclude = {}) const;
 
       /// Helper method that writes a software
-      void writeSoftware_(std::ostream& os, const String& id, const Software& software, const Internal::MzMLValidator& validator);
+      void writeSoftware_(std::ostream& os, const std::string& id, const Software& software, const Internal::MzMLValidator& validator);
+
+      /// Write one instrument configuration, including its components.
+      void writeInstrument_(std::ostream& os, const std::string& id, const Instrument& instrument,
+                            const std::string& software_id, const Internal::MzMLValidator& validator);
 
       /// Helper method that writes a source file
-      void writeSourceFile_(std::ostream& os, const String& id, const SourceFile& software, const Internal::MzMLValidator& validator);
+      void writeSourceFile_(std::ostream& os, const std::string& id, const SourceFile& software, const Internal::MzMLValidator& validator);
 
       /// Helper method that writes a data processing list
-      void writeDataProcessing_(std::ostream& os, const String& id, const std::vector< ConstDataProcessingPtr >& dps, const Internal::MzMLValidator& validator);
+      void writeDataProcessing_(std::ostream& os, const std::string& id, const std::vector< ConstDataProcessingPtr >& dps, const Internal::MzMLValidator& validator);
 
       /// Helper method that write precursor information from spectra and chromatograms
       void writePrecursor_(std::ostream& os, const Precursor& precursor, const Internal::MzMLValidator& validator);
@@ -360,13 +363,13 @@ protected:
       void writeProduct_(std::ostream& os, const Product& product, const Internal::MzMLValidator& validator);
 
       /// Helper method to write an CV based on a meta value
-      String writeCV_(const ControlledVocabulary::CVTerm& c, const DataValue& metaValue) const;
+      std::string writeCV_(const ControlledVocabulary::CVTerm& c, const DataValue& metaValue) const;
 
       /// Helper method to validate if the given CV is allowed in the current location (path)
-      bool validateCV_(const ControlledVocabulary::CVTerm& c, const String& path, const Internal::MzMLValidator& validator) const;
+      bool validateCV_(const ControlledVocabulary::CVTerm& c, const std::string& path, const Internal::MzMLValidator& validator) const;
 
       /// Helper method to look up a child CV term of @p parent_accession with the name @p name. If no such term is found, an empty term is returned.
-      ControlledVocabulary::CVTerm getChildWithName_(const String& parent_accession, const String& name) const;
+      ControlledVocabulary::CVTerm getChildWithName_(const std::string& parent_accession, const std::string& name) const;
 
       //@}
 
@@ -400,23 +403,24 @@ protected:
       /// Remember whether the RT of the spectrum was set or not
       bool rt_set_{ false };
       /// Id of the current list. Used for referencing param group, source file, sample, software, ...
-      String current_id_;
+      std::string current_id_;
       /// The referencing param groups: id => array (accession, value)
-      std::map<String, std::vector<SemanticValidator::CVTerm> > ref_param_;
+      std::map<std::string, std::vector<SemanticValidator::CVTerm> > ref_param_;
       /// The source files: id => SourceFile
-      std::map<String, SourceFile> source_files_;
+      std::map<std::string, SourceFile> source_files_;
       /// The sample list: id => Sample
-      std::map<String, Sample> samples_;
+      std::map<std::string, Sample> samples_;
       /// The software list: id => Software
-      std::map<String, Software> software_;
+      std::map<std::string, Software> software_;
       /// The data processing list: id => Instrument
-      std::map<String, Instrument> instruments_;
+      std::map<std::string, Instrument> instruments_;
+      std::string default_instrument_configuration_ref_;
       /// CV terms-path-combinations that have been checked in validateCV_()
-      mutable std::map<std::pair<String, String>, bool> cached_terms_;
+      mutable std::map<std::pair<std::string, std::string>, bool> cached_terms_;
       /// The data processing list: id => Instrument
-      std::map<String, std::vector< DataProcessingPtr > > processing_;
+      std::map<std::string, std::vector< DataProcessingPtr > > processing_;
       /// id of the default data processing (used when no processing is defined)
-      String default_processing_;
+      std::string default_processing_;
       /// Count of selected ions
       UInt selected_ion_count_{ 0 };
 
@@ -441,7 +445,7 @@ protected:
       void decodeSpectrumData_(SpectrumData& spectrum_data);
 
       /// Decodes a batch of spectra with @p threads threads (in the background); returns the number of errors and the last message
-      int decodeSpectrumBatch_(std::vector<SpectrumData>& batch, int threads, String& error_message);
+      int decodeSpectrumBatch_(std::vector<SpectrumData>& batch, int threads, std::string& error_message);
 
       /// Appends decoded spectra to the experiment / consumer, in order
       void appendSpectra_(std::vector<SpectrumData>& batch);

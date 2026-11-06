@@ -7,6 +7,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/CHEMISTRY/SpectrumAnnotator.h>
+#include <OpenMS/DATASTRUCTURES/ListUtils.h>
 #include <OpenMS/CONCEPT/LogStream.h>
 #include <OpenMS/MATH/StatisticFunctions.h>
 #include <OpenMS/MATH/MathFunctions.h>
@@ -77,19 +78,9 @@ namespace OpenMS
     defaultsToParam_();
   }
 
-  SpectrumAnnotator::SpectrumAnnotator(const SpectrumAnnotator & rhs) :
-    DefaultParamHandler(rhs)
-  {
-  }
+  SpectrumAnnotator::SpectrumAnnotator(const SpectrumAnnotator& rhs) = default;
 
-  SpectrumAnnotator & SpectrumAnnotator::operator=(const SpectrumAnnotator & rhs)
-  {
-    if (this != &rhs)
-    {
-      DefaultParamHandler::operator=(rhs);
-    }
-    return *this;
-  }
+  SpectrumAnnotator& SpectrumAnnotator::operator=(const SpectrumAnnotator& rhs) = default;
 
   SpectrumAnnotator::~SpectrumAnnotator() = default;
 
@@ -154,8 +145,8 @@ namespace OpenMS
       double nint = 0;
       double cint = 0;
 
-      StringList allowed_types = ListUtils::create<String>("y,b,a,c,x,z");
-      map<String, vector<bool> > ion_series;
+      StringList allowed_types = ListUtils::create<std::string>("y,b,a,c,x,z");
+      map<std::string, vector<bool> > ion_series;
       for (StringList::iterator st = allowed_types.begin(); st != allowed_types.end(); ++st)
       {
         ion_series.insert(make_pair(*st, vector<bool>(ph->getSequence().size()-1, false)));
@@ -181,7 +172,7 @@ namespace OpenMS
       for (size_t i = 0; i < spec.size(); ++i)
       {
         sum_intensity += spec[i].getIntensity();
-        String ion_name = type_annotations.at(i);
+        std::string ion_name = type_annotations.at(i);
         if (ion_name.empty()) continue;
          
         fragmenterrors.push_back(error_annotations.at(i));
@@ -203,7 +194,7 @@ namespace OpenMS
 
         if (max_series_)  // without loss max series is sometimes pretty crummy
         {
-          const String& ion_type = ion_name.prefix(1);
+          const std::string& ion_type = StringUtils::prefix(ion_name, 1);
           boost::cmatch what;
           if (boost::regex_match(ion_name.c_str(), what, seriesposition_regex_) &&
                   ListUtils::contains(allowed_types, ion_type))
@@ -217,7 +208,9 @@ namespace OpenMS
             }
             catch (std::out_of_range&)
             {
-              OPENMS_LOG_WARN << "Note: Ions of " << ion_type << ion_name.substr(1).remove('+').toInt()
+              std::string ion_sub = StringUtils::substr(ion_name, 1);
+              StringUtils::remove(ion_sub, '+');
+              OPENMS_LOG_WARN << "Note: Ions of " << ion_type << StringUtils::toInt32(ion_sub)
                        << " will be ignored for max_series " << ph->getSequence().toString() << endl;
               continue;
             }
@@ -292,9 +285,9 @@ namespace OpenMS
       }
       if (max_series_)
       {
-        String max_series;
+        std::string max_series;
         int max_stretch = 0;
-        for (map<String, vector<bool> >::iterator tt = ion_series.begin(); tt != ion_series.end(); ++tt)
+        for (map<std::string, vector<bool> >::iterator tt = ion_series.begin(); tt != ion_series.end(); ++tt)
         {
           int stretch = 0;
           for (vector<bool>::iterator it = tt->second.begin(); it != tt->second.end(); ++it)
@@ -322,7 +315,8 @@ namespace OpenMS
       {
         float sn_by_matched_intensity = (match_intensity / ions.size()) /
                 ((sum_intensity-match_intensity) / (spec.size()-ions.size()));
-        if (spec.size() - ions.size() == 0)
+        // Avoid division by zero when all peaks are matched
+        if (spec.size() == ions.size())
         {
           sn_by_matched_intensity = 0;
         }
@@ -376,9 +370,106 @@ namespace OpenMS
       }
       //TODO add "FragmentArray"s
 
-      Param sap = sa.getParameters();
+      const Param& sap = sa.getParameters();
       pi.setMetaValue("fragment_match_tolerance", (double)sap.getValue("tolerance"));
     }  
+  }
+
+  void SpectrumAnnotator::addPeakAnnotationsToPeptideHit(PeptideHit& ph, const PeakSpectrum& spec, const TheoreticalSpectrumGenerator& tg, const SpectrumAlignment& sa, bool include_unmatched_peaks) const
+  {
+    PeakSpectrum theoretical_spec;
+    vector<pair<Size, Size>> al;
+    const Int zmin = 1;
+    const Int zmax = 2;
+    tg.getSpectrum(theoretical_spec, ph.getSequence(), zmin, min(ph.getCharge(), zmax));
+    OPENMS_PRECONDITION(theoretical_spec.isSorted(), "TheoreticalSpectrumGenerator::getSpectrum did not yield a sorted spectrum!")
+
+    PeakSpectrum spec_copy = spec;
+    if (!spec_copy.isSorted()) { spec_copy.sortByPosition(); }
+    sa.getSpectrumAlignment(al, theoretical_spec, spec_copy);
+
+    // Get the ion name and charge data arrays from the theoretical spectrum
+    const PeakSpectrum::StringDataArray* ion_names = nullptr;
+    const PeakSpectrum::IntegerDataArray* ion_charges = nullptr;
+
+    for (const auto& sda : theoretical_spec.getStringDataArrays())
+    {
+      if (sda.getName() == "IonNames")
+      {
+        ion_names = &sda;
+        break;
+      }
+    }
+    for (const auto& ida : theoretical_spec.getIntegerDataArrays())
+    {
+      if (ida.getName() == "Charges")
+      {
+        ion_charges = &ida;
+        break;
+      }
+    }
+
+    // Build a map from spectrum index to alignment match (if any)
+    std::map<Size, Size> spec_idx_to_theo_idx;
+    for (const auto& match : al)
+    {
+      spec_idx_to_theo_idx[match.second] = match.first;
+    }
+
+    // Build the PeakAnnotation vector
+    std::vector<PeptideHit::PeakAnnotation> peak_annotations;
+
+    if (include_unmatched_peaks)
+    {
+      // Include all spectrum peaks
+      peak_annotations.reserve(spec_copy.size());
+      for (Size i = 0; i < spec_copy.size(); ++i)
+      {
+        PeptideHit::PeakAnnotation pa;
+        pa.mz = spec_copy[i].getMZ();
+        pa.intensity = spec_copy[i].getIntensity();
+
+        // Check if this peak was matched
+        auto it = spec_idx_to_theo_idx.find(i);
+        if (it != spec_idx_to_theo_idx.end())
+        {
+          Size theo_idx = it->second;
+          if (ion_names != nullptr && theo_idx < ion_names->size())
+          {
+            pa.annotation = (*ion_names)[theo_idx];
+          }
+          if (ion_charges != nullptr && theo_idx < ion_charges->size())
+          {
+            pa.charge = (*ion_charges)[theo_idx];
+          }
+        }
+        // Unmatched peaks will have default empty annotation and charge=0
+        peak_annotations.push_back(std::move(pa));
+      }
+    }
+    else
+    {
+      // Only include matched peaks (original behavior)
+      peak_annotations.reserve(al.size());
+      for (const auto& match : al)
+      {
+        PeptideHit::PeakAnnotation pa;
+        pa.mz = spec_copy[match.second].getMZ();
+        pa.intensity = spec_copy[match.second].getIntensity();
+
+        if (ion_names != nullptr && match.first < ion_names->size())
+        {
+          pa.annotation = (*ion_names)[match.first];
+        }
+        if (ion_charges != nullptr && match.first < ion_charges->size())
+        {
+          pa.charge = (*ion_charges)[match.first];
+        }
+        peak_annotations.push_back(std::move(pa));
+      }
+    }
+
+    ph.setPeakAnnotations(std::move(peak_annotations));
   }
 
   void SpectrumAnnotator::updateMembers_()

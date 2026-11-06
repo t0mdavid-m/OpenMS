@@ -11,7 +11,7 @@
 #include <OpenMS/CONCEPT/Exception.h>
 #include <OpenMS/CONCEPT/Macros.h>
 #include <OpenMS/CONCEPT/Types.h>
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 
 #include <algorithm>
 #include <cmath>
@@ -122,9 +122,9 @@ namespace OpenMS
     /**
        @brief Calculates the median of a range of values
        
-       @param begin Start of range
-       @param end End of range (past-the-end iterator)
-       @param sorted Is the range already sorted? If not, it will be sorted.
+       @param[in] begin Start of range
+       @param[in] end End of range (past-the-end iterator)
+       @param[in] sorted Is the range already sorted? If not, it will be sorted.
     @return Median (as floating point, since we need to support average of middle values)
        @exception Exception::InvalidRange is thrown if the range is NULL
 
@@ -169,9 +169,9 @@ namespace OpenMS
       For efficiency, you must provide the median separately, in order to avoid potentially duplicate efforts (usually one
       computes the median anyway externally).
       
-      @param begin Start of range
-      @param end End of range (past-the-end iterator)
-      @param median_of_numbers The precomputed median of range @p begin - @p end.
+      @param[in] begin Start of range
+      @param[in] end End of range (past-the-end iterator)
+      @param[in] median_of_numbers The precomputed median of range @p begin - @p end.
       @return the MAD
 
       @ingroup MathFunctionsStatistics
@@ -199,9 +199,9 @@ namespace OpenMS
       For efficiency, you must provide the mean separately, in order to avoid potentially duplicate efforts (usually one
       computes the mean anyway externally).
       
-      @param begin Start of range
-      @param end End of range (past-the-end iterator)
-      @param mean_of_numbers The precomputed mean of range @p begin - @p end.
+      @param[in] begin Start of range
+      @param[in] end End of range (past-the-end iterator)
+      @param[in] mean_of_numbers The precomputed mean of range @p begin - @p end.
       @return the MeanAbsoluteDeviation
 
       @ingroup MathFunctionsStatistics
@@ -220,19 +220,21 @@ namespace OpenMS
 
     /**
        @brief Calculates the first quantile of a range of values
-       
-       The range is divided into half and the median for the first half is returned.
 
-       @param begin Start of range
-       @param end End of range (past-the-end iterator)
-       @param sorted Is the range already sorted? If not, it will be sorted.
-       
-       @exception Exception::InvalidRange is thrown if the range is NULL
-       
+       The range is divided into half and the median for the first half is returned.
+       For a range of size 1 or 2 the lower half is empty, so the minimum is returned
+       (consistent with the size-3 and size-4 results of this method).
+
+       @param[in] begin Start of range
+       @param[in] end End of range (past-the-end iterator)
+       @param[in] sorted Is the range already sorted? If not, it will be sorted.
+
+       @exception Exception::InvalidRange is thrown if the range is empty
+
        @ingroup MathFunctionsStatistics
     */
     template <typename IteratorType>
-    static double quantile1st(IteratorType begin, IteratorType end, 
+    static double quantile1st(IteratorType begin, IteratorType end,
                               bool sorted = false)
     {
       checkIteratorsNotNULL(begin, end);
@@ -243,6 +245,10 @@ namespace OpenMS
       }
 
       Size size = std::distance(begin, end);
+      if (size < 3) // lower half is empty for size 1 or 2: the first quantile is the minimum
+      {
+        return static_cast<double>(*begin);
+      }
       if (size % 2 == 0)
       {
         return median(begin, begin + (size/2)-1, true); //-1 to exclude median values
@@ -254,12 +260,14 @@ namespace OpenMS
        @brief Calculates the third quantile of a range of values
 
        The range is divided into half and the median for the second half is returned.
+       For a range of size 1 or 2 the upper half is empty, so the maximum is returned
+       (consistent with the size-3 and size-4 results of this method).
 
-       @param begin Start of range
-       @param end End of range (past-the-end iterator)
-       @param sorted Is the range already sorted? If not, it will be sorted.
+       @param[in] begin Start of range
+       @param[in] end End of range (past-the-end iterator)
+       @param[in] sorted Is the range already sorted? If not, it will be sorted.
 
-       @exception Exception::InvalidRange is thrown if the range is NULL
+       @exception Exception::InvalidRange is thrown if the range is empty
 
        @ingroup MathFunctionsStatistics
     */
@@ -274,6 +282,10 @@ namespace OpenMS
       }
 
       Size size = std::distance(begin, end);
+      if (size < 3) // upper half is empty for size 1 or 2: the third quantile is the maximum
+      {
+        return static_cast<double>(*(begin + (size - 1)));
+      }
       return median(begin + (size/2)+1, end, true); //+1 to exclude median values
     }
 
@@ -291,9 +303,9 @@ namespace OpenMS
         - q == 0 returns the first (minimum) element
         - q == 1 returns the last (maximum) element
 
-      @param begin  Start of range
-      @param end    End of range (past-the-end iterator)
-      @param q      Quantile in [0, 1]
+      @param[in] begin  Start of range
+      @param[in] end    End of range (past-the-end iterator)
+      @param[in] q      Quantile in [0, 1]
 
       @pre Input range must be sorted ascending.
 
@@ -318,7 +330,7 @@ namespace OpenMS
       if (q < 0.0 || q > 1.0)
       {
         throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
-                                      "q must be in [0,1]", String(q));
+                                      "q must be in [0,1]",StringUtils::toStr(q));
       }
       if (n == 1) return static_cast<double>(*begin);
 
@@ -342,9 +354,9 @@ namespace OpenMS
       References: J. W. Tukey (1977). Exploratory Data Analysis.
 
       @tparam IteratorType  input iterator over arithmetic values
-      @param begin          start iterator
-      @param end            past-the-end iterator
-      @param k              Tukey factor (default 1.5)
+      @param[in] begin          start iterator
+      @param[in] end            past-the-end iterator
+      @param[in] k              Tukey factor (default 1.5)
       @return               upper fence (Q3 + k*IQR) or +infinity if undefined
     */
     template <typename IteratorType>
@@ -371,9 +383,9 @@ namespace OpenMS
       @brief Fraction of values above a threshold.
 
       @tparam IteratorType  input iterator over arithmetic values
-      @param begin          start iterator
-      @param end            past-the-end iterator
-      @param threshold      threshold T
+      @param[in] begin          start iterator
+      @param[in] end            past-the-end iterator
+      @param[in] threshold      threshold T
       @return               (# { x > T } / N), ignoring non-finite x
     */
     template <typename IteratorType>
@@ -402,10 +414,10 @@ namespace OpenMS
       References: J. W. Tukey (1962). The Future of Data Analysis.
 
       @tparam IteratorType  input iterator over arithmetic values
-      @param begin          start iterator
-      @param end            past-the-end iterator
-      @param q              quantile in [0,1]
-      @param upper_fence    winsorization cap (Q3+k*IQR), or +inf to disable
+      @param[in] begin          start iterator
+      @param[in] end            past-the-end iterator
+      @param[in] q              quantile in [0,1]
+      @param[in] upper_fence    winsorization cap (Q3+k*IQR), or +inf to disable
       @return               winsorized quantile
     */
     template <typename IteratorType>
@@ -458,12 +470,12 @@ namespace OpenMS
           - R. J. Hyndman, Y. Fan (1996). Sample Quantiles in Statistical Packages
 
       @tparam IteratorType   input iterator over arithmetic values
-      @param begin           start iterator
-      @param end             past-the-end iterator
-      @param q               target quantile in [0,1] (e.g., 0.99 for 99% half-width)
-      @param k               Tukey factor (default 1.5)
-      @param r_sparse        tail density below which robust wins (default 0.01 = 1%)
-      @param r_dense         tail density above which raw wins (default 0.10 = 10%)
+      @param[in] begin           start iterator
+      @param[in] end             past-the-end iterator
+      @param[in] q               target quantile in [0,1] (e.g., 0.99 for 99% half-width)
+      @param[in] k               Tukey factor (default 1.5)
+      @param[in] r_sparse        tail density below which robust wins (default 0.01 = 1%)
+      @param[in] r_dense         tail density above which raw wins (default 0.10 = 10%)
 
       @return                AdaptiveQuantileResult
     */
@@ -572,16 +584,11 @@ namespace OpenMS
                          double mean = std::numeric_limits<double>::max())
     {
       checkIteratorsNotNULL(begin, end);
-      double sum_value = 0.0;
       if (mean == std::numeric_limits<double>::max())
       {
         mean = Math::mean(begin, end);
       }
-      for (IteratorType iter=begin; iter!=end; ++iter)
-      {
-        sum_value += *iter - mean;
-      }
-      return sum_value / std::distance(begin, end);
+      return MeanAbsoluteDeviation(begin, end, mean);
     }
 
     /**
@@ -940,7 +947,8 @@ namespace OpenMS
         {
           sort(data.begin(), data.end());
           mean = Math::mean(data.begin(), data.end());
-          variance = Math::variance(data.begin(), data.end(), mean);
+          // variance divides by (n-1) and is undefined for a single value; report 0.0 as in the empty case
+          variance = (count > 1) ? Math::variance(data.begin(), data.end(), mean) : 0.0;
           min = data.front();
           lowerq = Math::quantile1st(data.begin(), data.end(), true);
           median = Math::median(data.begin(), data.end(), true);

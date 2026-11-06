@@ -39,29 +39,29 @@ START_SECTION((~Sample()))
 	delete dv_ptr;
 END_SECTION
 
-START_SECTION((const String& getName() const))
+START_SECTION((const std::string& getName() const))
 	Sample s;
 	TEST_EQUAL(s.getName(),"")
 END_SECTION
 
-START_SECTION((const String& getOrganism() const))
+START_SECTION((const std::string& getOrganism() const))
 	Sample s;
 	TEST_EQUAL(s.getOrganism(),"")
 END_SECTION
 
-START_SECTION((const String& getNumber() const))
+START_SECTION((const std::string& getNumber() const))
 	Sample s;
 	TEST_EQUAL(s.getNumber(),"")
 END_SECTION
 
-START_SECTION((const String& getComment() const))
+START_SECTION((const std::string& getComment() const))
 	Sample s;
 	TEST_EQUAL(s.getComment(),"")
 END_SECTION
 
 START_SECTION((SampleState getState() const))
 	Sample s;
-	TEST_EQUAL(s.getState(),Sample::SAMPLENULL)
+	TEST_EQUAL(s.getState(),Sample::SampleState::SAMPLENULL)
 END_SECTION
 
 START_SECTION((double getMass() const ))
@@ -79,25 +79,25 @@ START_SECTION((double getConcentration() const ))
 	TEST_REAL_SIMILAR(s.getConcentration(),0.0)
 END_SECTION
 
-START_SECTION((void setName(const String& name)))
+START_SECTION((void setName(const std::string& name)))
 	Sample s;
 	s.setName("TTEST");
 	TEST_EQUAL(s.getName(),"TTEST")
 END_SECTION
 
-START_SECTION((void setOrganism(const String& organism)))
+START_SECTION((void setOrganism(const std::string& organism)))
 	Sample s;
 	s.setOrganism("TTEST");
 	TEST_EQUAL(s.getOrganism(),"TTEST")
 END_SECTION
 
-START_SECTION((void setNumber(const String& number)))
+START_SECTION((void setNumber(const std::string& number)))
 	Sample s;
 	s.setNumber("Sample4711");
 	TEST_EQUAL(s.getNumber(),"Sample4711")
 END_SECTION
 
-START_SECTION((void setComment(const String& comment)))
+START_SECTION((void setComment(const std::string& comment)))
 	Sample s;
 	s.setComment("Sample Description");
 	TEST_EQUAL(s.getComment(),"Sample Description")
@@ -105,8 +105,8 @@ END_SECTION
 
 START_SECTION((void setState(SampleState state)))
 	Sample s;
-	s.setState(Sample::LIQUID);
-	TEST_EQUAL(s.getState(),Sample::LIQUID)
+	s.setState(Sample::SampleState::LIQUID);
+	TEST_EQUAL(s.getState(),Sample::SampleState::LIQUID)
 END_SECTION
 
 START_SECTION((void setMass(double mass)))
@@ -162,13 +162,13 @@ START_SECTION((Sample(const Sample& source)))
 	s.setName("TTEST");
 	s.setNumber("Sample4711");
 	s.setComment("Sample Description");
-	s.setState(Sample::LIQUID);
+	s.setState(Sample::SampleState::LIQUID);
 	s.setMass(4711.2);
 	s.setVolume(4711.3);
 	s.setConcentration(4711.4);
 
 	//meta info
-	s.setMetaValue("label",String("horse"));
+	s.setMetaValue("label",std::string("horse"));
 
 	//subsamples
 	Sample ss;
@@ -184,7 +184,7 @@ START_SECTION((Sample(const Sample& source)))
 	TEST_EQUAL(s2.getName(),"TTEST")
 	TEST_EQUAL(s2.getNumber(),"Sample4711")
 	TEST_EQUAL(s2.getComment(),"Sample Description")
-	TEST_EQUAL(s2.getState(),Sample::LIQUID)
+	TEST_EQUAL(s2.getState(),Sample::SampleState::LIQUID)
 	TEST_REAL_SIMILAR(s2.getMass(),4711.2)
 	TEST_REAL_SIMILAR(s2.getVolume(),4711.3)
 	TEST_REAL_SIMILAR(s2.getConcentration(),4711.4)
@@ -206,13 +206,13 @@ START_SECTION((Sample& operator= (const Sample& source)))
 	s.setOrganism("TTEST2");
 	s.setNumber("Sample4711");
 	s.setComment("Sample Description");
-	s.setState(Sample::LIQUID);
+	s.setState(Sample::SampleState::LIQUID);
 	s.setMass(4711.2);
 	s.setVolume(4711.3);
 	s.setConcentration(4711.4);
 
 	//meta
-	s.setMetaValue("label",String("horse"));
+	s.setMetaValue("label",std::string("horse"));
 
 	//subsamples
 	Sample ss;
@@ -230,7 +230,7 @@ START_SECTION((Sample& operator= (const Sample& source)))
 	TEST_EQUAL(s2.getNumber(),"Sample4711")
 	TEST_EQUAL(s2.getComment(),"Sample Description")
 	TEST_EQUAL(s2.getOrganism(),"TTEST2")
-	TEST_EQUAL(s2.getState(),Sample::LIQUID)
+	TEST_EQUAL(s2.getState(),Sample::SampleState::LIQUID)
 	TEST_REAL_SIMILAR(s2.getMass(),4711.2)
 	TEST_REAL_SIMILAR(s2.getVolume(),4711.3)
 	TEST_REAL_SIMILAR(s2.getConcentration(),4711.4)
@@ -268,7 +268,7 @@ START_SECTION((bool operator== (const Sample& rhs) const))
 	edit = empty;
 	TEST_EQUAL(edit==empty,true)
 
-	edit.setState(Sample::LIQUID);
+	edit.setState(Sample::SampleState::LIQUID);
 	TEST_EQUAL(edit==empty,false)
 	edit = empty;
 	TEST_EQUAL(edit==empty,true)
@@ -297,6 +297,13 @@ START_SECTION((bool operator== (const Sample& rhs) const))
 	TEST_EQUAL(edit==empty,false)
 	edit = empty;
 	TEST_EQUAL(edit==empty,true)
+END_SECTION
+
+START_SECTION((static StringList getAllNamesOfSampleState()))
+  StringList names = Sample::getAllNamesOfSampleState();
+  TEST_EQUAL(names.size(), static_cast<size_t>(Sample::SampleState::SIZE_OF_SAMPLESTATE));
+  TEST_EQUAL(names[static_cast<size_t>(Sample::SampleState::LIQUID)], "liquid");
+  TEST_EQUAL(names[static_cast<size_t>(Sample::SampleState::SOLID)], "solid");
 END_SECTION
 
 /////////////////////////////////////////////////////////////

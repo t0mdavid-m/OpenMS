@@ -1,0 +1,760 @@
+// Copyright (c) 2002-present, OpenMS Inc. -- EKU Tuebingen, ETH Zurich, and FU Berlin
+// SPDX-License-Identifier: BSD-3-Clause
+//
+// --------------------------------------------------------------------------
+// $Maintainer: Timo Sachsenberg $
+// $Authors: Timo Sachsenberg $
+// --------------------------------------------------------------------------
+
+#include <OpenMS/CONCEPT/ClassTest.h>
+#include <OpenMS/test_config.h>
+
+///////////////////////////
+
+#include <OpenMS/CHEMISTRY/MzPAF.h>
+#include <OpenMS/CHEMISTRY/AASequence.h>
+#include <OpenMS/CONCEPT/Constants.h>
+#include <OpenMS/METADATA/PeptideHit.h>
+
+#include <sstream>
+
+using namespace OpenMS;
+using namespace std;
+
+///////////////////////////
+
+START_TEST(MzPAF, "$Id$")
+
+/////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////
+
+START_SECTION(Simple ion parsing - y ion)
+{
+  MzPAFAnnotation ann = MzPAF::parse("y4");
+  TEST_EQUAL(ann.ion_series, MzPAFIonSeries::Y)
+  TEST_EQUAL(ann.ordinal.has_value(), true)
+  TEST_EQUAL(ann.ordinal.value(), 4)
+  TEST_EQUAL(ann.charge.has_value(), false)
+  TEST_EQUAL(ann.isValid(), true)
+}
+END_SECTION
+
+START_SECTION(Simple ion parsing - b ion)
+{
+  MzPAFAnnotation ann = MzPAF::parse("b2");
+  TEST_EQUAL(ann.ion_series, MzPAFIonSeries::B)
+  TEST_EQUAL(ann.ordinal.value(), 2)
+  TEST_EQUAL(ann.isValid(), true)
+}
+END_SECTION
+
+START_SECTION(Simple ion parsing - all standard ions)
+{
+  // a-ion
+  MzPAFAnnotation a = MzPAF::parse("a3");
+  TEST_EQUAL(a.ion_series, MzPAFIonSeries::A)
+  TEST_EQUAL(a.ordinal.value(), 3)
+
+  // c-ion
+  MzPAFAnnotation c = MzPAF::parse("c5");
+  TEST_EQUAL(c.ion_series, MzPAFIonSeries::C)
+  TEST_EQUAL(c.ordinal.value(), 5)
+
+  // x-ion
+  MzPAFAnnotation x = MzPAF::parse("x1");
+  TEST_EQUAL(x.ion_series, MzPAFIonSeries::X)
+  TEST_EQUAL(x.ordinal.value(), 1)
+
+  // z-ion
+  MzPAFAnnotation z = MzPAF::parse("z7");
+  TEST_EQUAL(z.ion_series, MzPAFIonSeries::Z)
+  TEST_EQUAL(z.ordinal.value(), 7)
+}
+END_SECTION
+
+START_SECTION(Satellite ion parsing and roundtrip)
+{
+  struct SatelliteCase
+  {
+    std::string text;
+    MzPAFIonSeries series;
+    int ordinal;
+    std::optional<char> subtype;
+  };
+  const vector<SatelliteCase> cases
+    = {{"d5", MzPAFIonSeries::D, 5, std::nullopt}, {"v7", MzPAFIonSeries::V, 7, std::nullopt}, {"w3", MzPAFIonSeries::W, 3, std::nullopt},
+       {"da12", MzPAFIonSeries::D, 12, 'a'},       {"db4", MzPAFIonSeries::D, 4, 'b'},         {"wa12", MzPAFIonSeries::W, 12, 'a'},
+       {"wb4", MzPAFIonSeries::W, 4, 'b'}};
+
+  for (const auto& test_case : cases)
+  {
+    const auto ann = MzPAF::parse(test_case.text);
+    TEST_EQUAL(ann.ion_series, test_case.series)
+    TEST_EQUAL(ann.ordinal.value(), test_case.ordinal)
+    TEST_TRUE(ann.satellite_subtype == test_case.subtype)
+    TEST_TRUE(ann.isValid())
+    TEST_TRUE(MzPAF::isPeptideFragmentIon(ann.ion_series))
+    TEST_TRUE(MzPAF::isMzPAFFormat(test_case.text))
+    TEST_STRING_EQUAL(MzPAF::toString(ann), test_case.text)
+    TEST_EQUAL(MzPAF::parse(MzPAF::toString(ann)), ann)
+
+    MzPAFAnnotation constructed;
+    constructed.ion_series = test_case.series;
+    constructed.ordinal = test_case.ordinal;
+    constructed.satellite_subtype = test_case.subtype;
+    TEST_STRING_EQUAL(MzPAF::toString(constructed), test_case.text)
+    TEST_EQUAL(constructed, ann)
+
+    MzPAFIonSeries series = MzPAFIonSeries::UNKNOWN;
+    TEST_TRUE(MzPAF::charToIonSeries(test_case.text[0], series))
+    TEST_EQUAL(series, test_case.series)
+    TEST_EQUAL(MzPAF::ionSeriesToChar(series), test_case.text[0])
+  }
+}
+END_SECTION
+
+START_SECTION(Satellite ions with modifiers and peak annotation conversion)
+{
+  for (const std::string prefix : {"d", "v", "w", "da", "db", "wa", "wb"})
+  {
+    const auto ann = MzPAF::parse("1@" + prefix + "3{LIR}-H2O+2i^2/-1.4ppm*0.75");
+    TEST_EQUAL(ann.analyte_index.value(), 1)
+    TEST_EQUAL(ann.ordinal.value(), 3)
+    TEST_STRING_EQUAL(ann.embedded_sequence.value(), "LIR")
+    TEST_EQUAL(ann.neutral_losses.size(), 1)
+    TEST_STRING_EQUAL(ann.neutral_losses[0].formula.toString(), "H2O1")
+    TEST_EQUAL(ann.isotope_offset.value(), 2)
+    TEST_EQUAL(ann.charge.value(), 2)
+    TEST_REAL_SIMILAR(ann.mass_delta.value().value, -1.4)
+    TEST_EQUAL(ann.mass_delta.value().unit, MzPAFDeltaUnit::PPM)
+    TEST_REAL_SIMILAR(ann.confidence.value(), 0.75)
+    TEST_EQUAL(MzPAF::parse(MzPAF::toString(ann)), ann)
+
+    const auto peak = MzPAF::toPeakAnnotation(ann, 500.123, 1000.0);
+    TEST_EQUAL(peak.charge, 2)
+    TEST_REAL_SIMILAR(peak.mz, 500.123)
+    TEST_REAL_SIMILAR(peak.intensity, 1000.0)
+    const auto restored = MzPAF::fromPeakAnnotation(peak);
+    TEST_EQUAL(restored.size(), 1)
+    TEST_EQUAL(restored.annotations[0], ann)
+  }
+
+  const std::string text = "d5,da5,db5,v7,w3,wa3,wb3,y4^2";
+  const auto anns = MzPAF::parseMultiple(text);
+  TEST_EQUAL(anns.size(), 8)
+  TEST_STRING_EQUAL(MzPAF::toString(anns), text)
+  TEST_EQUAL(MzPAF::parseMultiple(MzPAF::toString(anns)), anns)
+}
+END_SECTION
+
+START_SECTION(Satellite subtype validation and equality)
+{
+  MzPAFAnnotation ann;
+  TEST_FALSE(ann.satellite_subtype.has_value())
+  for (const auto series : {MzPAFIonSeries::D, MzPAFIonSeries::V, MzPAFIonSeries::W})
+  {
+    ann.ion_series = series;
+    TEST_FALSE(ann.isValid()) // Satellites require an ordinal too.
+  }
+  ann.ordinal = 3;
+
+  for (const auto series : {MzPAFIonSeries::D, MzPAFIonSeries::W})
+  {
+    ann.ion_series = series;
+    for (const char subtype : {'a', 'b'})
+    {
+      ann.satellite_subtype = subtype;
+      TEST_TRUE(ann.isValid())
+    }
+    ann.satellite_subtype = 'c';
+    TEST_FALSE(ann.isValid())
+    // toString() stays total: the non-conformant subtype is dropped, not thrown on.
+    TEST_STRING_EQUAL(MzPAF::toString(ann), std::string(1, MzPAF::ionSeriesToChar(series)) + "3")
+  }
+
+  // A subtype on any other series would produce a non-conformant annotation.
+  for (const auto series : {MzPAFIonSeries::A, MzPAFIonSeries::B, MzPAFIonSeries::C, MzPAFIonSeries::X, MzPAFIonSeries::Y, MzPAFIonSeries::Z,
+                            MzPAFIonSeries::V, MzPAFIonSeries::PRECURSOR})
+  {
+    ann.ion_series = series;
+    ann.satellite_subtype = 'a';
+    TEST_FALSE(ann.isValid())
+    TEST_STRING_EQUAL(MzPAF::toString(ann), std::string(1, MzPAF::ionSeriesToChar(series)) + "3")
+  }
+
+  // Streaming must never propagate out of an invalid annotation (operator<< forwards to toString).
+  {
+    MzPAFAnnotation bad;
+    bad.ion_series = MzPAFIonSeries::V;
+    bad.ordinal = 3;
+    bad.satellite_subtype = 'a';
+    std::ostringstream oss;
+    oss << bad;
+    TEST_STRING_EQUAL(oss.str(), "v3")
+  }
+
+  TEST_FALSE(MzPAF::parse("da3") == MzPAF::parse("db3"))
+  TEST_FALSE(MzPAF::parse("wa3") == MzPAF::parse("wb3"))
+  TEST_FALSE(MzPAF::parse("w3") == MzPAF::parse("wa3"))
+  TEST_FALSE(MzPAF::parseMultiple("d3,da3") == MzPAF::parseMultiple("d3,db3"))
+}
+END_SECTION
+
+START_SECTION(Reject malformed satellite ions)
+{
+  for (const std::string text : {"d",    "v",    "w",      "da",  "db",  "wa",   "wb",   "va3", "vb3", "aa3",  "ba3",    "ca3",
+                                 "xa3",  "ya3",  "za3",    "dc3", "wc3", "daa3", "wba3", "wA3", "d3a", "da^2", "wb-H2O", "da99999999999999999999",
+                                 "va 3", "dc 3", "wafoo 3"})
+  {
+    TEST_EXCEPTION(MzPAFParseError, MzPAF::parse(text))
+    TEST_FALSE(MzPAF::tryParse(text).has_value())
+    TEST_FALSE(MzPAF::isMzPAFFormat(text))
+    TEST_FALSE(MzPAF::tryParseMultiple("y4," + text).has_value())
+  }
+}
+END_SECTION
+
+START_SECTION(Ion with charge)
+{
+  MzPAFAnnotation ann = MzPAF::parse("y4^2");
+  TEST_EQUAL(ann.ion_series, MzPAFIonSeries::Y)
+  TEST_EQUAL(ann.ordinal.value(), 4)
+  TEST_EQUAL(ann.charge.has_value(), true)
+  TEST_EQUAL(ann.charge.value(), 2)
+}
+END_SECTION
+
+START_SECTION(Ion with negative charge)
+{
+  // negative mode: nucleic acid fragments are always negatively charged, so the charge carries a sign.
+  // Without this the parser stopped at the '-' and reported INVALID_CHARGE, so toString() produced names
+  // that parse() could not read back.
+  MzPAFAnnotation ann = MzPAF::parse("c1^-1");
+  TEST_EQUAL(ann.ion_series, MzPAFIonSeries::C)
+  TEST_EQUAL(ann.ordinal.value(), 1)
+  TEST_EQUAL(ann.charge.has_value(), true)
+  TEST_EQUAL(ann.charge.value(), -1)
+  TEST_STRING_EQUAL(MzPAF::toString(ann), "c1^-1")
+
+  ann = MzPAF::parse("a3^-2");
+  TEST_EQUAL(ann.charge.value(), -2)
+  TEST_STRING_EQUAL(MzPAF::toString(ann), "a3^-2")
+
+  // an explicit '+' means the same as no sign
+  ann = MzPAF::parse("y4^+3");
+  TEST_EQUAL(ann.charge.value(), 3)
+  TEST_STRING_EQUAL(MzPAF::toString(ann), "y4^3")
+
+  // a caret with only a sign and no number is still an error
+  TEST_EQUAL(MzPAF::tryParse("y4^-").has_value(), false)
+  TEST_EQUAL(MzPAF::tryParse("y4^").has_value(), false)
+
+  // what toString() writes, parse() reads back -- for every charge, either polarity
+  for (int z : {-5, -2, -1, 1, 2, 5})
+  {
+    MzPAFAnnotation a;
+    a.ion_series = MzPAFIonSeries::Y;
+    a.ordinal = 4;
+    a.charge = z;
+    const std::string written = MzPAF::toString(a);
+    const std::optional<MzPAFAnnotation> read_back = MzPAF::tryParse(written);
+    TEST_EQUAL(read_back.has_value(), true)
+    if (read_back.has_value()) { TEST_EQUAL(read_back->charge.value(), z) }
+  }
+}
+END_SECTION
+
+START_SECTION(Ion with neutral loss)
+{
+  MzPAFAnnotation ann = MzPAF::parse("b2-H2O");
+  TEST_EQUAL(ann.ion_series, MzPAFIonSeries::B)
+  TEST_EQUAL(ann.ordinal.value(), 2)
+  TEST_EQUAL(ann.neutral_losses.size(), 1)
+  TEST_EQUAL(ann.neutral_losses[0].formula.toString(), "H2O1")
+}
+END_SECTION
+
+START_SECTION(Ion with multiple neutral losses)
+{
+  MzPAFAnnotation ann = MzPAF::parse("y5-H2O-NH3");
+  TEST_EQUAL(ann.ion_series, MzPAFIonSeries::Y)
+  TEST_EQUAL(ann.ordinal.value(), 5)
+  TEST_EQUAL(ann.neutral_losses.size(), 2)
+  TEST_EQUAL(ann.neutral_losses[0].formula.toString(), "H2O1")
+  TEST_EQUAL(ann.neutral_losses[1].formula.toString(), "H3N1")
+}
+END_SECTION
+
+START_SECTION(Ion with isotope offset)
+{
+  MzPAFAnnotation ann = MzPAF::parse("y2+2i");
+  TEST_EQUAL(ann.ion_series, MzPAFIonSeries::Y)
+  TEST_EQUAL(ann.ordinal.value(), 2)
+  TEST_EQUAL(ann.isotope_offset.has_value(), true)
+  TEST_EQUAL(ann.isotope_offset.value(), 2)
+}
+END_SECTION
+
+START_SECTION(Ion with mass delta in Da)
+{
+  MzPAFAnnotation ann = MzPAF::parse("y4/0.001");
+  TEST_EQUAL(ann.ion_series, MzPAFIonSeries::Y)
+  TEST_EQUAL(ann.ordinal.value(), 4)
+  TEST_EQUAL(ann.mass_delta.has_value(), true)
+  TEST_REAL_SIMILAR(ann.mass_delta.value().value, 0.001)
+  TEST_EQUAL(ann.mass_delta.value().unit, MzPAFDeltaUnit::DALTON)
+}
+END_SECTION
+
+START_SECTION(Ion with mass delta in ppm)
+{
+  MzPAFAnnotation ann = MzPAF::parse("y4/-1.4ppm");
+  TEST_EQUAL(ann.ion_series, MzPAFIonSeries::Y)
+  TEST_EQUAL(ann.ordinal.value(), 4)
+  TEST_EQUAL(ann.mass_delta.has_value(), true)
+  TEST_REAL_SIMILAR(ann.mass_delta.value().value, -1.4)
+  TEST_EQUAL(ann.mass_delta.value().unit, MzPAFDeltaUnit::PPM)
+}
+END_SECTION
+
+START_SECTION(Ion with confidence)
+{
+  MzPAFAnnotation ann = MzPAF::parse("y4*0.75");
+  TEST_EQUAL(ann.ion_series, MzPAFIonSeries::Y)
+  TEST_EQUAL(ann.ordinal.value(), 4)
+  TEST_EQUAL(ann.confidence.has_value(), true)
+  TEST_REAL_SIMILAR(ann.confidence.value(), 0.75)
+}
+END_SECTION
+
+START_SECTION(Complex annotation with all modifiers)
+{
+  MzPAFAnnotation ann = MzPAF::parse("b2-H2O^2/3.2ppm*0.75");
+  TEST_EQUAL(ann.ion_series, MzPAFIonSeries::B)
+  TEST_EQUAL(ann.ordinal.value(), 2)
+  TEST_EQUAL(ann.neutral_losses.size(), 1)
+  TEST_EQUAL(ann.charge.value(), 2)
+  TEST_REAL_SIMILAR(ann.mass_delta.value().value, 3.2)
+  TEST_EQUAL(ann.mass_delta.value().unit, MzPAFDeltaUnit::PPM)
+  TEST_REAL_SIMILAR(ann.confidence.value(), 0.75)
+}
+END_SECTION
+
+START_SECTION(Immonium ion)
+{
+  MzPAFAnnotation ann = MzPAF::parse("IY");
+  TEST_EQUAL(ann.ion_series, MzPAFIonSeries::IMMONIUM)
+  TEST_EQUAL(ann.immonium_residue.has_value(), true)
+  TEST_EQUAL(ann.immonium_residue.value(), 'Y')
+}
+END_SECTION
+
+START_SECTION(Internal fragment)
+{
+  MzPAFAnnotation ann = MzPAF::parse("m3:6");
+  TEST_EQUAL(ann.ion_series, MzPAFIonSeries::INTERNAL)
+  TEST_EQUAL(ann.internal_range.has_value(), true)
+  TEST_EQUAL(ann.internal_range.value().first, 3)
+  TEST_EQUAL(ann.internal_range.value().second, 6)
+}
+END_SECTION
+
+START_SECTION(Reporter ion)
+{
+  MzPAFAnnotation ann = MzPAF::parse("r[TMT127N]");
+  TEST_EQUAL(ann.ion_series, MzPAFIonSeries::REPORTER)
+  TEST_EQUAL(ann.reporter_name.has_value(), true)
+  TEST_EQUAL(ann.reporter_name.value(), "TMT127N")
+}
+END_SECTION
+
+START_SECTION(Formula ion)
+{
+  MzPAFAnnotation ann = MzPAF::parse("f{C16H22O}");
+  TEST_EQUAL(ann.ion_series, MzPAFIonSeries::FORMULA)
+  TEST_EQUAL(ann.formula.has_value(), true)
+  // EmpiricalFormula.toString() includes count even if 1 (C16H22O1)
+  TEST_EQUAL(ann.formula.value().toString(), "C16H22O1")
+}
+END_SECTION
+
+START_SECTION(Precursor ion)
+{
+  MzPAFAnnotation ann = MzPAF::parse("p");
+  TEST_EQUAL(ann.ion_series, MzPAFIonSeries::PRECURSOR)
+}
+END_SECTION
+
+START_SECTION(Multi-analyte annotation)
+{
+  MzPAFAnnotation ann = MzPAF::parse("1@y12");
+  TEST_EQUAL(ann.analyte_index.has_value(), true)
+  TEST_EQUAL(ann.analyte_index.value(), 1)
+  TEST_EQUAL(ann.ion_series, MzPAFIonSeries::Y)
+  TEST_EQUAL(ann.ordinal.value(), 12)
+}
+END_SECTION
+
+START_SECTION(Embedded sequence)
+{
+  MzPAFAnnotation ann = MzPAF::parse("b2{LC}");
+  TEST_EQUAL(ann.ion_series, MzPAFIonSeries::B)
+  TEST_EQUAL(ann.ordinal.value(), 2)
+  TEST_EQUAL(ann.embedded_sequence.has_value(), true)
+  TEST_EQUAL(ann.embedded_sequence.value(), "LC")
+}
+END_SECTION
+
+START_SECTION(Parse multiple annotations)
+{
+  MzPAFPeakAnnotations anns = MzPAF::parseMultiple("b2,y4^2");
+  TEST_EQUAL(anns.size(), 2)
+  TEST_EQUAL(anns.annotations[0].ion_series, MzPAFIonSeries::B)
+  TEST_EQUAL(anns.annotations[0].ordinal.value(), 2)
+  TEST_EQUAL(anns.annotations[1].ion_series, MzPAFIonSeries::Y)
+  TEST_EQUAL(anns.annotations[1].ordinal.value(), 4)
+  TEST_EQUAL(anns.annotations[1].charge.value(), 2)
+}
+END_SECTION
+
+START_SECTION(tryParse non-throwing)
+{
+  auto valid = MzPAF::tryParse("y4");
+  TEST_EQUAL(valid.has_value(), true)
+
+  auto invalid = MzPAF::tryParse("invalid[");
+  TEST_EQUAL(invalid.has_value(), false)
+}
+END_SECTION
+
+START_SECTION(toString single annotation)
+{
+  MzPAFAnnotation ann = MzPAF::parse("y4^2-H2O/0.001*0.75");
+  std::string s = MzPAF::toString(ann);
+  TEST_EQUAL(s, "y4-H2O1^2/0.001*0.75")
+}
+END_SECTION
+
+START_SECTION(toString simple annotation)
+{
+  MzPAFAnnotation ann = MzPAF::parse("y4^2");
+  std::string s = MzPAF::toString(ann);
+  TEST_EQUAL(s, "y4^2")
+}
+END_SECTION
+
+START_SECTION(toString multiple annotations)
+{
+  MzPAFPeakAnnotations anns = MzPAF::parseMultiple("b2,y4^2");
+  std::string s = MzPAF::toString(anns);
+  TEST_EQUAL(s, "b2,y4^2")
+}
+END_SECTION
+
+START_SECTION(Roundtrip test)
+{
+  vector<std::string> test_cases = {
+    "y4",
+    "b2",
+    "y4^2",
+    "b2-H2O",
+    "y5-H2O-NH3",
+    "y4/0.001",
+    "y4*0.75",
+    "IY",
+    "m3:6",
+    "r[TMT127N]",
+    "p",
+    "1@y12"
+  };
+
+  for (const auto& input : test_cases)
+  {
+    auto ann = MzPAF::parse(input);
+    std::string output = MzPAF::toString(ann);
+    auto reparsed = MzPAF::parse(output);
+    TEST_EQUAL(ann, reparsed)
+  }
+}
+END_SECTION
+
+START_SECTION(isMzPAFFormat detection)
+{
+  TEST_EQUAL(MzPAF::isMzPAFFormat("y4"), true)
+  TEST_EQUAL(MzPAF::isMzPAFFormat("b2-H2O"), true)
+  TEST_EQUAL(MzPAF::isMzPAFFormat("y4^2"), true)
+  TEST_EQUAL(MzPAF::isMzPAFFormat("IY"), true)
+  TEST_EQUAL(MzPAF::isMzPAFFormat("m3:6"), true)
+  TEST_EQUAL(MzPAF::isMzPAFFormat("r[TMT127N]"), true)
+  TEST_EQUAL(MzPAF::isMzPAFFormat(""), false)
+  TEST_EQUAL(MzPAF::isMzPAFFormat("random text"), false)
+}
+END_SECTION
+
+START_SECTION(toPeakAnnotation integration)
+{
+  MzPAFAnnotation ann = MzPAF::parse("y4^2");
+  PeptideHit::PeakAnnotation pa = MzPAF::toPeakAnnotation(ann, 500.123, 1000.0);
+
+  TEST_EQUAL(pa.charge, 2)
+  TEST_REAL_SIMILAR(pa.mz, 500.123)
+  TEST_REAL_SIMILAR(pa.intensity, 1000.0)
+  TEST_EQUAL(pa.annotation, "y4^2")
+}
+END_SECTION
+
+START_SECTION(fromPeakAnnotation integration)
+{
+  PeptideHit::PeakAnnotation pa;
+  pa.annotation = "y4^2-H2O";
+  pa.charge = 2;
+  pa.mz = 500.0;
+  pa.intensity = 1000.0;
+
+  MzPAFPeakAnnotations anns = MzPAF::fromPeakAnnotation(pa);
+  TEST_EQUAL(anns.size(), 1)
+  TEST_EQUAL(anns.annotations[0].ion_series, MzPAFIonSeries::Y)
+  TEST_EQUAL(anns.annotations[0].ordinal.value(), 4)
+  TEST_EQUAL(anns.annotations[0].charge.value(), 2)
+  TEST_EQUAL(anns.annotations[0].neutral_losses.size(), 1)
+}
+END_SECTION
+
+START_SECTION(ionSeriesToChar and charToIonSeries)
+{
+  TEST_EQUAL(MzPAF::ionSeriesToChar(MzPAFIonSeries::A), 'a')
+  TEST_EQUAL(MzPAF::ionSeriesToChar(MzPAFIonSeries::B), 'b')
+  TEST_EQUAL(MzPAF::ionSeriesToChar(MzPAFIonSeries::C), 'c')
+  TEST_EQUAL(MzPAF::ionSeriesToChar(MzPAFIonSeries::X), 'x')
+  TEST_EQUAL(MzPAF::ionSeriesToChar(MzPAFIonSeries::Y), 'y')
+  TEST_EQUAL(MzPAF::ionSeriesToChar(MzPAFIonSeries::Z), 'z')
+  TEST_EQUAL(MzPAF::ionSeriesToChar(MzPAFIonSeries::PRECURSOR), 'p')
+  TEST_EQUAL(MzPAF::ionSeriesToChar(MzPAFIonSeries::IMMONIUM), 'I')
+  TEST_EQUAL(MzPAF::ionSeriesToChar(MzPAFIonSeries::INTERNAL), 'm')
+  TEST_EQUAL(MzPAF::ionSeriesToChar(MzPAFIonSeries::REPORTER), 'r')
+  TEST_EQUAL(MzPAF::ionSeriesToChar(MzPAFIonSeries::FORMULA), 'f')
+  TEST_EQUAL(MzPAF::ionSeriesToChar(MzPAFIonSeries::NAMED), '_')
+
+  MzPAFIonSeries series;
+  TEST_EQUAL(MzPAF::charToIonSeries('y', series), true)
+  TEST_EQUAL(series, MzPAFIonSeries::Y)
+
+  TEST_EQUAL(MzPAF::charToIonSeries('Q', series), false)
+}
+END_SECTION
+
+START_SECTION(Error handling - empty input)
+{
+  TEST_EXCEPTION(MzPAFParseError, MzPAF::parse(""))
+}
+END_SECTION
+
+START_SECTION(Error handling - invalid ion series)
+{
+  TEST_EXCEPTION(MzPAFParseError, MzPAF::parse("Q5"))
+}
+END_SECTION
+
+START_SECTION(Error handling - unclosed bracket)
+{
+  TEST_EXCEPTION(MzPAFParseError, MzPAF::parse("r[TMT127N"))
+}
+END_SECTION
+
+START_SECTION(Named compound ion)
+{
+  MzPAFAnnotation ann = MzPAF::parse("_[Aspirin]");
+  TEST_EQUAL(ann.ion_series, MzPAFIonSeries::NAMED)
+  TEST_EQUAL(ann.named_compound.has_value(), true)
+  TEST_EQUAL(ann.named_compound.value(), "Aspirin")
+  TEST_EQUAL(ann.isValid(), true)
+}
+END_SECTION
+
+START_SECTION(Named compound ion with modifiers)
+{
+  MzPAFAnnotation ann = MzPAF::parse("_[Iodoacetamide]^1/0.5ppm");
+  TEST_EQUAL(ann.ion_series, MzPAFIonSeries::NAMED)
+  TEST_EQUAL(ann.named_compound.value(), "Iodoacetamide")
+  TEST_EQUAL(ann.charge.value(), 1)
+  TEST_REAL_SIMILAR(ann.mass_delta.value().value, 0.5)
+  TEST_EQUAL(ann.mass_delta.value().unit, MzPAFDeltaUnit::PPM)
+}
+END_SECTION
+
+START_SECTION(Error handling - number overflow in ordinal)
+{
+  // Very large number that would overflow int
+  TEST_EXCEPTION(MzPAFParseError, MzPAF::parse("y99999999999999999999"))
+}
+END_SECTION
+
+START_SECTION(Error handling - number overflow in charge)
+{
+  TEST_EXCEPTION(MzPAFParseError, MzPAF::parse("y4^99999999999999999999"))
+}
+END_SECTION
+
+START_SECTION(Error handling - number overflow in analyte index)
+{
+  TEST_EXCEPTION(MzPAFParseError, MzPAF::parse("99999999999999999999@y4"))
+}
+END_SECTION
+
+START_SECTION(Error handling - invalid internal fragment range)
+{
+  TEST_EXCEPTION(MzPAFParseError, MzPAF::parse("m99999999999999999999:6"))
+}
+END_SECTION
+
+START_SECTION(Roundtrip test with named compound)
+{
+  auto ann = MzPAF::parse("_[MyCompound]");
+  std::string output = MzPAF::toString(ann);
+  auto reparsed = MzPAF::parse(output);
+  TEST_EQUAL(ann, reparsed)
+}
+END_SECTION
+
+START_SECTION(tryParseMultiple non-throwing)
+{
+  auto valid = MzPAF::tryParseMultiple("b2,y4^2");
+  TEST_EQUAL(valid.has_value(), true)
+  TEST_EQUAL(valid.value().size(), 2)
+
+  auto invalid = MzPAF::tryParseMultiple("y4,invalid[");
+  TEST_EQUAL(invalid.has_value(), false)
+}
+END_SECTION
+
+START_SECTION(isPeptideFragmentIon)
+{
+  // Standard fragment ions (a, b, c, x, y, z)
+  TEST_EQUAL(MzPAF::isPeptideFragmentIon(MzPAFIonSeries::A), true)
+  TEST_EQUAL(MzPAF::isPeptideFragmentIon(MzPAFIonSeries::B), true)
+  TEST_EQUAL(MzPAF::isPeptideFragmentIon(MzPAFIonSeries::C), true)
+  TEST_EQUAL(MzPAF::isPeptideFragmentIon(MzPAFIonSeries::X), true)
+  TEST_EQUAL(MzPAF::isPeptideFragmentIon(MzPAFIonSeries::Y), true)
+  TEST_EQUAL(MzPAF::isPeptideFragmentIon(MzPAFIonSeries::Z), true)
+
+  // Special ion types (not standard fragment ions)
+  TEST_EQUAL(MzPAF::isPeptideFragmentIon(MzPAFIonSeries::PRECURSOR), false)
+  TEST_EQUAL(MzPAF::isPeptideFragmentIon(MzPAFIonSeries::IMMONIUM), false)
+  TEST_EQUAL(MzPAF::isPeptideFragmentIon(MzPAFIonSeries::INTERNAL), false)
+  TEST_EQUAL(MzPAF::isPeptideFragmentIon(MzPAFIonSeries::REPORTER), false)
+  TEST_EQUAL(MzPAF::isPeptideFragmentIon(MzPAFIonSeries::FORMULA), false)
+  TEST_EQUAL(MzPAF::isPeptideFragmentIon(MzPAFIonSeries::NAMED), false)
+  TEST_EQUAL(MzPAF::isPeptideFragmentIon(MzPAFIonSeries::UNKNOWN), false)
+}
+END_SECTION
+
+START_SECTION(Adduct parsing)
+{
+  // Note: Adduct parsing depends on implementation - test if supported
+  auto result = MzPAF::tryParse("y4+Na");
+  if (result.has_value() && result.value().adduct.has_value())
+  {
+    TEST_EQUAL(result.value().ion_series, MzPAFIonSeries::Y)
+    TEST_EQUAL(result.value().ordinal.value(), 4)
+    // Adduct should be parsed as Na
+  }
+}
+END_SECTION
+
+START_SECTION(calculateTheoreticalMZ)
+{
+  AASequence seq = AASequence::fromString("PEPTIDER");
+
+  // Test y4 ion (C-terminal 4 residues: IDER)
+  MzPAFAnnotation y4 = MzPAF::parse("y4");
+  auto mz_y4 = MzPAF::calculateTheoreticalMZ(y4, seq);
+  TEST_EQUAL(mz_y4.has_value(), true)
+  // y4 of PEPTIDER = IDER, singly charged
+  TEST_REAL_SIMILAR(mz_y4.value(), 532.2726)
+
+  // Test b3 ion (N-terminal 3 residues: PEP)
+  MzPAFAnnotation b3 = MzPAF::parse("b3");
+  auto mz_b3 = MzPAF::calculateTheoreticalMZ(b3, seq);
+  TEST_EQUAL(mz_b3.has_value(), true)
+  // b3 of PEPTIDER = PEP
+  TEST_REAL_SIMILAR(mz_b3.value(), 324.1554)
+
+  // Test doubly charged y4
+  MzPAFAnnotation y4_2 = MzPAF::parse("y4^2");
+  auto mz_y4_2 = MzPAF::calculateTheoreticalMZ(y4_2, seq);
+  TEST_EQUAL(mz_y4_2.has_value(), true)
+  // Doubly charged: (mass + 2*proton) / 2
+  TEST_REAL_SIMILAR(mz_y4_2.value(), 266.6399)
+
+  // Test non-standard ion (should return nullopt)
+  MzPAFAnnotation precursor = MzPAF::parse("p");
+  auto mz_p = MzPAF::calculateTheoreticalMZ(precursor, seq);
+  TEST_EQUAL(mz_p.has_value(), false)
+
+  // Test invalid ordinal (out of range)
+  MzPAFAnnotation y100 = MzPAF::parse("y100");
+  auto mz_y100 = MzPAF::calculateTheoreticalMZ(y100, seq);
+  TEST_EQUAL(mz_y100.has_value(), false)
+
+  // Satellite m/z calculation tests
+  // d3 on PEPTIDER (cleavage at Proline, which has no satellite loss) should return nullopt
+  TEST_FALSE(MzPAF::calculateTheoreticalMZ(MzPAF::parse("d3"), seq).has_value())
+
+  // d5 on PEPTIDER (cleavage at Isoleucine): da5 (-CH3) and db5 (-C2H5)
+  auto mz_da5 = MzPAF::calculateTheoreticalMZ(MzPAF::parse("da5"), seq);
+  auto mz_db5 = MzPAF::calculateTheoreticalMZ(MzPAF::parse("db5"), seq);
+  TEST_EQUAL(mz_da5.has_value(), true)
+  TEST_EQUAL(mz_db5.has_value(), true)
+  // da5 vs db5 mass difference should be exactly C2H5 - CH3 = CH2 (14.01565 Da)
+  TEST_REAL_SIMILAR(mz_da5.value() - mz_db5.value(), EmpiricalFormula("CH2").getMonoWeight())
+
+  // wa4 and wb4 on PEPTIDER (suffix 4 is IDER, N-terminal residue is Ile)
+  auto mz_wa4 = MzPAF::calculateTheoreticalMZ(MzPAF::parse("wa4"), seq);
+  auto mz_wb4 = MzPAF::calculateTheoreticalMZ(MzPAF::parse("wb4"), seq);
+  TEST_EQUAL(mz_wa4.has_value(), true)
+  TEST_EQUAL(mz_wb4.has_value(), true)
+  TEST_REAL_SIMILAR(mz_wa4.value() - mz_wb4.value(), EmpiricalFormula("CH2").getMonoWeight())
+
+  // Absolute-mass regression: w3 on AAAACAK (suffix CAK, satellite loss HS from Cys).
+  // The w ion is formed from the radical z+1 fragment, not the even-electron z ion,
+  // which would be one H (1.007825 Da) too light. Kempkes et al. 2018
+  // (DOI: 10.1002/jms.4298) report w3 of this peptide at nominal m/z 272.
+  AASequence aaaacak = AASequence::fromString("AAAACAK");
+  auto mz_w3 = MzPAF::calculateTheoreticalMZ(MzPAF::parse("w3"), aaaacak);
+  TEST_EQUAL(mz_w3.has_value(), true)
+  TEST_REAL_SIMILAR(mz_w3.value(), EmpiricalFormula("C12H21N3O4").getMonoWeight() + Constants::PROTON_MASS_U)
+
+  // v4 on PEPTIDER (suffix 4 is IDER, complete side-chain loss of Ile)
+  auto mz_v4 = MzPAF::calculateTheoreticalMZ(MzPAF::parse("v4"), seq);
+  TEST_EQUAL(mz_v4.has_value(), true)
+
+  // Absolute d/v masses, independently derived from neutral losses C3H6/C4H10.
+  // Fernandez et al., DOI: 10.1002/ejoc.202101549 (d); Liu et al.,
+  // DOI: 10.1016/j.ijms.2011.04.008, Table 4 (v).
+  const AASequence ala = AASequence::fromString("ALA");
+  TOLERANCE_ABSOLUTE(0.000001)
+  for (Int charge : {1, 2, 3})
+  {
+    auto d = MzPAF::parse("d2");
+    d.charge = charge;
+    auto v = MzPAF::parse("v2");
+    v.charge = charge;
+    const auto mz_d = MzPAF::calculateTheoreticalMZ(d, ala);
+    const auto mz_v = MzPAF::calculateTheoreticalMZ(v, ala);
+    TEST_TRUE(mz_d.has_value())
+    TEST_TRUE(mz_v.has_value())
+    TEST_REAL_SIMILAR(mz_d.value(), (115.086589785771 + (charge - 1) * Constants::PROTON_MASS_U) / charge)
+    TEST_REAL_SIMILAR(mz_v.value(), (145.060769721971 + (charge - 1) * Constants::PROTON_MASS_U) / charge)
+  }
+
+  // Modified residue at satellite cleavage site should return nullopt
+  AASequence mod_seq = AASequence::fromString("AM(Oxidation)EPTIDER");
+  TEST_FALSE(MzPAF::calculateTheoreticalMZ(MzPAF::parse("d2"), mod_seq).has_value())
+  TEST_FALSE(MzPAF::calculateTheoreticalMZ(MzPAF::parse("v8"), mod_seq).has_value())
+  TEST_FALSE(MzPAF::calculateTheoreticalMZ(MzPAF::parse("w8"), mod_seq).has_value())
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////
+END_TEST

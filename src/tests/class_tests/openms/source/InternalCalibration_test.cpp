@@ -94,14 +94,14 @@ START_SECTION(const CalibrationData& getCalibrationPoints() const)
   NOT_TESTABLE // tested above
 END_SECTION
 
-START_SECTION(bool calibrate(PeakMap& exp, const IntList& target_mslvl, MZTrafoModel::MODELTYPE model_type, double rt_chunk, bool use_RANSAC, double post_ppm_median, double post_ppm_MAD, const String& file_models, const String& file_residuals))
+START_SECTION(bool calibrate(PeakMap& exp, const IntList& target_mslvl, MZTrafoModel::MODELTYPE model_type, double rt_chunk, bool use_RANSAC, double post_ppm_median, double post_ppm_MAD, const std::string& file_models, const std::string& file_residuals))
   InternalCalibration ic;
   ic.fillCalibrants(peps, 3.0);
   PeakMap exp;
   MzMLFile().load(File::find("./examples/BSA/BSA1.mzML"), exp);
   MZTrafoModel::setRANSACSeed(0);
   MZTrafoModel::setRANSACParams(Math::RANSACParam(2, 1000, 1.0, 30, true));
-  bool success = ic.calibrate(exp, std::vector<Int>(1, 1), MZTrafoModel::LINEAR, -1, true, 1.0, 1.0);
+  bool success = ic.calibrate(exp, std::vector<Int>(1, 1), MZTrafoModel::MODELTYPE::LINEAR, -1, true, 1.0, 1.0);
   TEST_EQUAL(success, true)
 END_SECTION
 

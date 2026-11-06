@@ -46,7 +46,7 @@ namespace OpenMS
                                 const std::vector<FASTAFile::FASTAEntry>& fasta,
                                 IdentificationData::MoleculeType type =
                                 IdentificationData::MoleculeType::PROTEIN,
-                                const String& decoy_pattern = "");
+                                const std::string& decoy_pattern = "");
 
     /// Convert parent matches to peptide evidences
     static void exportParentMatches(
@@ -55,32 +55,32 @@ namespace OpenMS
     /*!
       @brief Convert IDs from legacy peptide/protein identifications in a feature map
 
-      @param features Feature map containing IDs in legacy format
-      @param clear_original Clear original IDs after conversion?
+      @param[in,out] features Feature map containing IDs in legacy format
+      @param[in] clear_original Clear original IDs after conversion?
     */
     static void importFeatureIDs(FeatureMap& features, bool clear_original = true);
 
     /*!
       @brief Convert IDs in a feature map to legacy peptide/protein identifications
 
-      @param features Feature map containing IDs in new format
-      @param clear_original Clear original IDs after conversion?
+      @param[in,out] features Feature map containing IDs in new format
+      @param[in] clear_original Clear original IDs after conversion?
     */
     static void exportFeatureIDs(FeatureMap& features, bool clear_original = true);
 
     /*!
       @brief Convert IDs from legacy peptide/protein identifications in a consensus map
 
-      @param consensus Consensus map containing IDs in legacy format
-      @param clear_original Clear original IDs after conversion?
+      @param[in,out] consensus Consensus map containing IDs in legacy format
+      @param[in] clear_original Clear original IDs after conversion?
     */
     static void importConsensusIDs(ConsensusMap& consensus, bool clear_original = true);
 
     /*!
       @brief Convert IDs in a consensus map to legacy peptide/protein identifications
 
-      @param consensus Consensus map containing IDs in new format
-      @param clear_original Clear original IDs after conversion?
+      @param[in,out] consensus Consensus map containing IDs in new format
+      @param[in] clear_original Clear original IDs after conversion?
     */
     static void exportConsensusIDs(ConsensusMap& consensus, bool clear_original = true);
 
@@ -203,7 +203,7 @@ namespace OpenMS
     /// Export an input match (peptide- or oligonucleotide-spectrum match) to mzTab
     template <typename MzTabSectionRow>
     static void exportObservationMatchToMzTab_(
-      const String& sequence,
+      const std::string& sequence,
       const IdentificationData::ObservationMatch& match, double calc_mass,
       std::vector<MzTabSectionRow>& output,
       std::map<IdentificationData::ScoreTypeRef, Size>& score_map,
@@ -238,7 +238,7 @@ namespace OpenMS
       {
         MzTabOptionalColumnEntry opt_meta;
         opt_meta.first = "opt_isotope_offset";
-        opt_meta.second.set(match.getMetaValue("isotope_offset"));
+        opt_meta.second.set(StringUtils::toStr(match.getMetaValue("isotope_offset")));
         xsm.opt_.push_back(opt_meta);
       }
       // don't repeat data from the peptide section (e.g. accessions)

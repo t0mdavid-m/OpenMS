@@ -43,7 +43,7 @@ public:
     typedef float WidthType;
 
     /// state of identification, use getAnnotationState() to query it
-    enum AnnotationState
+    enum class AnnotationState
     {
       FEATURE_ID_NONE,
       FEATURE_ID_SINGLE,
@@ -52,7 +52,7 @@ public:
       SIZE_OF_ANNOTATIONSTATE
     };
 
-    static const std::string NamesOfAnnotationState[SIZE_OF_ANNOTATIONSTATE];
+    static const std::string NamesOfAnnotationState[static_cast<size_t>(AnnotationState::SIZE_OF_ANNOTATIONSTATE)];
     ///@}
 
     /// @name Constructors and Destructor
@@ -161,7 +161,24 @@ public:
     /// sets the PeptideIdentification vector
     void setPeptideIdentifications(const PeptideIdentificationList& peptides);
 
-    /// sorts PeptideIdentifications, assuming they have the same scoreType.
+    /**
+      @brief Sorts the peptide identifications of this feature by the score of their best hit
+
+      First the hits of every identification are sorted with PeptideIdentification::sort(), so
+      afterwards the best hit of each identification is its first hit. Then the identifications
+      are ordered best first: the identification whose first hit has the best score ends up at
+      index 0. Identifications without hits are placed after all identifications with hits.
+      Identifications whose first hits score equally, and identifications without hits among
+      themselves, keep their relative order (the sort is stable).
+
+      @note The identifications are assumed to share one score type. The score orientation used
+      to compare them is read once, from the first identification (in the order before sorting)
+      that has hits, or is higher-is-better if no identification has hits. An identification with
+      a different orientation is ordered by that single orientation rather than rejected; only
+      the order of its own hits follows its own orientation. With mixed orientations the result
+      therefore depends on the order before sorting, and sorting again can change it; the sort is
+      idempotent only when all identifications share one orientation.
+    */
     void sortPeptideIdentifications();
     ///@}
 

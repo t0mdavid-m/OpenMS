@@ -42,22 +42,22 @@ START_SECTION(const std::vector<IonSource>& getIonSources() const)
   TEST_EQUAL(tmp.getIonSources().size(),0)
 END_SECTION
 
-START_SECTION(const String& getCustomizations() const)
+START_SECTION(const std::string& getCustomizations() const)
   Instrument tmp;
   TEST_EQUAL(tmp.getCustomizations(),"");
 END_SECTION
 
-START_SECTION(const String& getModel() const)
+START_SECTION(const std::string& getModel() const)
   Instrument tmp;
   TEST_EQUAL(tmp.getModel(),"");
 END_SECTION
 
-START_SECTION(const String& getName() const)
+START_SECTION(const std::string& getName() const)
   Instrument tmp;
   TEST_EQUAL(tmp.getName(),"");
 END_SECTION
 
-START_SECTION(const String& getVendor() const)
+START_SECTION(const std::string& getVendor() const)
   Instrument tmp;
   TEST_EQUAL(tmp.getVendor(),"");
 END_SECTION
@@ -74,16 +74,16 @@ END_SECTION
 
 START_SECTION(IonOpticsType getIonOptics() const)
 	Instrument tmp;
-  TEST_EQUAL(tmp.getIonOptics(),Instrument::UNKNOWN);
+  TEST_EQUAL(tmp.getIonOptics(),Instrument::IonOpticsType::UNKNOWN);
 END_SECTION
 
 START_SECTION(void setIonOptics(IonOpticsType ion_optics))
 	Instrument tmp;
-	tmp.setIonOptics(Instrument::REFLECTRON);
-  TEST_EQUAL(tmp.getIonOptics(),Instrument::REFLECTRON);
+	tmp.setIonOptics(Instrument::IonOpticsType::REFLECTRON);
+  TEST_EQUAL(tmp.getIonOptics(),Instrument::IonOpticsType::REFLECTRON);
 END_SECTION
 
-START_SECTION(void setCustomizations(const String& customizations))
+START_SECTION(void setCustomizations(const std::string& customizations))
   Instrument tmp;
   tmp.setCustomizations("Customizations");
   TEST_EQUAL(tmp.getCustomizations(),"Customizations");
@@ -119,19 +119,19 @@ START_SECTION(void setMassAnalyzers(const std::vector<MassAnalyzer>& mass_analyz
   TEST_REAL_SIMILAR(tmp.getMassAnalyzers()[1].getScanTime(),47.12);
 END_SECTION
 
-START_SECTION(void setModel(const String& model))
+START_SECTION(void setModel(const std::string& model))
   Instrument tmp;
   tmp.setModel("Model");
   TEST_EQUAL(tmp.getModel(),"Model");
 END_SECTION
 
-START_SECTION(void setName(const String& name))
+START_SECTION(void setName(const std::string& name))
   Instrument tmp;
   tmp.setName("Name");
   TEST_EQUAL(tmp.getName(),"Name");
 END_SECTION
 
-START_SECTION(void setVendor(const String& vendor))
+START_SECTION(void setVendor(const std::string& vendor))
   Instrument tmp;
   tmp.setVendor("Vendor");
   TEST_EQUAL(tmp.getVendor(),"Vendor");
@@ -182,12 +182,12 @@ START_SECTION(Instrument(const Instrument& source))
   tmp.setModel("Model");
   tmp.setName("Name");
   tmp.setVendor("Vendor");
-  tmp.setMetaValue("label",String("label"));
+  tmp.setMetaValue("label",std::string("label"));
   tmp.getSoftware().setName("sn");
-	tmp.setIonOptics(Instrument::REFLECTRON);
+	tmp.setIonOptics(Instrument::IonOpticsType::REFLECTRON);
   
   Instrument tmp2(tmp);
-  TEST_EQUAL((String)(tmp2.getMetaValue("label")), "label");
+  TEST_EQUAL(std::string(tmp2.getMetaValue("label")), "label");
   TEST_EQUAL(tmp2.getName(),"Name");
   TEST_EQUAL(tmp2.getModel(),"Model");
   TEST_EQUAL(tmp2.getVendor(),"Vendor");
@@ -196,7 +196,7 @@ START_SECTION(Instrument(const Instrument& source))
   TEST_EQUAL(tmp2.getMassAnalyzers().size(),1);
   TEST_REAL_SIMILAR(tmp2.getMassAnalyzers()[0].getScanTime(),47.11);
   TEST_EQUAL(tmp2.getSoftware().getName(),"sn");
-  TEST_EQUAL(tmp2.getIonOptics(),Instrument::REFLECTRON);
+  TEST_EQUAL(tmp2.getIonOptics(),Instrument::IonOpticsType::REFLECTRON);
 END_SECTION
 
 START_SECTION(Instrument& operator= (const Instrument& source))
@@ -208,13 +208,13 @@ START_SECTION(Instrument& operator= (const Instrument& source))
   tmp.setModel("Model");
   tmp.setName("Name");
   tmp.setVendor("Vendor");
-  tmp.setMetaValue("label",String("label"));
+  tmp.setMetaValue("label",std::string("label"));
   tmp.getSoftware().setName("sn");
-	tmp.setIonOptics(Instrument::REFLECTRON);
+	tmp.setIonOptics(Instrument::IonOpticsType::REFLECTRON);
 		
   Instrument tmp2;
   tmp2 = tmp;
-  TEST_EQUAL((String)(tmp2.getMetaValue("label")), "label");
+  TEST_EQUAL(std::string(tmp2.getMetaValue("label")), "label");
   TEST_EQUAL(tmp2.getName(),"Name");
   TEST_EQUAL(tmp2.getModel(),"Model");
   TEST_EQUAL(tmp2.getVendor(),"Vendor");
@@ -223,7 +223,7 @@ START_SECTION(Instrument& operator= (const Instrument& source))
   TEST_EQUAL(tmp2.getMassAnalyzers().size(),1);
   TEST_REAL_SIMILAR(tmp2.getMassAnalyzers()[0].getScanTime(),47.11);
   TEST_EQUAL(tmp2.getSoftware().getName(),"sn");
-  TEST_EQUAL(tmp2.getIonOptics(),Instrument::REFLECTRON);
+  TEST_EQUAL(tmp2.getIonOptics(),Instrument::IonOpticsType::REFLECTRON);
 
   tmp2 = Instrument();
   TEST_EQUAL(tmp2.getMetaValue("label").isEmpty(), true);
@@ -234,7 +234,7 @@ START_SECTION(Instrument& operator= (const Instrument& source))
   TEST_EQUAL(tmp2.getIonSources().size(),0);
   TEST_EQUAL(tmp2.getMassAnalyzers().size(),0);
   TEST_EQUAL(tmp2.getSoftware().getName(),"");
-  TEST_EQUAL(tmp2.getIonOptics(),Instrument::UNKNOWN);
+  TEST_EQUAL(tmp2.getIonOptics(),Instrument::IonOpticsType::UNKNOWN);
 END_SECTION
 
 START_SECTION(bool operator== (const Instrument& rhs) const)
@@ -270,11 +270,11 @@ START_SECTION(bool operator== (const Instrument& rhs) const)
   TEST_EQUAL(edit==empty,false);
   
   edit = empty;
-	edit.setIonOptics(Instrument::REFLECTRON);
+	edit.setIonOptics(Instrument::IonOpticsType::REFLECTRON);
   TEST_EQUAL(edit==empty,false);
   
   edit = empty;
-  edit.setMetaValue("label",String("label"));
+  edit.setMetaValue("label",std::string("label"));
 	TEST_EQUAL(edit==empty,false);
 END_SECTION
 
@@ -311,12 +311,18 @@ START_SECTION(bool operator!= (const Instrument& rhs) const)
   TEST_EQUAL(edit!=empty,true);
 
   edit = empty;
-	edit.setIonOptics(Instrument::REFLECTRON);
+	edit.setIonOptics(Instrument::IonOpticsType::REFLECTRON);
   TEST_EQUAL(edit!=empty,true)
   
   edit = empty;
-  edit.setMetaValue("label",String("label"));
+  edit.setMetaValue("label",std::string("label"));
 	TEST_EQUAL(edit!=empty,true);
+END_SECTION
+
+START_SECTION((static StringList getAllNamesOfIonOpticsType()))
+  StringList names = Instrument::getAllNamesOfIonOpticsType();
+  TEST_EQUAL(names.size(), static_cast<size_t>(Instrument::IonOpticsType::SIZE_OF_IONOPTICSTYPE));
+  TEST_EQUAL(names[static_cast<size_t>(Instrument::IonOpticsType::REFLECTRON)], "reflectron");
 END_SECTION
 
 

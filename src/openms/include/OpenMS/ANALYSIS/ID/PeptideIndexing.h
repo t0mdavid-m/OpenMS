@@ -11,8 +11,8 @@
 #include <OpenMS/CONCEPT/ProgressLogger.h>
 #include <OpenMS/DATASTRUCTURES/DefaultParamHandler.h>
 #include <OpenMS/DATASTRUCTURES/FASTAContainer.h>
-#include <OpenMS/DATASTRUCTURES/ListUtils.h>
-#include <OpenMS/DATASTRUCTURES/StringUtilsSimple.h>
+#include <OpenMS/DATASTRUCTURES/TypeAliases.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
 #include <OpenMS/KERNEL/StandardTypes.h>
 #include <OpenMS/METADATA/PeptideIdentification.h>
@@ -90,10 +90,10 @@ namespace OpenMS
   {
 public:
     /// name of enzyme/specificity which signals that the enzyme/specificity should be taken from meta information
-    static char const* const AUTO_MODE; /* = 'auto' */ 
+    static char const* const AUTO_MODE; /* = 'auto' */
 
     /// Exit codes
-    enum ExitCodes
+    enum class ExitCodes
     {
       EXECUTION_OK,
       DATABASE_EMPTY,
@@ -159,9 +159,9 @@ public:
     Runtime: PeptideIndexer is usually very fast (loading and storing the data takes the most time) and search speed can be further improved (linearly), but using more threads. 
     Avoid allowing too many (>=4) ambiguous amino acids if your database contains long stretches of 'X' (exponential search space).
 
-    @param proteins A list of proteins -- either read piecewise from a FASTA file or as existing vector of FASTAEntries.
-    @param prot_ids Resulting protein identifications associated to pep_ids (will be re-written completely)
-    @param pep_ids Peptide identifications which should be search within @p proteins and then linked to @p prot_ids
+    @param[in] proteins A list of proteins -- either read piecewise from a FASTA file or as existing vector of FASTAEntries.
+    @param[out] prot_ids Resulting protein identifications associated to pep_ids (will be re-written completely)
+    @param[in] pep_ids Peptide identifications which should be search within @p proteins and then linked to @p prot_ids
     @return Exit status codes.
 
     */
@@ -171,7 +171,7 @@ public:
     ExitCodes run(FASTAContainer<TFI_Vector>& proteins, std::vector<ProteinIdentification>& prot_ids, PeptideIdentificationList& pep_ids);
 
     /// Which string is used to determine if a protein is a decoy or not
-    const String& getDecoyString() const;
+    const std::string& getDecoyString() const;
 
     /// Is the decoy string position a prefix or suffix?
     bool isPrefix() const;
@@ -181,11 +181,11 @@ public:
 
     template<typename T> ExitCodes run_(FASTAContainer<T>& proteins, std::vector<ProteinIdentification>& prot_ids, PeptideIdentificationList& pep_ids);
 
-    String decoy_string_{};
+    std::string decoy_string_{};
     bool prefix_{ false };
     MissingDecoy missing_decoy_action_ = MissingDecoy::IS_ERROR;
-    String enzyme_name_{};
-    String enzyme_specificity_{};
+    std::string enzyme_name_{};
+    std::string enzyme_specificity_{};
 
     bool write_protein_sequence_{ false };
     bool write_protein_description_{ false };

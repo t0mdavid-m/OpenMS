@@ -7,6 +7,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/CONCEPT/ClassTest.h>
+#include <OpenMS/DATASTRUCTURES/DataValue.h>
 #include <OpenMS/test_config.h>
 
 ///////////////////////////
@@ -42,7 +43,7 @@ START_SECTION((static MetaInfoRegistry& metaRegistry()))
 	TEST_EQUAL(mi.metaRegistry().getIndex("testname"),1024);
 END_SECTION
 
-START_SECTION((void setMetaValue(const String& name, const DataValue& value)))
+START_SECTION((void setMetaValue(const std::string& name, const DataValue& value)))
 	NOT_TESTABLE //tested in the get method
 END_SECTION
 
@@ -52,16 +53,16 @@ END_SECTION
 
 START_SECTION((const DataValue& getMetaValue(UInt index, const DataValue& default_value = DataValue::EMPTY) const))
 {
-	mi.setMetaValue(1024, String("testtesttest"));
+	mi.setMetaValue(1024,std::string("testtesttest"));
 	TEST_STRING_EQUAL(mi.getMetaValue(1024), "testtesttest");
 	TEST_EQUAL(mi.getMetaValue(1025) == DataValue::EMPTY, true);
 	TEST_EQUAL(mi.getMetaValue(1025, 10) == DataValue(10), true);
 }
 END_SECTION
 
-START_SECTION((const DataValue& getMetaValue(const String& name, const DataValue& default_value = DataValue::EMPTY) const))
+START_SECTION((const DataValue& getMetaValue(const std::string& name, const DataValue& default_value = DataValue::EMPTY) const))
 {
-	mi.setMetaValue("testname", String("testtesttest2"));
+	mi.setMetaValue("testname",std::string("testtesttest2"));
 	TEST_STRING_EQUAL(mi.getMetaValue("testname"), "testtesttest2");
 	TEST_EQUAL(mi.getMetaValue("notdefined") == DataValue::EMPTY, true);
 	TEST_EQUAL(mi.getMetaValue("notdefined", 10) == DataValue(10), true);
@@ -74,7 +75,7 @@ mi.setMetaValue(2, 4712.12f);
 START_SECTION((bool isMetaEmpty() const))
 	MetaInfoInterface tmp;
 	TEST_EQUAL(tmp.isMetaEmpty(),true)
-	tmp.setMetaValue(1024,String("testtesttest"));
+	tmp.setMetaValue(1024,std::string("testtesttest"));
 	TEST_EQUAL(tmp.isMetaEmpty(),false)
 END_SECTION
 
@@ -185,8 +186,8 @@ START_SECTION((MetaInfoInterface& operator=(MetaInfoInterface&& rhs)))
 }
 END_SECTION
 
-START_SECTION((void getKeys(std::vector<String>& keys) const))
-	vector<String> tmp,tmp2;
+START_SECTION((void getKeys(std::vector<std::string>& keys) const))
+	vector<std::string> tmp,tmp2;
 	tmp.push_back("cluster_id");
 	tmp.push_back("testname");
 	mi.getKeys(tmp2);
@@ -224,8 +225,8 @@ END_SECTION
 
 START_SECTION((void getKeys(std::vector< UInt > &keys) const))
 	MetaInfoInterface mi;
-	mi.setMetaValue("label",String("tag"));
-	mi.setMetaValue("icon",String("kreis"));
+	mi.setMetaValue("label",std::string("tag"));
+	mi.setMetaValue("icon",std::string("kreis"));
 	vector<UInt> vec;
 	mi.getKeys(vec);
 	TEST_EQUAL(vec.size(),2)
@@ -248,7 +249,7 @@ START_SECTION((void getKeys(std::vector< UInt > &keys) const))
 	TEST_EQUAL(vec[4],1027)
 END_SECTION
 
-START_SECTION((bool metaValueExists(const String& name) const))
+START_SECTION((bool metaValueExists(const std::string& name) const))
 	MetaInfoInterface mi4;
 	TEST_EQUAL(mi4.metaValueExists("cluster_id"),false)
 	mi4.setMetaValue("cluster_id",4712.1234);
@@ -262,8 +263,8 @@ START_SECTION((bool metaValueExists(UInt index) const))
 	TEST_EQUAL(mi4.metaValueExists(2),true)
 END_SECTION
 
-START_SECTION(([EXTRA] void getKeys(std::vector<String>& keys) const))
-	std::vector<String> keys;
+START_SECTION(([EXTRA] void getKeys(std::vector<std::string>& keys) const))
+	std::vector<std::string> keys;
 	mi.getKeys(keys);
 	TEST_EQUAL(keys.size(),2)
 	TEST_EQUAL(keys[0],"cluster_id")
@@ -273,7 +274,7 @@ END_SECTION
 START_SECTION((void clearMetaInfo()))
 	MetaInfoInterface i;
 	TEST_EQUAL(i.isMetaEmpty(),true)
-	i.setMetaValue("label",String("test"));
+	i.setMetaValue("label",std::string("test"));
 	TEST_EQUAL(i.isMetaEmpty(),false)
 	i.clearMetaInfo();
 	TEST_EQUAL(i.isMetaEmpty(),true)
@@ -283,10 +284,10 @@ START_SECTION((bool operator== (const MetaInfoInterface& rhs) const))
 	MetaInfoInterface i,i2;
 	TEST_EQUAL(i==i2,true)
 	TEST_EQUAL(i2==i,true)
-	i.setMetaValue("label",String("test"));
+	i.setMetaValue("label",std::string("test"));
 	TEST_EQUAL(i==i2,false)
 	TEST_EQUAL(i2==i,false)
-	i2.setMetaValue("label",String("test"));
+	i2.setMetaValue("label",std::string("test"));
 	TEST_EQUAL(i==i2,true)
 	TEST_EQUAL(i2==i,true)
 END_SECTION
@@ -295,10 +296,10 @@ START_SECTION((bool operator!= (const MetaInfoInterface& rhs) const))
 	MetaInfoInterface i,i2;
 	TEST_EQUAL(i!=i2,false)
 	TEST_EQUAL(i2!=i,false)
-	i.setMetaValue("label",String("test"));
+	i.setMetaValue("label",std::string("test"));
 	TEST_EQUAL(i!=i2,true)
 	TEST_EQUAL(i2!=i,true)
-	i2.setMetaValue("label",String("test"));
+	i2.setMetaValue("label",std::string("test"));
 	TEST_EQUAL(i!=i2,false)
 	TEST_EQUAL(i2!=i,false)
 END_SECTION
@@ -306,7 +307,7 @@ END_SECTION
 START_SECTION((void removeMetaValue(UInt index)))
 	MetaInfoInterface i,i2;
 
-	i.setMetaValue(1,String("bla"));
+	i.setMetaValue(1,std::string("bla"));
 	TEST_EQUAL(i==i2,false)
 	i.removeMetaValue(1);
 	TEST_EQUAL(i==i2,true)
@@ -315,10 +316,10 @@ START_SECTION((void removeMetaValue(UInt index)))
 	i.removeMetaValue(1234);
 END_SECTION
 
-START_SECTION((void removeMetaValue(const String& name)))
+START_SECTION((void removeMetaValue(const std::string& name)))
 	MetaInfoInterface i,i2;
 
-	i.setMetaValue("label",String("bla"));
+	i.setMetaValue("label",std::string("bla"));
 	TEST_EQUAL(i==i2,false)
 	i.removeMetaValue("label");
 	TEST_EQUAL(i==i2,true)
@@ -330,15 +331,15 @@ END_SECTION
 START_SECTION((void addMetaValues(const MetaInfoInterface& from)))
   MetaInfoInterface m_new, m_base;
 
-  m_base.setMetaValue("label", String("old"));
+  m_base.setMetaValue("label",std::string("old"));
   m_base.setMetaValue("exists_no_overwrite", 5.2);
   
-  m_new.setMetaValue("label", String("new")); // will be overwritten
+  m_new.setMetaValue("label",std::string("new")); // will be overwritten
   m_new.setMetaValue("icon", 4.3);            // will be added
   
   m_base.addMetaValues(m_new);
 
-  TEST_EQUAL(m_base.getMetaValue("label"), String("new"));
+  TEST_EQUAL(m_base.getMetaValue("label"),std::string("new"));
   TEST_EQUAL(m_base.getMetaValue("icon"), 4.3);
   TEST_EQUAL(m_base.getMetaValue("exists_no_overwrite"), 5.2);
 
@@ -354,6 +355,78 @@ START_SECTION((void swap(MetaInfoInterface&& rhs)))
   TEST_EQUAL(mi2.metaValueExists("b"), false);
   TEST_EQUAL(mi1.getMetaValue("b"), 2);
   TEST_EQUAL(mi2.getMetaValue("a"), 1);
+}
+END_SECTION
+
+START_SECTION((MetaInfoConstIterator metaBegin() const))
+{
+	// Test with empty meta info (null meta_)
+	MetaInfoInterface mi_empty;
+	TEST_EQUAL(mi_empty.metaBegin() == mi_empty.metaEnd(), true)
+
+	// Test with non-empty meta info
+	MetaInfoInterface mi_filled;
+	mi_filled.setMetaValue("test_key", 42);
+	TEST_EQUAL(mi_filled.metaBegin() != mi_filled.metaEnd(), true)
+	TEST_EQUAL(mi_filled.metaBegin()->second, DataValue(42))
+}
+END_SECTION
+
+START_SECTION((MetaInfoConstIterator metaEnd() const))
+	NOT_TESTABLE // tested with metaBegin()
+END_SECTION
+
+START_SECTION((Size metaSize() const))
+{
+	// Test with null meta_
+	MetaInfoInterface mi_empty;
+	TEST_EQUAL(mi_empty.metaSize(), 0)
+
+	// Test with non-null meta_
+	MetaInfoInterface mi_filled;
+	mi_filled.setMetaValue("key1", 1);
+	TEST_EQUAL(mi_filled.metaSize(), 1)
+	mi_filled.setMetaValue("key2", 2);
+	TEST_EQUAL(mi_filled.metaSize(), 2)
+	mi_filled.removeMetaValue("key1");
+	TEST_EQUAL(mi_filled.metaSize(), 1)
+	mi_filled.clearMetaInfo();
+	TEST_EQUAL(mi_filled.metaSize(), 0)
+}
+END_SECTION
+
+START_SECTION([EXTRA] Range-based for loop iteration via iterators)
+{
+	MetaInfoInterface mi_iter;
+	mi_iter.setMetaValue("a", 1);
+	mi_iter.setMetaValue("b", 2);
+	mi_iter.setMetaValue("c", 3);
+
+	int count = 0;
+	for (auto it = mi_iter.metaBegin(); it != mi_iter.metaEnd(); ++it)
+	{
+		++count;
+		TEST_EQUAL(it->second.valueType() == DataValue::INT_VALUE, true)
+	}
+	TEST_EQUAL(count, 3)
+}
+END_SECTION
+
+START_SECTION([EXTRA] addMetaValues with empty source)
+{
+	MetaInfoInterface m_base, m_empty;
+	m_base.setMetaValue("key", 1);
+
+	// Adding empty to non-empty should not change anything
+	m_base.addMetaValues(m_empty);
+	TEST_EQUAL(m_base.metaSize(), 1)
+	TEST_EQUAL(m_base.getMetaValue("key"), DataValue(1))
+
+	// Adding non-empty to empty
+	MetaInfoInterface m_new;
+	m_new.addMetaValues(m_base);
+	TEST_EQUAL(m_new.metaSize(), 1)
+	TEST_EQUAL(m_new.getMetaValue("key"), DataValue(1))
 }
 END_SECTION
 

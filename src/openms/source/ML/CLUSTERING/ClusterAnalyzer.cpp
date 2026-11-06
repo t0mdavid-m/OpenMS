@@ -9,7 +9,7 @@
 
 #include <OpenMS/ML/CLUSTERING/ClusterAnalyzer.h>
 
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 
 #include <map>
 #include <set>
@@ -90,7 +90,7 @@ namespace OpenMS
     /* to manually retrace
     for (Size i = 0; i < original.dimensionsize(); ++i)
     {
-        std::cout << interdist_i[i] << " | " << cluster_with_interdist[i] << " | " << intradist_i[i] << std::endl;
+        std::cout << interdist_i[i] << " | " << cluster_with_interdist[i] << " | " << intradist_i[i] << '\n';
     }
     */
 
@@ -263,15 +263,15 @@ namespace OpenMS
           }
           std::cout << " | ";
       }
-      std::cout << std::endl;
-      std::cout << "---------" << std::endl;
+      std::cout << '\n';
+      std::cout << "---------\n";
       for (Size z = 0; z < original.dimensionsize(); ++z)
       {
           std::cout << interdist_i[z] << " , " << intradist_i[z] << " , " << cluster_with_interdist[z] << " , ";
-          std::cout << ((interdist_i[z] - intradist_i[z]) / std::max(interdist_i[z],intradist_i[z])) << std::endl;
+          std::cout << ((interdist_i[z] - intradist_i[z]) / std::max(interdist_i[z],intradist_i[z])) << '\n';
 
       }
-      std::cout << "---------" << std::endl;
+      std::cout << "---------\n";
       */
 
       //calculate average silhouette width for clusters and then overall average silhouette width for cluster step
@@ -299,9 +299,9 @@ namespace OpenMS
       /* to manually retrace
           for (Size i = 0; i < silhouettes.size(); ++i)
           {
-              std::cout << "s(" <<  (i) << ") = " << silhouettes[i] << std::endl;
+              std::cout << "s(" <<  (i) << ") = " << silhouettes[i] << '\n';
           }
-          std::cout << "---------" << std::endl;
+          std::cout << "---------\n";
       */
       average_silhouette_widths.push_back(average_overall_silhouette / (float)(tree.size() + 1));
     }
@@ -488,9 +488,9 @@ namespace OpenMS
       }
 
       /* to manually retrace
-          std::cout << min_intercluster_distance << std::endl;
-          std::cout << clusters_with_min_intercluster_dist.first << " , " << clusters_with_min_intercluster_dist.second << std::endl;
-          std::cout << max_intracluster_distance << std::endl;
+          std::cout << min_intercluster_distance << '\n';
+          std::cout << clusters_with_min_intercluster_dist.first << " , " << clusters_with_min_intercluster_dist.second << '\n';
+          std::cout << max_intracluster_distance << '\n';
       */
 
     }
@@ -678,13 +678,13 @@ namespace OpenMS
       {
         av_c_dist = av_dist;
       }
-      //~ std::cout << " av clu i " << av_c_dist << std::endl;
+      //~ std::cout << " av clu i " << av_c_dist << '\n';
       cohesions.push_back(av_c_dist);
     }
     return cohesions;
   }
 
-  String ClusterAnalyzer::newickTree(const std::vector<BinaryTreeNode> & tree, const bool include_distance)
+  std::string ClusterAnalyzer::newickTree(const std::vector<BinaryTreeNode> & tree, const bool include_distance)
   {
     std::set<Size> leafs;
     for (Size i = 0; i < tree.size(); ++i)
@@ -693,10 +693,10 @@ namespace OpenMS
       leafs.insert(tree[i].right_child);
     }
 
-    std::vector<String> clusters(*(leafs.rbegin()) + 1, "");
+    std::vector<std::string> clusters(*(leafs.rbegin()) + 1, "");
     for (std::set<Size>::iterator it = leafs.begin(); it != leafs.end(); ++it)
     {
-      clusters[*it] = String(*it);
+      clusters[*it] =StringUtils::toStr(*it);
     }
 
     //redo clustering till step (original.dimensionsize()-1)
@@ -707,18 +707,18 @@ namespace OpenMS
       if (include_distance)
       {
         clusters[tree[cluster_step].left_child] += ":";
-        clusters[tree[cluster_step].left_child] += String(tree[cluster_step].distance);
+        clusters[tree[cluster_step].left_child] +=StringUtils::toStr(tree[cluster_step].distance);
       }
       clusters[tree[cluster_step].left_child] += " , ";
       clusters[tree[cluster_step].left_child] += clusters[tree[cluster_step].right_child];
       if (include_distance)
       {
         clusters[tree[cluster_step].left_child] += ":";
-        clusters[tree[cluster_step].left_child] += String(tree[cluster_step].distance);
+        clusters[tree[cluster_step].left_child] +=StringUtils::toStr(tree[cluster_step].distance);
       }
       clusters[tree[cluster_step].left_child] += " )";
 
-      clusters[tree[cluster_step].right_child] = String("");
+      clusters[tree[cluster_step].right_child] =std::string("");
     }
 
     Size first_filled(0);
@@ -738,14 +738,14 @@ namespace OpenMS
         if (include_distance)
         {
           clusters[first_filled] += ":";
-          clusters[first_filled] += String("1");
+          clusters[first_filled] +=std::string("1");
         }
         clusters[first_filled] += " , ";
         clusters[first_filled] += clusters[i];
         if (include_distance)
         {
           clusters[first_filled] += ":";
-          clusters[first_filled] += String("1");
+          clusters[first_filled] +=std::string("1");
         }
         clusters[first_filled] += " )";
       }

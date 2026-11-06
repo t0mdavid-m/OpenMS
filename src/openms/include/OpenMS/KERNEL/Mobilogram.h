@@ -16,6 +16,9 @@
 #include <OpenMS/IONMOBILITY/IMTypes.h>
 #include <OpenMS/KERNEL/RangeManager.h>
 
+#include <algorithm>
+#include <numeric>
+
 namespace OpenMS
 {
   enum class DriftTimeUnit;
@@ -51,7 +54,7 @@ namespace OpenMS
     /// Float data array vector type
     typedef OpenMS::DataArrays::FloatDataArray FloatDataArray ;
     typedef std::vector<FloatDataArray> FloatDataArrays;
-    /// String data array vector type
+    /// std::string data array vector type
     typedef OpenMS::DataArrays::StringDataArray StringDataArray ;
     typedef std::vector<StringDataArray> StringDataArrays;
     /// Integer data array vector type
@@ -263,7 +266,7 @@ namespace OpenMS
     }
 
     /// returns the ion mobility drift time unit as string
-    String getDriftTimeUnitAsString() const;
+    std::string getDriftTimeUnitAsString() const;
 
     /**
       @brief Sets the ion mobility drift time unit
@@ -328,14 +331,15 @@ namespace OpenMS
     /**
       @brief Lexicographically sorts the peaks by their intensity.
 
-      Sorts the peaks according to ascending intensity.
+      Sorts the peaks according to ascending intensity. Meta data arrays will be sorted accordingly.
     */
     void sortByIntensity(bool reverse = false);
 
     /**
       @brief Lexicographically sorts the peaks by their position (mobility).
 
-      The mobilogram is sorted with respect to position (mobility).
+      The mobilogram is sorted with respect to position (mobility). Meta data arrays will be
+      sorted accordingly.
     */
     void sortByPosition();
 
@@ -361,6 +365,38 @@ namespace OpenMS
       return std::is_sorted(this->begin(), this->end(), value_2_index_wrapper);
     }
 
+    /**
+      @brief Stably sorts the peaks (and all parallel data arrays) by a user-defined predicate.
+
+      You can pass any @p lambda with signature <tt>bool(Size index_1, Size index_2)</tt> which,
+      given two indices into the Mobilogram (either peaks or data arrays), returns a strict weak
+      ordering. Capture the Mobilogram in the lambda and operate on it based on the indices. The
+      sort is stable, so peaks with equivalent keys keep their relative order.
+
+      @tparam Predicate Callable with signature <tt>bool(Size, Size)</tt> expressing a strict weak ordering.
+      @param[in] lambda The comparison predicate.
+
+      @note All data arrays are reordered alongside the peaks.
+      @note Cached ranges are preserved (a permutation does not change them).
+
+      @exception Exception::Precondition if a non-empty data array's size differs from the number
+                 of peaks. This is checked up front, before @p lambda is ever invoked, so the
+                 mobilogram is left unchanged.
+    */
+    template<class Predicate>
+    void sort(const Predicate& lambda)
+    {
+      // Validate up front, before running the (possibly data-array-indexing) predicate, so a
+      // mis-sized array throws instead of being read out of bounds during the sort.
+      checkDataArraySizes_();
+      std::vector<Size> indices(this->size());
+      std::iota(indices.begin(), indices.end(), 0);
+      std::stable_sort(indices.begin(), indices.end(), lambda);
+      // 'indices' is a permutation of [0, size): in range and duplicate-free by construction,
+      // so the unchecked path is safe and skips the redundant bounds re-scan.
+      selectUnchecked(indices);
+    }
+
     //@}
 
     ///@name Searching a peak or peak range
@@ -368,7 +404,7 @@ namespace OpenMS
     /**
       @brief Binary search for the peak nearest to a specific mobility
 
-      @param mb The target mobility value
+      @param[in] mb The target mobility value
       @return Returns the index of the peak.
 
       @note Make sure the mobilogram is sorted with respect to mobility! Otherwise the result is undefined.
@@ -380,8 +416,8 @@ namespace OpenMS
     /**
       @brief Binary search for the peak nearest to a specific mobility given a +/- tolerance windows
 
-      @param mb The target mobility value
-      @param tolerance The non-negative tolerance applied to both sides of @p mb
+      @param[in] mb The target mobility value
+      @param[in] tolerance The non-negative tolerance applied to both sides of @p mb
 
       @return Returns the index of the peak or -1 if no peak present in tolerance window or if mobilogram is empty
 
@@ -393,9 +429,9 @@ namespace OpenMS
     /**
       @brief Search for the peak nearest to a specific mobility given two +/- tolerance windows
 
-      @param mb The target mobility value
-      @param tolerance_left The non-negative tolerance applied left of @p mb
-      @param tolerance_right The non-negative tolerance applied right of @p mb
+      @param[in] mb The target mobility value
+      @param[in] tolerance_left The non-negative tolerance applied left of @p mb
+      @param[in] tolerance_right The non-negative tolerance applied right of @p mb
 
       @return Returns the index of the peak or -1 if no peak present in tolerance window or if mobilogram is empty
 
@@ -408,9 +444,9 @@ namespace OpenMS
     /**
       @brief Search for the peak with highest intensity among the peaks near to a specific mobility given two +/- tolerance windows in Th
 
-      @param mb The target mobility value
-      @param tolerance_left The non-negative tolerance applied left of @p mb
-      @param tolerance_right The non-negative tolerance applied right of @p mb
+      @param[in] mb The target mobility value
+      @param[in] tolerance_left The non-negative tolerance applied left of @p mb
+      @param[in] tolerance_right The non-negative tolerance applied right of @p mb
 
       @return Returns the index of the peak or -1 if no peak present in tolerance window or if mobilogram is empty
 
@@ -553,9 +589,48 @@ namespace OpenMS
     /**
       @brief Clears all data and ranges
 
-      Will delete (clear) all peaks contained in the mobilogram 
+      Will delete (clear) all peaks contained in the mobilogram as well as any
+      associated data arrays (FloatDataArrays, IntegerDataArrays,
+      StringDataArrays) -- those arrays are parallel to the peaks, so retaining
+      them would leave the mobilogram inconsistent.
     */
     void clear() noexcept;
+
+    /**
+      @brief Select a (subset of) mobilogram and its data_arrays, only retaining the indices given in @p indices
+
+      Every index is bounds-checked before anything is modified, so an out-of-range index is rejected
+      with the mobilogram left unchanged. This is the safe, default entry point. Callers whose indices
+      are in range by construction can use selectUnchecked() to skip the check.
+
+      @param[in] indices Indices to keep, in the retained order. Must all be < size(); see
+                 selectUnchecked() for the duplicate-index restriction that applies to both overloads.
+      @return Reference to this Mobilogram
+
+      @note Cached ranges are NOT recomputed. A permutation preserves them, but selecting a
+            subset can leave them too wide -- call updateRanges() if you need them exact.
+
+      @exception Exception::Precondition if an index is out of range, or if a non-empty data
+                 array's size differs from the number of peaks.
+    */
+    Mobilogram& select(const std::vector<Size>& indices);
+
+    /**
+      @brief Like select(), but without the per-index range check.
+
+      For hot paths whose indices are in range by construction (e.g. a sort permutation). The data-array
+      size consistency is still checked, as it is cheap and guards a separate out-of-bounds.
+
+      @note @p indices must be duplicate-free. Repeating an index is undefined behaviour: entries are
+            moved, so a second reference would read a moved-from value. A debug build asserts uniqueness
+            via OPENMS_PRECONDITION; release builds do not pay for the check.
+
+      @param[in] indices Indices to keep, in the retained order. Every index must be < size() and unique.
+      @return Reference to this Mobilogram
+
+      @exception Exception::Precondition if a non-empty data array's size differs from the number of peaks.
+    */
+    Mobilogram& selectUnchecked(const std::vector<Size>& indices);
 
     /// return the peak with the highest intensity. If the peak is not unique, the first peak in the container is returned.
     /// The function works correctly, even if the mobilogram is unsorted.
@@ -569,6 +644,17 @@ namespace OpenMS
     PeakType::IntensityType calculateTIC() const;
 
   protected:
+    /**
+      @brief Throws Exception::Precondition if any non-empty data array's size differs from the peak count.
+
+      Shared by sort() and select() so that permuting the peaks can never mis-associate a parallel
+      data array or index one out of bounds.
+
+      @exception Exception::Precondition if a non-empty float, string or integer data array's size
+                 differs from the number of peaks.
+    */
+    void checkDataArraySizes_() const;
+
     /// the actual peaks
     std::vector<MobilityPeak1D> data_;
 
@@ -581,7 +667,7 @@ namespace OpenMS
     /// Float data arrays
     FloatDataArrays float_data_arrays_;
 
-    /// String data arrays
+    /// std::string data arrays
     StringDataArrays string_data_arrays_;
 
     /// Integer data arrays

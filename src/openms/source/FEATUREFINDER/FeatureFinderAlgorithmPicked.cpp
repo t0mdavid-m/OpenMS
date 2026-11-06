@@ -12,6 +12,7 @@
 #include <OpenMS/FEATUREFINDER/GaussTraceFitter.h>
 
 #include <OpenMS/FORMAT/FileHandler.h>
+#include <OpenMS/KERNEL/MSExperiment.h>
 #include <OpenMS/FORMAT/TextFile.h>
 #include <OpenMS/MATH/StatisticFunctions.h>
 #include <OpenMS/MATH/MathFunctions.h>
@@ -21,7 +22,7 @@
 #include <OpenMS/CHEMISTRY/ISOTOPEDISTRIBUTION/CoarseIsotopePatternGenerator.h>
 #include <OpenMS/CONCEPT/LogStream.h>
 #include <OpenMS/CONCEPT/Constants.h>
-#include <QtCore/QDir>
+#include <OpenMS/SYSTEM/File.h>
 
 #include <boost/math/special_functions/fpclassify.hpp> // isnan
 
@@ -130,13 +131,13 @@ namespace OpenMS
     seeds_ = seeds;
   }
 
-  void FeatureFinderAlgorithmPicked::setData(const MSExperiment& map, FeatureMap& features)
+  void FeatureFinderAlgorithmPicked::setData_(MSExperiment&& map, FeatureMap& features)
   {
-    map_ = map;
+    map_ = std::move(map);
     features_ = &features;
   }
 
-  void FeatureFinderAlgorithmPicked::run()
+  void FeatureFinderAlgorithmPicked::run_()
   {
     //-------------------------------------------------------------------------
     // General initialization
@@ -152,12 +153,12 @@ namespace OpenMS
 
     Size max_isotopes = 20;
 
-    //check if non-natural isotopic abundances are set. If so modify
+    //check if non-natural isotopic abundances are set. If so, apply them locally to the
+    //isotope-pattern generator below instead of mutating the shared global ElementDB.
     double abundance_12C = param_.getValue("isotopic_pattern:abundance_12C");
     double abundance_14N = param_.getValue("isotopic_pattern:abundance_14N");
 
-    const Element* carbon_const = ElementDB::getInstance()->getElement("Carbon");
-    Element* carbon = const_cast<Element*>(carbon_const);
+    std::map<const Element*, IsotopeDistribution> isotope_overrides;
 
     if (param_.getValue("isotopic_pattern:abundance_12C") != defaults_.getValue("isotopic_pattern:abundance_12C"))
     {
@@ -165,11 +166,8 @@ namespace OpenMS
       IsotopeDistribution isotopes;
       isotopes.insert(12, abundance_12C / 100.0);
       isotopes.insert(13, 1.0 - (abundance_12C / 100.0));
-      carbon->setIsotopeDistribution(isotopes);
+      isotope_overrides[ElementDB::getInstance()->getElement("Carbon")] = isotopes;
     }
-
-    const Element* nitrogen_const = ElementDB::getInstance()->getElement("Nitrogen");
-    Element* nitrogen = const_cast<Element*>(nitrogen_const);
 
     if (param_.getValue("isotopic_pattern:abundance_14N") != defaults_.getValue("isotopic_pattern:abundance_14N"))
     {
@@ -177,7 +175,7 @@ namespace OpenMS
       IsotopeDistribution isotopes;
       isotopes.insert(14, abundance_14N / 100.0);
       isotopes.insert(15, 1.0 - (abundance_14N / 100.0));
-      nitrogen->setIsotopeDistribution(isotopes);
+      isotope_overrides[ElementDB::getInstance()->getElement("Nitrogen")] = isotopes;
     }
 
     // initialize trace fitter parameters here to avoid
@@ -211,7 +209,7 @@ namespace OpenMS
       UInt charge = charge_low;
       for (Size i = 3; i < 3 + charge_count; ++i)
       {
-        s.getFloatDataArrays()[i].setName(String("pattern_score_") + charge);
+        s.getFloatDataArrays()[i].setName(std::string("pattern_score_") + charge);
         s.getFloatDataArrays()[i].assign(scan_size, 0.0);
         ++charge;
       }
@@ -219,7 +217,7 @@ namespace OpenMS
       charge = charge_low;
       for (Size i = 3 + charge_count; i < 3 + 2 * charge_count; ++i)
       {
-        s.getFloatDataArrays()[i].setName(String("overall_score_") + charge);
+        s.getFloatDataArrays()[i].setName(std::string("overall_score_") + charge);
         s.getFloatDataArrays()[i].assign(scan_size, 0.0);
         ++charge;
       }
@@ -229,8 +227,7 @@ namespace OpenMS
     //clean up / create folders for debug information
     if (debug_)
     {
-      QDir dir(".");
-      dir.mkpath("debug/features");
+      File::makeDir("debug/features");
       log_.open("debug/log.txt");
     }
 
@@ -238,7 +235,7 @@ namespace OpenMS
     // Step 1:
     // Precalculate intensity scores for peaks
     //---------------------------------------------------------------------------
-    if (debug_) log_ << "Precalculating intensity thresholds ..." << std::endl;
+    if (debug_) log_ << "Precalculating intensity thresholds ...\n";
     //new scope to make local variables disappear
     {
       startProgress(0, intensity_bins_ * intensity_bins_, "Precalculating intensity scores");
@@ -258,8 +255,8 @@ namespace OpenMS
           setProgress(rt * intensity_bins_ + mz);
           double min_mz = mz_start + mz * intensity_mz_step_;
           double max_mz = mz_start + (mz + 1) * intensity_mz_step_;
-          //std::cout << "rt range: " << min_rt << " - " << max_rt << std::endl;
-          //std::cout << "mz range: " << min_mz << " - " << max_mz << std::endl;
+          //std::cout << "rt range: " << min_rt << " - " << max_rt << '\n';
+          //std::cout << "mz range: " << min_mz << " - " << max_mz << '\n';
           tmp.clear();
           for (MapType::ConstAreaIterator it = map_.areaBeginConst(min_rt, max_rt, min_mz, max_mz); it != map_.areaEndConst(); ++it)
           {
@@ -312,7 +309,7 @@ namespace OpenMS
           double pos = spectrum[p].getMZ();
           float intensity = spectrum[p].getIntensity();
 
-          //if(debug_) log_ << std::endl << "Peak: " << pos << std::endl;
+          //if(debug_) log_ << '\n' << "Peak: " << pos << '\n';
           bool is_max_peak = true; // checking the maximum intensity peaks -> use them later as feature seeds.
           for (Size i = 1; i <= min_spectra_; ++i)
           {
@@ -327,7 +324,7 @@ namespace OpenMS
           }
           for (Size i = 1; i <= min_spectra_; ++i)
           {
-            SpectrumType& next_spectrum = map_[s - i];
+            const SpectrumType& next_spectrum = map_[s - i];
             if (!next_spectrum.empty()) // There are peaks in the spectrum
             {
               Size spec_index = next_spectrum.findNearest(pos);
@@ -366,8 +363,9 @@ namespace OpenMS
       //calculate distribution if necessary
       for (Size index = 0; index < num_isotopes; ++index)
       {
-        //if(debug_) log_ << "Calculating iso dist for mass: " << 0.5*mass_window_width_ + index * mass_window_width_ << std::endl;
+        //if(debug_) log_ << "Calculating iso dist for mass: " << 0.5*mass_window_width_ + index * mass_window_width_ << '\n';
         CoarseIsotopePatternGenerator solver(max_isotopes);
+        for (const auto& ov : isotope_overrides) { solver.setIsotopeOverride(ov.first, ov.second); }
         auto d = solver.estimateFromPeptideWeight(0.5 * mass_window_width_ + index * mass_window_width_);
         //trim left and right. And store the number of isotopes on the left, to reconstruct the monoisotopic peak
         Size size_before = d.size();
@@ -378,7 +376,7 @@ namespace OpenMS
         for (auto& peak : d)
         {
           isotope_distributions_[index].intensity.push_back(peak.getIntensity());
-          //if(debug_) log_ << " - " << it->second << std::endl;
+          //if(debug_) log_ << " - " << it->second << '\n';
         }
 
         //determine the number of optional peaks at the beginning/end
@@ -426,7 +424,7 @@ namespace OpenMS
           i /= max;
         }
 
-        //if(debug_) log_ << " - optional begin/end:" << begin << " / " << end << std::endl;
+        //if(debug_) log_ << " - optional begin/end:" << begin << " / " << end << '\n';
       }
 
       endProgress();
@@ -449,7 +447,7 @@ namespace OpenMS
       //-----------------------------------------------------------
       // Step 3.1: Precalculate IsotopePattern score
       //-----------------------------------------------------------
-      startProgress(0, map_.size(), String("Calculating isotope pattern scores for charge ") + String(c));
+      startProgress(0, map_.size(),"Calculating isotope pattern scores for charge " + StringUtils::toStr(c));
       for (Size s = 0; s < map_.size(); ++s)
       {
         setProgress(s);
@@ -493,7 +491,7 @@ namespace OpenMS
       // Find seeds for this charge
       //-----------------------------------------------------------
       Size end_of_iteration = map_.size() - std::min((Size)min_spectra_, map_.size());
-      startProgress(min_spectra_, end_of_iteration, String("Finding seeds for charge ") + String(c));
+      startProgress(min_spectra_, end_of_iteration,"Finding seeds for charge " + StringUtils::toStr(c));
 
       double min_seed_score = param_.getValue("seed:min_score");
       //do nothing for the first few and last few spectra as the scans required to search for traces are missing
@@ -569,11 +567,11 @@ namespace OpenMS
           tmp.setMetaValue("trace_score", meta[0][peak]);
           seed_map.push_back(tmp);
         }
-        FileHandler().storeFeatures(String("debug/seeds_") + String(c) + ".featureXML", seed_map);
+        FileHandler().storeFeatures("debug/seeds_" + StringUtils::toStr(c) + ".featureXML", seed_map);
       }
 
       endProgress();
-      std::cout << "Found " << seeds.size() << " seeds for charge " << c << "." << std::endl;
+      std::cout << "Found " << seeds.size() << " seeds for charge " << c << ".\n";
 
       //------------------------------------------------------------------
       // Step 3.3:
@@ -592,7 +590,7 @@ namespace OpenMS
       typedef std::map<Size, Feature> FeatureMapType;
       FeatureMapType tmp_feature_map;
       int gl_progress = 0;
-      startProgress(0, seeds.size(), String("Extending seeds for charge ") + String(c));
+      startProgress(0, seeds.size(),"Extending seeds for charge " + StringUtils::toStr(c));
 
 #pragma omp parallel for
       for (SignedSize i = 0; i < (SignedSize)seeds.size(); ++i)
@@ -611,11 +609,11 @@ namespace OpenMS
 
           if (debug_)
           {
-            log_ << std::endl << "Seed " << i << ":" << std::endl;
+            log_ << '\n' << "Seed " << i << ":\n";
             //If the intensity is zero this seed is already uses in another feature
-            log_ << " - Int: " << peak.getIntensity() << std::endl;
-            log_ << " - RT: " << spectrum.getRT() << std::endl;
-            log_ << " - MZ: " << peak.getMZ() << std::endl;
+            log_ << " - Int: " << peak.getIntensity() << '\n';
+            log_ << " - RT: " << spectrum.getRT() << '\n';
+            log_ << " - MZ: " << peak.getMZ() << '\n';
           }
         }
 
@@ -679,8 +677,8 @@ namespace OpenMS
         alt_fitter->setParameters(alt_p);
         alt_fitter->fit(traces);
 
-        OPENMS_LOG_DEBUG << "EGH:   " << fitter->getCenter() << " " << fitter->getHeight() << std::endl;
-        OPENMS_LOG_DEBUG << "GAUSS: " << alt_fitter->getCenter() << " " << alt_fitter->getHeight() << std::endl;
+        OPENMS_LOG_DEBUG << "EGH:   " << fitter->getCenter() << " " << fitter->getHeight() << '\n';
+        OPENMS_LOG_DEBUG << "GAUSS: " << alt_fitter->getCenter() << " " << alt_fitter->getHeight() << '\n';
 #endif
         // what should come out
         // left "sigma"
@@ -701,7 +699,7 @@ namespace OpenMS
         // Step 3.3.4:
         // Check if feature is ok
         //------------------------------------------------------------------
-        String error_msg = "";
+        std::string error_msg;
 
         double fit_score = 0.0;
         double correlation = 0.0;
@@ -843,7 +841,7 @@ namespace OpenMS
           //re-set label
           f.second.setMetaValue(3, feature_nr_global);
           ++feature_nr_global;
-          features_->push_back(f.second);
+          (*features_).push_back(f.second);
 
           std::vector<Size> curr_seed = seeds_in_features[seed_nr];
           for (Size k : curr_seed)
@@ -854,7 +852,7 @@ namespace OpenMS
       }
 
       IF_MASTERTHREAD endProgress();
-      std::cout << "Found " << feature_candidates << " feature candidates for charge " << c << "." << std::endl;
+      std::cout << "Found " << feature_candidates << " feature candidates for charge " << c << ".\n";
     }
     // END OPENMP
 
@@ -862,15 +860,15 @@ namespace OpenMS
     //Step 4:
     //Resolve contradicting and overlapping features
     //------------------------------------------------------------------
-    startProgress(0, features_->size() * features_->size(), "Resolving overlapping features");
-    if (debug_) log_ << "Resolving intersecting features (" << features_->size() << " candidates)" << std::endl;
+    startProgress(0, (*features_).size() * (*features_).size(), "Resolving overlapping features");
+    if (debug_) log_ << "Resolving intersecting features (" << (*features_).size() << " candidates)\n";
     //sort features according to m/z in order to speed up the resolution
-    features_->sortByMZ();
+    (*features_).sortByMZ();
     //precalculate BBs and maximum mz span
-    std::vector<DBoundingBox<2> > bbs(features_->size());
+    std::vector<DBoundingBox<2> > bbs((*features_).size());
     double max_mz_span = 0.0;
 
-    for (Size i = 0; i < features_->size(); ++i)
+    for (Size i = 0; i < (*features_).size(); ++i)
     {
       bbs[i] = (*features_)[i].getConvexHull().getBoundingBox();
       if (bbs[i].height() > max_mz_span)
@@ -881,12 +879,12 @@ namespace OpenMS
 
     Size removed(0);
     //intersect
-    for (Size i = 0; i < features_->size(); ++i)
+    for (Size i = 0; i < (*features_).size(); ++i)
     {
       Feature& f1((*features_)[i]);
-      for (Size j = i + 1; j < features_->size(); ++j)
+      for (Size j = i + 1; j < (*features_).size(); ++j)
       {
-        setProgress(i * features_->size() + j);
+        setProgress(i * (*features_).size() + j);
         Feature& f2((*features_)[j]);
         //features that are more than 2 times the maximum m/z span apart do not overlap => abort
         if (f2.getMZ() - f1.getMZ() > 2.0 * max_mz_span)
@@ -912,7 +910,7 @@ namespace OpenMS
 
           if (debug_)
           {
-            log_ << " - Intersection (" << (i + 1) << "/" << (j + 1) << "): " << intersection << std::endl;
+            log_ << " - Intersection (" << (i + 1) << "/" << (j + 1) << "): " << intersection << '\n';
           }
           if (f1.getCharge() == f2.getCharge())
           {
@@ -920,7 +918,7 @@ namespace OpenMS
             {
               if (debug_)
               {
-                log_ << "   - same charge -> removing duplicate " << (j + 1) << std::endl;
+                log_ << "   - same charge -> removing duplicate " << (j + 1) << '\n';
               }
               f1.getSubordinates().push_back(f2);
               f2.setIntensity(0.0);
@@ -929,7 +927,7 @@ namespace OpenMS
             {
               if (debug_)
               {
-                log_ << "   - same charge -> removing duplicate " << (i + 1) << std::endl;
+                log_ << "   - same charge -> removing duplicate " << (i + 1) << '\n';
               }
               f2.getSubordinates().push_back(f1);
               f1.setIntensity(0.0);
@@ -939,7 +937,7 @@ namespace OpenMS
           {
             if (debug_)
             {
-              log_ << "   - different charge (one is the multiple of the other) -> removing lower charge " << (i + 1) << std::endl;
+              log_ << "   - different charge (one is the multiple of the other) -> removing lower charge " << (i + 1) << '\n';
             }
             f2.getSubordinates().push_back(f1);
             f1.setIntensity(0.0);
@@ -948,7 +946,7 @@ namespace OpenMS
           {
             if (debug_)
             {
-              log_ << "   - different charge (one is the multiple of the other) -> removing lower charge " << (i + 1) << std::endl;
+              log_ << "   - different charge (one is the multiple of the other) -> removing lower charge " << (i + 1) << '\n';
             }
             f1.getSubordinates().push_back(f2);
             f2.setIntensity(0.0);
@@ -959,7 +957,7 @@ namespace OpenMS
             {
               if (debug_)
               {
-                log_ << "   - different charge -> removing lower score " << (j + 1) << std::endl;
+                log_ << "   - different charge -> removing lower score " << (j + 1) << '\n';
               }
               f1.getSubordinates().push_back(f2);
               f2.setIntensity(0.0);
@@ -968,7 +966,7 @@ namespace OpenMS
             {
               if (debug_)
               {
-                log_ << "   - different charge -> removing lower score " << (i + 1) << std::endl;
+                log_ << "   - different charge -> removing lower score " << (i + 1) << '\n';
               }
               f2.getSubordinates().push_back(f1);
               f1.setIntensity(0.0);
@@ -977,21 +975,45 @@ namespace OpenMS
         }
       }
     }
-    OPENMS_LOG_INFO << "Removed " << removed << " overlapping features." << std::endl;
+    OPENMS_LOG_INFO << "Removed " << removed << " overlapping features.\n";
     // finally remove features with intensity 0
     FeatureMap tmp;
-    tmp.reserve(features_->size());
-    for (Size i = 0; i < features_->size(); ++i)
+    tmp.reserve((*features_).size());
+    for (Size i = 0; i < (*features_).size(); ++i)
     {
-      if (features_->operator[](i).getIntensity() != 0.0)
+      if ((*features_).operator[](i).getIntensity() != 0.0)
       {
-        tmp.push_back(features_->operator[](i));
+        tmp.push_back((*features_).operator[](i));
       }
     }
     tmp.swapFeaturesOnly(*features_);
     // sort features by intensity
-    features_->sortByIntensity(true);
+    (*features_).sortByIntensity(true);
     endProgress();
+
+    // report RT apex spectrum index and native ID for each feature
+    Size invalid_apex_index_count = 0;
+    for (Size i = 0; i < (*features_).size(); ++i)
+    {
+      // index
+      Size spectrum_index = map_.RTBegin((*features_)[i].getRT()) - map_.begin();
+      (*features_)[i].setMetaValue("spectrum_index", spectrum_index);
+      // native id
+      if (spectrum_index < map_.size())
+      {
+        std::string native_id = map_[spectrum_index].getNativeID();
+        (*features_)[i].setMetaValue("spectrum_native_id", native_id);
+      }
+      else
+      {
+        ++invalid_apex_index_count;
+      }
+    }
+    if (invalid_apex_index_count > 0)
+    {
+      OPENMS_LOG_WARN << "Could not assign 'spectrum_native_id' for " << invalid_apex_index_count
+                      << " feature(s), because the computed apex spectrum index was out of range.\n";
+    }
 
     // Abort reasons
     OPENMS_LOG_INFO << '\n';
@@ -1001,7 +1023,7 @@ namespace OpenMS
       OPENMS_LOG_INFO << " - " << reason.first << ": " << reason.second << " times\n";
     }
 
-    OPENMS_LOG_INFO << "\n" << features_->size() << " features found." << std::endl;
+    OPENMS_LOG_INFO << "\n" << (*features_).size() << " features found.\n";
 
     if (debug_)
     {
@@ -1009,7 +1031,7 @@ namespace OpenMS
       FeatureMap abort_map;
       abort_map.reserve(abort_reasons_.size());
       Size counter = 0;
-      for (std::map<Seed, String>::iterator it2 = abort_reasons_.begin(); it2 != abort_reasons_.end(); ++it2, ++counter)
+      for (std::map<Seed, std::string>::iterator it2 = abort_reasons_.begin(); it2 != abort_reasons_.end(); ++it2, ++counter)
       {
         Feature f;
         f.setRT(map_[it2->first.spectrum].getRT());
@@ -1032,7 +1054,7 @@ namespace OpenMS
 
   }
 
-  void FeatureFinderAlgorithmPicked::run(PeakMap& input_map, FeatureMap& features, const Param& param, const FeatureMap& seeds)
+  void FeatureFinderAlgorithmPicked::run(PeakMap&& input_map, FeatureMap& features, const Param& param, const FeatureMap& seeds)
   {
     // Nothing to do if there is no data
     if (input_map.empty())
@@ -1058,7 +1080,7 @@ namespace OpenMS
       //Check if the peaks are sorted according to m/z
       if (!input_map.isSorted(true))
       {
-        OPENMS_LOG_WARN << "Input map is not sorted by RT and m/z! This is done now, before applying the algorithm!" << std::endl;
+        OPENMS_LOG_WARN << "Input map is not sorted by RT and m/z! This is done now, before applying the algorithm!\n";
         input_map.sortSpectra(true);
         input_map.sortChromatograms(true);
       }
@@ -1078,34 +1100,15 @@ namespace OpenMS
 
     // do the work
     setParameters(param);
-    setData(input_map, features);
+    setData_(std::move(input_map), features);
     setSeeds(seeds);
-    run();
-
-    //report RT apex spectrum index and native ID for each feature
-    for (Size i = 0; i < features.size(); ++i)
-    {
-      //index
-      Size spectrum_index = input_map.RTBegin(features[i].getRT()) - input_map.begin();
-      features[i].setMetaValue("spectrum_index", spectrum_index);
-      //native id
-      if (spectrum_index < input_map.size())
-      {
-        String native_id = input_map[spectrum_index].getNativeID();
-        features[i].setMetaValue("spectrum_native_id", native_id);
-      }
-      else
-      {
-        /// @todo that happens sometimes using IsotopeWaveletFeatureFinder (Rene, Marc, Andreas, Clemens)
-        std::cerr << "FeatureFinderAlgorithm_impl, line=" << __LINE__ << "; FixMe this cannot be, but happens" << std::endl;
-      }
-    }
+    run_();
   }
 
   void FeatureFinderAlgorithmPicked::updateMembers_()
   {
-    pattern_tolerance_ = param_.getValue("mass_trace:mz_tolerance");
-    trace_tolerance_ = param_.getValue("isotopic_pattern:mz_tolerance");
+    pattern_tolerance_ = param_.getValue("isotopic_pattern:mz_tolerance");
+    trace_tolerance_ = param_.getValue("mass_trace:mz_tolerance");
     min_spectra_ = (UInt) std::floor((double)param_.getValue("mass_trace:min_spectra") * 0.5);
     max_missing_trace_peaks_ = param_.getValue("mass_trace:max_missing");
     slope_bound_ = param_.getValue("mass_trace:slope_bound");
@@ -1123,11 +1126,11 @@ namespace OpenMS
   }
 
   /// Writes the abort reason to the log file and counts occurrences for each reason
-  void FeatureFinderAlgorithmPicked::abort_(const Seed& seed, const String& reason)
+  void FeatureFinderAlgorithmPicked::abort_(const Seed& seed, const std::string& reason)
   {
     if (debug_)
     {
-      log_ << "Abort: " << reason << std::endl;
+      log_ << "Abort: " << reason << '\n';
     }
     aborts_[reason]++;
     if (debug_)
@@ -1198,7 +1201,7 @@ namespace OpenMS
 
     if (index >= isotope_distributions_.size())
     {
-      throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "IsotopeDistribution not precalculated. Maximum allowed index is " + String(isotope_distributions_.size()), String(index));
+      throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "IsotopeDistribution not precalculated. Maximum allowed index is " + StringUtils::toStr(isotope_distributions_.size()),StringUtils::toStr(index));
     }
 
     //Return distribution
@@ -1209,19 +1212,19 @@ namespace OpenMS
   {
     if (debug_)
     {
-      log_ << "Testing isotope patterns for charge " << charge << ": " << std::endl;
+      log_ << "Testing isotope patterns for charge " << charge << ": \n";
     }
     const SpectrumType& spectrum = map_[center.spectrum];
     const TheoreticalIsotopePattern& isotopes = getIsotopeDistribution_(spectrum[center.peak].getMZ() * charge);
     if (debug_)
     {
-      log_ << " - Seed: " << center.peak << " (mz:" << spectrum[center.peak].getMZ() << ")" << std::endl;
+      log_ << " - Seed: " << center.peak << " (mz:" << spectrum[center.peak].getMZ() << ")\n";
     }
     //Find m/z boundaries of search space (linear search as this is local and we have the center already)
     double mass_window = (double)(isotopes.size() + 1) / (double)charge;
     if (debug_)
     {
-      log_ << " - Mass window: " << mass_window << std::endl;
+      log_ << " - Mass window: " << mass_window << '\n';
     }
     Size end = center.peak;
     while (end < spectrum.size() &&
@@ -1241,11 +1244,11 @@ namespace OpenMS
     ++begin;
     if (debug_)
     {
-      log_ << " - Begin: " << begin << " (mz:" << spectrum[begin].getMZ() << ")" << std::endl;
+      log_ << " - Begin: " << begin << " (mz:" << spectrum[begin].getMZ() << ")\n";
     }
     if (debug_)
     {
-      log_ << " - End: " << end << " (mz:" << spectrum[end].getMZ() << ")" << std::endl;
+      log_ << " - End: " << end << " (mz:" << spectrum[end].getMZ() << ")\n";
     }
     //fit isotope distribution to peaks
     double max_score = 0.0;
@@ -1256,7 +1259,7 @@ namespace OpenMS
       IsotopePattern pattern(isotopes.size());
       if (debug_)
       {
-        log_ << " - Fitting at " << start << " (mz:" << spectrum[start].getMZ() << ")" << std::endl;
+        log_ << " - Fitting at " << start << " (mz:" << spectrum[start].getMZ() << ")\n";
       }
       for (Size iso = 0; iso < isotopes.size(); ++iso)
       {
@@ -1278,7 +1281,7 @@ namespace OpenMS
       {
         if (debug_)
         {
-          log_ << "   - aborting: seed is not contained!" << std::endl;
+          log_ << "   - aborting: seed is not contained!\n";
         }
         continue;
       }
@@ -1300,14 +1303,14 @@ namespace OpenMS
       {
         if (debug_)
         {
-          log_ << "   - aborting: seed was removed during isotope fit!" << std::endl;
+          log_ << "   - aborting: seed was removed during isotope fit!\n";
         }
         continue;
       }
 
       if (debug_)
       {
-        log_ << "   - final score: " << score << std::endl;
+        log_ << "   - final score: " << score << '\n';
       }
       if (score > max_score)
       {
@@ -1317,7 +1320,7 @@ namespace OpenMS
     }
     if (debug_)
     {
-      log_ << " - best score              : " << max_score << std::endl;
+      log_ << " - best score              : " << max_score << '\n';
     }
     best_pattern.theoretical_pattern = isotopes;
     return max_score;
@@ -1348,11 +1351,11 @@ namespace OpenMS
     double start_rt = map_[start_index].getRT();
     if (debug_)
     {
-      log_ << " - Trace " << max_trace_index << " (maximum intensity)" << std::endl;
+      log_ << " - Trace " << max_trace_index << " (maximum intensity)\n";
     }
     if (debug_)
     {
-      log_ << "   - extending from: " << map_[start_index].getRT() << " / " << start_mz << " (int: " << start_peak->getIntensity() << ")" << std::endl;
+      log_ << "   - extending from: " << map_[start_index].getRT() << " / " << start_mz << " (int: " << start_peak->getIntensity() << ")\n";
     }
     //initialize the trace and extend
     MassTrace max_trace;
@@ -1364,14 +1367,14 @@ namespace OpenMS
     double rt_min = max_trace.peaks.begin()->first;
     if (debug_)
     {
-      log_ << "   - rt bounds: " << rt_min << "-" << rt_max << std::endl;
+      log_ << "   - rt bounds: " << rt_min << "-" << rt_max << '\n';
     }
     //Abort if too few peak were found
     if (!max_trace.isValid() || max_trace.peaks.size() < 2 * min_spectra_ - max_missing_trace_peaks_)
     {
       if (debug_)
       {
-        log_ << "   - could not extend trace with maximum intensity => abort" << std::endl;
+        log_ << "   - could not extend trace with maximum intensity => abort\n";
       }
       return;
     }
@@ -1379,13 +1382,13 @@ namespace OpenMS
     {
       if (debug_)
       {
-        log_ << " - Trace " << p << std::endl;
+        log_ << " - Trace " << p << '\n';
       }
       if (p == max_trace_index)
       {
         if (debug_)
         {
-          log_ << "   - previously extended maximum trace" << std::endl;
+          log_ << "   - previously extended maximum trace\n";
         }
         traces.push_back(std::move(max_trace));
         traces.back().theoretical_int = pattern.theoretical_pattern.intensity[p];
@@ -1399,7 +1402,7 @@ namespace OpenMS
       {
         if (debug_)
         {
-          log_ << "   - removed during isotope fit" << std::endl;
+          log_ << "   - removed during isotope fit\n";
         }
         continue;
       }
@@ -1407,12 +1410,12 @@ namespace OpenMS
       {
         if (debug_)
         {
-          log_ << "   - missing" << std::endl;
+          log_ << "   - missing\n";
         }
         continue;
       }
       starting_peak.intensity = map_[starting_peak.spectrum][starting_peak.peak].getIntensity();
-      if (debug_) log_ << "   - trace seed: " << map_[starting_peak.spectrum].getRT() << " / " << map_[starting_peak.spectrum][starting_peak.peak].getMZ() << " (int: " << map_[starting_peak.spectrum][starting_peak.peak].getIntensity() << ")" << std::endl;
+      if (debug_) log_ << "   - trace seed: " << map_[starting_peak.spectrum].getRT() << " / " << map_[starting_peak.spectrum][starting_peak.peak].getMZ() << " (int: " << map_[starting_peak.spectrum][starting_peak.peak].getIntensity() << ")\n";
 
       //search for nearby maximum of the mass trace as the extension assumes that it starts at the maximum
       Size begin = std::max((Size)0, starting_peak.spectrum - min_spectra_);
@@ -1442,7 +1445,7 @@ namespace OpenMS
       }
       if (debug_)
       {
-        log_ << "   - extending from: " << map_[starting_peak.spectrum].getRT() << " / " << map_[starting_peak.spectrum][starting_peak.peak].getMZ() << " (int: " << map_[starting_peak.spectrum][starting_peak.peak].getIntensity() << ")" << std::endl;
+        log_ << "   - extending from: " << map_[starting_peak.spectrum].getRT() << " / " << map_[starting_peak.spectrum][starting_peak.peak].getMZ() << " (int: " << map_[starting_peak.spectrum][starting_peak.peak].getIntensity() << ")\n";
       }
       //------------------------------------------------------------------
       //Extend seed to a mass trace
@@ -1458,7 +1461,7 @@ namespace OpenMS
       {
         if (debug_)
         {
-          log_ << "   - could not extend trace " << std::endl;
+          log_ << "   - could not extend trace \n";
         }
         //Missing traces in the middle of a pattern are not acceptable => fix this
         if (p < traces.max_trace)
@@ -1506,7 +1509,7 @@ namespace OpenMS
 
     UInt missing_peaks = 0;
     Size peaks_before_extension = trace.peaks.size();
-    String abort_reason = "";
+    std::string abort_reason;
 
     while ((!increase_rt && spectrum_index >= 0) || (increase_rt && spectrum_index < (SignedSize)map_.size()))
     {
@@ -1556,7 +1559,7 @@ namespace OpenMS
         double average_delta = std::accumulate(deltas.end() - delta_count, deltas.end(), 0.0) / (double)delta_count;
         if (average_delta > current_slope_bound)
         {
-          abort_reason = String("Average delta above threshold: ") + average_delta + "/" + current_slope_bound;
+          abort_reason =std::string("Average delta above threshold: ") + average_delta + "/" + current_slope_bound;
 
           //remove last peaks as we extended too far
           Size remove = std::min((Size)(trace.peaks.size() - peaks_before_extension), delta_count - 1);
@@ -1577,7 +1580,7 @@ namespace OpenMS
     }
     if (debug_)
     {
-      log_ << "   - Added " << (trace.peaks.size() - peaks_before_extension) << " peaks (abort: " << abort_reason << ")" << std::endl;
+      log_ << "   - Added " << (trace.peaks.size() - peaks_before_extension) << " peaks (abort: " << abort_reason << ")\n";
     }
   }
 
@@ -1622,7 +1625,7 @@ namespace OpenMS
     {
       if (debug_)
       {
-        log_ << String::number(spectrum[peak_index].getIntensity(), 1) << " ";
+        log_ << StringUtils::number(spectrum[peak_index].getIntensity(), 1) << " ";
       }
       pattern.peak[pattern_index] = peak_index;
       pattern.spectrum[pattern_index] = spectrum_index;
@@ -1639,7 +1642,7 @@ namespace OpenMS
       double mz_score = positionScore_(pos, spectrum_before[index_before].getMZ(), pattern_tolerance_);
       if (mz_score != 0.0)
       {
-        if (debug_) log_ << String::number(spectrum_before[index_before].getIntensity(), 1) << "b ";
+        if (debug_) log_ << StringUtils::number(spectrum_before[index_before].getIntensity(), 1) << "b ";
         intensity += spectrum_before[index_before].getIntensity();
         pos_score += mz_score;
         ++matches;
@@ -1660,7 +1663,7 @@ namespace OpenMS
       double mz_score = positionScore_(pos, spectrum_after[index_after].getMZ(), pattern_tolerance_);
       if (mz_score != 0.0)
       {
-        if (debug_) log_ << String::number(spectrum_after[index_after].getIntensity(), 1) << "a ";
+        if (debug_) log_ << StringUtils::number(spectrum_after[index_after].getIntensity(), 1) << "a ";
         intensity += spectrum_after[index_after].getIntensity();
         pos_score += mz_score;
         ++matches;
@@ -1678,7 +1681,7 @@ namespace OpenMS
     {
       if (debug_)
       {
-        log_ << " missing" << std::endl;
+        log_ << " missing\n";
       }
       pattern.peak[pattern_index] = -1;
       pattern.mz_score[pattern_index] = 0.0;
@@ -1688,7 +1691,7 @@ namespace OpenMS
     {
       if (debug_)
       {
-        log_ << "=> " << intensity / matches << std::endl;
+        log_ << "=> " << intensity / matches << '\n';
       }
       pattern.mz_score[pattern_index] = pos_score / matches;
       pattern.intensity[pattern_index] = intensity / matches;
@@ -1712,7 +1715,7 @@ namespace OpenMS
   /// Calculates a score between 0 and 1 for the correlation between theoretical and found isotope pattern
   double FeatureFinderAlgorithmPicked::isotopeScore_(const TheoreticalIsotopePattern& isotopes, IsotopePattern& pattern, bool consider_mz_distances) const
   {
-    if (debug_) log_ << "   - fitting " << pattern.intensity.size() << " peaks" << std::endl;
+    if (debug_) log_ << "   - fitting " << pattern.intensity.size() << " peaks\n";
     //Abort if a core peak is missing
     for (Size iso = 0 + isotopes.optional_begin; iso < pattern.peak.size() - isotopes.optional_end; ++iso)
     {
@@ -1720,7 +1723,7 @@ namespace OpenMS
       {
         if (debug_)
         {
-          log_ << "   - aborting: core peak is missing" << std::endl;
+          log_ << "   - aborting: core peak is missing\n";
         }
         return 0.0;
       }
@@ -1749,7 +1752,7 @@ namespace OpenMS
     }
     if (debug_)
     {
-      log_ << "   - best_begin/end: " << best_begin << "/" << best_end << std::endl;
+      log_ << "   - best_begin/end: " << best_begin << "/" << best_end << '\n';
     }
     for (Size b = best_begin; b <= isotopes.optional_begin; ++b)
     {
@@ -1785,7 +1788,7 @@ namespace OpenMS
           }
           if (debug_)
           {
-            log_ << std::endl;
+            log_ << '\n';
           }
         }
       }
@@ -1818,8 +1821,8 @@ namespace OpenMS
     }
 
     //return final score
-    OPENMS_POSTCONDITION(best_int_score >= 0.0, (String("Internal error: Isotope score (") + best_int_score + ") should be >=0.0").c_str())
-    OPENMS_POSTCONDITION(best_int_score <= 1.0, (String("Internal error: Isotope score (") + best_int_score + ") should be <=1.0").c_str())
+    OPENMS_POSTCONDITION(best_int_score >= 0.0, (std::string("Internal error: Isotope score (") + best_int_score + ") should be >=0.0").c_str())
+    OPENMS_POSTCONDITION(best_int_score <= 1.0, (std::string("Internal error: Isotope score (") + best_int_score + ") should be <=1.0").c_str())
     return best_int_score;
   }
 
@@ -1886,8 +1889,8 @@ namespace OpenMS
                    + intensityScore_(rl, mh, intensity) * (d3 / d_sum)
                    + intensityScore_(rh, mh, intensity) * (d4 / d_sum);
 
-    OPENMS_POSTCONDITION(final >= 0.0, (String("Internal error: Intensity score (") + final + ") should be >=0.0").c_str())
-    OPENMS_POSTCONDITION(final <= 1.0001, (String("Internal error: Intensity score (") + final + ") should be <=1.0").c_str())
+    OPENMS_POSTCONDITION(final >= 0.0, (std::string("Internal error: Intensity score (") + final + ") should be >=0.0").c_str())
+    OPENMS_POSTCONDITION(final <= 1.0001, (std::string("Internal error: Intensity score (") + final + ") should be <=1.0").c_str())
     return final;
   }
 
@@ -1896,13 +1899,13 @@ namespace OpenMS
     // choose fitter
     if (param_.getValue("feature:rt_shape") == "asymmetric")
     {
-      OPENMS_LOG_DEBUG << "use asymmetric rt peak shape" << std::endl;
+      OPENMS_LOG_DEBUG << "use asymmetric rt peak shape\n";
       tau = -1.0;
       return std::make_unique<EGHTraceFitter>();
     }
     else // if (param_.getValue("feature:rt_shape") == "symmetric")
     {
-      OPENMS_LOG_DEBUG << "use symmetric rt peak shape" << std::endl;
+      OPENMS_LOG_DEBUG << "use symmetric rt peak shape\n";
       return std::make_unique<GaussTraceFitter>();
     }
   }
@@ -1955,7 +1958,7 @@ namespace OpenMS
 
     if (debug_)
     {
-      log_ << "    => RT bounds: " << low_bound << " - " << high_bound << std::endl;
+      log_ << "    => RT bounds: " << low_bound << " - " << high_bound << '\n';
     }
     std::vector<double> v_theo, v_real;
     for (Size t = 0; t < traces.size(); ++t)
@@ -1963,7 +1966,7 @@ namespace OpenMS
       const MassTrace& trace = traces[t];
       if (debug_)
       {
-        log_ << "   - Trace " << t << ": (" << trace.theoretical_int << ")" << std::endl;
+        log_ << "   - Trace " << t << ": (" << trace.theoretical_int << ")\n";
       }
       MassTrace new_trace;
       //compute average relative deviation and correlation
@@ -1995,7 +1998,7 @@ namespace OpenMS
       }
       if (debug_)
       {
-        log_ << "     - peaks: " << new_trace.peaks.size() << " / " << trace.peaks.size() << " - relative deviation: " << fit_score << " - correlation: " << correlation << " - final score: " << correlation << std::endl;
+        log_ << "     - peaks: " << new_trace.peaks.size() << " / " << trace.peaks.size() << " - relative deviation: " << fit_score << " - correlation: " << correlation << " - final score: " << correlation << '\n';
       }
       //remove badly fitting traces
       if (!new_trace.isValid() || final_score < min_trace_score_)
@@ -2005,7 +2008,7 @@ namespace OpenMS
           new_traces = MassTraces();
           if (debug_)
           {
-            log_ << "     - removed this and previous traces due to bad fit" << std::endl;
+            log_ << "     - removed this and previous traces due to bad fit\n";
           }
           new_traces.clear(); //remove earlier traces
           continue;
@@ -2015,7 +2018,7 @@ namespace OpenMS
           new_traces = MassTraces();
           if (debug_)
           {
-            log_ << "     - aborting (max trace was removed)" << std::endl;
+            log_ << "     - aborting (max trace was removed)\n";
           }
           break;
         }
@@ -2023,7 +2026,7 @@ namespace OpenMS
         {
           if (debug_)
           {
-            log_ << "     - removed due to bad fit => omitting the rest" << std::endl;
+            log_ << "     - removed due to bad fit => omitting the rest\n";
           }
           break; //no more traces are possible
         }
@@ -2045,7 +2048,7 @@ namespace OpenMS
   bool FeatureFinderAlgorithmPicked::checkFeatureQuality_(const std::shared_ptr<TraceFitter>& fitter,
                                                           MassTraces& feature_traces,
                                                           const double& seed_mz, const double& min_feature_score,
-                                                          String& error_msg, double& fit_score, double& correlation, double& final_score)
+                                                          std::string& error_msg, double& fit_score, double& correlation, double& final_score)
   {
     //check if the sigma fit was ok (if it is larger than 'max_rt_span')
     // 5.0 * sigma > max_rt_span_ * region_rt_span
@@ -2106,10 +2109,10 @@ namespace OpenMS
       //quality output
       if (debug_)
       {
-        log_ << "Quality estimation:" << std::endl;
-        log_ << " - relative deviation: " << fit_score << std::endl;
-        log_ << " - correlation: " << correlation << std::endl;
-        log_ << " => final score: " << final_score << std::endl;
+        log_ << "Quality estimation:\n";
+        log_ << " - relative deviation: " << fit_score << '\n';
+        log_ << " - correlation: " << correlation << '\n';
+        log_ << " => final score: " << final_score << '\n';
       }
 
       if (final_score < min_feature_score)
@@ -2127,22 +2130,22 @@ namespace OpenMS
   void FeatureFinderAlgorithmPicked::writeFeatureDebugInfo_(const std::shared_ptr<TraceFitter>& fitter,
                                                             const MassTraces& traces,
                                                             const MassTraces& new_traces,
-                                                            bool feature_ok, const String& error_msg, const double final_score, const Int plot_nr, const PeakType& peak,
-                                                            const String& path)
+                                                            bool feature_ok, const std::string& error_msg, const double final_score, const Int plot_nr, const PeakType& peak,
+                                                            const std::string& path)
   {
 
     double pseudo_rt_shift = param_.getValue("debug:pseudo_rt_shift");
-    String script;
+    std::string script;
     {
       TextFile tf;
       //gnuplot script
-      script = String("plot \"") + path + plot_nr + ".dta\" title 'before fit (RT: " +  String::number(fitter->getCenter(), 2) + " m/z: " +  String::number(peak.getMZ(), 4) + ")' with points 1";
+      script =std::string("plot \"") + path + plot_nr + ".dta\" title 'before fit (RT: " +  StringUtils::number(fitter->getCenter(), 2) + " m/z: " +  StringUtils::number(peak.getMZ(), 4) + ")' with points 1";
       //feature before fit
       for (Size k = 0; k < traces.size(); ++k)
       {
         for (Size j = 0; j < traces[k].peaks.size(); ++j)
         {
-          tf.addLine(String(pseudo_rt_shift * k + traces[k].peaks[j].first) + "\t" + traces[k].peaks[j].second->getIntensity());
+          tf.addLine(StringUtils::toStr(pseudo_rt_shift * k + traces[k].peaks[j].first) + "\t" + traces[k].peaks[j].second->getIntensity());
         }
       }
       tf.store(path + plot_nr + ".dta");
@@ -2157,7 +2160,7 @@ namespace OpenMS
         {
           for (Size j = 0; j < new_traces[k].peaks.size(); ++j)
           {
-            tf_new_trace.addLine(String(pseudo_rt_shift * k + new_traces[k].peaks[j].first) + "\t" + new_traces[k].peaks[j].second->getIntensity());
+            tf_new_trace.addLine(StringUtils::toStr(pseudo_rt_shift * k + new_traces[k].peaks[j].first) + "\t" + new_traces[k].peaks[j].second->getIntensity());
           }
         }
 
@@ -2170,7 +2173,7 @@ namespace OpenMS
         }
         else
         {
-          script = script + (features_->size() + 1) + " (score: " +  String::number(final_score, 3) + ")";
+          script = script + ((*features_).size() + 1) + " (score: " +  StringUtils::number(final_score, 3) + ")";
         }
         script = script + "' with points 3";
       }
@@ -2184,8 +2187,8 @@ namespace OpenMS
         char fun = 'f';
         fun += (char)k;
         tf_fitted_func.addLine(fitter->getGnuplotFormula(traces[k], fun, traces.baseline, pseudo_rt_shift * k));
-        //tf.push_back(String(fun)+"(x)= " + traces.baseline + " + " + fitter->getGnuplotFormula(traces[k], pseudo_rt_shift * k));
-        script =  script + ", " + fun + "(x) title 'Trace " + k + " (m/z: " + String::number(traces[k].getAvgMZ(), 4) + ")'";
+        //tf.push_back(StringUtils::toStr(fun)+"(x)= " + traces.baseline + " + " + fitter->getGnuplotFormula(traces[k], pseudo_rt_shift * k));
+        script =  script + ", " + fun + "(x) title 'Trace " + k + " (m/z: " + StringUtils::number(traces[k].getAvgMZ(), 4) + ")'";
       }
 
       //output

@@ -209,13 +209,13 @@ void FLASHTaggerAlgorithm::constructDAG_(FLASHHelperClasses::DAG& dag,
           //if (edge_aa_map_.find(end_index) == edge_aa_map_.end()) { edge_aa_map_[end_index] = std::map<int, std::vector<String>>(); }
           auto& e = edge_aa_map_[end_index];
 
-          if (e.find(current_index) == e.end()) { e[current_index] = std::vector<String>(); }
+          if (e.find(current_index) == e.end()) { e[current_index] = std::vector<std::string>(); }
 
           if (g == 0)
           {
             for (const auto& aa : aas)
             {
-              auto aaStr = n == 0 ? aa.toString() : aa.toString().toLower();
+              auto aaStr = n == 0 ? aa.toString() : StringUtils::toLowered(aa.toString());
               e[current_index].push_back(aaStr);
             }
           }
@@ -225,7 +225,7 @@ void FLASHTaggerAlgorithm::constructDAG_(FLASHHelperClasses::DAG& dag,
             {
               std::stringstream ss;
               for (const auto& aa : gap)
-                ss << aa.toString().toLower();
+                ss << StringUtils::toLowered(aa.toString());
               e[current_index].emplace_back(ss.str());
             }
           }
@@ -454,7 +454,7 @@ void FLASHTaggerAlgorithm::generateTags_(const DeconvolvedSpectrum& dspec, doubl
 }
 
 void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHHelperClasses::Tag>& tag_set,
-                                         std::map<String, std::vector<FLASHHelperClasses::Tag>>& seq_tag,
+                                         std::map<std::string, std::vector<FLASHHelperClasses::Tag>>& seq_tag,
                                          const std::vector<Size>& path,
                                          const std::vector<double>& mzs,
                                          const std::vector<int>& scores,
@@ -463,7 +463,7 @@ void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHHelperClasses::Tag>& tag_
                                          int mode)
 {
   double flanking_mass = -1;
-  std::vector<String> seqs {""};
+  std::vector<std::string> seqs {""};
   std::vector<double> tag_mzs;
   std::vector<int> tag_scores;
   tag_mzs.reserve(path.size() - 1);
@@ -477,7 +477,7 @@ void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHHelperClasses::Tag>& tag_
     if (edge_aa_map_.find(i1) != edge_aa_map_.end() && edge_aa_map_[i1].find(i2) != edge_aa_map_[i1].end())
     {
       auto& edge_aa = edge_aa_map_[i1];
-      std::vector<String> tmp_seqs;
+      std::vector<std::string> tmp_seqs;
       tmp_seqs.reserve(seqs.size() * edge_aa[i2].size());
       for (const auto& tmp_seq : seqs)
       {
@@ -511,7 +511,7 @@ void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHHelperClasses::Tag>& tag_
 
   for (const auto& seq : seqs)
   {
-    String rev_seq = String(seq).reverse();
+    std::string rev_seq(seq.rbegin(), seq.rend());
     if (rev_seq == seq) continue; // exclude palindromic tags.
     auto iter = seq_tag.find(seq);
     bool pass = (mode != 2);
@@ -608,7 +608,7 @@ void FLASHTaggerAlgorithm::getTags_(const std::vector<double>& mzs, const std::v
   min_path_score_ = std::max(0, min_path_score_);
 
   std::set<FLASHHelperClasses::Tag> tagSet;
-  std::map<String, std::vector<FLASHHelperClasses::Tag>> seq_tag;
+  std::map<std::string, std::vector<FLASHHelperClasses::Tag>> seq_tag;
 
   for (int length = min_tag_length_; length <= max_tag_length_; length++)
   {
@@ -659,9 +659,9 @@ void FLASHTaggerAlgorithm::getTags_(const std::vector<double>& mzs, const std::v
   });
 }
 
-Size FLASHTaggerAlgorithm::find_with_X_(const std::string_view& A, const String& B, Size pos) // allow a single X. pos is in A
+Size FLASHTaggerAlgorithm::find_with_X_(const std::string_view& A, const std::string& B, Size pos) // allow a single X. pos is in A
 {
-  if (A.length() < B.length()) return String::npos;
+  if (A.length() < B.length()) return std::string::npos;
   for (size_t i = pos; i <= A.length() - B.length(); ++i)
   {
     bool match = true;
@@ -677,7 +677,7 @@ Size FLASHTaggerAlgorithm::find_with_X_(const std::string_view& A, const String&
     }
     if (match) { return i; }
   }
-  return String::npos;
+  return std::string::npos;
 }
 
 
@@ -943,10 +943,10 @@ namespace
 // The internal mass of the residues [begin, end) of @p seq without its X, as AASequence::fromString() of them gives it with
 // getMonoWeight(Residue::Internal) when all are one-letter codes A-Z of residues (each ResidueDB::getResidue(char), their masses added to 0
 // in sequence order): the same additions in the same order, without parsing. False if another character is among them (AASequence then).
-bool sumInternalMasses(const String& seq, Size begin, Size end, double& sum, Size& count)
+bool sumInternalMasses(const std::string& seq, Size begin, Size end, double& sum, Size& count)
 {
   static const ResidueDB* rdb = ResidueDB::getInstance();
-  static const Residue* unknown = rdb->getResidue(String("X"));
+  static const Residue* unknown = rdb->getResidue(std::string("X"));
   sum = 0;
   count = 0;
   for (Size i = begin; i < end; i++)
@@ -966,7 +966,7 @@ bool sumInternalMasses(const String& seq, Size begin, Size end, double& sum, Siz
 void FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(std::vector<int>& positions,
                                                                    std::vector<double>& masses,
                                                                    double flanking_mass_tol,
-                                                                   const String& seq, //
+                                                                   const std::string& seq, //
                                                                    const FLASHHelperClasses::Tag& tag,
                                                                    const std::vector<std::pair<int, double>>* fixed)
 {
@@ -983,10 +983,10 @@ void FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(std::vector<
   std::vector<int> indices;
   const auto& tagseq = tag.getUppercaseSequence();
   // without X in the protein, find_with_X_ finds exact matches only
-  const bool with_x = seq.find('X') != String::npos;
+  const bool with_x = seq.find('X') != std::string::npos;
   auto findTag = [&](Size from) { return with_x ? find_with_X_(seq, tagseq, from) : seq.find(tagseq, from); };
   Size pos = findTag(0);
-  while (pos != String::npos)
+  while (pos != std::string::npos)
   {
     double delta_mass = - flanking_mass_tol - 1;
 

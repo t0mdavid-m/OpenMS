@@ -70,16 +70,16 @@ public:
            const std::vector<std::unordered_set<int>>& rev_vec_pro, const std::vector<FLASHHelperClasses::Tag>& tags, double ppm, bool multiple_hits_per_spec);
 
   /// names of the variable modifications, in the order of the var_mod_penalty parameter
-  std::vector<String> getVariableModificationNames() const
+  std::vector<std::string> getVariableModificationNames() const
   {
-    std::vector<String> names;
+    std::vector<std::string> names;
     for (const auto& vm : var_mod_list_) names.push_back(vm.name);
     return names;
   }
   /// residues each variable modification can sit on (empty: any), in the same order
-  std::vector<String> getVariableModificationResidues() const
+  std::vector<std::string> getVariableModificationResidues() const
   {
-    std::vector<String> residues;
+    std::vector<std::string> residues;
     for (const auto& vm : var_mod_list_) residues.push_back(vm.residues);
     return residues;
   }
@@ -271,7 +271,7 @@ private:
     const MSSpectrum* cur_node_spec_ = nullptr;
     const MSSpectrum* cur_tol_spec_ = nullptr;
     /// the protein sequence in the orientation of the current mode's protein masses (reversed for mode 0)
-    String cur_oriented_seq_;
+    std::string cur_oriented_seq_;
     /// per mode, the fragment series of each node: 0 a/b/x/y, 1 c/z, -1 node 0, the precursor or a merged node of both
     std::map<int, std::vector<int>> node_series_map_;
     /// with report_matched_masses_, per mode: the deconvolved-spectrum index of each mass of the mode before merging (node_source_map_, in
@@ -298,9 +298,9 @@ private:
   /// a variable modification: a residue-specific mass shift searched with its own count, independently of blind modifications
   struct VariableModification
   {
-    String name;
+    std::string name;
     double mass = 0;
-    String residues;       ///< one-letter codes of the residues it can sit on; empty or "*" for any residue
+    std::string residues;       ///< one-letter codes of the residues it can sit on; empty or "*" for any residue
     int position = 0;      ///< 0 anywhere, 1 proteoform N-terminal residue, 2 proteoform C-terminal residue, 3 protein N-terminal residue
                            ///< (the proteoform's first residue and the protein's first, or its second after an initiator Met)
     int unimod = -1;
@@ -320,7 +320,7 @@ private:
   std::vector<double> blind_mod_masses_;
   std::vector<Size> blind_mod_offsets_;
   std::vector<int> blind_mod_unimods_;
-  std::vector<String> blind_mod_ids_;
+  std::vector<std::string> blind_mod_ids_;
   /// per bucket of 1 / blind_mod_bucket_scale_ Da from blind_mod_masses_.front(), the first mass index in it: where blindModLowerBound_ starts
   std::vector<UInt> blind_mod_buckets_;
   double blind_mod_bucket_scale_ = 0;
@@ -370,13 +370,13 @@ private:
   /// can the modifications of @p combination sit on distinct residues among @p seq[from, to) (current mode orientation)?
   /// @p n_site / @p c_site: the index in @p seq of the proteoform's N- / C-terminal residue if this stretch can reach it, else -1;
   /// @p occupied: per residue of @p seq, the kinds of its fixed modifications (HitInformation::cur_occupied_), nullptr: none
-  bool combinationFits_(const VariableModificationCombination& combination, const String& seq, int from, int to, int n_site, int c_site,
+  bool combinationFits_(const VariableModificationCombination& combination, const std::string& seq, int from, int to, int n_site, int c_site,
                         const std::uint8_t* occupied = nullptr) const;
 
   /// names of the variable modification combinations of mass @p mass within @p tol that fit @p seq[from, to); @p site is the only
   /// possible residue (index in @p seq) if a single one-site modification fits at a single residue, else -1; @p theoretical_mass the
   /// mass of the fitting combination closest to @p mass (unchanged if none fits)
-  String variableModificationNames_(double mass, double tol, const String& seq, int from, int to, int n_site, int c_site, String& accessions,
+  std::string variableModificationNames_(double mass, double tol, const std::string& seq, int from, int to, int n_site, int c_site, std::string& accessions,
                                     int& site, double& theoretical_mass, const std::uint8_t* occupied = nullptr) const;
 
   /// whether a variable modification at @p position (0 anywhere, 1 N-terminal, 2 C-terminal) may sit on a residue with fixed kinds @p bits
@@ -386,7 +386,7 @@ private:
   }
 
   /// whether residue @p p of @p seq (a prefix orientation) is the protein's N-terminal residue: the first, or the second after an initiator Met
-  static bool isProteinNTerminal_(const String& seq, int p)
+  static bool isProteinNTerminal_(const std::string& seq, int p)
   {
     return p == 0 || (p == 1 && ! seq.empty() && seq[0] == 'M');
   }
@@ -441,7 +441,7 @@ private:
 
   /// of the placements @p positions of @p tag on @p seq (by its letters), those whose residues, with the fixed modifications @p fixed
   /// (position in @p seq, mass), have the mass span of the tag's masses; a tag with lowercase letters is only kept off fixed residues
-  void keepFixedConsistentPlacements_(const String& seq, const FLASHHelperClasses::Tag& tag, const std::vector<std::pair<int, double>>& fixed,
+  void keepFixedConsistentPlacements_(const std::string& seq, const FLASHHelperClasses::Tag& tag, const std::vector<std::pair<int, double>>& fixed,
                                       std::vector<int>& positions) const;
 
   /**

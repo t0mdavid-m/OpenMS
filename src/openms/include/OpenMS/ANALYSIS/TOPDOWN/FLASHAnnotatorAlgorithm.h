@@ -9,7 +9,7 @@
 #pragma once
 
 #include <OpenMS/DATASTRUCTURES/DefaultParamHandler.h>
-#include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 #include <OpenMS/KERNEL/MSSpectrum.h>
 #include <limits>
 #include <map>
@@ -85,7 +85,7 @@ public:
   struct OPENMS_DLLAPI PrSM
   {
     /// proteoform sequence (one-letter codes, without modifications)
-    String sequence;
+    std::string sequence;
     std::vector<Modification> modifications;
     /// fragment charges are capped by this charge (<= 0: only by min_mass_per_charge)
     int precursor_charge = 0;
@@ -212,13 +212,13 @@ public:
   void getIsotopeEnvelope(double mono_mass, int charge, std::vector<double>& mzs, std::vector<double>& intensities);
 
   /// the ion types, in the order Fragment::ion_type and Envelope::ion_type refer to
-  const std::vector<String>& getIonTypes() const;
+  const std::vector<std::string>& getIonTypes() const;
 
   /// the internal ion types (C-end type/N-end type, e.g. "b/y"), in the order Envelope::ion_type of an internal fragment refers to
-  const std::vector<String>& getInternalIonTypes() const;
+  const std::vector<std::string>& getInternalIonTypes() const;
 
   /// neutral monoisotopic mass of the proteoform (residues + water + modifications); -1 for an unknown residue
-  static double getProteoformMass(const String& sequence, const std::vector<Modification>& modifications);
+  static double getProteoformMass(const std::string& sequence, const std::vector<Modification>& modifications);
 
   /// -log10 P(X >= k) for X ~ Binomial(n, p), computed in log space and capped at max_score_
   static double binomialTailScore(int n, int k, double p);
@@ -230,7 +230,7 @@ public:
     index + 1 (the file is then read a second time, all spectra). The spectra are as in the file (profile or centroided).
     @return the number of spectra read
   */
-  static Size loadSpectra(const String& mzml_file, const std::set<int>& scans, std::map<int, MSSpectrum>& spectra);
+  static Size loadSpectra(const std::string& mzml_file, const std::set<int>& scans, std::map<int, MSSpectrum>& spectra);
 
   /// the peak arrays of a raw spectrum, centroided with PeakPickerHiRes if it is a profile spectrum, at most the 30000 most intense peaks
   /// (FLASHDeconv's cap for centroided spectra); true if it was centroided here
@@ -345,7 +345,7 @@ private:
     receives the authentic cleavages found in this world.
   */
   std::set<std::pair<int, int>> annotateInternal_(const PeakArrays& spec, const PeakOccupancy& occupancy, const std::vector<double>& sorted_intensities,
-                                                  const InternalPieces& pieces, const String& sequence,
+                                                  const InternalPieces& pieces, const std::string& sequence,
                                                   const std::vector<char>& terminal_peaks, double cal_factor, double shift, bool record,
                                                   int extension_min_run, const std::vector<char>& given_authentic,
                                                   std::vector<Envelope>& envelopes, std::vector<char>& authentic) const;
@@ -386,9 +386,9 @@ private:
   int extension_min_run_ = 2;
   /// internal ion types: mass added to the residue sum (C-end prefix shift + N-end suffix shift - H2O), and their names
   std::vector<double> internal_offsets_;
-  std::vector<String> internal_ion_types_;
+  std::vector<std::string> internal_ion_types_;
   std::vector<double> decoy_shifts_;
-  std::vector<String> ion_types_;
+  std::vector<std::string> ion_types_;
   /// mass added to the residue sum of a fragment, per ion type; and whether the ion type is a prefix (N-terminal) one
   std::vector<double> ion_shifts_;
   std::vector<bool> ion_is_prefix_;

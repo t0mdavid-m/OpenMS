@@ -54,10 +54,10 @@ namespace OpenMS
 
   public:
     /// Mapping from predictor name to vector of predictor values
-    typedef std::map<String, std::vector<double> > PredictorMap;
+    typedef std::map<std::string, std::vector<double> > PredictorMap;
 
     /// Mapping from predictor name to predictor min and max
-    typedef std::map<String, std::pair<double, double> > ScaleMap;
+    typedef std::map<std::string, std::pair<double, double> > ScaleMap;
 
     /// SVM/SVR prediction result
     struct Prediction
@@ -82,9 +82,9 @@ namespace OpenMS
     /**
        @brief Load data and train a model.
 
-       @param predictors Mapping from predictor name to vector of predictor values (for different observations). All vectors should have the same length; values will be changed by scaling.
-       @param outcomes Mapping from observation index to class label or regression value in the training set.
-       @param classification true (default) if SVM classification should be used, SVR otherwise
+       @param[in,out] predictors Mapping from predictor name to vector of predictor values (for different observations). All vectors should have the same length; values will be changed by scaling.
+       @param[in] outcomes Mapping from observation index to class label or regression value in the training set.
+       @param[in] classification true (default) if SVM classification should be used, SVR otherwise
 
        @throw Exception::IllegalArgument if @p predictors is empty
        @throw Exception::InvalidValue if an invalid index is used in @p outcomes
@@ -93,10 +93,34 @@ namespace OpenMS
     void setup(PredictorMap& predictors, const std::map<Size, double>& outcomes, bool classification = true);
 
     /**
+       @brief Load a pre-trained model from a file (in LIBSVM's native format).
+
+       Any previously trained or loaded model is discarded. The loaded model can be
+       used with the vector-based predict() overload. Note that scaling information
+       is not part of the model file: callers must scale the predictors consistently
+       with how the model was trained before calling predict().
+
+       @param[in] filename Path to the model file (as written by saveModel() or LIBSVM's svm-train).
+
+       @throw Exception::ParseError if the model file cannot be loaded
+    */
+    void loadModel(const std::string& filename);
+
+    /**
+       @brief Save the current model to a file (in LIBSVM's native format).
+
+       @param[in] filename Output path for the model file.
+
+       @throw Exception::Precondition if no model has been trained or loaded
+       @throw Exception::UnableToCreateFile if the model file cannot be written
+    */
+    void saveModel(const std::string& filename) const;
+
+    /**
        @brief Predict class labels or regression values (and probabilities).
 
-       @param predictions Output vector of prediction results (same order as @p indexes).
-       @param indexes Vector of observation indexes for which predictions are desired. If empty (default), predictions are made for all observations.
+       @param[out] predictions Output vector of prediction results (same order as @p indexes).
+       @param[in] indexes Vector of observation indexes for which predictions are desired. If empty (default), predictions are made for all observations.
 
        @throw Exception::Precondition if no model has been trained
        @throw Exception::InvalidValue if an invalid index is used in @p indexes
@@ -108,13 +132,29 @@ namespace OpenMS
     /**
        @brief Predict class labels or regression values (and probabilities).
 
-       @param predictors Mapping from predictor name to vector of predictor values (for different observations). All vectors should have the same length; values will be changed by scaling applied to training data in setup.
-       @param predictions Output vector of prediction results (same order as @p indexes).
+       @param[in,out] predictors Mapping from predictor name to vector of predictor values (for different observations). All vectors should have the same length; values will be changed by scaling applied to training data in setup.
+       @param[out] predictions Output vector of prediction results (same order as @p indexes).
        
        @throw Exception::Precondition if no model has been trained
        @throw Exception::InvalidValue if an invalid index is used in @p indexes
     **/
     void predict(PredictorMap& predictors, std::vector<Prediction>& predictions) const;
+
+    /**
+       @brief Predict the class label (or regression value) for a single observation.
+
+       Unlike the other predict() methods, this operates on a dense, already scaled
+       feature vector and returns the raw predicted label without probability
+       estimates. Feature @p features[i] is passed to the model as the (1-based)
+       LIBSVM feature index i+1, so the ordering must match the model's training
+       features. This is primarily intended for models loaded via loadModel().
+
+       @param[in] features Dense vector of (scaled) predictor values for one observation.
+       @return Predicted class label (or regression value).
+
+       @throw Exception::Precondition if no model has been trained or loaded
+    */
+    double predict(const std::vector<double>& features) const;
 
     /**
        @brief Get the weights used for features (predictors) in the SVM model
@@ -124,10 +164,10 @@ namespace OpenMS
 
        @throw Exception::Precondition if no model has been trained, or if the classification involves more than two classes
     */
-    void getFeatureWeights(std::map<String, double>& feature_weights) const;
+    void getFeatureWeights(std::map<std::string, double>& feature_weights) const;
 
     /// Write cross-validation (parameter optimization) results to a CSV file
-    void writeXvalResults(const String& path) const;
+    void writeXvalResults(const std::string& path) const;
 
     /// Get data range of predictors before scaling to [0, 1]
     const ScaleMap& getScaling() const;

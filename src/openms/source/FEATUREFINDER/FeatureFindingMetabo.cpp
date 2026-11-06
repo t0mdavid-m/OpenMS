@@ -3,7 +3,7 @@
 //
 // --------------------------------------------------------------------------
 // $Maintainer: Timo Sachsenberg $
-// $Authors: Erhan Kenar, Holger Franken $
+// $Authors: Erhan Kenar, Holger Franken, Mohammed Alhigaylan $
 // --------------------------------------------------------------------------
 
 #include <OpenMS/FEATUREFINDER/FeatureFindingMetabo.h>
@@ -13,13 +13,15 @@
 #include <OpenMS/CONCEPT/Constants.h>
 #include <OpenMS/CONCEPT/LogStream.h>
 #include <OpenMS/CONCEPT/UniqueIdGenerator.h>
+#include <OpenMS/DATASTRUCTURES/ListUtils.h>
+#include <OpenMS/ML/SVM/SimpleSVM.h>
 #include <OpenMS/SYSTEM/File.h>
 
+#include <algorithm>
 #include <fstream>
+#include <memory>
 
 #include <boost/dynamic_bitset.hpp>
-
-#include "svm.h"
 
 // #define FFM_DEBUG
 
@@ -35,7 +37,7 @@ namespace OpenMS
     if (iso_pattern_.empty())
     {
       throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
-          "FeatureHypothesis is empty, no traces contained!", String(iso_pattern_.size()));
+          "FeatureHypothesis is empty, no traces contained!",StringUtils::toStr(iso_pattern_.size()));
     }
     return iso_pattern_[0]->getIntensity(smoothed);
   }
@@ -104,7 +106,7 @@ namespace OpenMS
     Precursor prec;
     prec.setMZ(mz);
     prec.setCharge(charge_);
-    prec.setMetaValue("peptide_sequence", String(feature_id));
+    prec.setMetaValue("peptide_sequence",StringUtils::toStr(feature_id));
 
     std::vector< OpenMS::MSChromatogram > tmp_chromatograms;
     for (Size mt_idx = 0; mt_idx < iso_pattern_.size(); ++mt_idx)
@@ -118,9 +120,9 @@ namespace OpenMS
         peak.setIntensity((*l_it).getIntensity());
         chromatogram.push_back(peak);
       }
-      chromatogram.setNativeID(String(feature_id) + "_" + String(mt_idx));
-      chromatogram.setName(String(feature_id) + "_" + String(mt_idx));
-      chromatogram.setChromatogramType(ChromatogramSettings::BASEPEAK_CHROMATOGRAM);
+      chromatogram.setNativeID(StringUtils::toStr(feature_id) + "_" + StringUtils::toStr(mt_idx));
+      chromatogram.setName(StringUtils::toStr(feature_id) + "_" + StringUtils::toStr(mt_idx));
+      chromatogram.setChromatogramType(ChromatogramSettings::ChromatogramType::BASEPEAK_CHROMATOGRAM);
       chromatogram.setPrecursor(prec);
       chromatogram.sortByPosition();
 
@@ -130,7 +132,7 @@ namespace OpenMS
     return tmp_chromatograms;
   }
 
-  OpenMS::String FeatureHypothesis::getLabel() const
+  std::string FeatureHypothesis::getLabel() const
   {
     return ListUtils::concatenate(getLabels(), "_");
   }
@@ -140,9 +142,9 @@ namespace OpenMS
     return iso_pattern_.size();
   }
 
-  std::vector<String> FeatureHypothesis::getLabels() const
+  std::vector<std::string> FeatureHypothesis::getLabels() const
   {
-    std::vector<String> tmp_labels;
+    std::vector<std::string> tmp_labels;
 
     for (Size i = 0; i < iso_pattern_.size(); ++i)
     {
@@ -198,6 +200,17 @@ namespace OpenMS
     return tmp;
   }
 
+  /// formulate a feature with meta values containing MassTrace IM values
+  std::vector<double> FeatureHypothesis::getAllCentroidIM() const
+  {
+    std::vector<double> tmp;
+    for (Size i = 0; i < iso_pattern_.size(); ++i)
+    {
+      tmp.push_back(iso_pattern_[i]->getCentroidIM());
+    }
+    return tmp;
+  }
+
   std::vector<double> FeatureHypothesis::getIsotopeDistances() const
   {
     std::vector<double> tmp;
@@ -215,7 +228,7 @@ namespace OpenMS
     if (iso_pattern_.empty())
     {
       throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
-                                    "FeatureHypothesis is empty, no centroid MZ!", String(iso_pattern_.size()));
+                                    "FeatureHypothesis is empty, no centroid MZ!",StringUtils::toStr(iso_pattern_.size()));
     }
     return iso_pattern_[0]->getCentroidMZ();
   }
@@ -225,7 +238,7 @@ namespace OpenMS
     if (iso_pattern_.empty())
     {
       throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
-        "FeatureHypothesis is empty, no centroid RT!", String(iso_pattern_.size()));
+        "FeatureHypothesis is empty, no centroid RT!",StringUtils::toStr(iso_pattern_.size()));
     }
     return iso_pattern_[0]->getCentroidRT();
   }
@@ -248,6 +261,7 @@ namespace OpenMS
     DefaultParamHandler("FeatureFindingMetabo"), ProgressLogger()
   {
     defaults_.setValue("local_rt_range", 10.0, "RT range where to look for coeluting mass traces", {"advanced"}); // 5.0
+    defaults_.setValue("local_im_range", 0.02, "IM range where to look for coeluting mass traces", {"advanced"});
     defaults_.setValue("local_mz_range", 6.5, "MZ range where to look for isotopic mass traces", {"advanced"}); // 6.5
     defaults_.setValue("charge_lower_bound", 1, "Lowest charge state to consider"); // 1
     defaults_.setValue("charge_upper_bound", 3, "Highest charge state to consider"); // 3
@@ -256,6 +270,12 @@ namespace OpenMS
     defaults_.setValidStrings("report_summed_ints", {"false","true"});
     defaults_.setValue("enable_RT_filtering", "true", "Require sufficient overlap in RT while assembling mass traces. Disable for direct injection data..");
     defaults_.setValidStrings("enable_RT_filtering", {"false","true"});
+
+    defaults_.setValue("isotope_rt_overlap_reference", "longer", "Reference trace the RT overlap is measured against when scoring two co-eluting mass traces (only used if 'enable_RT_filtering' is enabled): 'longer' measures the overlap against the longer trace (default, historic behavior); 'shorter' measures it against the shorter trace and additionally requires the apex of the longer trace to fall within the RT range of the shorter trace. Since low-intensity isotope traces are usually much shorter than the monoisotopic trace, 'shorter' better groups them (see issue #4483).", {"advanced"});
+    defaults_.setValidStrings("isotope_rt_overlap_reference", {"longer", "shorter"});
+    defaults_.setValue("min_isotope_rt_overlap", 0.7, "Minimum fraction of the reference trace (see 'isotope_rt_overlap_reference') in RT (within FWHM) that must overlap the other trace so the two are scored as isotopes. Only used if 'enable_RT_filtering' is enabled.", {"advanced"});
+    defaults_.setMinFloat("min_isotope_rt_overlap", 0.0);
+    defaults_.setMaxFloat("min_isotope_rt_overlap", 1.0);
 
     defaults_.setValue("isotope_filtering_model", "metabolites (5% RMS)", "Remove/score candidate assemblies based on isotope intensities. SVM isotope models for metabolites were trained with either 2% or 5% RMS error. For peptides, an averagine cosine scoring is used. Select the appropriate noise model according to the quality of measurement or MS device.");
     defaults_.setValidStrings("isotope_filtering_model", {"metabolites (2% RMS)","metabolites (5% RMS)","peptides","none"});
@@ -287,17 +307,14 @@ namespace OpenMS
     this->setLogType(CMD);
   }
 
-  FeatureFindingMetabo::~FeatureFindingMetabo()
-  {
-    if (isotope_filt_svm_ != nullptr)
-    {
-      svm_free_and_destroy_model(&isotope_filt_svm_);
-    }
-  }
+  // Defined here (not defaulted in the header) so the std::unique_ptr<SimpleSVM>
+  // member can be destroyed with SimpleSVM as a complete type.
+  FeatureFindingMetabo::~FeatureFindingMetabo() = default;
 
   void FeatureFindingMetabo::updateMembers_()
   {
     local_rt_range_ = (double)param_.getValue("local_rt_range");
+    local_im_range_ = (double)param_.getValue("local_im_range");
     local_mz_range_ = (double)param_.getValue("local_mz_range");
     chrom_fwhm_ = (double)param_.getValue("chrom_fwhm");
 
@@ -306,13 +323,15 @@ namespace OpenMS
 
     report_summed_ints_ = param_.getValue("report_summed_ints").toBool();
     enable_RT_filtering_ = param_.getValue("enable_RT_filtering").toBool();
+    min_isotope_rt_overlap_ = (double)param_.getValue("min_isotope_rt_overlap");
+    isotope_rt_overlap_use_shorter_ = (param_.getValue("isotope_rt_overlap_reference") == "shorter");
     
     isotope_filtering_model_ = param_.getValue("isotope_filtering_model").toString();
     use_smoothed_intensities_ = param_.getValue("use_smoothed_intensities").toBool();
     bool use_smoothed = param_.getValue("use_smoothed_intensities").toBool();
     bool report_smoothed = param_.getValue("report_smoothed_intensities").toBool();
     if (report_smoothed && !use_smoothed) {
-      OPENMS_LOG_WARN << "Warning: 'report_smoothed_intensities' is set to true, but 'use_smoothed_intensities' is false. Ignoring 'report_smoothed_intensities'." << std::endl;
+      OPENMS_LOG_WARN << "Warning: 'report_smoothed_intensities' is set to true, but 'use_smoothed_intensities' is false. Ignoring 'report_smoothed_intensities'.\n";
       report_smoothed = false;
     }
     use_smoothed_intensities_ = use_smoothed;
@@ -346,7 +365,7 @@ namespace OpenMS
     auto isodist = solver.estimateFromPeptideWeight(mol_weight);
     // isodist.renormalize();
 
-    IsotopeDistribution::ContainerType averagine_dist = isodist.getContainer();
+    const IsotopeDistribution::ContainerType& averagine_dist = isodist.getContainer();
     double max_int(0.0), theo_max_int(0.0);
     for (Size i = 0; i < hypo_ints.size(); ++i)
     {
@@ -389,8 +408,11 @@ namespace OpenMS
 
     double mono_int(all_ints[0]); // monoisotopic intensity
 
+    // Dense, scaled feature vector for the SVM: index 0 is the mass, indexes 1..3
+    // are the (scaled) intensity ratios of the first three isotopic traces to the
+    // monoisotopic trace. Absent traces contribute a scaled ratio of 0.
     const Size FEAT_NUM(4);
-    svm_node* nodes = new svm_node[FEAT_NUM + 1];
+    std::vector<double> features(FEAT_NUM);
 
     double act_mass(feat_hypo.getCentroidMZ() * feat_hypo.getCharge());
 
@@ -400,8 +422,7 @@ namespace OpenMS
       act_mass = 1000.0;
     }
 
-    nodes[0].index = 1;
-    nodes[0].value = (act_mass - svm_feat_centers_[0]) / svm_feat_scales_[0];
+    features[0] = (act_mass - svm_feat_centers_[0]) / svm_feat_scales_[0];
 
     // Iterate, start with first isotopic trace (skip monoisotopic)
     Size i = 2;
@@ -415,59 +436,38 @@ namespace OpenMS
 
     for (; i - 1 < feat_size; ++i)
     {
-      nodes[i - 1].index = static_cast<Int>(i);
-
       // compute ratio of trace to monoisotopic intensity
       double ratio((all_ints[i - 1] / mono_int));
 
-      double tmp_val((ratio - svm_feat_centers_[i - 1]) / svm_feat_scales_[i - 1]);
-      nodes[i - 1].value = tmp_val;
+      features[i - 1] = (ratio - svm_feat_centers_[i - 1]) / svm_feat_scales_[i - 1];
     }
 
     for (; i < FEAT_NUM + 1; ++i)
     {
-      nodes[i - 1].index = static_cast<Int>(i);
-      nodes[i - 1].value = (-svm_feat_centers_[i - 1]) / svm_feat_scales_[i - 1];
+      features[i - 1] = (-svm_feat_centers_[i - 1]) / svm_feat_scales_[i - 1];
     }
-
-    nodes[FEAT_NUM].index = -1;
-    nodes[FEAT_NUM].value = 0;
-
-    // debug output
-    //    std::cout << "isocheck for " << feat_hypo.getLabel() << " " << feat_hypo.getSize() << std::endl;
-    //    for (Size i = 0; i < FEAT_NUM + 1; ++i)
-    //    {
-    //        std::cout << "idx: " << nodes[i].index << " val: " << nodes[i].value << std::endl;
-    //    }
 
     // Use SVM model to predict the category in which the current trace group
     // belongs ...
-    double predict = svm_predict(isotope_filt_svm_, nodes);
+    double predict = isotope_filt_svm_->predict(features);
 
-    // std::cout << "predict: " << predict << std::endl;
-    delete[] nodes;
+    // std::cout << "predict: " << predict << '\n';
 
     return (predict == 2.0) ? 1 : 0;
   }
 
-  void FeatureFindingMetabo::loadIsotopeModel_(const String& model_name)
+  void FeatureFindingMetabo::loadIsotopeModel_(const std::string& model_name)
   {
-    String search_name("CHEMISTRY/" + model_name);
+    std::string search_name("CHEMISTRY/" + model_name);
 
     std::string model_filename = File::find(search_name + ".svm");
     std::string scale_filename = File::find(search_name + ".scale");
 
-    if (isotope_filt_svm_ != nullptr)
+    if (!isotope_filt_svm_)
     {
-      svm_free_and_destroy_model(&isotope_filt_svm_);
+      isotope_filt_svm_ = std::make_unique<SimpleSVM>();
     }
-    isotope_filt_svm_ = svm_load_model(model_filename.c_str());
-    if (isotope_filt_svm_ == nullptr)
-    {
-      throw Exception::ParseError(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
-          "Loading " + model_filename + " failed", model_filename);
-    }
-
+    isotope_filt_svm_->loadModel(model_filename); // throws on failure
 
     std::ifstream ifs(scale_filename.c_str());
 
@@ -497,7 +497,7 @@ namespace OpenMS
     {
       throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
           "Numbers of centers and scales from file " + scale_filename + " are different!",
-          String(svm_feat_centers_.size()) + " and " + String(svm_feat_scales_.size()));
+          StringUtils::toStr(svm_feat_centers_.size()) + " and " + StringUtils::toStr(svm_feat_scales_.size()));
     }
   }
 
@@ -554,7 +554,7 @@ namespace OpenMS
     //standard deviation including the estimated isotope deviation
     double score_sigma(std::sqrt(std::exp(2 * std::log(sd)) + mt_variances));
 
-    // std::cout << std::setprecision(15) << "old " << score_sigma_old << " new " << score_sigma << std::endl;
+    // std::cout << std::setprecision(15) << "old " << score_sigma_old << " new " << score_sigma << '\n';
 
     if ((diff_mz < mu + sigma_mult * score_sigma) && (diff_mz > mu - sigma_mult * score_sigma))
     {
@@ -614,8 +614,8 @@ namespace OpenMS
     std::pair<Size, Size> tr1_fwhm_idx(tr1.getFWHMborders());
     std::pair<Size, Size> tr2_fwhm_idx(tr2.getFWHMborders());
 
-    //    std::cout << tr1_fwhm_idx.first << " " << tr1_fwhm_idx.second << std::endl;
-    //    std::cout << tr2_fwhm_idx.first << " " << tr2_fwhm_idx.second << std::endl;
+    //    std::cout << tr1_fwhm_idx.first << " " << tr1_fwhm_idx.second << '\n';
+    //    std::cout << tr2_fwhm_idx.first << " " << tr2_fwhm_idx.second << '\n';
 
     //    Size tr1_fwhm_size(tr1_fwhm_idx.second - tr1_fwhm_idx.first);
     //    Size tr2_fwhm_size(tr2_fwhm_idx.second - tr2_fwhm_idx.first);
@@ -624,9 +624,10 @@ namespace OpenMS
 
     double tr1_length(tr1.getFWHM());
     double tr2_length(tr2.getFWHM());
-    double max_length = (tr1_length > tr2_length) ? tr1_length : tr2_length;
+    double max_length = std::max(tr1_length, tr2_length);
+    double min_length = std::min(tr1_length, tr2_length);
 
-    // std::cout << "tr1 " << tr1_length << " tr2 " << tr2_length << std::endl;
+    // std::cout << "tr1 " << tr1_length << " tr2 " << tr2_length << '\n';
 
     // Extract peak shape between FWHM borders for both peaks
     for (Size i = tr1_fwhm_idx.first; i <= tr1_fwhm_idx.second; ++i)
@@ -638,7 +639,7 @@ namespace OpenMS
       coinciding_rts[tr2[i].getRT()].push_back(tr2[i].getIntensity());
     }
 
-    // Look at peaks at the same RT 
+    // Look at peaks at the same RT
     // TODO: this only works if both traces are sampled with equal rate at the same RT
     std::vector<double> x, y, overlap_rts;
     for (std::map<double, std::vector<double> >::const_iterator m_it = coinciding_rts.begin(); m_it != coinciding_rts.end(); ++m_it)
@@ -651,17 +652,6 @@ namespace OpenMS
       }
     }
 
-    //    if (x.size() < std::floor(0.8*max_length))
-    //        {
-    //            return 0.0;
-    //        }
-    // double rt_range(0.0)
-    // if (coinciding_rts.size() > 0)
-    // {
-    //     rt_range = std::fabs(coinciding_rts.rbegin()->first - coinciding_rts.begin()->first);
-    // }
-
-
     double overlap(0.0);
     if (!overlap_rts.empty())
     {
@@ -669,11 +659,43 @@ namespace OpenMS
       overlap = std::fabs(end_rt - start_rt);
     }
 
-    double proportion(overlap / max_length);
-    if (proportion < 0.7)
+    if (!isotope_rt_overlap_use_shorter_)
+    {
+      // Historic behavior: the overlap must exceed the given fraction of the
+      // longer trace (default 0.7, i.e. 70 %, as described in Kenar et al.).
+      double proportion = (max_length > 0.0) ? (overlap / max_length) : 0.0;
+      if (proportion < min_isotope_rt_overlap_)
+      {
+        return 0.0;
+      }
+      return computeCosineSim_(x, y);
+    }
+
+    // 'shorter' reference: require the shorter mass trace to lie almost entirely
+    // within the longer one. Measuring the overlap against the shorter trace still
+    // groups low-intensity isotope traces that are much shorter than the
+    // monoisotopic trace (see issue #4483).
+    const MassTrace& longer_trace = (tr1_length >= tr2_length) ? tr1 : tr2;
+    const MassTrace& shorter_trace = (tr1_length >= tr2_length) ? tr2 : tr1;
+
+    double proportion = (min_length > 0.0) ? (overlap / min_length) : 0.0;
+    if (proportion < min_isotope_rt_overlap_)
     {
       return 0.0;
     }
+
+    // Additionally require the apex (most intense peak) of the longer trace to fall
+    // within the RT range of the shorter trace. If the dominant peak is not present
+    // where the shorter trace elutes, the two traces most likely do not belong together.
+    std::pair<Size, Size> shorter_fwhm_idx(shorter_trace.getFWHMborders());
+    double shorter_start_rt(shorter_trace[shorter_fwhm_idx.first].getRT());
+    double shorter_end_rt(shorter_trace[shorter_fwhm_idx.second].getRT());
+    double longer_apex_rt(longer_trace[longer_trace.findMaxByIntPeak(use_smoothed_intensities_)].getRT());
+    if (longer_apex_rt < shorter_start_rt || longer_apex_rt > shorter_end_rt)
+    {
+      return 0.0;
+    }
+
     return computeCosineSim_(x, y);
   }
 
@@ -777,7 +799,7 @@ namespace OpenMS
 
 #ifdef FFM_DEBUG
           std::cout << "scoring " << candidates[0]->getLabel() << " " << candidates[0]->getCentroidMZ() << 
-            " with " << candidates[mt_idx]->getLabel() << " " << candidates[mt_idx]->getCentroidMZ() << std::endl;
+            " with " << candidates[mt_idx]->getLabel() << " " << candidates[mt_idx]->getCentroidMZ() << '\n';
 #endif
 
           // Score current mass trace candidates against hypothesis
@@ -798,7 +820,7 @@ namespace OpenMS
 #ifdef FFM_DEBUG
           std::cout << fh_tmp.getLabel() << "_" << candidates[mt_idx]->getLabel() << 
             "\t" << "ch: " << charge << " isopos: " << iso_pos << " rt: " << 
-            rt_score << "mz: " << mz_score << "int: " << int_score << std::endl;
+            rt_score << "mz: " << mz_score << "int: " << int_score << '\n';
 #endif
 
           double total_pair_score(0.0);
@@ -839,7 +861,7 @@ namespace OpenMS
       } // end for iso_pos
 
 #ifdef FFM_DEBUG
-      std::cout << "best found for ch " << charge << ":" << fh_tmp.getLabel() << " score: " << fh_tmp.getScore() << std::endl;
+      std::cout << "best found for ch " << charge << ":" << fh_tmp.getLabel() << " score: " << fh_tmp.getScore() << '\n';
 #endif
     } // end for charge
   } // end of findLocalFeatures_(...)
@@ -851,17 +873,21 @@ namespace OpenMS
     {
       OPENMS_LOG_WARN << "Isotope filtering is not supported, when using the mz scoring by elements.\n"
                       << "The parameter isotope_filtering_model will be set to 'none'."
-                      << std::endl;
+                      << '\n';
       isotope_filtering_model_ = "none";
     }
 
     output_featmap.clear();
     output_chromatograms.clear();
 
-    if (input_mtraces.empty()) 
+    if (input_mtraces.empty())
     {
       return;
     }
+
+    // Detect whether the input mass traces contain ion mobility data.
+    has_im_data_ = std::any_of(input_mtraces.begin(), input_mtraces.end(),
+      [](const MassTrace& mt) { return mt.containsIMData(); });
 
     // mass traces must be sorted by their centroid MZ
     std::sort(input_mtraces.begin(), input_mtraces.end(), CmpMassTraceByMZ());
@@ -873,12 +899,12 @@ namespace OpenMS
     // *********************************************************** //
     if (isotope_filtering_model_ == "metabolites (2% RMS)")
     {
-      OPENMS_LOG_INFO << "Loading metabolite isotope model with 2% RMS error" << std::endl;
+      OPENMS_LOG_INFO << "Loading metabolite isotope model with 2% RMS error\n";
       loadIsotopeModel_("MetaboliteIsoModelNoised2");
     }
     else if (isotope_filtering_model_ == "metabolites (5% RMS)")
     {
-      OPENMS_LOG_INFO << "Loading metabolite isotope model with 5% RMS error" << std::endl;
+      OPENMS_LOG_INFO << "Loading metabolite isotope model with 5% RMS error\n";
       loadIsotopeModel_("MetaboliteIsoModelNoised5");
     }
 
@@ -921,9 +947,9 @@ namespace OpenMS
           break;
         }
         double diff_rt = std::fabs(input_mtraces[ext_idx].getCentroidRT() - ref_trace_rt);
-        if (diff_rt <= local_rt_range_)
+        if (diff_rt <= local_rt_range_
+            && (!has_im_data_ || std::fabs(input_mtraces[ext_idx].getCentroidIM() - input_mtraces[i].getCentroidIM()) <= local_im_range_))
         {
-          // std::cout << " accepted!" << std::endl;
           local_traces.push_back(&input_mtraces[ext_idx]);
         }
       }
@@ -935,13 +961,13 @@ namespace OpenMS
     std::sort(feat_hypos.begin(), feat_hypos.end(), CmpHypothesesByScore());
 
 #ifdef FFM_DEBUG
-    std::cout << "size of hypotheses: " << feat_hypos.size() << std::endl;
+    std::cout << "size of hypotheses: " << feat_hypos.size() << '\n';
     // output all hypotheses:
     for (Size hypo_idx = 0; hypo_idx < feat_hypos.size(); ++ hypo_idx)
     {
       bool legal = isLegalIsotopePattern_(feat_hypos[hypo_idx]) > 0;
       std::cout << feat_hypos[hypo_idx].getLabel() << " ch: " << feat_hypos[hypo_idx].getCharge() << 
-        " score: " << feat_hypos[hypo_idx].getScore() << " legal: " << legal << std::endl;
+        " score: " << feat_hypos[hypo_idx].getScore() << " legal: " << legal << '\n';
     }
 #endif
 
@@ -950,15 +976,15 @@ namespace OpenMS
     // scoring one. Accept them if they do not contain traces that have 
     // already been used by a higher scoring hypothesis.
     // *********************************************************** //
-    std::map<String, bool> trace_excl_map;
+    std::map<std::string, bool> trace_excl_map;
     for (Size hypo_idx = 0; hypo_idx < feat_hypos.size(); ++hypo_idx)
     {
-      // std::cout << "score now: " <<  feat_hypos[hypo_idx].getScore() << std::endl;
-      std::vector<String> labels(feat_hypos[hypo_idx].getLabels());
+      // std::cout << "score now: " <<  feat_hypos[hypo_idx].getScore() << '\n';
+      std::vector<std::string> labels(feat_hypos[hypo_idx].getLabels());
       bool trace_coll = false;   // trace collision?
       for (Size lab_idx = 0; lab_idx < labels.size(); ++lab_idx)
       {
-        if (trace_excl_map.find(labels[lab_idx]) != trace_excl_map.end())
+        if (trace_excl_map.contains(labels[lab_idx]))
         {
           trace_coll = true;
           break;
@@ -970,12 +996,12 @@ namespace OpenMS
       {
         std::cout << "check for collision: " << trace_coll << " " << 
           feat_hypos[hypo_idx].getLabel() << " " << isLegalIsotopePattern_(feat_hypos[hypo_idx]) << 
-          " " << feat_hypos[hypo_idx].getScore() << std::endl;
+          " " << feat_hypos[hypo_idx].getScore() << '\n';
       }
 #endif
 
       // Skip hypotheses that contain a mass trace that has already been used
-      if (trace_coll) 
+      if (trace_coll)
       {
         continue;
       }
@@ -989,7 +1015,7 @@ namespace OpenMS
         pass_isotope_filter = isLegalIsotopePattern_(feat_hypos[hypo_idx]);
       }
     
-      // std::cout << "\nlegal iso? " << feat_hypos[hypo_idx].getLabel() << " score: " << feat_hypos[hypo_idx].getScore() << " " << result << std::endl;
+      // std::cout << "\nlegal iso? " << feat_hypos[hypo_idx].getLabel() << " score: " << feat_hypos[hypo_idx].getScore() << " " << result << '\n';
 
       if (pass_isotope_filter == 0) // not passing filter
       {
@@ -1018,7 +1044,7 @@ namespace OpenMS
       {
         f.setIntensity(feat_hypos[hypo_idx].getMonoisotopicFeatureIntensity(report_smoothed_intensities_));
       }
-      
+
       f.setWidth(feat_hypos[hypo_idx].getFWHM());
       f.setCharge(feat_hypos[hypo_idx].getCharge());
       f.setMetaValue(3, feat_hypos[hypo_idx].getLabel());
@@ -1031,7 +1057,8 @@ namespace OpenMS
       f.setOverallQuality(feat_hypos[hypo_idx].getScore());
       f.setMetaValue("masstrace_intensity", all_ints);
       f.setMetaValue("masstrace_centroid_rt", feat_hypos[hypo_idx].getAllCentroidRT());
-      f.setMetaValue("masstrace_centroid_mz", feat_hypos[hypo_idx].getAllCentroidMZ());;
+      f.setMetaValue("masstrace_centroid_mz", feat_hypos[hypo_idx].getAllCentroidMZ());
+      if (has_im_data_) f.setMetaValue("masstrace_centroid_im", feat_hypos[hypo_idx].getAllCentroidIM());
       f.setMetaValue("isotope_distances", feat_hypos[hypo_idx].getIsotopeDistances());
       f.setMetaValue("legal_isotope_pattern", pass_isotope_filter);
       f.applyMemberFunction(&UniqueIdInterface::setUniqueId);

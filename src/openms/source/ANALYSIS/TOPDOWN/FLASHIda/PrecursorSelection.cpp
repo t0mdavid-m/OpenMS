@@ -71,14 +71,14 @@ namespace OpenMS
         // collect those ids, then parse as before, skipping a Mass= line whose ID= is among them -- a decision that
         // was never acquired is no observation for in_depth's 1 - prod(1 - qscore). Per file, because tracking ids
         // restart in every run. A log written before ID= existed has no such line and loads exactly as it did.
-        std::vector<String> lines;
+        std::vector<std::string> lines;
         std::set<std::string> superseded;
         {
-          String raw;
+          std::string raw;
           while (std::getline(instream, raw))
           {
             if (!raw.empty() && raw.back() == '\r') raw.pop_back();
-            if (raw.hasPrefix("Superseded="))
+            if (StringUtils::hasPrefix(raw, "Superseded="))
             {
               std::stringstream ids(raw.substr(11));
               std::string id;
@@ -88,16 +88,16 @@ namespace OpenMS
             lines.push_back(raw);
           }
         }
-        auto idOf = [](const String& mass_line) {
+        auto idOf = [](const std::string& mass_line) {
           const Size st = mass_line.find("\tID=");
-          if (st == String::npos) return std::string();
+          if (st == std::string::npos) return std::string();
           const Size ed = mass_line.find('\t', st + 4);
-          return std::string(mass_line.substr(st + 4, ed == String::npos ? String::npos : ed - st - 4));
+          return std::string(mass_line.substr(st + 4, ed == std::string::npos ? std::string::npos : ed - st - 4));
         };
 
         double rt = .0, mass, qscore;
         int charge = 0;
-        for (const String& line : lines)
+        for (const std::string& line : lines)
         {
           // EVERY MS1 header sets `rt`, a "- 0 targets" one included. This loop used to skip those
           // headers, copying IdaLogger::parseFLASHIdaLog -- whose skip only keeps target-less scans
@@ -107,19 +107,19 @@ namespace OpenMS
           // and, before the first header with targets, under 0.0, which filterAndRank applies at
           // EVERY retention time (`prt != 0`). A 0-target header has no Mass= lines (the writer
           // prints one per command), so modes 1 and 2 load exactly what they loaded before.
-          if (line.hasPrefix("MS1"))
+          if (StringUtils::hasPrefix(line, "MS1"))
           {
             Size st = line.find("RT ") + 3;
             Size ed = line.find('(') - 2;
-            String n = line.substr(st, ed - st + 1);
+            std::string n = line.substr(st, ed - st + 1);
             rt = atof(n.c_str());
           }
-          if (line.hasPrefix("Mass"))
+          if (StringUtils::hasPrefix(line, "Mass"))
           {
             if (!superseded.empty() && superseded.count(idOf(line)) > 0) continue;
             Size st = 5;
             Size ed = line.find('\t');
-            String n = line.substr(st, ed - st + 1);
+            std::string n = line.substr(st, ed - st + 1);
             mass = atof(n.c_str());
 
             st = line.find("Score=") + 6;
@@ -132,7 +132,7 @@ namespace OpenMS
               st = line.find("Z=") + 2;
               ed = line.find('\t', st);
               n = line.substr(st, ed - st + 1);
-              charge = n.toInt();
+              charge = StringUtils::toInt32(n);
             }
 
             if (targeting.mode == 1 || targeting.mode == 2)
@@ -146,15 +146,15 @@ namespace OpenMS
               if (targeting.mode == 1 && targeting.log_target_reference_charges) target_mass_charge_map_[mass].push_back(charge);
             }
           }
-          else if (line.hasPrefix("AllMass"))
+          else if (StringUtils::hasPrefix(line, "AllMass"))
           {
             if (targeting.mode == 3)
             {
               Size st = 8;
               Size ed = line.size();
-              String n = line.substr(st, ed - st + 1);
+              std::string n = line.substr(st, ed - st + 1);
               std::stringstream tmp_stream(n);
-              String str;
+              std::string str;
               std::vector<double> results;
               while (getline(tmp_stream, str, ' '))
                 results.push_back(atof(str.c_str()));
@@ -1266,7 +1266,7 @@ namespace OpenMS
     return out;
   }
 
-  void PrecursorSelection::parseInclusionListTSV_(const String& filename)
+  void PrecursorSelection::parseInclusionListTSV_(const std::string& filename)
   {
     std::ifstream instream(filename);
     if (!instream.good())
@@ -1274,19 +1274,19 @@ namespace OpenMS
       throw Exception::FileNotFound(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, filename);
     }
 
-    String line;
+    std::string line;
     bool header_skipped = false;
 
     while (std::getline(instream, line))
     {
-      line = line.trim();
-      if (line.empty() || line.hasPrefix("#")) continue;
+      line = StringUtils::trim(line);
+      if (line.empty() || StringUtils::hasPrefix(line, "#")) continue;
 
       StringList cells;
-      line.split('\t', cells);
+      StringUtils::split(line, '\t', cells);
 
       // Skip header row (check if first cell looks like "mass" header)
-      if (!header_skipped && cells.size() > 0 && cells[0].toLower() == "mass")
+      if (!header_skipped && cells.size() > 0 && StringUtils::toLower(cells[0]) == "mass")
       {
         header_skipped = true;
         continue;
@@ -1300,7 +1300,7 @@ namespace OpenMS
       }
 
       InclusionTarget target;
-      target.mass = cells[0].toDouble();
+      target.mass = StringUtils::toDouble(cells[0]);
 
       // The AUTHORED CHARGE SET (ADR-0028). "-1" or empty leaves the row unrestricted and yields
       // an EMPTY set; a single charge is just a set of one; "10;13;16" names three.
@@ -1309,19 +1309,19 @@ namespace OpenMS
       // spreadsheet in a comma-decimal locale writes 12351,3 and a comma list would then be
       // indistinguishable from a mangled number. The wire grammar's ',' axis is a different thing
       // in a different file and does not reach here.
-      String charge_str = cells[1].trim();
+      std::string charge_str = StringUtils::trim(cells[1]);
       if (!charge_str.empty() && charge_str != "-1")
       {
         // String::split pushes the whole string and returns false when the delimiter is absent, so
         // a lone "12" arrives here as a one-element list and needs no special case. It does NOT
         // trim on that path, hence the trim below.
         StringList charge_parts;
-        charge_str.split(';', charge_parts);
-        for (const String& part : charge_parts)
+        StringUtils::split(charge_str, ';', charge_parts);
+        for (const std::string& part : charge_parts)
         {
-          const String tok = String(part).trim();
+          const std::string tok = StringUtils::trimmed(part);
           if (tok.empty()) continue;
-          const int z = tok.toInt();
+          const int z = StringUtils::toInt32(tok);
           // Loud rather than silent, per the strict-schema stance (ADR-0007): a charge that cannot
           // be isolated is a typo, and a row silently reduced to "unrestricted" would acquire the
           // whole envelope while reading as though it named three charges.
@@ -1338,9 +1338,9 @@ namespace OpenMS
                              target.charges.end());
       }
       // RT values in minutes, convert to seconds
-      target.rt_start = cells[2].toDouble() * 60.0;
-      target.rt_end = cells[3].toDouble() * 60.0;
-      target.priority = cells[4].toInt();
+      target.rt_start = StringUtils::toDouble(cells[2]) * 60.0;
+      target.rt_end = StringUtils::toDouble(cells[3]) * 60.0;
+      target.priority = StringUtils::toInt32(cells[4]);
 
       inclusion_targets_.push_back(target);
     }
@@ -1350,7 +1350,7 @@ namespace OpenMS
       [](const InclusionTarget& a, const InclusionTarget& b) { return a.mass < b.mass; });
   }
 
-  void PrecursorSelection::parseTargetPTMsTSV_(const String& filename)
+  void PrecursorSelection::parseTargetPTMsTSV_(const std::string& filename)
   {
     std::ifstream instream(filename);
     if (!instream.good())
@@ -1358,19 +1358,19 @@ namespace OpenMS
       throw Exception::FileNotFound(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, filename);
     }
 
-    String line;
+    std::string line;
     bool header_skipped = false;
 
     while (std::getline(instream, line))
     {
-      line = line.trim();
-      if (line.empty() || line.hasPrefix("#")) continue;
+      line = StringUtils::trim(line);
+      if (line.empty() || StringUtils::hasPrefix(line, "#")) continue;
 
       StringList cells;
-      line.split('\t', cells);
+      StringUtils::split(line, '\t', cells);
 
       // Skip header row (check if first cell looks like "name" header)
-      if (!header_skipped && cells.size() > 0 && cells[0].toLower() == "name")
+      if (!header_skipped && cells.size() > 0 && StringUtils::toLower(cells[0]) == "name")
       {
         header_skipped = true;
         continue;
@@ -1384,9 +1384,9 @@ namespace OpenMS
       }
 
       TargetPTM ptm;
-      ptm.name = cells[0].trim();
-      ptm.mass = cells[1].toDouble();
-      ptm.max_count = cells[2].toInt();
+      ptm.name = StringUtils::trim(cells[0]);
+      ptm.mass = StringUtils::toDouble(cells[1]);
+      ptm.max_count = StringUtils::toInt32(cells[2]);
 
       target_ptms_.push_back(ptm);
     }
@@ -1514,11 +1514,11 @@ namespace OpenMS
     }
 
     // Prepare protein sequences for matching (replace I with L for matching)
-    std::vector<String> protein_seqs;
+    std::vector<std::string> protein_seqs;
     protein_seqs.reserve(target_protein_database_.size());
     for (const auto& fe : target_protein_database_)
     {
-      String seq = fe.sequence;
+      std::string seq = fe.sequence;
       std::replace(seq.begin(), seq.end(), 'I', 'L');
       protein_seqs.push_back(seq);
     }
@@ -1529,7 +1529,7 @@ namespace OpenMS
     {
       for (Size protein_idx = 0; protein_idx < protein_seqs.size(); ++protein_idx)
       {
-        const String& pseq = protein_seqs[protein_idx];
+        const std::string& pseq = protein_seqs[protein_idx];
 
         std::vector<int> positions;
         std::vector<double> flanking_mass_diffs;

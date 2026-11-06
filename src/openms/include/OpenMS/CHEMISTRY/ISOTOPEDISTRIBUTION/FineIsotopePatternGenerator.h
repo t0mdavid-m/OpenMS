@@ -108,15 +108,15 @@ namespace OpenMS
     /**
       * @brief Constructor
       *
-      * @param stop_condition The total probability (if use_total_prob == true) or
+      * @param[in] stop_condition The total probability (if use_total_prob == true) or
       *        threshold (if use_total_prob is false) (see class docu)
       *
-      * @param use_total_prob Whether the stop_condition should be interpreted as a
+      * @param[in] use_total_prob Whether the stop_condition should be interpreted as a
       *        probability threshold (only configurations with intensity above this
       *        threshold will be returned) or as a total probability that the distribution
       *        should cover.
       *
-      * @param absolute Whether threshold is absolute or relative (ignored if use_total_prob is true, see class docu)
+      * @param[in] absolute Whether threshold is absolute or relative (ignored if use_total_prob is true, see class docu)
       *
       **/
     FineIsotopePatternGenerator(double stop_condition, bool use_total_prob = true, bool absolute = false) :
@@ -131,9 +131,12 @@ namespace OpenMS
      * Iterates through all elements, convolves them according to the number
      * of atoms from that element and sums up the result.
      *
-     * If the EmpiricalFormula has a charge 'q' != 0, then 'q' hydrogen atoms are added
-     * to the formula to match the result of EmpiricalFormula::getMonoWeight().
-     * Set `ef.charge = 0` to avoid this behavior.
+     * @deprecated Implicit charge handling: if the EmpiricalFormula has a charge 'q' != 0, then 'q'
+     * hydrogen atoms are currently added to the formula to match the result of
+     * EmpiricalFormula::getMonoWeight(). This is deprecated and will change in OpenMS 4.0, where the
+     * charge will be ignored and the neutral pattern returned (a one-time warning is logged when a
+     * non-zero charge is passed). Set `ef.charge = 0` to get the neutral pattern, or make the adduct
+     * explicit via EmpiricalFormula::addChargeAdduct(q) to keep the shifted pattern across the change.
      *  
      * @note The constructed isotope distribution is sorted by m/z which slows
      * down processing, consider using IsoSpec (IsoSpecWrapper /

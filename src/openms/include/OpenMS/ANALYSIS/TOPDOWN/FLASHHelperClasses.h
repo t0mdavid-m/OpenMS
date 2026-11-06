@@ -8,15 +8,20 @@
 
 #pragma once
 
-#include <OpenMS/APPLICATIONS/TOPPBase.h>
 #include <OpenMS/CHEMISTRY/ISOTOPEDISTRIBUTION/CoarseIsotopePatternGenerator.h>
+#include <OpenMS/CHEMISTRY/ProForma.h>
 #include <OpenMS/CHEMISTRY/ISOTOPEDISTRIBUTION/IsotopeDistribution.h>
 #include <OpenMS/CONCEPT/Constants.h>
+#include <OpenMS/CONCEPT/LogStream.h>
+#include <OpenMS/CONCEPT/ProgressLogger.h>
+#include <OpenMS/DATASTRUCTURES/StringUtils.h>
 #include <OpenMS/FEATUREFINDER/MassTraceDetection.h>
 #include <OpenMS/FORMAT/OPTIONS/PeakFileOptions.h>
 #include <OpenMS/KERNEL/MSExperiment.h>
 #include <boost/dynamic_bitset.hpp>
+#include <fstream>
 #include <limits>
+#include <unordered_set>
 
 namespace OpenMS
 {
@@ -254,7 +259,7 @@ namespace OpenMS
     {
     public:
       /// constructor
-      explicit MassTag(const String& full_seq, const std::vector<int>& positions, int scan);
+      explicit MassTag(const std::string& full_seq, const std::vector<int>& positions, int scan);
 
       /// copy constructor
       MassTag(const MassTag&) = default;
@@ -266,7 +271,7 @@ namespace OpenMS
       bool operator>(const MassTag& a) const;
       bool operator==(const MassTag& other) const;
 
-      [[nodiscard]] const String& getSequence() const;
+      [[nodiscard]] const std::string& getSequence() const;
       [[nodiscard]] double getNtermMass() const;
       [[nodiscard]] double getCtermMass() const;
       Size getLength() const;
@@ -293,12 +298,12 @@ namespace OpenMS
         rt_ = i;
       }
 
-      String toString() const;
+      std::string toString() const;
       const std::vector<double>& getMzs() const;
 
     private:
       double n_mass_ = -1, c_mass_ = -1;
-      String seq_;
+      std::string seq_;
       float rt_ = -1;
       int scan_;
       std::vector<int> positions_;
@@ -314,10 +319,10 @@ namespace OpenMS
     {
     public:
       /// constructor
-      explicit Tag(const String& seq, double n_mass, double c_mass, const std::vector<double>& mzs, const std::vector<int>& scores, int scan);
+      explicit Tag(const std::string& seq, double n_mass, double c_mass, const std::vector<double>& mzs, const std::vector<int>& scores, int scan);
 
       /// constructor of a gapped tag: @p mzs are the masses at the gap boundaries only, so the residue length is given explicitly
-      explicit Tag(String seq, double n_mass, double c_mass, std::vector<double>& mzs, std::vector<int>& scores, int scan, Size length);
+      explicit Tag(std::string seq, double n_mass, double c_mass, std::vector<double>& mzs, std::vector<int>& scores, int scan, Size length);
 
       /// copy constructor
       Tag(const Tag&) = default;
@@ -335,8 +340,8 @@ namespace OpenMS
       bool operator>(const Tag& a) const;
       bool operator==(const Tag& other) const;
 
-      [[nodiscard]] const String& getSequence() const;
-      [[nodiscard]] const String& getUppercaseSequence() const;
+      [[nodiscard]] const std::string& getSequence() const;
+      [[nodiscard]] const std::string& getUppercaseSequence() const;
       [[nodiscard]] double getNtermMass() const;
       [[nodiscard]] double getCtermMass() const;
       /// number of residues the tag spans (for a gapped tag more than the number of mass gaps)
@@ -369,11 +374,11 @@ namespace OpenMS
         rt_ = i;
       }
 
-      String toString() const;
+      std::string toString() const;
       const std::vector<double>& getMzs() const;
 
     private:
-      String seq_, upper_seq_;
+      std::string seq_, upper_seq_;
       double n_mass_ = -1, c_mass_ = -1;
       float rt_ = -1;
       std::vector<double> mzs_;
@@ -701,7 +706,7 @@ namespace OpenMS
        @throw Exception::ElementNotFound for an unknown name, or an accession unknown at the site
        @throw Exception::InvalidValue for a bare accession of several sites (the message lists them) or a malformed accession
     */
-    static const ResidueModification* resolveModification(const String& spec);
+    static const ResidueModification* resolveModification(const std::string& spec);
 
     /**
        @brief A variable modification a user names (FLASHTnT var_mod): as resolveModification, and also a modification that the database has
@@ -709,7 +714,7 @@ namespace OpenMS
        N-term Q)" for Gln->pyro-Glu (N-term Q); @p protein_n_term tells which.
        @throw as resolveModification for the name as given
     */
-    static const ResidueModification* resolveVariableModification(const String& spec, bool& protein_n_term);
+    static const ResidueModification* resolveVariableModification(const std::string& spec, bool& protein_n_term);
 
     /**
       @brief Read the spectra of an input run: an mzML file, or a Thermo .raw file.
@@ -719,7 +724,79 @@ namespace OpenMS
       the retention time range of @p options are applied while reading, the m/z and intensity ranges after it. Reading a .raw file
       needs OpenMS built with WITH_THERMO_RAW and the .NET 8 runtime; otherwise it stops with a message to convert the file to mzML.
     */
-    static void loadExperiment(const String& file, PeakMap& map, const PeakFileOptions& options, ProgressLogger::LogType log);
+    static void loadExperiment(const std::string& file, PeakMap& map, const PeakFileOptions& options, ProgressLogger::LogType log);
+
+    /**
+      @brief A modification of a proteoform as the top-down tools read and write it in ProForma 2.0 (HUPO-PSI): its site, its residues and
+      its mass. Parsing and writing are OpenMS::ProForma's (getProFormaModifications, toPeptidoform); the masses are computed here.
+
+      What is read (getProFormaModifications) and written (toPeptidoform):
+      - residues: the 20 standard amino acids, U and O
+      - modification tags: a name looked up in Unimod, then PSI-MOD ([Oxidation], [L-methionine sulfoxide]); a name with its source
+        ([U:Oxidation], [M:L-methionine sulfoxide]); an accession ([UNIMOD:35], [MOD:00719]); a formula ([Formula:C2H2O]); a glycan
+        composition ([Glycan:Hex1HexNAc2]); a mass ([+15.9949], [Obs:+15.995]). Alternatives are separated by | and the first one that
+        gives a mass is used ([Phospho|+79.966]); INFO: parts are ignored. A localisation group or score suffix (#g1, (0.9)) is dropped:
+        the modification stays where its tag is written.
+      - on a residue: PEM[Oxidation]K, several on one residue: S[Phospho][+1.0]; on a range: P(EMK)[+15.995]; on a terminus:
+        [Acetyl]-PEPTIDE, PEPTIDE-[Amidated]; at an unknown position: [Phospho]?PEPTIDE, [Phospho]^2?PEPTIDE; labile:
+        {Glycan:Hex}PEPTIDE; global fixed: <[Carbamidomethyl]@C>PEPTCDE; charge: PEPTIDE/2 (read only)
+      - written in the order of ProForma 2.0: global, unknown position, labile, N-terminal, sequence, C-terminal
+
+      Not supported (Exception::ParseError): chimeras (+), several chains (//), cross-links and branches (#XL, #BRANCH), isotope labels
+      (<13C>), adducts as charge (/[Na:z+1]), names ((>name)), ambiguous residues ((?DQ)) and residues other than the 20, U and O.
+    */
+    struct OPENMS_DLLAPI ProFormaModification
+    {
+      /// where a modification sits
+      enum class Site
+      {
+        RESIDUE, ///< on residues start..end (a range if end > start)
+        N_TERM,
+        C_TERM,
+        UNKNOWN, ///< at an unknown position of the sequence
+        LABILE   ///< lost on fragmentation: in the precursor mass only
+      };
+
+      Site site = Site::RESIDUE;
+      int start = 0;       ///< first residue, 0-based (Site::RESIDUE)
+      int end = 0;         ///< last residue, 0-based (Site::RESIDUE)
+      double mass = 0;     ///< monoisotopic mass shift in Da
+      std::string tag;     ///< the tag content as written (name, accession, formula, ...); empty: the mass is written (formatProFormaMass)
+      bool global = false; ///< from a global fixed modification <[tag]@residues> (written there, not on the residue)
+    };
+
+    /**
+      @brief The sequence and the modifications of a ProForma string read by OpenMS::ProForma::parseIon (see ProFormaModification).
+
+      All modifications with their masses, in the order global (per residue), unknown position (a count ^n repeats them), labile,
+      N-terminal, residues and ranges (as written; a range after the residues inside it), C-terminal. A terminal modification has the site
+      N_TERM or C_TERM; a residue tag without mass ([#g1], [INFO:x]) is left out. The charge, if any, is in @p ion.
+      @throw Exception::ParseError for a feature not supported (see ProFormaModification) or a modification without mass
+    */
+    static std::vector<ProFormaModification> getProFormaModifications(const ProForma::PeptidoformIon& ion, std::string& sequence);
+
+    /**
+      @brief The proteoform @p sequence with @p modifications as a ProForma::Peptidoform, to be written by ProForma::toString (lossless):
+      each tag as written (a mass formatted by formatProFormaMass), modifications of one residue or range in their order here, global ones
+      as one <[tag]@residues> per tag.
+      @throw Exception::ParseError for a residue other than the 20 standard ones, U and O
+      @throw Exception::InvalidValue for residues outside the sequence, or a range that overlaps another (ProForma ranges are the same or
+      disjoint); several modifications on one residue are allowed
+    */
+    static ProForma::Peptidoform toPeptidoform(const std::string& sequence, const std::vector<ProFormaModification>& modifications);
+
+    /**
+      @brief The mass of a ProForma tag content (see ProFormaModification), read by OpenMS::ProForma, e.g. Oxidation, U:Oxidation,
+      UNIMOD:35, MOD:00719, Formula:O, Glycan:Hex1HexNAc1, INFO:x|Phospho|+79.97, Obs:+79.97, Cation:Ca[II]; @p residue (one-letter code or
+      0) narrows a name or accession lookup. A name or accession that OpenMS::ProForma does not read (a Unimod name starting with a digit,
+      2-methylbutyryl; OpenMS's UniMod:35) is looked up in ModificationsDB as it is.
+      @throw Exception::ParseError if no alternative gives a mass
+    */
+    static double getProFormaTagMass(const std::string& tag, char residue = 0);
+
+    /// a mass as written in a ProForma tag: sign, at most six decimals, no trailing zeros (+15.994915, -18.010565, +1.0); six decimals keep
+    /// a written and read-back PrSM identical for annotation (four moved the mass calibration of FLASHAnnotator in 32 of 4245 PrSMs)
+    static std::string formatProFormaMass(double mass);
   };
 
   // Hot in every peak-group sort and mass computation: defined inline (same arithmetic as before).
