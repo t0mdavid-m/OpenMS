@@ -4170,6 +4170,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       hit.setMetaValue(tntKey("ProteoformIndex"), it == prsm_to_proteoform.end() ? -1 : it->second);
     }
   }
+  if (native_rule) setNativeTermini_();
   // the large locals freed with all threads instead of by their destructors on return
   releaseInParallel(dspecs);
   releaseInParallel(uncapped_masses);
@@ -4186,6 +4187,95 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   // get all protoeforms - mass and score.
   // get all combinations with a certain tolerance.
   // record the best ranking combination(s) along with summed score (can score be non overlapping?) and mass difference
+}
+
+void FLASHTnTAlgorithm::setNativeTermini_()
+{
+  // Native mode reads ladders and tags from any start or end of a protein, and its spectra often have no precursor mass. A PrSM without a
+  // proteoform mass has no mass that places its termini, so each terminus rests on its own side's fragments (N: a b c; C: x y z), yet
+  // FLASHExtender reports one without them too: the protein's own terminus with its free forms (initiator Met removal, protein N-terminal
+  // acetyl). Such a terminus is reported undetermined (-1) when its side's terminal fragment envelopes on the raw spectrum (the envelope
+  // rule of the raw score) are as likely by chance: P(k or more) > 0.01, k ~ Poisson(lambda), lambda = the side's envelopes per decoy
+  // fragment set (decoy_shifts). Measured with FLASHAnnotator and the same rule: PXD047341 bacteriorhodopsin 3.4 N-side envelopes per PrSM
+  // against 2.3 per decoy set (17 of its 21 PrSMs started at residue 1 or 2 with acetyl), bovine carbonic anhydrase the N side of 101 of
+  // 103 PrSMs, the heavy-chain C-termini of the native mAb spectra; ADH none (its acetylated Ser2 has its fragments). In the lysates the
+  // rule removed no error: 1% proteoforms of "undetermined, both termini" with such a terminus were 580 E. coli and 5 B. theta (0.85%),
+  // the others 705 and 4 (0.56%) (B. theta entrapment, nine runs), so it applies to native mode, where termini are reported, not counted.
+  // It runs after the FDR, the proteins and the combined coverage, which take the termini as the search found them.
+  if (! raw_loader_) return;
+  std::vector<Size> hits;
+  std::set<int> scans;
+  for (Size i = 0; i < proteoform_hits_.size(); i++)
+  {
+    const auto& h = proteoform_hits_[i];
+    if ((double)h.getMetaValue(tntKey("Mass"), -1.0) > 0) continue;
+    if ((int)h.getMetaValue(tntKey("StartPosition")) <= 0 && (int)h.getMetaValue(tntKey("EndPosition")) <= 0) continue;
+    hits.push_back(i);
+    scans.insert((int)h.getMetaValue(tntKey("Scan")));
+  }
+  if (hits.empty()) return;
+  loadRawSpectra_(scans);
+  FLASHAnnotatorAlgorithm annotator;
+  Param aparam = annotator_param_;
+  aparam.setValue("internal_ions", "false");
+  aparam.setValue("report_decoy_envelopes", "true");
+  annotator.setParameters(aparam);
+  const std::vector<double> shifts = aparam.getValue("decoy_shifts").toDoubleVector();
+  if (shifts.empty())
+  {
+    releaseRawSpectra_();
+    return;
+  }
+  std::vector<FLASHAnnotatorAlgorithm::PrSM> prsms;
+  std::vector<double> precursor_masses;
+  std::vector<Size> hit_of; // proteoform_hits_ index of prsms[j]
+  double max_mass = 0;
+  for (Size i : hits)
+  {
+    FLASHAnnotatorAlgorithm::PrSM prsm;
+    double precursor_mass = -1.0;
+    if (! toRawPrSM_(proteoform_hits_[i], prsm, precursor_mass)) continue;
+    max_mass = std::max({max_mass, precursor_mass, FLASHAnnotatorAlgorithm::getProteoformMass(prsm.sequence, prsm.modifications)});
+    prsms.push_back(std::move(prsm));
+    precursor_masses.push_back(precursor_mass);
+    hit_of.push_back(i);
+  }
+  std::vector<double> iso_mzs, iso_intensities;
+  annotator.getIsotopeEnvelope(max_mass + 200.0, 1, iso_mzs, iso_intensities);
+  for (Size j = 0; j < prsms.size(); j++)
+  {
+    int reason = 4;
+    prsms[j].precursor_charge = annotator.precursorChargeCap(raw_spectra_[prsms[j].spectrum_index], precursor_masses[j], reason);
+  }
+  std::vector<FLASHAnnotatorAlgorithm::Result> results;
+  annotator.annotate(raw_peaks_, prsms, results);
+  const auto& ion_types = annotator.getIonTypes();
+  Size undetermined[2] = {0, 0};
+  for (Size j = 0; j < prsms.size(); j++)
+  {
+    if (! results[j].annotated) continue;
+    double k[2] = {0, 0}, d[2] = {0, 0}; // per side: target envelopes, decoy envelopes
+    for (const auto& e : results[j].envelopes)
+    {
+      if (e.first >= 0 || e.ion_type < 0 || e.ion_type >= (int)ion_types.size() || ion_types[e.ion_type].empty()) continue; // terminal only
+      const int side = (ion_types[e.ion_type][0] == 'a' || ion_types[e.ion_type][0] == 'b' || ion_types[e.ion_type][0] == 'c') ? 0 : 1;
+      (e.decoy_shift == 0 ? k : d)[side] += 1;
+    }
+    auto& hit = proteoform_hits_[hit_of[j]];
+    for (int side = 0; side < 2; side++)
+    {
+      const auto key = tntKey(side == 0 ? "StartPosition" : "EndPosition");
+      if ((int)hit.getMetaValue(key) <= 0) continue;
+      const double lambda = std::max(d[side] / (double)shifts.size(), 1e-12);
+      const double p = k[side] > 0 ? boost::math::gamma_p(k[side], lambda) : 1.0;
+      if (p <= 0.01) continue;
+      hit.setMetaValue(key, -1);
+      undetermined[side]++;
+    }
+  }
+  releaseRawSpectra_();
+  OPENMS_LOG_INFO << "Native termini: " << prsms.size() << " PrSMs without a proteoform mass; reported undetermined for fragments at chance: "
+                  << undetermined[0] << " N-termini, " << undetermined[1] << " C-termini" << std::endl;
 }
 
 void FLASHTnTAlgorithm::loadRawSpectra_(const std::set<int>& scans)

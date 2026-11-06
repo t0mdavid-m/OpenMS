@@ -144,6 +144,9 @@ private:
   /// representative): @p clusters as markRepresentativeProteoformHits_ returns them, @p qvalues the PrSM q-values, a PrSM taking part if its
   /// q-value is at most @p rep_q (with @p use_fdr; otherwise only the representative's own termini and modifications count)
   void setCombinedCoverage_(const std::vector<std::vector<Size>>& clusters, const std::vector<double>& qvalues, double rep_q, bool use_fdr);
+  /// native mode: a terminus of a PrSM without a proteoform mass whose side has no more fragments on the raw spectrum than chance is
+  /// reported undetermined (-1)
+  void setNativeTermini_();
   /// the raw-spectrum PrSM of @p hit (its proteoform, bounded by the entry where a terminus is open) and its given precursor mass (-1:
   /// none); false if its spectrum is not loaded
   bool toRawPrSM_(const ProteinHit& hit, FLASHAnnotatorAlgorithm::PrSM& prsm, double& precursor_mass) const;
