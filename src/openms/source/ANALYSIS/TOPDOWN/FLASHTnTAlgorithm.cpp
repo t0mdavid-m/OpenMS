@@ -31,6 +31,8 @@
 #include <unordered_set>
 #ifdef _OPENMP
   #include <omp.h>
+#else
+  #define omp_in_parallel() 0
 #endif
 #include <OpenMS/CHEMISTRY/EmpiricalFormula.h>
 #include <OpenMS/CHEMISTRY/ModificationsDB.h>
