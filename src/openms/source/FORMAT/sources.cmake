@@ -110,6 +110,10 @@ if (WITH_PARQUET)
   list(APPEND sources_list QuantmsIO.cpp)  
 endif()
 
+if (WITH_THERMO_RAW)
+  list(APPEND sources_list ThermoRawFile.cpp)
+endif()
+
 ### add path to the filenames
 set(sources)
 foreach(i ${sources_list})

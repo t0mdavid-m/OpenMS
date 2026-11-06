@@ -13,6 +13,8 @@
 #include <OpenMS/CHEMISTRY/ISOTOPEDISTRIBUTION/IsotopeDistribution.h>
 #include <OpenMS/CONCEPT/Constants.h>
 #include <OpenMS/FEATUREFINDER/MassTraceDetection.h>
+#include <OpenMS/FORMAT/OPTIONS/PeakFileOptions.h>
+#include <OpenMS/KERNEL/MSExperiment.h>
 #include <boost/dynamic_bitset.hpp>
 #include <limits>
 
@@ -708,6 +710,16 @@ namespace OpenMS
        @throw as resolveModification for the name as given
     */
     static const ResidueModification* resolveVariableModification(const String& spec, bool& protein_n_term);
+
+    /**
+      @brief Read the spectra of an input run: an mzML file, or a Thermo .raw file.
+
+      An mzML file is read as MzMLFile reads it, with @p options. A .raw file (recognised by its extension) is read with Thermo's
+      peak picking, so its spectra are centroided as ThermoRawFileParser and FileConverter convert them by default; the MS levels and
+      the retention time range of @p options are applied while reading, the m/z and intensity ranges after it. Reading a .raw file
+      needs OpenMS built with WITH_THERMO_RAW and the .NET 8 runtime; otherwise it stops with a message to convert the file to mzML.
+    */
+    static void loadExperiment(const String& file, PeakMap& map, const PeakFileOptions& options, ProgressLogger::LogType log);
   };
 
   // Hot in every peak-group sort and mass computation: defined inline (same arithmetic as before).

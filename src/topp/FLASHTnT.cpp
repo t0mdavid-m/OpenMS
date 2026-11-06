@@ -98,8 +98,10 @@ protected:
                        "without FLASHDeconv's deconvolved masses). A raw mzML is deconvolved here with FLASHDeconv's algorithm (parameters fd:, "
                        "FLASHDeconv's defaults), and its MSn spectra, as read before deconvolution, serve the raw-spectrum scoring as -in_raw "
                        "would (-in_raw is then not needed and not read): the same results as FLASHDeconv and FLASHTnT -in_raw run one after "
-                       "the other, without reading the raw file twice or writing the deconvolved mzML.", true);
-    setValidFormats_("in", ListUtils::create<String>("mzML"));
+                       "the other, without reading the raw file twice or writing the deconvolved mzML. A Thermo .raw file (recognised by its "
+                       "extension) is a raw input too: it is read with Thermo's peak picking, so centroided, as ThermoRawFileParser converts it "
+                       "by default (needs OpenMS built with WITH_THERMO_RAW and the .NET 8 runtime).", true);
+    setValidFormats_("in", ListUtils::create<String>("mzML,raw"));
 
     registerInputFile_("db", "<file>", "",
                        "Protein database. Three formats, recognised from the file content (else from the file name):\n"
@@ -146,7 +148,7 @@ protected:
                        "spectrum (fragment isotope envelopes at every charge, as FLASHAnnotator) before the FDR, and ranked by its extension score "
                        "plus 8 times its raw score. The raw annotation columns are written in the PrSM and proteoform files.",
                        false);
-    setValidFormats_("in_raw", ListUtils::create<String>("mzML"));
+    setValidFormats_("in_raw", ListUtils::create<String>("mzML,raw"));
 
     registerOutputFile_("out_pro", "<file>", "", "Output proteoform-level tsv file containing proteoform IDs. ", true);
     setValidFormats_("out_pro", ListUtils::create<String>("tsv"));
@@ -284,8 +286,7 @@ protected:
 
     // reading mzMLs with m/z and rt criteria.
 
-    mzml.setLogType(log_type_);
-    mzml.load(in_file, map);
+    FLASHHelperClasses::loadExperiment(in_file, map, mzml.getOptions(), log_type_);
 
     // A raw mzML (no spectrum with FLASHDeconv's deconvolved masses) is deconvolved here, as FLASHDeconv does before writing its
     // deconvolved mzML (FLASHDeconvSpectrumFile::toDeconvolvedMap, uncharged masses), and its MSn spectra are kept for the raw-spectrum

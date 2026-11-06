@@ -100,6 +100,10 @@ if (WITH_CRAWDAD) ## TODO check if still necessary
   list(APPEND OPENMS_DEP_LIBRARIES ${Crawdad_LIBRARY})
 endif()
 
+if (WITH_THERMO_RAW)
+  list(APPEND OPENMS_DEP_PRIVATE_LIBRARIES OpenMSThermoBridge::openms_thermo_bridge)
+endif()
+
 openms_add_library(TARGET_NAME  OpenMS
                    SOURCE_FILES  ${OpenMS_sources}
                    HEADER_FILES  ${OpenMS_sources_h}
@@ -123,6 +127,14 @@ endif()
 
 if (ENABLE_TDL)
     target_compile_definitions(OpenMS PUBLIC ENABLE_TDL)
+endif()
+
+# Thermo .raw reading (ThermoRawFile, FileHandler); the bridge's managed runtime files go next to the library
+if (WITH_THERMO_RAW)
+    target_compile_definitions(OpenMS PUBLIC WITH_THERMO_RAW=1)
+    if (COMMAND openms_thermo_bridge_copy_runtime_files)
+      openms_thermo_bridge_copy_runtime_files(TARGET OpenMS)
+    endif()
 endif()
 
 # propagate Parquet support to the code (used to gate tools in ToolHandler, etc.)

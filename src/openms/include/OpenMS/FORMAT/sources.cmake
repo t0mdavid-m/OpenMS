@@ -114,6 +114,10 @@ XQuestResultXMLFile.h
 ZlibCompression.h
 )
 
+if (WITH_THERMO_RAW)
+  list(APPEND sources_list_h ThermoRawFile.h)
+endif()
+
 if (WITH_HDF5)
   list(APPEND sources_list_h HDF5Connector.h)  
 endif()

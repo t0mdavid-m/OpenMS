@@ -29,6 +29,9 @@ set(sources_list
   XMLHandler.cpp
   XQuestResultXMLHandler.cpp
 )
+if (WITH_THERMO_RAW)
+  list(APPEND sources_list ThermoRawFileMetadata.cpp ThermoRawScanReader.cpp)
+endif()
 
 ### add path to the filenames
 set(sources)

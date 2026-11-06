@@ -104,8 +104,11 @@ protected:
 
   void registerOptionsAndFlags_() override
   {
-    registerInputFileList_("in", "<files>", {}, "MS1 mzML files of the runs (as given to FLASHDeconv), centroided.", true);
-    setValidFormats_("in", ListUtils::create<String>("mzML"));
+    registerInputFileList_("in", "<files>", {},
+                           "The runs as given to FLASHDeconv: mzML files (centroided), or Thermo .raw files (recognised by their extension; read "
+                           "with Thermo's peak picking, as ThermoRawFileParser converts them by default; needs OpenMS built with WITH_THERMO_RAW and "
+                           "the .NET 8 runtime).", true);
+    setValidFormats_("in", ListUtils::create<String>("mzML,raw"));
     registerInputFileList_("in_feature", "<files>", {}, "FLASHDeconv feature tsv files (-out) of the runs, in the order of -in.", true);
     setValidFormats_("in_feature", ListUtils::create<String>("tsv"));
     registerOutputFile_("out", "<file>", "", "Consensus feature tsv: per feature its mass, aligned apex and charges, and per run (named by the base name of its "
@@ -586,11 +589,10 @@ protected:
     };
     // the MS1 spectra of the next run are read while a run is measured (reading is mostly waiting for the disk: ~1.8 of ~4.3 s per run)
     const auto load_run = [&in](Size r) {
-      MzMLFile mzml;
-      mzml.setLogType(ProgressLogger::NONE);
-      mzml.getOptions().setMSLevels({1});
+      PeakFileOptions options = MzMLFile().getOptions();
+      options.setMSLevels({1});
       PeakMap map;
-      mzml.load(in[r], map);
+      FLASHHelperClasses::loadExperiment(in[r], map, options, ProgressLogger::NONE);
       map.sortSpectra(true);
       return map;
     };

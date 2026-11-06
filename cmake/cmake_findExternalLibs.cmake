@@ -239,3 +239,37 @@ if (WITH_GUI)
 
 endif()
 #------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+# openms-thermo-bridge (Thermo .raw reading; backported from OpenMS develop, 2026-11)
+if (WITH_THERMO_RAW)
+  find_package(OpenMSThermoBridge 1.0.0 QUIET)
+  if(OpenMSThermoBridge_FOUND)
+    message(STATUS "openms-thermo-bridge: using system installation")
+  else()
+    message(STATUS "openms-thermo-bridge: system installation not found, fetching from git")
+    include(FetchContent)
+    FetchContent_Declare(
+      OpenMSThermoBridge
+      GIT_REPOSITORY https://github.com/OpenMS/openms-thermo-bridge.git
+      GIT_TAG        75849ecf6f600a3e52479823043842e571a774ae  # v1.0.0, as OpenMS develop pins it
+    )
+    set(OPENMS_THERMO_BRIDGE_BUILD_CLI OFF CACHE BOOL "" FORCE)
+    set(OPENMS_THERMO_BRIDGE_ENABLE_VENDOR_DOWNLOAD ON CACHE BOOL "" FORCE)
+    set(OPENMS_THERMO_BRIDGE_DOWNLOAD_TEST_DATA OFF CACHE BOOL "" FORCE)
+    # a shared library, as in OpenMS develop (a static bridge duplicated std::exception's typeinfo on macOS)
+    set(_openms_saved_build_testing ${BUILD_TESTING})
+    set(BUILD_TESTING OFF)
+    FetchContent_MakeAvailable(OpenMSThermoBridge)
+    set(BUILD_TESTING ${_openms_saved_build_testing})
+    if(TARGET openms_thermo_bridge)
+      set_target_properties(openms_thermo_bridge PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}")
+      install_library(openms_thermo_bridge)
+      openms_register_export_target(openms_thermo_bridge)
+    endif()
+    message(STATUS "openms-thermo-bridge: built from source (${OpenMSThermoBridge_SOURCE_DIR})")
+  endif()
+endif()

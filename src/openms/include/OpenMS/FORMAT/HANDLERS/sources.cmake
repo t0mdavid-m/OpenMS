@@ -27,6 +27,9 @@ UniProtXMLHandler.h
 XMLHandler.h
 XQuestResultXMLHandler.h
 )
+if (WITH_THERMO_RAW)
+  list(APPEND sources_list_h ThermoRawFileMetadata.h ThermoRawScanReader.h)
+endif()
 
 ### add path to the filenames
 set(sources_h)

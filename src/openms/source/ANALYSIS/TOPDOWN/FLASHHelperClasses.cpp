@@ -8,6 +8,8 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/CHEMISTRY/ModificationsDB.h>
+#include <OpenMS/FORMAT/FileHandler.h>
+#include <OpenMS/FORMAT/MzMLFile.h>
 #include <algorithm>
 #include <cctype>
 #include <map>
@@ -261,6 +263,27 @@ namespace OpenMS
   FLASHHelperClasses::LogMzPeak::LogMzPeak(const Peak1D& peak, const bool positive) :
       mz(peak.getMZ()), intensity(peak.getIntensity()), logMz(getLogMz(peak.getMZ(), positive)), abs_charge(0), is_positive(positive), isotopeIndex(0)
   {
+  }
+
+  void FLASHHelperClasses::loadExperiment(const String& file, PeakMap& map, const PeakFileOptions& options, ProgressLogger::LogType log)
+  {
+    if (FileHandler::getTypeByFileName(file) == FileTypes::RAW)
+    {
+#ifdef WITH_THERMO_RAW
+      FileHandler file_handler;
+      file_handler.setOptions(options);
+      file_handler.loadExperiment(file, map, {FileTypes::RAW}, log);
+      return;
+#else
+      throw Exception::InvalidParameter(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
+                                        "'" + file + "' is a Thermo .raw file, which this build cannot read (OpenMS built without WITH_THERMO_RAW): "
+                                        "convert it to mzML first, e.g. with ThermoRawFileParser.");
+#endif
+    }
+    MzMLFile mzml;
+    mzml.setLogType(log);
+    mzml.setOptions(options);
+    mzml.load(file, map);
   }
 
   const ResidueModification* FLASHHelperClasses::resolveVariableModification(const String& spec_in, bool& protein_n_term)

@@ -12,7 +12,11 @@
 #include <OpenMS/CHEMISTRY/Residue.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
 #include <OpenMS/CONCEPT/Constants.h>
+#include <OpenMS/FORMAT/FileHandler.h>
 #include <OpenMS/FORMAT/MzMLFile.h>
+#ifdef WITH_THERMO_RAW
+#include <OpenMS/FORMAT/ThermoRawFile.h>
+#endif
 #include <OpenMS/INTERFACES/IMSDataConsumer.h>
 #include <OpenMS/METADATA/ExperimentalSettings.h>
 #include <OpenMS/METADATA/SpectrumLookup.h>
@@ -1404,6 +1408,28 @@ namespace
 
 Size FLASHAnnotatorAlgorithm::loadSpectra(const String& mzml_file, const std::set<int>& scans, std::map<int, MSSpectrum>& spectra)
 {
+  if (FileHandler::getTypeByFileName(mzml_file) == FileTypes::RAW)
+  {
+#ifdef WITH_THERMO_RAW
+    // a Thermo .raw file, streamed with Thermo's peak picking (centroided), as FLASHHelperClasses::loadExperiment reads it; its native
+    // IDs always hold the scan number
+    ThermoRawFile raw;
+    raw.setLogType(ProgressLogger::NONE);
+    ThermoRawFile::Options raw_options = raw.getOptions();
+    raw_options.centroid = true;
+    raw_options.checksum = false;
+    raw_options.skip_chromatograms = true;
+    raw_options.ms_levels = {2, 3, 4, 5};
+    raw.setOptions(raw_options);
+    NeededSpectraConsumer consumer(scans, false, spectra);
+    raw.transform(mzml_file, &consumer);
+    return consumer.readCount();
+#else
+    throw Exception::InvalidParameter(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
+                                      "'" + mzml_file + "' is a Thermo .raw file, which this build cannot read (OpenMS built without WITH_THERMO_RAW): "
+                                      "convert it to mzML first, e.g. with ThermoRawFileParser.");
+#endif
+  }
   MzMLFile mzml;
   mzml.setLogType(ProgressLogger::NONE);
   PeakFileOptions options = mzml.getOptions();

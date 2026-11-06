@@ -72,8 +72,11 @@ protected:
   // it gets automatically called on tool execution
   void registerOptionsAndFlags_() override
   {
-    registerInputFile_("in", "<file>", "", "Input file in mzML format. ");
-    setValidFormats_("in", ListUtils::create<String>("mzML"));
+    registerInputFile_("in", "<file>", "",
+                       "Input file: mzML (profile or centroid), or a Thermo .raw file (recognised by its extension; read with Thermo's peak "
+                       "picking, so centroided, as ThermoRawFileParser converts it by default; needs OpenMS built with WITH_THERMO_RAW and the "
+                       ".NET 8 runtime).");
+    setValidFormats_("in", ListUtils::create<String>("mzML,raw"));
 
     registerOutputFile_("out", "<file>", "", "Default output tsv file containing deconvolved features");
     setValidFormats_("out", ListUtils::create<String>("tsv"));
@@ -276,9 +279,7 @@ protected:
       opt.setMSLevels(ms_levels);
     }
 
-    mzml.setLogType(log_type_);
-    mzml.setOptions(opt);
-    mzml.load(in_file, map);
+    FLASHHelperClasses::loadExperiment(in_file, map, opt, log_type_);
 
     std::vector<DeconvolvedSpectrum> deconvolved_spectra;
     std::vector<FLASHHelperClasses::MassFeature> deconvolved_features;

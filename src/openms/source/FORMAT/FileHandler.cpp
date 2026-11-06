@@ -12,6 +12,9 @@
 #include <OpenMS/FORMAT/DTA2DFile.h>
 #include <OpenMS/FORMAT/EDTAFile.h>
 #include <OpenMS/FORMAT/MzXMLFile.h>
+#ifdef WITH_THERMO_RAW
+#include <OpenMS/FORMAT/ThermoRawFile.h>
+#endif
 #include <OpenMS/FORMAT/MzMLFile.h>
 #include <OpenMS/FORMAT/FeatureXMLFile.h>
 #include <OpenMS/FORMAT/ConsensusXMLFile.h>
@@ -764,6 +767,46 @@ namespace OpenMS
         MSPGenericFile().load(filename, exp);
       }
       break;
+
+#ifdef WITH_THERMO_RAW
+      case FileTypes::RAW:
+      {
+        // Thermo's peak picking (centroided spectra), as ThermoRawFileParser and FileConverter do by default; the MS levels and the
+        // retention time range are applied while reading (scans not selected are not decoded), the m/z and intensity ranges after it
+        ThermoRawFile f;
+        f.setLogType(log);
+        ThermoRawFile::Options raw_options = f.getOptions();
+        raw_options.centroid = true;
+        raw_options.checksum = false;
+        if (options_.hasMSLevels()) { raw_options.ms_levels.assign(options_.getMSLevels().begin(), options_.getMSLevels().end()); }
+        if (options_.hasRTRange())
+        {
+          raw_options.rt_min = options_.getRTRange().minPosition()[0];
+          raw_options.rt_max = options_.getRTRange().maxPosition()[0];
+        }
+        raw_options.metadata_only = options_.getMetadataOnly() || ! options_.getFillData();
+        raw_options.skip_chromatograms = options_.getSkipChromatograms();
+        f.setOptions(raw_options);
+        f.load(filename, exp);
+        if (options_.hasMZRange() || options_.hasIntensityRange())
+        {
+          for (auto& spec : exp)
+          {
+            std::vector<Size> kept;
+            kept.reserve(spec.size());
+            for (Size i = 0; i < spec.size(); ++i)
+            {
+              if (options_.hasMZRange() && ! options_.getMZRange().encloses(DPosition<1>(spec[i].getMZ()))) continue;
+              if (options_.hasIntensityRange() && ! options_.getIntensityRange().encloses(DPosition<1>(spec[i].getIntensity()))) continue;
+              kept.push_back(i);
+            }
+            if (kept.size() != spec.size()) spec.select(kept);
+          }
+          exp.updateRanges();
+        }
+      }
+      break;
+#endif
 
       default: 
       {
