@@ -1917,7 +1917,6 @@ Constructors
         .def("getChargeIntensity", [](const OpenMS::PeakGroup& self, int abs_charge) { return self.getChargeIntensity(abs_charge); }, "abs_charge"_a, "Returns intensity for given charge")
         .def("getIsotopeIntensities", [](const OpenMS::PeakGroup& self) -> const std::vector<float> & { return self.getIsotopeIntensities(); }, "Returns per-isotope intensities")
         .def("getIsotopeCosine", [](const OpenMS::PeakGroup& self) { return self.getIsotopeCosine(); }, "Returns the isotope cosine score")
-        .def("getPeakOccupancy", [](const OpenMS::PeakGroup& self) { return self.getPeakOccupancy(); }, "Returns peak occupancy (0-1)")
         .def("getRepAbsCharge", [](const OpenMS::PeakGroup& self) { return self.getRepAbsCharge(); }, "Returns the representative charge")
         .def("getQscore", [](const OpenMS::PeakGroup& self) { return self.getQscore(); }, "Returns the quality score (0-1)")
         .def("getQscore2D", [](const OpenMS::PeakGroup& self) { return self.getQscore2D(); }, "Returns the 2D quality score incorporating feature-level information")

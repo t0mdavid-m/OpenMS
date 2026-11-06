@@ -9,6 +9,9 @@
 #pragma once
 
 #include <OpenMS/CHEMISTRY/ISOTOPEDISTRIBUTION/CoarseIsotopePatternGenerator.h>
+#ifdef _MSC_VER
+using uint = unsigned int; // POSIX uint not available on MSVC; was provided transitively via Qt
+#endif
 #include <OpenMS/CHEMISTRY/ProForma.h>
 #include <OpenMS/CHEMISTRY/ISOTOPEDISTRIBUTION/IsotopeDistribution.h>
 #include <OpenMS/CONCEPT/Constants.h>
