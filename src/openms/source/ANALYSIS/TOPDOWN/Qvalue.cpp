@@ -30,15 +30,15 @@ namespace OpenMS
     return ret;
   }
 
-  std::map<uint, double> Qvalue::updatePeakGroupQvalues(std::vector<DeconvolvedSpectrum>& deconvolved_spectra) // per ms level + precursor update as well.
+  std::map<UInt, double> Qvalue::updatePeakGroupQvalues(std::vector<DeconvolvedSpectrum>& deconvolved_spectra) // per ms level + precursor update as well.
   {
-    std::map<uint, double> noise_weights; // per MS level (the weight of the last level was returned for all levels)
-    std::map<uint, std::vector<double>> score_map_target; // target PeakGroupScoring vector per ms level
-    std::map<uint, std::vector<double>> score_signal_decoy_map; // signal decoy PeakGroupScoring vector per ms level
-    std::map<uint, std::vector<double>> score_noise_decoy_map; // noise decoy PeakGroupScoring vector per ms level
+    std::map<UInt, double> noise_weights; // per MS level (the weight of the last level was returned for all levels)
+    std::map<UInt, std::vector<double>> score_map_target; // target PeakGroupScoring vector per ms level
+    std::map<UInt, std::vector<double>> score_signal_decoy_map; // signal decoy PeakGroupScoring vector per ms level
+    std::map<UInt, std::vector<double>> score_noise_decoy_map; // noise decoy PeakGroupScoring vector per ms level
     // qscore -> qvalue per ms level as two arrays, filled with the unique qscores in descending order (a std::map built from them in this
     // insertion order is the former table)
-    std::map<uint, std::pair<std::vector<double>, std::vector<double>>> qscore_qvalue_arrays;
+    std::map<UInt, std::pair<std::vector<double>, std::vector<double>>> qscore_qvalue_arrays;
 
     // to calculate qvalues per ms level, store Qscores per ms level
     std::vector<bool> used_feature_indices; // the feature indices seen so far, by index
@@ -48,10 +48,10 @@ namespace OpenMS
       if (deconvolved_spectrum.empty())
         continue;
 
-      uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
+      UInt ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
       for (auto& pg : deconvolved_spectrum)
       {
-        const uint feature_index = pg.getFeatureIndex();
+        const UInt feature_index = pg.getFeatureIndex();
         if (feature_index > 0 && feature_index < used_feature_indices.size() && used_feature_indices[feature_index])
           continue;
         if (feature_index >= used_feature_indices.size()) used_feature_indices.resize((Size)feature_index + 1, false);
@@ -168,7 +168,7 @@ namespace OpenMS
     // refine qvalues to make them monotonic decreasing
     for (const auto& titem : score_map_target)
     {
-      uint ms_level = titem.first;
+      UInt ms_level = titem.first;
       auto& [qscore_keys, qvalue_values] = qscore_qvalue_arrays[ms_level];
       bool key_nan = false;
       for (double qs : qscore_keys) key_nan = key_nan || std::isnan(qs);

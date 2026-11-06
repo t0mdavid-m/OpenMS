@@ -78,17 +78,17 @@ namespace OpenMS
     }
 
     /// get the noise decoy weight of an MS level (1 if not determined)
-    double getNoiseDecoyWeight(uint ms_level) const
+    double getNoiseDecoyWeight(UInt ms_level) const
     {
       const auto it = noise_decoy_weights_.find(ms_level);
       return it == noise_decoy_weights_.end() ? 1.0 : it->second;
     }
 
     /// get the noise decoy weights by MS level - 1 (for the writers), for MS levels 1 to @p max_ms_level
-    std::vector<double> getNoiseDecoyWeights(uint max_ms_level) const
+    std::vector<double> getNoiseDecoyWeights(UInt max_ms_level) const
     {
       std::vector<double> weights;
-      for (uint l = 1; l <= max_ms_level; l++) weights.push_back(getNoiseDecoyWeight(l));
+      for (UInt l = 1; l <= max_ms_level; l++) weights.push_back(getNoiseDecoyWeight(l));
       return weights;
     }
     /// get scan number of the spectrum in @p index -th in @p map
@@ -145,7 +145,7 @@ namespace OpenMS
     double isolation_window_size_{3.0};
 
     /// noise decoy weight of each MS level, determined with the q-value calculation
-    std::map<uint, double> noise_decoy_weights_;
+    std::map<UInt, double> noise_decoy_weights_;
     /// ADR-0046: the commanded MS2 scans by scan number, each naming the survey its command was decided from
     std::map<int, ScanCommandJoin::Located> located_by_scan_;
     /// a map from native ID to precursor peak
@@ -221,7 +221,7 @@ namespace OpenMS
     PeakGroup peakGroupFromCommand_(const ScanCommandJoin::Located& located) const;
 
     /// register the precursor peak group (or mass) if possible for MSn (n>1) spectrum.
-    void findPrecursorPeakGroupsForMSnSpectra_(const MSExperiment& map, const std::vector<DeconvolvedSpectrum>& deconvolved_spectra, uint ms_level);
+    void findPrecursorPeakGroupsForMSnSpectra_(const MSExperiment& map, const std::vector<DeconvolvedSpectrum>& deconvolved_spectra, UInt ms_level);
 
     /**
      * Choose a precursor mass of an MSn spectrum among candidate masses by the fragments: a candidate mass M scores its complementary
@@ -241,7 +241,7 @@ namespace OpenMS
                                            double tol_ppm);
 
     /// determine tolerance
-    void determineTolerance_(const MSExperiment& map, const Param& sd_param, const FLASHHelperClasses::PrecalculatedAveragine& avg, uint ms_level);
+    void determineTolerance_(const MSExperiment& map, const Param& sd_param, const FLASHHelperClasses::PrecalculatedAveragine& avg, UInt ms_level);
 
     /// filter low intensity peaks
     static void filterLowPeaks_(MSExperiment& map);

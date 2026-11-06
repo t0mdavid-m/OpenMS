@@ -32,12 +32,12 @@ namespace OpenMS
     static void writeHeader(std::fstream& fs, bool report_decoy = false, bool write_abundance = false);
 
     /// write header line for topFD feature file
-    static void writeTopFDFeatureHeader(std::fstream& fs, uint ms_level);
+    static void writeTopFDFeatureHeader(std::fstream& fs, UInt ms_level);
 
     /// write the features in regular file output; with @p abundances (feature index -> abundance and the number of raw mass traces it is
     /// summed over, FLASHDeconv -quant), the two columns are appended to each row (nan and 0 for a feature without an entry)
     static void writeFeatures(const std::vector<FLASHHelperClasses::MassFeature>& mass_features, const std::string& file_name, std::fstream& fs, bool report_decoy = false,
-                              const std::map<uint, std::pair<double, Size>>* abundances = nullptr);
+                              const std::map<UInt, std::pair<double, Size>>* abundances = nullptr);
 
     /**
      * @brief Find mass features and write features in TopFD format files.
@@ -50,7 +50,7 @@ namespace OpenMS
      */
 
     static void writeTopFDFeatures(std::vector<DeconvolvedSpectrum>& deconvolved_spectra, const std::vector<FLASHHelperClasses::MassFeature>& mass_features,
-                                   const std::map<int, double>& scan_rt_map, const std::string& file_name, std::fstream& fs, uint ms_level);
+                                   const std::map<int, double>& scan_rt_map, const std::string& file_name, std::fstream& fs, UInt ms_level);
 
   };
 } // namespace OpenMS

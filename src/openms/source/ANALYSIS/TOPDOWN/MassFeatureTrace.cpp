@@ -17,7 +17,7 @@ namespace OpenMS
   namespace
   {
     /// the process-wide feature index (numberFeatures)
-    uint next_feature_index = 1;
+    UInt next_feature_index = 1;
   }
 
   void MassFeatureTrace::resetFeatureIndex()

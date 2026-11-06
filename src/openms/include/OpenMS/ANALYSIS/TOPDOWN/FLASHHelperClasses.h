@@ -156,7 +156,7 @@ namespace OpenMS
     {
     public:
       /// feature index;
-      uint index;
+      UInt index;
       /// the trace calculated from the masses
       MassTrace mt;
       /// per charge and isotope intensities
@@ -173,7 +173,7 @@ namespace OpenMS
       double isotope_score, qscore;
       double rep_mz;
       bool is_decoy;
-      uint ms_level;
+      UInt ms_level;
       /// features are compared
       bool operator<(const MassFeature& a) const
       {

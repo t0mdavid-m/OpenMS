@@ -297,18 +297,18 @@ namespace OpenMS
     int getMinNegativeIsotopeIndex() const;
 
     /// set index of this peak group
-    void setIndex(uint i);
+    void setIndex(UInt i);
 
     /// set Q score 2D
     void setQscore2D(double fqscore);
 
     /// set feature index
-    void setFeatureIndex(uint findex);
+    void setFeatureIndex(UInt findex);
 
     /// get index of this peak group
-    uint getIndex() const;
+    UInt getIndex() const;
     /// get feature index of this peak group
-    uint getFeatureIndex() const;
+    UInt getFeatureIndex() const;
 
     /// iterators for the signal LogMz peaks in this PeakGroup
     std::vector<FLASHHelperClasses::LogMzPeak>::const_iterator begin() const noexcept;
@@ -389,9 +389,9 @@ namespace OpenMS
     /// charge range
     int min_abs_charge_ = 0, max_abs_charge_ = -1;
     /// peak group index
-    uint index_ = 0;
+    UInt index_ = 0;
     /// feature index in which this peak group is included. 0 if not included in any feature
-    uint findex_ = 0;
+    UInt findex_ = 0;
     /// scan number
     int scan_number_ = 0;
     /// is positive or not

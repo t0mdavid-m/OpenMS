@@ -231,9 +231,9 @@ protected:
     double max_rt = getDoubleOption_("max_rt") * 60.0;
     int max_ms_level = getIntOption_("max_ms_level");
 
-    std::map<uint, int> per_ms_level_spec_count;
-    std::map<uint, int> per_ms_level_deconv_spec_count;
-    std::map<uint, int> per_ms_level_mass_count;
+    std::map<UInt, int> per_ms_level_spec_count;
+    std::map<UInt, int> per_ms_level_deconv_spec_count;
+    std::map<UInt, int> per_ms_level_mass_count;
     FLASHDeconvAlgorithm fd;
     Param tmp_fd_param = getParam_().copy("FD:", true);
     Param fd_param;
@@ -302,7 +302,7 @@ protected:
     tols = fd.getTolerances();
 
     std::vector<std::vector<FLASHQuantAlgorithm::MassAbundance>> mass_abundances;
-    std::map<uint, FLASHQuantAlgorithm::MassAbundance> feature_abundances;
+    std::map<UInt, FLASHQuantAlgorithm::MassAbundance> feature_abundances;
     if (quant)
     {
       OPENMS_LOG_INFO << "Quantifying the MS1 masses from their raw signal (FLASHQuant) ..." << endl;
@@ -314,14 +314,14 @@ protected:
     // collect statistics for information
     for (auto& it : map)
     {
-      uint ms_level = it.getMSLevel();
+      UInt ms_level = it.getMSLevel();
       if (per_ms_level_spec_count.find(ms_level) == per_ms_level_spec_count.end()) per_ms_level_spec_count[ms_level] = 0;
       per_ms_level_spec_count[ms_level]++;
     }
 
     for (auto& deconvolved_spectrum : deconvolved_spectra)
     {
-      uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
+      UInt ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
       scan_rt_map[deconvolved_spectrum.getScanNumber()] = deconvolved_spectrum.getOriginalSpectrum().getRT();
 
       if (deconvolved_spectrum.empty()) continue;
@@ -380,7 +380,7 @@ protected:
 #ifdef TRAIN_OUT
       for (auto& deconvolved_spectrum : deconvolved_spectra)
       {
-        uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
+        UInt ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
         if (out_spec_file[ms_level - 1].empty()) continue;
         FLASHDeconvSpectrumFile::writeDeconvolvedMasses(deconvolved_spectrum, out_spec_streams[ms_level - 1], in_file, fd.getAveragine(), fd.getDecoyAveragine(),
                                                         tols[ms_level - 1], write_detail, report_decoy, fd.getNoiseDecoyWeight(ms_level));
@@ -389,7 +389,7 @@ protected:
 #else
       // the same rows in the same order, formatted in parallel (with report_FDR, the noise-decoy carries are replayed serially up front)
       FLASHDeconvSpectrumFile::writeDeconvolvedMasses(deconvolved_spectra, out_spec_streams, out_spec_file, in_file, fd.getAveragine(), fd.getDecoyAveragine(), tols,
-                                                      write_detail, report_decoy, fd.getNoiseDecoyWeights((uint)tols.size()), quant ? &mass_abundances : nullptr);
+                                                      write_detail, report_decoy, fd.getNoiseDecoyWeights((UInt)tols.size()), quant ? &mass_abundances : nullptr);
 #endif
 
       for (Size i = 0; i < out_spec_file.size(); i++)
@@ -455,7 +455,7 @@ protected:
 
       for (auto& deconvolved_spectrum : deconvolved_spectra)
       {
-        uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
+        UInt ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
         if (out_topfd_file[ms_level - 1].empty()) continue;
 
         FLASHDeconvSpectrumFile::writeTopFD(deconvolved_spectrum, out_topfd_streams[ms_level - 1], in_file, 1,

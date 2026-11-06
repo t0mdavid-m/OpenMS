@@ -81,7 +81,7 @@ namespace
     return lines;
   }
 
-  FLASHHelperClasses::MassFeature makeFeature(uint index, uint ms_level, double mono_mass, int rep_charge, double rt_start)
+  FLASHHelperClasses::MassFeature makeFeature(UInt index, UInt ms_level, double mono_mass, int rep_charge, double rt_start)
   {
     std::vector<Peak2D> peaks;
     for (int i = 0; i < 3; ++i)
@@ -118,7 +118,7 @@ namespace
 
   /// A precursor peak group: two peaks at the representative charge, the +1 isotope the more
   /// intense, so the observed rep m/z is distinguishable from the monoisotopic m/z.
-  PeakGroup makePrecursorPG(double mono_mass, int z, int ms1_scan, uint feature_index)
+  PeakGroup makePrecursorPG(double mono_mass, int z, int ms1_scan, UInt feature_index)
   {
     PeakGroup pg(z, z, true);
     const double mono_mz = mono_mass / z + Constants::PROTON_MASS_U;
@@ -212,7 +212,7 @@ NEW_TMP_FILE(ms2_out)
 std::vector<std::string> ms1_lines = readLines(ms1_out);
 std::vector<std::string> ms2_lines = readLines(ms2_out);
 
-START_SECTION((static void writeTopFDFeatureHeader(std::fstream& fs, uint ms_level)))
+START_SECTION((static void writeTopFDFeatureHeader(std::fstream& fs, UInt ms_level)))
 {
   ABORT_IF(ms2_lines.empty())
   std::vector<std::string> h2 = splitTabs(ms2_lines[0]);
@@ -231,7 +231,7 @@ START_SECTION((static void writeTopFDFeatureHeader(std::fstream& fs, uint ms_lev
 }
 END_SECTION
 
-START_SECTION((static void writeTopFDFeatures(std::vector<DeconvolvedSpectrum>& deconvolved_spectra, const std::vector<FLASHHelperClasses::MassFeature>& mass_features, const std::map<int, double>& scan_rt_map, const std::string& file_name, std::fstream& fs, uint ms_level)))
+START_SECTION((static void writeTopFDFeatures(std::vector<DeconvolvedSpectrum>& deconvolved_spectra, const std::vector<FLASHHelperClasses::MassFeature>& mass_features, const std::map<int, double>& scan_rt_map, const std::string& file_name, std::fstream& fs, UInt ms_level)))
 {
   // 2 traced MS1 targets + 1 minted synthetic row; f3 is MSn and is never written here
   TEST_EQUAL(ms1_lines.size(), 1 + 3)

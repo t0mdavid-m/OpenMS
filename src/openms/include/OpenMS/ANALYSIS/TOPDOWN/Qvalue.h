@@ -33,7 +33,7 @@ namespace OpenMS
     /// score at or above it (the targets counted at that threshold are the same), the highest target score's if it is above all.
     /// @param deconvolved_spectra target and decoy deconvolved spectra
     /// @return the noise decoy weight of each MS level (by MS level) for decoy output
-    static std::map<uint, double> updatePeakGroupQvalues(std::vector<DeconvolvedSpectrum>& deconvolved_spectra);
+    static std::map<UInt, double> updatePeakGroupQvalues(std::vector<DeconvolvedSpectrum>& deconvolved_spectra);
 
   private:
   };

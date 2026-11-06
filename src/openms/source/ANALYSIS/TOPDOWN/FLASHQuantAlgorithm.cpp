@@ -2419,7 +2419,7 @@ namespace OpenMS
   void FLASHQuantAlgorithm::runFromDeconvolvedMasses(const PeakMap& ms1_map, const std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
                                                      const FLASHHelperClasses::PrecalculatedAveragine& avg,
                                                      std::vector<std::vector<MassAbundance>>& mass_abundances,
-                                                     std::map<uint, MassAbundance>& feature_abundances,
+                                                     std::map<UInt, MassAbundance>& feature_abundances,
                                                      const std::vector<FLASHHelperClasses::MassFeature>* mass_features)
   {
     fd_seeded_ = true;
@@ -2476,7 +2476,7 @@ namespace OpenMS
     struct MassEntry
     {
       Size spectrum, mass;
-      uint feature;
+      UInt feature;
       double mono_mass;
       float intensity;
       std::vector<std::pair<Size, int>> traces; // (trace, charge) of its raw peaks
@@ -2507,7 +2507,7 @@ namespace OpenMS
     // union-find over the masses; a root carries the feature of its set (0: none)
     std::vector<Size> parent(entries.size());
     std::iota(parent.begin(), parent.end(), 0);
-    std::vector<uint> set_feature(entries.size());
+    std::vector<UInt> set_feature(entries.size());
     for (Size e = 0; e < entries.size(); ++e) set_feature[e] = entries[e].feature;
     std::function<Size(Size)> root = [&](Size a) { return parent[a] == a ? a : parent[a] = root(parent[a]); };
     const auto join = [&](Size a, Size b) {
@@ -2519,7 +2519,7 @@ namespace OpenMS
       if (set_feature[a] == 0) set_feature[a] = set_feature[b];
     };
     {
-      std::map<uint, Size> first_of_feature;
+      std::map<UInt, Size> first_of_feature;
       for (Size e = 0; e < entries.size(); ++e)
       {
         if (entries[e].feature == 0) continue;
@@ -2562,7 +2562,7 @@ namespace OpenMS
       std::vector<std::pair<Size, Size>> masses;            // (deconvolved spectrum, mass)
     };
     std::vector<MassGroup> groups;
-    std::map<uint, Size> group_of_feature;
+    std::map<UInt, Size> group_of_feature;
     {
       std::vector<long> group_of_root(entries.size(), -1);
       for (Size e = 0; e < entries.size(); ++e)
@@ -2769,7 +2769,7 @@ namespace OpenMS
     Size filled = 0;
     if (mass_features != nullptr)
     {
-      std::map<uint, double> feature_quantity;
+      std::map<UInt, double> feature_quantity;
       std::vector<double> ratios;
       for (const auto& mf : *mass_features)
       {
