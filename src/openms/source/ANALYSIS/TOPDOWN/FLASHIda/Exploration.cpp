@@ -316,13 +316,24 @@ namespace OpenMS
       const double* mzs, const double* ints, int length,
       double rt, ScanCommandQueue& queue, ProteoformTracker* tracker, int precursor_id)
   {
+    const VariantInput in = prepareVariant(tracking_id, mzs, ints, length, rt);
+    if (!in.known) return {};
+    return applyVariant(in, nullptr, false, queue, tracker, precursor_id);
+  }
+
+  Exploration::VariantInput Exploration::prepareVariant(int tracking_id, const double* mzs, const double* ints,
+                                                        int length, double rt)
+  {
+    VariantInput in;
+    in.tracking_id = tracking_id;
+
     // Look up the group to get correct precursor context for deconvolution
     auto vit = variant_tracking_map_.find(tracking_id);
-    if (vit == variant_tracking_map_.end()) return {};
+    if (vit == variant_tracking_map_.end()) return in;
 
     int group_id = vit->second.group_id;
     auto git = active_groups_.find(group_id);
-    if (git == active_groups_.end()) return {};
+    if (git == active_groups_.end()) return in;
     const ExplorationGroup& group = git->second;
 
     // Charge ceiling = the highest charge THIS VARIANT ACTUALLY ISOLATED, not the group's anchor
@@ -353,21 +364,45 @@ namespace OpenMS
       const ScanCommand& vcmd = group.variants[variant_slot].cmd;
       if (vcmd.num_stages > 0) precursor_charge = maxIsolatedCharge(vcmd, vcmd.num_stages - 1);
       measured_only = isTrapAnalyzer(vcmd.analyzer);
+      in.activation_type = group.variants[variant_slot].activation_type;
     }
 
     // Deconvolve with correct precursor context from the group -- unless the variant is a trap
     // pre-scan, which is never deconvolved: unit-resolution peaks have no business in a ppm-tolerance
     // identification, and the only thing read from such a scan is the raw window sum.
-    DeconvolvedSpectrum ms2_deconv(tracking_id);
+    in.deconv = DeconvolvedSpectrum(tracking_id);
     if (!measured_only && mzs != nullptr && ints != nullptr && length > 0)
     {
       exploration_deconv_->deconvolveMSn(mzs, ints, length, rt,
                                          group.precursor_mass, precursor_charge);
-      ms2_deconv = exploration_deconv_->storedMS2();
+      in.deconv = exploration_deconv_->storedMS2();
+      in.deconvolved = true;
     }
     last_result_deconvolved_ = !measured_only;
 
-    return feedResultImpl_(tracking_id, ms2_deconv, mzs, ints, length, queue, tracker, precursor_id, measured_only);
+    in.known = true;
+    in.msn_level = group.msn_level;
+    in.measured_only = measured_only;
+    // The precursor SHARE is read for every variant under every metric (ADR-0048 d.1): it is what the
+    // share-based metrics score, what the Kinetic Model fits (ADR-0047), and what scan_results logs.
+    // No reference scan exists; the share is the window's fraction of the scan's own signal. Read here,
+    // where the raw arrays still exist; applyVariant stores it on the variant.
+    in.precursor_share = precursorShare_(group, mzs, ints, length);
+    return in;
+  }
+
+  bool Exploration::variantNeedsSearch(const VariantInput& in) const
+  {
+    // computeFragmentMatch_ returns an empty match without matching for no sequence or an empty
+    // spectrum; a trap variant is never matched (ADR-0045); an MS3 variant is not an MS2 search
+    // (ADR-0061 d.2) and stays on the analysis thread.
+    return in.known && in.msn_level == 2 && !in.measured_only && in.deconvolved && !in.deconv.empty()
+           && !config_.identification().sequence.empty();
+  }
+
+  FragmentAnalysis::ProteoformMatch Exploration::searchVariant(const VariantInput& in) const
+  {
+    return computeFragmentMatch_(in.deconv, in.msn_level, in.activation_type);
   }
 
   Exploration::FeedResultInfo Exploration::feedResultImpl_(int tracking_id,
@@ -375,6 +410,28 @@ namespace OpenMS
       const double* mzs, const double* ints, int length,
       ScanCommandQueue& queue, ProteoformTracker* tracker, int precursor_id, bool measured_only)
   {
+    // The deconvolution-bypass entry (ExplorationTestAccess): the caller supplies the spectrum. The share
+    // still needs the group's window, so it is read here exactly as prepareVariant reads it.
+    VariantInput in;
+    in.tracking_id = tracking_id;
+    in.measured_only = measured_only;
+    in.deconv = msn_deconv;
+    auto rit = variant_tracking_map_.find(tracking_id);
+    if (rit != variant_tracking_map_.end())
+    {
+      auto git = active_groups_.find(rit->second.group_id);
+      if (git != active_groups_.end()) in.precursor_share = precursorShare_(git->second, mzs, ints, length);
+    }
+    return applyVariant(in, nullptr, false, queue, tracker, precursor_id);
+  }
+
+  Exploration::FeedResultInfo Exploration::applyVariant(const VariantInput& in,
+      const FragmentAnalysis::ProteoformMatch* searched, bool dropped,
+      ScanCommandQueue& queue, ProteoformTracker* tracker, int precursor_id)
+  {
+    const int tracking_id = in.tracking_id;
+    const DeconvolvedSpectrum& msn_deconv = in.deconv;
+    const bool measured_only = in.measured_only;
     FeedResultInfo info;
 
     // Look up the variant reference
@@ -396,11 +453,9 @@ namespace OpenMS
 
     v.result = msn_deconv;
     v.measured_only = measured_only;
-    // The precursor SHARE is read for every variant under every metric (ADR-0048 d.1): it is what the
-    // share-based metrics score, what the Kinetic Model fits (ADR-0047), and what scan_results logs.
-    // No reference scan exists; the share is the window's fraction of the scan's own signal.
-    v.precursor_share = precursorShare_(group, mzs, ints, length);
+    v.precursor_share = in.precursor_share;   // read by prepareVariant (ADR-0048 d.1)
     FragmentAnalysis::ProteoformMatch frag{};
+    const FragmentAnalysis::ProteoformMatch no_match{};
     if (measured_only)
     {
       // Window and total only (ADR-0045). The metric is share-based by config -- Config::validate
@@ -412,10 +467,20 @@ namespace OpenMS
                   ? computeRemainingPrecursorScore_(group, v.precursor_share)
                   : -1.0;
     }
+    else if (dropped)
+    {
+      // ADR-0062 d.5: the backlog dropped this variant's search, so it has no match. A count it never took
+      // must not compete, so fragment_count leaves it unscored (-1.0, which never wins); every other metric
+      // scores from what was read under the lock, as for any variant. It is not pooled (below).
+      v.score = (group.exploration_metric == ExplorationMetric::FragmentCount)
+                  ? -1.0
+                  : computeExplorationScore_(group.exploration_metric, msn_deconv, group, v.precursor_share,
+                                             &frag, v.activation_type, &no_match);
+    }
     else
     {
       v.score = computeExplorationScore_(group.exploration_metric, msn_deconv, group, v.precursor_share,
-                                         &frag, v.activation_type);
+                                         &frag, v.activation_type, searched);
     }
     v.tic_coverage = measured_only ? 0.0f : computeTICCoverage_(msn_deconv);
     v.fragment_count = frag.total_match_count;
@@ -451,8 +516,9 @@ namespace OpenMS
     info.identification.result = frag;
 
     // Stage this MS2 variant into the ProteoformTracker for pooling (MS3 evidence folds via foldMs3,
-    // not here). A measured-only (trap) variant is never pooled (ADR-0045).
-    if (tracker != nullptr && group.msn_level == 2 && !v.measured_only)
+    // not here). A measured-only (trap) variant is never pooled (ADR-0045), nor one whose search the
+    // backlog dropped (ADR-0062 d.5).
+    if (tracker != nullptr && group.msn_level == 2 && !v.measured_only && !dropped)
     {
       tracker->feedScan(precursor_id,
                         2,
@@ -906,7 +972,16 @@ namespace OpenMS
       const DeconvolvedSpectrum& result, double faims_cv, ScanCommandQueue& queue,
       const ScanCommand* ms_ctx, ProteoformTracker* tracker, int precursor_id)
   {
-    NextLevelResult nlr;
+    return applyNextLevel(searchNextLevel(msn_level, result, ms_ctx), msn_level, result, faims_cv, queue, ms_ctx,
+                          tracker, precursor_id);
+  }
+
+  // The measuring half (ADR-0062): reads only its arguments and the immutable Config, so a search worker
+  // runs it with no lock held. The FragmentAnalysis it drives holds nothing but the Config.
+  Exploration::NextLevelSearch Exploration::searchNextLevel(int msn_level, const DeconvolvedSpectrum& result,
+                                                            const ScanCommand* ms_ctx) const
+  {
+    NextLevelSearch nlr;
 
     int next_level = msn_level + 1;
     const auto& this_cfg = config_.level(msn_level);
@@ -920,6 +995,7 @@ namespace OpenMS
     // because this function owns identification as well as MS3 target selection, and the former sits above
     // the latter. With no sequence there is nothing to match against, so that is the honest gate.
     if (seq.empty()) return nlr;
+    nlr.ran = true;
 
     int num_targets = this_cfg.max_targets;
 
@@ -948,7 +1024,7 @@ namespace OpenMS
     std::vector<FragmentAnalysis::FragmentScores> frag_scores(num_targets);  // stage-1 (fragment) scoring for MS3 cmd rows
 
     int found = 0;
-    FragmentAnalysis::ProteoformMatch frag_result;
+    FragmentAnalysis::ProteoformMatch& frag_result = nlr.frag_result;
 
     // #46: the metric->matcher selection switch now lives in ProteoformTracker::selectNextLevelTargets
     // (byte-identical: same matcher, same args). Behavior fixes (bail-early / num_targets bound) are deferred.
@@ -972,7 +1048,7 @@ namespace OpenMS
     // source flows to group.proteoform_ctx (:215), the three buildMS3 ms3_proteoform renders and the
     // cached MS2Context. Winner SCORING is decoupled: the returning MS3 (FLASHIda.cpp) and the completed
     // exploration group (below) score against a fresh buildWinnerProteoformContext instead.
-    MS3FragmentMatcher::ProteoformContext proto_ctx;
+    MS3FragmentMatcher::ProteoformContext& proto_ctx = nlr.proto_ctx;
     if (next_level >= 3)
     {
       proto_ctx.region_start = frag_result.region_start;
@@ -987,7 +1063,6 @@ namespace OpenMS
     // caller's log rows. Moving it onto the tracker would give it a caller-facing return type it does not
     // otherwise need, so it stays here by choice, not by oversight.
     nlr.fragment_count = frag_result.total_match_count;
-    nlr.proteoform_match = frag_result;
     if (!seq.empty() && found > 0)
     {
       nlr.matched_protein = config_.identification().sequence;
@@ -1003,7 +1078,27 @@ namespace OpenMS
         nlr.tic_coverage = static_cast<float>(matched_intensity / total_tic);
     }
 
-    num_targets = std::min(num_targets, found);
+    return nlr;
+  }
+
+  // The acquiring half (ADR-0062): everything below the seam, on the analysis thread under its lock.
+  Exploration::NextLevelResult Exploration::applyNextLevel(const NextLevelSearch& search, int msn_level,
+      const DeconvolvedSpectrum& result, double faims_cv, ScanCommandQueue& queue,
+      const ScanCommand* ms_ctx, ProteoformTracker* tracker, int precursor_id)
+  {
+    NextLevelResult nlr;
+    if (!search.ran) return nlr;
+
+    const int next_level = msn_level + 1;
+    const auto& this_cfg = config_.level(msn_level);
+    const auto& next_cfg = config_.level(next_level);
+    const FragmentAnalysis::ProteoformMatch& frag_result = search.frag_result;
+    const MS3FragmentMatcher::ProteoformContext& proto_ctx = search.proto_ctx;
+    nlr.fragment_count = search.fragment_count;
+    nlr.proteoform_match = frag_result;
+    nlr.matched_protein = search.matched_protein;
+    nlr.proteoform_sequence = search.proteoform_sequence;
+    nlr.tic_coverage = search.tic_coverage;
 
     // MS3 DISPATCH GATE -- the four conditions lifted off the entry gate at the top of this function.
     //
@@ -1278,11 +1373,14 @@ namespace OpenMS
       const DeconvolvedSpectrum& spec,
       const ExplorationGroup& group, double share,
       FragmentAnalysis::ProteoformMatch* out_frag,
-      const std::string& activation_type) const
+      const std::string& activation_type,
+      const FragmentAnalysis::ProteoformMatch* searched) const
   {
     // Every Orbitrap variant is matched under every metric at MS2 (the whole-protein matcher is the
-    // right one there); at MS3 the FragmentCount batch re-score is the matcher that counts.
-    FragmentAnalysis::ProteoformMatch fmr = computeFragmentMatch_(spec, group.msn_level, activation_type);
+    // right one there); at MS3 the FragmentCount batch re-score is the matcher that counts. A search
+    // worker may already have run the same matcher on the same spectrum (ADR-0062).
+    FragmentAnalysis::ProteoformMatch fmr =
+        (searched != nullptr) ? *searched : computeFragmentMatch_(spec, group.msn_level, activation_type);
     if (out_frag) *out_frag = fmr;
     switch (metric)
     {

@@ -47,6 +47,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Quantification.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/SearchPool.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/DATASTRUCTURES/ListUtils.h>
 #include <atomic>
@@ -111,6 +112,13 @@ namespace OpenMS
     /// Get the next monotonically increasing tracking ID (thread-safe)
     int getNextTrackingId();
 
+    /// Block until the search pool is idle -- nothing waiting, nothing running -- and return the commands
+    /// the search workers' applies pushed since the previous call (ADR-0062 d.7). For HARNESSES only: a
+    /// drive that waits after every feed sees exactly the order processScan alone produced before the pool
+    /// existed. Production never calls it. Must not be called while analysis_mutex_ is held (a worker's
+    /// apply would wait for the caller). 0 at once when the engine has no pool (no identification section).
+    int waitForSearchIdle();
+
     /// Test-only access (push / queue / queueSize / explorationActive) lives in the test header
     /// FLASHIda_TestAccess.h via this friend, so test scaffolding stays out of the production API.
     friend struct FLASHIdaTestAccess;
@@ -155,10 +163,11 @@ namespace OpenMS
     /// Mutex protecting analysis state: deconv_, selection_, exploration_, faims_, quant_, fragments_,
     /// tracker_, ms2_context_cache_ and next_precursor_id_.
     ///
-    /// ONE acquisition site: processScan (function-scoped, so it is held across the whole
-    /// deconvolution). getNextScanCommand does NOT acquire it and must not start -- the instrument
-    /// event thread calls the drain, and making it wait on a deconvolution to write one TSV row and
-    /// read one map entry is what this arrangement exists to prevent.
+    /// TWO acquisition sites (ADR-0062): processScan (function-scoped, so it is held across the whole
+    /// deconvolution), and a search worker's APPLY step (applyRegularSearch_ / applyVariantSearch_ run
+    /// under it; the search itself holds no lock). getNextScanCommand does NOT acquire it and must not
+    /// start -- the instrument event thread calls the drain, and making it wait on a deconvolution to
+    /// write one TSV row and read one map entry is what this arrangement exists to prevent.
     ///
     /// It no longer serialises the logger. IdaLogger owns a mutex per stream, which matters rather
     /// than being tidier: one shared logger lock would put the drain's writeScanCommandRow behind
@@ -227,7 +236,7 @@ namespace OpenMS
     /// Leaf lock for precursor_id_by_tracking_.
     ///
     /// Lock hierarchy: analysis_mutex_ -> { queue_mutex_, precursor_map_mutex_, the IdaLogger stream
-    /// mutexes }, all leaves. This one is taken ONLY inside the two accessors below, and neither of
+    /// mutexes, the SearchPool's mutex }, all leaves. This one is taken ONLY inside the two accessors below, and neither of
     /// them calls anything -- that is what makes it a leaf and the hierarchy acyclic. Keep it that
     /// way: a queue callback that consulted this map would invert the edge.
     ///
@@ -375,5 +384,69 @@ namespace OpenMS
       if (before_replan_) before_replan_();
     }
 
+    // ===== The search pool (ADR-0062) ===========================================================
+    // processScan copies what a search needs under analysis_mutex_ and returns; a worker searches with
+    // no lock held, then applies under analysis_mutex_ (the second acquisition site). The two job kinds
+    // are exactly the matcher's two callers on an MS2: the regular MS2 (Exploration::searchNextLevel)
+    // and the MS2 exploration variant (Exploration::searchVariant). Nothing else is searched here.
+
+    /// A regular MS2's search: the copies its apply needs once deconv_ has moved on to later scans.
+    struct RegularSearch
+    {
+      int precursor_id = 0;
+      std::string parent_id_str;
+      ScanCommand parent_ctx{};
+      double rt = 0.0;
+      int instrument_scan_number = 0;
+      bool has_spectrum = false;                ///< deconv_.hasStoredMS2() when the job was made
+      DeconvolvedSpectrum spectrum;             ///< deconv_.storedMS2(), copied
+      IdaLogger::ScanRowDescriptor results_row{};   ///< the half-filled row; deconv_spectrum re-pointed at `spectrum`
+      std::vector<std::string> child_ids;
+      int commands_pushed = 0;
+      Exploration::NextLevelSearch result;      ///< filled by the worker
+    };
+
+    /// An MS2 exploration variant's search.
+    struct VariantSearch
+    {
+      int precursor_id = 0;
+      std::string parent_id_str;
+      Exploration::VariantInput input;          ///< prepareVariant's copy (spectrum, share, slot)
+      IdaLogger::ScanRowDescriptor results_row{};
+      FragmentAnalysis::ProteoformMatch match;  ///< filled by the worker
+    };
+
+    /// The regular-MS2 tail from MS3 targeting to the row fields (processScan inline, or a worker's apply).
+    /// @p searched: the worker's search; nullptr runs initiateNextLevel inline, as before the pool.
+    /// @p dropped: the backlog dropped the search -- nothing is matched, planned or identified, and the
+    /// identification columns keep their not-run sentinels (ADR-0062 d.5). Returns commands pushed.
+    /// @p match_spec: the spectrum matched against; @p row_spec: the one the row reports (nullptr = none stored).
+    int finishRegularMS2_(const Exploration::NextLevelSearch* searched, bool dropped, const DeconvolvedSpectrum& match_spec,
+                          const DeconvolvedSpectrum* row_spec, const ScanCommand& parent_ctx, int precursor_id,
+                          const std::string& parent_id_str, double rt, int instrument_scan_number, bool is_quant_scan,
+                          int commands_pushed, std::vector<std::string>& child_ids,
+                          IdaLogger::ScanRowDescriptor& results_row, std::vector<IdaLogger::IdRowDescriptor>& id_rows);
+
+    /// The exploration-variant tail: push the group's commands, seed the MS3 contexts, fill the row and the
+    /// identification rows. @p mass_count / @p spectrum: the variant's own deconvolution. Returns commands pushed.
+    int finishVariantMS2_(Exploration::FeedResultInfo& expl_result, int mass_count, const DeconvolvedSpectrum* spectrum,
+                          int precursor_id, const std::string& parent_id_str, bool dropped,
+                          IdaLogger::ScanRowDescriptor& results_row, std::vector<IdaLogger::IdRowDescriptor>& id_rows);
+
+    /// A worker's apply step: take analysis_mutex_, finish the scan, write its rows. Returns commands pushed.
+    int applyRegularSearch_(RegularSearch& job);
+    int applyVariantSearch_(VariantSearch& job);
+
+    /// Hand a job to the pool; if the backlog drops the oldest waiting job, run its drop() here, under the
+    /// caller's analysis_mutex_. Caller holds analysis_mutex_.
+    void submitSearch_(std::unique_ptr<SearchPool::Job> job);
+
+    /// Test seam run on the worker before every search (FLASHIda_TestAccess.h: block a worker, observe that
+    /// the search runs while a test holds analysis_mutex_). Set before the first feed; empty in production.
+    std::function<void()> before_search_;
+
+    /// The pool. Null without an identification section (nothing is ever searched then). Stopped and joined
+    /// in ~FLASHIda's body, before any member a running apply touches is destroyed.
+    std::unique_ptr<SearchPool> search_pool_;
   };
 }

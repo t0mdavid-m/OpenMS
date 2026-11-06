@@ -61,7 +61,7 @@ namespace OpenMS
   /// and beyond are passed on the stack, so a stale 8-parameter OpenMS.dll simply ignores argument 9
   /// and degrades to the old tracking-id logging. Inserting it before faims_cv would instead make
   /// that DLL read an int as a double and command the wrong FAIMS CV on every scan, silently.
-  /// This still leaves exactly 5 exports: a signature change is not a count change.
+  /// A signature change is not a count change.
   extern "C" OPENMS_DLLAPI int ProcessScan(FLASHIda *obj, double *mzs, double *ints,
       int length, double rt_min, int ms_level, const char *scan_description,
       double faims_cv, int instrument_scan_number);
@@ -71,6 +71,11 @@ namespace OpenMS
 
   /// Get the next monotonically increasing tracking ID (thread-safe)
   extern "C" OPENMS_DLLAPI int GetNextTrackingId(FLASHIda *obj);
+
+  /// Block until the search pool is idle and return the commands its applies pushed since the previous call
+  /// (ADR-0062 d.7); -1 for a null object. The SIXTH export, and the only one production never calls: harnesses
+  /// call it after every ProcessScan so a drive sees exactly the order a synchronous ProcessScan produced.
+  extern "C" OPENMS_DLLAPI int WaitForSearchIdle(FLASHIda *obj);
 
   /// keeps the precalculated averagine to calculate average masses from monoisotopic masses
   static FLASHHelperClasses::PrecalculatedAveragine avg;

@@ -125,6 +125,8 @@ namespace OpenMS
       row.n_levels = rec->n_levels;
       row.precursor_mass_difference = rec->precursor_mass_difference;
     }
+    /// Search-pool backlog: waiting jobs per worker (ADR-0062 d.5). Provisional until measured.
+    constexpr int kSearchBacklogPerThread = 4;
   } // namespace
 
 /// constructor
@@ -153,12 +155,32 @@ FLASHIda::FLASHIda(char* arg) :
     if (config_.level(2).monitor_ms1_enabled || config_.level(3).monitor_ms1_enabled)
       monitor_deconv_ = std::make_unique<Deconvolution>(config_, config_.toleranceList());
 
+    // The search pool (ADR-0062), only when MS2s are matched at all. Each worker sets OpenMP's team size
+    // as above (the setting is per thread and a new thread does not inherit it), so the Tagger's and the
+    // Extender's parallel regions run as they did on the analysis thread. The backlog bound is provisional
+    // (ADR-0062 d.5 sets it from measurement, once search_ms / search_wait_ms are logged).
+    if (config_.identification().enabled())
+    {
+      const int threads = config_.identification().search_threads;
+      search_pool_ = std::make_unique<SearchPool>(threads, static_cast<size_t>(kSearchBacklogPerThread * threads), []
+      {
+  #ifdef _OPENMP
+        omp_set_num_threads(4);
+  #endif
+      });
+    }
+
     // Initialize FAIMS CV atomic for getNextScanCommand reads.
     // relaxed is safe: no other thread can observe this object before construction completes.
     current_faims_cv_.store(faims_.isEnabled() ? faims_.currentCV() : 0.0, std::memory_order_relaxed);
   }
 
-  FLASHIda::~FLASHIda() = default;
+  // Stop the pool FIRST: a running apply touches the tracker, the queue and the logger, and members are
+  // destroyed only after this body returns. Waiting jobs are discarded; a running one finishes.
+  FLASHIda::~FLASHIda()
+  {
+    if (search_pool_) search_pool_->stop();
+  }
 
   /**
    * @brief The MS1 SURVEY arm: deconvolve -> select top-N -> push MS2 (or CE sweep) -> FAIMS cycle.
@@ -614,6 +636,243 @@ FLASHIda::FLASHIda(char* arg) :
     return pushed;
   }
 
+  int FLASHIda::waitForSearchIdle()
+  {
+    return search_pool_ ? search_pool_->waitIdle() : 0;
+  }
+
+  void FLASHIda::submitSearch_(std::unique_ptr<SearchPool::Job> job)
+  {
+    std::unique_ptr<SearchPool::Job> dropped = search_pool_->submit(std::move(job));
+    if (dropped && dropped->drop) dropped->drop();
+  }
+
+  // A worker's apply step: the engine's second analysis_mutex_ acquisition site (ADR-0062). Exactly what
+  // processScan did after the match, then the shared tail's writes -- scan_results row, identification rows.
+  int FLASHIda::applyRegularSearch_(RegularSearch& job)
+  {
+    std::lock_guard<std::mutex> lock(analysis_mutex_);
+    std::vector<IdaLogger::IdRowDescriptor> id_rows;
+    const int pushed = finishRegularMS2_(&job.result, false, job.spectrum, job.has_spectrum ? &job.spectrum : nullptr,
+                                         job.parent_ctx, job.precursor_id, job.parent_id_str, job.rt,
+                                         job.instrument_scan_number, false, job.commands_pushed, job.child_ids,
+                                         job.results_row, id_rows);
+    logger_.writeScanResultRow(job.results_row);
+    for (const auto& r : id_rows)
+      logger_.writeIdentificationRow(r);
+    return pushed;
+  }
+
+  int FLASHIda::applyVariantSearch_(VariantSearch& job)
+  {
+    std::lock_guard<std::mutex> lock(analysis_mutex_);
+    Exploration::FeedResultInfo expl_result =
+        exploration_.applyVariant(job.input, &job.match, false, queue_, &tracker_, job.precursor_id);
+    std::vector<IdaLogger::IdRowDescriptor> id_rows;
+    const int pushed = finishVariantMS2_(expl_result, static_cast<int>(job.input.deconv.size()), &job.input.deconv,
+                                         job.precursor_id, job.parent_id_str, false, job.results_row, id_rows);
+    logger_.writeScanResultRow(job.results_row);
+    for (const auto& r : id_rows)
+      logger_.writeIdentificationRow(r);
+    return pushed;
+  }
+
+  int FLASHIda::finishRegularMS2_(const Exploration::NextLevelSearch* searched, bool dropped,
+                                   const DeconvolvedSpectrum& match_spec, const DeconvolvedSpectrum* row_spec,
+                                   const ScanCommand& parent_ctx, int precursor_id, const std::string& parent_id_str,
+                                   double rt, int instrument_scan_number, bool is_quant_scan, int commands_pushed,
+                                   std::vector<std::string>& child_ids, IdaLogger::ScanRowDescriptor& results_row,
+                                   std::vector<IdaLogger::IdRowDescriptor>& id_rows)
+  {
+    // Identification + MS3 targeting, gated by the SEQUENCE rather than by characterization.mode.
+    // initiateNextLevel owns both, and it decides internally which of the two it performs: with mode
+    // off it matches fragments and returns no commands, with mode on it also dispatches MS3. Gating
+    // the CALL on level(2).selection (i.e. on mode) meant an MS2 in a mode: off run was never
+    // identified at all -- no sequence tags, no fragments, no identification.tsv row.
+    // The identification-row write below sits OUTSIDE this block deliberately and reads
+    // ms3_targeting, which stays default-constructed when the call is skipped.
+    // Also skipped on a quantification scan (ADR-0038): MS3 targets picked off a reporter-release
+    // spectrum would be selected from a spectrum optimised for something else. Identification and
+    // MS3 both belong to the 'R' identification scan, which is the one chosen to fragment
+    // informatively -- and which this Q scan may be about to buy.
+    Exploration::NextLevelResult ms3_targeting;
+    if (config_.identification().enabled() && !is_quant_scan && !dropped)
+    {
+      // initiateNextLevel stamps each command's parent with the MS2 id (parent_ctx.scan_id) at creation.
+      // It serves BOTH MS3 shapes, chosen by config_.hasExploration(3): with MS3 exploration off it
+      // builds one fixed-CE MS3 per target straight from ms_settings.ms3; with it on it builds a CE
+      // sweep. The `exploration_` receiver names the owning object, not a precondition on the scan.
+      // Refine prints its [LEVELS]/[CANDIDATES] block inside the match below with scan=0 (the stored MS2 carries no
+      // scan number), so one attribution line precedes it naming the precursor, the scan's tracking id and number.
+      // ADR-0062: a search worker already ran the measuring half (searchNextLevel) on a copy of this
+      // spectrum; only the acquiring half runs here. Inline (no pool) it is today's single call.
+      if (searched != nullptr)
+      {
+        ms3_targeting = exploration_.applyNextLevel(*searched, 2, match_spec, parent_ctx.faims_cv, queue_, &parent_ctx,
+                                                    &tracker_, precursor_id);
+      }
+      else
+      {
+        if (config_.identification().method == AnnotationMethod::Refine)
+          std::cout << "[REFINE] precursor_id=" << precursor_id << " tracking_id=" << parent_id_str
+                    << " scan=" << instrument_scan_number << std::endl;
+        ms3_targeting = exploration_.initiateNextLevel(2, match_spec, parent_ctx.faims_cv, queue_, &parent_ctx,
+                                                       &tracker_, precursor_id);
+      }
+      for (auto& c : ms3_targeting.commands)
+      {
+        stampAndPush_(c, precursor_id);  // P5: MS3 children inherit the parent MS2's precursor_id
+        child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
+        commands_pushed++;
+      }
+
+      // Cache MS2 context for each MS3 command (for non-exploration identification.tsv)
+      for (size_t ci = 0; ci < ms3_targeting.commands.size(); ++ci)
+      {
+        if (ms3_targeting.commands[ci].msn_level >= 3 && ci < ms3_targeting.ms3_contexts.size())
+        {
+          ms2_context_cache_[ms3_targeting.commands[ci].scan_id] = ms3_targeting.ms3_contexts[ci];
+        }
+      }
+    }
+
+    // Write MS2 identification row if proteoform was matched.
+    // Gate on the actual match (proteoform_match), NOT on ms3_targeting.proteoform_sequence — the
+    // latter is only set when found>0 (MS3 targets were selected), so an unambiguous ID that yields
+    // zero MS3 targets would otherwise be dropped from identification.tsv.
+    if (!ms3_targeting.proteoform_match.proteoform_sequence.empty() && !ms3_targeting.proteoform_match.fragments.empty())
+    {
+      Exploration::MS2Context ms2_ctx;
+      ms2_ctx.proteoform_sequence = ms3_targeting.proteoform_match.proteoform_sequence;
+      ms2_ctx.start_pos = ms3_targeting.proteoform_match.region_start;
+      ms2_ctx.end_pos = ms3_targeting.proteoform_match.region_end;
+      ms2_ctx.ptm_sites = ms3_targeting.proteoform_match.ptm_sites;
+      ms2_ctx.ms1_precursor_mass = parent_ctx.mono_mass;
+      ms2_ctx.ms1_precursor_mz = parent_ctx.stages[0].precursor_mz;
+      ms2_ctx.ms1_precursor_charge = parent_ctx.stages[0].charge_state;
+      // MS2 isolation-window reporting from the resolved command (window-SNR was recorded at MS1
+      // time, keyed by this scan_id). The MS3 triplet stays 0 on MS2 rows.
+      if (parent_ctx.num_stages > 0)
+      {
+        ms2_ctx.ms2_isolation_width = parent_ctx.stages[0].isolation_width;
+        ms2_ctx.ms2_charge_intensity = parent_ctx.precursor_intensity;
+        ms2_ctx.ms2_window_snr = parent_ctx.window_snr;  // Item 2: SNR travels on the command (was the queue map)
+      }
+      id_rows.push_back({parent_id_str, 2, 'R', ms2_ctx, ms3_targeting.proteoform_match, precursor_id, ms3_targeting.tic_coverage, ms3_targeting.proteoform_match.score});  // copy by value (ms2_ctx is local)
+      // ADR-0049: an MS2 row whose match Refine decided carries its record (here and on the exploration MS2
+      // rows); MS3 rows never run Refine and keep the sentinels.
+      fillRefineColumns(id_rows.back());
+    }
+
+    int ms2_mass_count = row_spec != nullptr ? static_cast<int>(row_spec->size()) : 0;
+    const DeconvolvedSpectrum* ms2_spec = row_spec;
+    std::string parent_id(parent_ctx.parent_scan_id);
+
+    // Log the actual MS2 scan-config CE/activation/reaction (single stage) the engine used.
+    std::string ms2_collision_energy = parent_ctx.num_stages > 0 ? std::to_string(parent_ctx.stages[0].collision_energy) : "0";
+    std::string ms2_activation_type = parent_ctx.num_stages > 0
+        ? std::string(parent_ctx.stages[0].activation_type)
+        : config_.level(2).scans[0].activation;
+    std::string ms2_reaction_time = parent_ctx.num_stages > 0 ? std::to_string(parent_ctx.stages[0].reaction_time) : "0";
+    // Identification yield. The DISTINCTION the sentinels exist for: -1 means the tagger never ran
+    // on this spectrum, 0 means it ran and read nothing. Identification runs exactly when a protein
+    // sequence is configured, so that is the condition -- NOT whether it happened to match anything,
+    // which is the reading 0 carries. ms3_targeting.tic_coverage is written only inside its own
+    // found>0 guard and otherwise stays 0.0f, so it needs the same treatment or a spectrum that
+    // matched nothing would be indistinguishable from one never examined.
+    if (config_.identification().enabled() && !dropped)
+    {
+      results_row.tag_count      = ms3_targeting.proteoform_match.tag_count;
+      results_row.fragment_count = ms3_targeting.proteoform_match.total_match_count;
+      results_row.tic_coverage   = ms3_targeting.tic_coverage;
+    }
+    // Fill scan_results row; exploration fields stay at their sentinel defaults.
+    results_row.mass_count         = ms2_mass_count;
+    results_row.commands_pushed    = commands_pushed;
+    results_row.child_ids          = child_ids;
+    results_row.deconv_spectrum    = ms2_spec;
+    results_row.parent_tracking_id = parent_id;
+    results_row.collision_energy   = ms2_collision_energy;
+    results_row.activation_type    = ms2_activation_type;
+    results_row.reaction_time      = ms2_reaction_time;
+
+    std::cout << "[TRACK-RESOLVE] id=" << parent_id_str
+              << " rt=" << rt
+              << " commands=" << commands_pushed
+              << std::endl;
+
+    // Update atomic for lock-free reads by getNextScanCommand
+    publishExplorationState_();
+
+    return commands_pushed;
+  }
+
+  int FLASHIda::finishVariantMS2_(Exploration::FeedResultInfo& expl_result, int mass_count,
+                                   const DeconvolvedSpectrum* spectrum, int precursor_id, const std::string& parent_id_str,
+                                   bool dropped, IdaLogger::ScanRowDescriptor& results_row,
+                                   std::vector<IdaLogger::IdRowDescriptor>& id_rows)
+  {
+    for (auto& c : expl_result.commands)
+    {
+      stampAndPush_(c, precursor_id);
+    }
+    // Seed the parent-MS2 context of every MS3 this group dispatched, so each one identifies when it
+    // returns on the regular MS3 path. Empty unless the group cascaded to MS3.
+    for (const auto& [ms3_scan_id, parent_ms2_context] : expl_result.ms2_context_cache)
+      ms2_context_cache_[ms3_scan_id] = parent_ms2_context;
+
+    int expl_mass_count = mass_count;
+    const DeconvolvedSpectrum* expl_spec = spectrum;
+    std::string parent_id(expl_result.parent_scan_id);
+
+    // Identification yield for an MS2 exploration VARIANT. Every MS2 variant is identified under
+    // every metric (computeFragmentMatch_'s whole-protein matcher is correct at MS2), so these are
+    // real readings, gated only on a sequence being configured.
+    if (config_.identification().enabled() && !dropped)
+    {
+      results_row.tag_count      = expl_result.identification.result.tag_count;
+      results_row.fragment_count = expl_result.identification.result.total_match_count;
+      results_row.tic_coverage   = expl_result.metric.tic_coverage;
+    }
+    // Fill scan_results row in canonical order (copy expl_result.* by value — it dies at block end).
+    results_row.mass_count          = expl_mass_count;
+    results_row.commands_pushed     = static_cast<int>(expl_result.commands.size());
+    results_row.child_ids           = expl_result.child_ids;
+    results_row.deconv_spectrum     = expl_spec;
+    results_row.parent_tracking_id  = parent_id;
+    results_row.exploration_group_id = expl_result.group.group_id;
+    results_row.exploration_metric  = expl_result.metric.exploration_metric;
+    results_row.variant_index       = expl_result.group.variant_index;
+    results_row.total_variants      = expl_result.group.total_variants;
+    results_row.collision_energy    = std::to_string(expl_result.fragmentation.collision_energy);
+    results_row.exploration_score   = expl_result.metric.score;
+    results_row.precursor_share     = expl_result.metric.precursor_share;   // ADR-0048: every variant, every metric
+    fillKineticColumns(results_row, expl_result.kinetic);                    // ADR-0047: the completing row's fit
+    results_row.activation_type     = expl_result.fragmentation.activation_type;
+    results_row.reaction_time       = std::to_string(expl_result.fragmentation.reaction_time);
+    results_row.winner_tracking_id  = expl_result.group.winner_tracking_id;  // "" except the group-completing row
+
+    // MS2 identification row (copy by value before expl_result goes out of scope).
+    if (!expl_result.identification.proteoform_sequence.empty() && !expl_result.identification.result.fragments.empty())
+    {
+      id_rows.push_back({parent_id_str, 2, 'E', expl_result.identification.ms2_context, expl_result.identification.result, precursor_id, expl_result.metric.tic_coverage, expl_result.identification.result.score});
+      fillRefineColumns(id_rows.back());   // ADR-0049: under method refine the variant's own match is a Refine match
+    }
+    // C: winner-re-matched non-winner identification rows (MS2 'E'), each rendering the winner proteoform;
+    // flash_extender_score = -1 marks "no own ID". Populated by Exploration after MS2 finalize.
+    for (const auto& row : expl_result.identification.additional_rows)
+      if (!row.identification_result.fragments.empty())
+      {
+        id_rows.push_back({row.tracking_id, 2, 'E', row.ms2_context, row.identification_result, precursor_id, row.tic_coverage, row.flash_extender_score});
+        // ADR-0049: another variant's self-ID row carries its own Refine record; a winner-re-matched row's match
+        // is built fresh by the tracker with refine null, so it stays at the sentinels.
+        fillRefineColumns(id_rows.back());
+      }
+
+    publishExplorationState_();
+    return static_cast<int>(expl_result.commands.size());
+  }
+
   int FLASHIda::processScan(const double* mzs, const double* ints, int length,
                              double rt, int ms_level, const char* scan_description,
                              double faims_cv, int instrument_scan_number)
@@ -769,66 +1028,46 @@ FLASHIda::FLASHIda(char* arg) :
       // ===== MS2 (exploration variant): score variant -> push children -> fill row =====
       if (exploration_.isExplorationVariant(parent_tracking_id))
       {
-        auto expl_result = exploration_.feedResult(parent_tracking_id, mzs, ints, length, rt, queue_, &tracker_, precursor_id);
-        for (auto& c : expl_result.commands)
+        // ADR-0062: the variant is routed and deconvolved here (exploration_deconv_ is analysis state); a
+        // variant today's matcher reads is then SEARCHED on the pool, and its group completes when that
+        // search returns, not when the scan did. A trap, MS3-free, sequence-less or empty variant is never
+        // matched and is applied inline, exactly as before.
+        Exploration::VariantInput variant_in = exploration_.prepareVariant(parent_tracking_id, mzs, ints, length, rt);
+        if (search_pool_ != nullptr && exploration_.variantNeedsSearch(variant_in))
         {
-          stampAndPush_(c, precursor_id);
-        }
-        // Seed the parent-MS2 context of every MS3 this group dispatched, so each one identifies when it
-        // returns on the regular MS3 path. Empty unless the group cascaded to MS3.
-        for (const auto& [ms3_scan_id, parent_ms2_context] : expl_result.ms2_context_cache)
-          ms2_context_cache_[ms3_scan_id] = parent_ms2_context;
+          auto job = std::make_shared<VariantSearch>();
+          job->precursor_id = precursor_id;
+          job->parent_id_str = parent_id_str;
+          job->input = std::move(variant_in);
+          job->results_row = results_row;
 
-        int expl_mass_count = exploration_.explorationDeconvMassCount();
-        const DeconvolvedSpectrum* expl_spec = exploration_.explorationDeconvSpectrum();
-        std::string parent_id(expl_result.parent_scan_id);
-
-        // Identification yield for an MS2 exploration VARIANT. Every MS2 variant is identified under
-        // every metric (computeFragmentMatch_'s whole-protein matcher is correct at MS2), so these are
-        // real readings, gated only on a sequence being configured.
-        if (config_.identification().enabled())
-        {
-          results_row.tag_count      = expl_result.identification.result.tag_count;
-          results_row.fragment_count = expl_result.identification.result.total_match_count;
-          results_row.tic_coverage   = expl_result.metric.tic_coverage;
-        }
-        // Fill scan_results row in canonical order (copy expl_result.* by value — it dies at block end).
-        results_row.mass_count          = expl_mass_count;
-        results_row.commands_pushed     = static_cast<int>(expl_result.commands.size());
-        results_row.child_ids           = expl_result.child_ids;
-        results_row.deconv_spectrum     = expl_spec;
-        results_row.parent_tracking_id  = parent_id;
-        results_row.exploration_group_id = expl_result.group.group_id;
-        results_row.exploration_metric  = expl_result.metric.exploration_metric;
-        results_row.variant_index       = expl_result.group.variant_index;
-        results_row.total_variants      = expl_result.group.total_variants;
-        results_row.collision_energy    = std::to_string(expl_result.fragmentation.collision_energy);
-        results_row.exploration_score   = expl_result.metric.score;
-        results_row.precursor_share     = expl_result.metric.precursor_share;   // ADR-0048: every variant, every metric
-        fillKineticColumns(results_row, expl_result.kinetic);                    // ADR-0047: the completing row's fit
-        results_row.activation_type     = expl_result.fragmentation.activation_type;
-        results_row.reaction_time       = std::to_string(expl_result.fragmentation.reaction_time);
-        results_row.winner_tracking_id  = expl_result.group.winner_tracking_id;  // "" except the group-completing row
-
-        // MS2 identification row (copy by value before expl_result goes out of scope).
-        if (!expl_result.identification.proteoform_sequence.empty() && !expl_result.identification.result.fragments.empty())
-        {
-          id_rows.push_back({parent_id_str, 2, 'E', expl_result.identification.ms2_context, expl_result.identification.result, precursor_id, expl_result.metric.tic_coverage, expl_result.identification.result.score});
-          fillRefineColumns(id_rows.back());   // ADR-0049: under method refine the variant's own match is a Refine match
-        }
-        // C: winner-re-matched non-winner identification rows (MS2 'E'), each rendering the winner proteoform;
-        // flash_extender_score = -1 marks "no own ID". Populated by Exploration after MS2 finalize.
-        for (const auto& row : expl_result.identification.additional_rows)
-          if (!row.identification_result.fragments.empty())
+          auto pj = std::make_unique<SearchPool::Job>();
+          pj->search = [this, job]
           {
-            id_rows.push_back({row.tracking_id, 2, 'E', row.ms2_context, row.identification_result, precursor_id, row.tic_coverage, row.flash_extender_score});
-            // ADR-0049: another variant's self-ID row carries its own Refine record; a winner-re-matched row's match
-            // is built fresh by the tracker with refine null, so it stays at the sentinels.
-            fillRefineColumns(id_rows.back());
-          }
-
-        publishExplorationState_();
-        return_code = static_cast<int>(expl_result.commands.size());
+            if (before_search_) before_search_();
+            job->match = exploration_.searchVariant(job->input);
+          };
+          pj->apply = [this, job] { return applyVariantSearch_(*job); };
+          pj->drop = [this, job]
+          {
+            // Run by submitSearch_, under the submitting processScan's analysis_mutex_.
+            std::cout << "[SEARCH-DROPPED] id=" << job->parent_id_str << std::endl;
+            auto r = exploration_.applyVariant(job->input, nullptr, true, queue_, &tracker_, job->precursor_id);
+            std::vector<IdaLogger::IdRowDescriptor> rows;
+            finishVariantMS2_(r, static_cast<int>(job->input.deconv.size()), &job->input.deconv, job->precursor_id,
+                              job->parent_id_str, true, job->results_row, rows);
+            logger_.writeScanResultRow(job->results_row);
+            for (const auto& row : rows) logger_.writeIdentificationRow(row);
+          };
+          submitSearch_(std::move(pj));
+          return 0;   // the row is written by the apply
+        }
+        Exploration::FeedResultInfo expl_result =
+            variant_in.known ? exploration_.applyVariant(variant_in, nullptr, false, queue_, &tracker_, precursor_id)
+                             : Exploration::FeedResultInfo{};
+        return_code = finishVariantMS2_(expl_result, exploration_.explorationDeconvMassCount(),
+                                        exploration_.explorationDeconvSpectrum(), precursor_id, parent_id_str, false,
+                                        results_row, id_rows);
       }
       else
       {
@@ -908,119 +1147,58 @@ FLASHIda::FLASHIda(char* arg) :
           }
         }
 
-        // Identification + MS3 targeting, gated by the SEQUENCE rather than by characterization.mode.
-        // initiateNextLevel owns both, and it decides internally which of the two it performs: with mode
-        // off it matches fragments and returns no commands, with mode on it also dispatches MS3. Gating
-        // the CALL on level(2).selection (i.e. on mode) meant an MS2 in a mode: off run was never
-        // identified at all -- no sequence tags, no fragments, no identification.tsv row.
-        // The identification-row write below sits OUTSIDE this block deliberately and reads
-        // ms3_targeting, which stays default-constructed when the call is skipped.
-        // Also skipped on a quantification scan (ADR-0038): MS3 targets picked off a reporter-release
-        // spectrum would be selected from a spectrum optimised for something else. Identification and
-        // MS3 both belong to the 'R' identification scan, which is the one chosen to fragment
-        // informatively -- and which this Q scan may be about to buy.
-        Exploration::NextLevelResult ms3_targeting;
-        if (config_.identification().enabled() && !is_quant_scan)
-        {
-          // initiateNextLevel stamps each command's parent with the MS2 id (parent_ctx.scan_id) at creation.
-          // It serves BOTH MS3 shapes, chosen by config_.hasExploration(3): with MS3 exploration off it
-          // builds one fixed-CE MS3 per target straight from ms_settings.ms3; with it on it builds a CE
-          // sweep. The `exploration_` receiver names the owning object, not a precondition on the scan.
-          // Refine prints its [LEVELS]/[CANDIDATES] block inside the match below with scan=0 (the stored MS2 carries no
-          // scan number), so one attribution line precedes it naming the precursor, the scan's tracking id and number.
-          if (config_.identification().method == AnnotationMethod::Refine)
-            std::cout << "[REFINE] precursor_id=" << precursor_id << " tracking_id=" << parent_id_str
-                      << " scan=" << instrument_scan_number << std::endl;
-          ms3_targeting = exploration_.initiateNextLevel(2, deconv_.storedMS2(), parent_ctx.faims_cv, queue_, &parent_ctx, &tracker_, precursor_id);
-          for (auto& c : ms3_targeting.commands)
-          {
-            stampAndPush_(c, precursor_id);  // P5: MS3 children inherit the parent MS2's precursor_id
-            child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
-            commands_pushed++;
-          }
-
-          // Cache MS2 context for each MS3 command (for non-exploration identification.tsv)
-          for (size_t ci = 0; ci < ms3_targeting.commands.size(); ++ci)
-          {
-            if (ms3_targeting.commands[ci].msn_level >= 3 && ci < ms3_targeting.ms3_contexts.size())
-            {
-              ms2_context_cache_[ms3_targeting.commands[ci].scan_id] = ms3_targeting.ms3_contexts[ci];
-            }
-          }
-        }
-
-        // Write MS2 identification row if proteoform was matched.
-        // Gate on the actual match (proteoform_match), NOT on ms3_targeting.proteoform_sequence — the
-        // latter is only set when found>0 (MS3 targets were selected), so an unambiguous ID that yields
-        // zero MS3 targets would otherwise be dropped from identification.tsv.
-        if (!ms3_targeting.proteoform_match.proteoform_sequence.empty() && !ms3_targeting.proteoform_match.fragments.empty())
-        {
-          Exploration::MS2Context ms2_ctx;
-          ms2_ctx.proteoform_sequence = ms3_targeting.proteoform_match.proteoform_sequence;
-          ms2_ctx.start_pos = ms3_targeting.proteoform_match.region_start;
-          ms2_ctx.end_pos = ms3_targeting.proteoform_match.region_end;
-          ms2_ctx.ptm_sites = ms3_targeting.proteoform_match.ptm_sites;
-          ms2_ctx.ms1_precursor_mass = parent_ctx.mono_mass;
-          ms2_ctx.ms1_precursor_mz = parent_ctx.stages[0].precursor_mz;
-          ms2_ctx.ms1_precursor_charge = parent_ctx.stages[0].charge_state;
-          // MS2 isolation-window reporting from the resolved command (window-SNR was recorded at MS1
-          // time, keyed by this scan_id). The MS3 triplet stays 0 on MS2 rows.
-          if (parent_ctx.num_stages > 0)
-          {
-            ms2_ctx.ms2_isolation_width = parent_ctx.stages[0].isolation_width;
-            ms2_ctx.ms2_charge_intensity = parent_ctx.precursor_intensity;
-            ms2_ctx.ms2_window_snr = parent_ctx.window_snr;  // Item 2: SNR travels on the command (was the queue map)
-          }
-          id_rows.push_back({parent_id_str, 2, 'R', ms2_ctx, ms3_targeting.proteoform_match, precursor_id, ms3_targeting.tic_coverage, ms3_targeting.proteoform_match.score});  // copy by value (ms2_ctx is local)
-          // ADR-0049: an MS2 row whose match Refine decided carries its record (here and on the exploration MS2
-          // rows); MS3 rows never run Refine and keep the sentinels.
-          fillRefineColumns(id_rows.back());
-        }
-
-        int ms2_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
-        const DeconvolvedSpectrum* ms2_spec = deconv_.hasStoredMS2() ? &deconv_.storedMS2() : nullptr;
-        std::string parent_id(parent_ctx.parent_scan_id);
-
-        // Log the actual MS2 scan-config CE/activation/reaction (single stage) the engine used.
-        std::string ms2_collision_energy = parent_ctx.num_stages > 0 ? std::to_string(parent_ctx.stages[0].collision_energy) : "0";
-        std::string ms2_activation_type = parent_ctx.num_stages > 0
-            ? std::string(parent_ctx.stages[0].activation_type)
-            : config_.level(2).scans[0].activation;
-        std::string ms2_reaction_time = parent_ctx.num_stages > 0 ? std::to_string(parent_ctx.stages[0].reaction_time) : "0";
-        // Identification yield. The DISTINCTION the sentinels exist for: -1 means the tagger never ran
-        // on this spectrum, 0 means it ran and read nothing. Identification runs exactly when a protein
-        // sequence is configured, so that is the condition -- NOT whether it happened to match anything,
-        // which is the reading 0 carries. ms3_targeting.tic_coverage is written only inside its own
-        // found>0 guard and otherwise stays 0.0f, so it needs the same treatment or a spectrum that
-        // matched nothing would be indistinguishable from one never examined.
-        if (config_.identification().enabled())
-        {
-          results_row.tag_count      = ms3_targeting.proteoform_match.tag_count;
-          results_row.fragment_count = ms3_targeting.proteoform_match.total_match_count;
-          results_row.tic_coverage   = ms3_targeting.tic_coverage;
-        }
-        // Fill scan_results row; exploration fields stay at their sentinel defaults.
-        results_row.mass_count         = ms2_mass_count;
-        results_row.commands_pushed    = commands_pushed;
-        results_row.child_ids          = child_ids;
-        results_row.deconv_spectrum    = ms2_spec;
-        results_row.parent_tracking_id = parent_id;
-        results_row.collision_energy   = ms2_collision_energy;
-        results_row.activation_type    = ms2_activation_type;
-        results_row.reaction_time      = ms2_reaction_time;
         // ADR-0048 d.4: the share on a regular MS2 too -- the follow-up a sweep buys, a quantification
         // scan, a plain DDA MS2 -- read in stage 0's window, so a dense run is a share dataset by itself.
+        // Read here, where the raw arrays still exist; nothing below depends on when it is written.
         results_row.precursor_share    = regularRowShare(parent_ctx, mzs, ints, length);
 
-        std::cout << "[TRACK-RESOLVE] id=" << parent_id_str
-                  << " rt=" << rt
-                  << " commands=" << commands_pushed
-                  << std::endl;
+        // ADR-0062: a matched MS2 is SEARCHED on the pool. Copy what the search and its apply need -- the
+        // spectrum outlives this call only as a copy, since the next MS2 overwrites deconv_ -- and return. The
+        // worker matches with no lock held, then finishes the scan and writes its rows under analysis_mutex_.
+        // A Q scan is never matched (ADR-0038), so it never gets here; without an identification section
+        // there is no pool and nothing to match.
+        if (search_pool_ != nullptr && config_.identification().enabled() && !is_quant_scan)
+        {
+          auto job = std::make_shared<RegularSearch>();
+          job->precursor_id = precursor_id;
+          job->parent_id_str = parent_id_str;
+          job->parent_ctx = parent_ctx;
+          job->rt = rt;
+          job->instrument_scan_number = instrument_scan_number;
+          job->has_spectrum = deconv_.hasStoredMS2();
+          job->spectrum = deconv_.storedMS2();
+          job->results_row = results_row;
+          job->child_ids = child_ids;
+          job->commands_pushed = commands_pushed;
 
-        // Update atomic for lock-free reads by getNextScanCommand
-        publishExplorationState_();
+          auto pj = std::make_unique<SearchPool::Job>();
+          pj->search = [this, job]
+          {
+            if (before_search_) before_search_();
+            if (config_.identification().method == AnnotationMethod::Refine)
+              std::cout << "[REFINE] precursor_id=" << job->precursor_id << " tracking_id=" << job->parent_id_str
+                        << " scan=" << job->instrument_scan_number << std::endl;
+            job->result = exploration_.searchNextLevel(2, job->spectrum, &job->parent_ctx);
+          };
+          pj->apply = [this, job] { return applyRegularSearch_(*job); };
+          pj->drop = [this, job]
+          {
+            // Run by submitSearch_, under the submitting processScan's analysis_mutex_.
+            std::cout << "[SEARCH-DROPPED] id=" << job->parent_id_str << std::endl;
+            std::vector<IdaLogger::IdRowDescriptor> no_rows;
+            finishRegularMS2_(nullptr, true, job->spectrum, job->has_spectrum ? &job->spectrum : nullptr, job->parent_ctx,
+                              job->precursor_id, job->parent_id_str, job->rt, job->instrument_scan_number, false,
+                              job->commands_pushed, job->child_ids, job->results_row, no_rows);
+            logger_.writeScanResultRow(job->results_row);
+          };
+          submitSearch_(std::move(pj));
+          return commands_pushed;   // the row is written by the apply
+        }
 
-        return_code = commands_pushed;
+        return_code = finishRegularMS2_(nullptr, false, deconv_.storedMS2(),
+                                        deconv_.hasStoredMS2() ? &deconv_.storedMS2() : nullptr, parent_ctx, precursor_id,
+                                        parent_id_str, rt, instrument_scan_number, is_quant_scan, commands_pushed,
+                                        child_ids, results_row, id_rows);
       }
     }
     else if (ms_level == 3)

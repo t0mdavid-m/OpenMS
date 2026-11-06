@@ -23,6 +23,7 @@ set(sources_list
         FLASHIda/ProteoformTracker.cpp
         FLASHIda/Quantification.cpp
         FLASHIda/ScanCommandQueue.cpp
+        FLASHIda/SearchPool.cpp
         FLASHIdaBridgeFunctions.cpp
         FLASHGappedTaggerAlgorithm.cpp
         FLASHTaggerAlgorithm.cpp

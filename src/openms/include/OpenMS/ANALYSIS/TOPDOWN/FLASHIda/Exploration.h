@@ -262,6 +262,35 @@ namespace OpenMS
       std::vector<std::pair<int, MS2Context>> ms2_context_cache;
     };
 
+    /// The MEASURING half of initiateNextLevel (ADR-0062): the match and the report it shapes, computed
+    /// from the spectrum and the immutable Config alone, so a search worker can run it with no lock held.
+    /// applyNextLevel takes it from there.
+    struct NextLevelSearch
+    {
+      bool ran = false;                              ///< false: no sequence configured, nothing was matched
+      FragmentAnalysis::ProteoformMatch frag_result;
+      MS3FragmentMatcher::ProteoformContext proto_ctx;
+      std::string matched_protein;
+      std::string proteoform_sequence;
+      float tic_coverage = 0.0f;
+      int fragment_count = 0;
+    };
+
+    /// What a returning exploration variant hands its match (ADR-0062): everything feedResult read off the
+    /// scan and the group under the analysis lock, copied, so the search and the apply need neither the
+    /// raw arrays nor exploration_deconv_ (which the next variant overwrites).
+    struct VariantInput
+    {
+      int tracking_id = 0;
+      bool known = false;            ///< the tracking id routes to a live group and variant slot
+      int msn_level = 0;
+      bool measured_only = false;    ///< a trap pre-scan (ADR-0045): never deconvolved, never matched
+      bool deconvolved = false;      ///< deconvolution ran on this scan (non-empty arrays, not trap)
+      double precursor_share = -1.0;
+      std::string activation_type;   ///< the variant's own activation, as computeExplorationScore_ reads it
+      DeconvolvedSpectrum deconv;
+    };
+
     /// Construct with a reference to the shared Config and FragmentAnalysis
     explicit Exploration(const Config& config, FragmentAnalysis& fragments);
 
@@ -302,6 +331,25 @@ namespace OpenMS
                               double rt, ScanCommandQueue& queue, ProteoformTracker* tracker = nullptr,
                               int precursor_id = 0);
 
+    /// feedResult, split for the search pool (ADR-0062). feedResult == applyVariant(prepareVariant(...)).
+    /// prepareVariant: route the tracking id, deconvolve (unless trap) and read the precursor share. Changes
+    /// nothing but exploration_deconv_ and the accessors' flag; the variant is still waiting afterwards.
+    VariantInput prepareVariant(int tracking_id, const double* mzs, const double* ints, int length, double rt);
+
+    /// Whether the variant reaches today's matcher: a deconvolved, non-empty MS2 variant with a sequence
+    /// configured. Exactly the variants computeFragmentMatch_ does not return empty for.
+    bool variantNeedsSearch(const VariantInput& in) const;
+
+    /// The variant's match, from the copied input alone (no lock needed): computeFragmentMatch_.
+    FragmentAnalysis::ProteoformMatch searchVariant(const VariantInput& in) const;
+
+    /// Score, pool, complete. @p searched: the worker's match (nullptr = match inline, today's path).
+    /// @p dropped: the backlog dropped the search (ADR-0062 d.5) -- the variant is received unscored under
+    /// fragment_count, scored as usual under the other metrics, and never pooled, so its group still
+    /// completes and it cannot win on a count it never took.
+    FeedResultInfo applyVariant(const VariantInput& in, const FragmentAnalysis::ProteoformMatch* searched, bool dropped,
+                                ScanCommandQueue& queue, ProteoformTracker* tracker, int precursor_id);
+
     /// Test-only access (the feedResultImpl_ deconvolution-bypass + getGroup) lives in
     /// FLASHIda_TestAccess.h via this friend, so test scaffolding stays out of the production API.
     friend struct ExplorationTestAccess;
@@ -322,6 +370,16 @@ namespace OpenMS
                                       const ScanCommand* ms_ctx = nullptr,
                                       ProteoformTracker* tracker = nullptr,
                                       int precursor_id = 0);
+
+    /// initiateNextLevel, split at its seam for the search pool (ADR-0062):
+    /// initiateNextLevel == applyNextLevel(searchNextLevel(...), ...). searchNextLevel is everything above
+    /// the dispatch gate -- the match and the report -- and reads only its arguments and the Config.
+    NextLevelSearch searchNextLevel(int msn_level, const DeconvolvedSpectrum& result, const ScanCommand* ms_ctx) const;
+
+    /// Everything from the dispatch gate on: tracker seeding, planNextScans, the MS3 builds.
+    NextLevelResult applyNextLevel(const NextLevelSearch& search, int msn_level, const DeconvolvedSpectrum& result,
+                                   double faims_cv, ScanCommandQueue& queue, const ScanCommand* ms_ctx = nullptr,
+                                   ProteoformTracker* tracker = nullptr, int precursor_id = 0);
 
     /// The acquiring tail of initiateNextLevel: plan the next-level targets from the precursor's FINALIZED
     /// ProteoformTracker model (planNextScans), build one MS3 command per target (or one per CE variant when
@@ -420,10 +478,13 @@ namespace OpenMS
     std::vector<VariantParams> buildVariants_(const MSLevelConfig& cfg, const ScanConfig& base_config) const;
 
     /// Dispatch to metric-specific scorer. @p share is the variant's precursor share (-1 = no measurement).
+    /// @p searched: the variant's match when a search worker already produced it (ADR-0062); nullptr
+    /// matches inline, as before.
     double computeExplorationScore_(ExplorationMetric metric, const DeconvolvedSpectrum& spec,
                                     const ExplorationGroup& group, double share,
                                     FragmentAnalysis::ProteoformMatch* out_frag,
-                                    const std::string& activation_type) const;
+                                    const std::string& activation_type,
+                                    const FragmentAnalysis::ProteoformMatch* searched = nullptr) const;
 
     /// Score: number of deconvolved masses
     double computeMassCount_(const DeconvolvedSpectrum& spec) const;

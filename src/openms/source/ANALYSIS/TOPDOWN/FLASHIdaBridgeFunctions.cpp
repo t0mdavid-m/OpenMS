@@ -92,4 +92,13 @@ namespace OpenMS
     return -1;
   }
 
+  int WaitForSearchIdle(FLASHIda *pObject)
+  {
+    if (pObject != nullptr)
+    {
+      return pObject->waitForSearchIdle();
+    }
+    return -1;
+  }
+
 }
