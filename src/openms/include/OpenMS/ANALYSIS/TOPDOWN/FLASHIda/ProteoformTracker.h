@@ -179,10 +179,10 @@ namespace OpenMS
     std::vector<PeakRecord> peaks;   ///< One entry per deconvolved PeakGroup
     FragmentAnalysis::ProteoformMatch match;
     double id_score = -1;
-    /// characterization.method refine only: the scan's deconvolved spectrum, so finalizeMS2 can hand the winner's to
+    /// identification.method refine only: the scan's deconvolved spectrum, so finalizeMS2 can hand the winner's to
     /// the model for the MS3 re-dispatch after the discriminating round (ADR-0049). Null under flashtnt -- no copy.
     std::shared_ptr<const DeconvolvedSpectrum> spectrum;
-    /// characterization.method refine only: the command that acquired this scan, so finalizeMS2 can hand the winner's
+    /// identification.method refine only: the command that acquired this scan, so finalizeMS2 can hand the winner's
     /// to the model for that re-dispatch -- its isolation and stage-0 energy, not the first fed scan's. Null under flashtnt.
     std::shared_ptr<const ScanCommand> cmd;
   };
@@ -198,7 +198,7 @@ namespace OpenMS
     int scans = 0;                         ///< MS3 scans returned for this mass
   };
 
-  /// Refine's candidate record on the model (characterization.method refine), and the discriminating round.
+  /// Refine's candidate record on the model (identification.method refine), and the discriminating round.
   struct RefineState
   {
     std::shared_ptr<const RefineCandidates> candidates;   ///< from the winner match
@@ -235,10 +235,10 @@ namespace OpenMS
     /// then carries these two fields and nothing else -- no sequence, no fragments, no pooled row.
     std::vector<PeakRecord> winner_peaks;
     Ms2Params winner_params;
-    /// characterization.method refine only: the winner MS2 scan's deconvolved spectrum (from its PendingScan), which the
+    /// identification.method refine only: the winner MS2 scan's deconvolved spectrum (from its PendingScan), which the
     /// MS3 return path re-dispatches from once the discriminating round has decided (ADR-0049). Null under flashtnt.
     std::shared_ptr<const DeconvolvedSpectrum> winner_spectrum;
-    /// characterization.method refine only: the winner MS2 scan's own command (from its PendingScan). The re-dispatch
+    /// identification.method refine only: the winner MS2 scan's own command (from its PendingScan). The re-dispatch
     /// replays it as stage 0; ms2_ctx cannot serve, being the FIRST fed scan's context, which under MS2 exploration,
     /// additional_scans or separate charges is another scan's isolation and energy. Null under flashtnt.
     std::shared_ptr<const ScanCommand> winner_cmd;
@@ -273,7 +273,7 @@ namespace OpenMS
     /// no such feedback either, and there this set IS its termination condition.
     std::set<int> dispatched_nominal_masses;
 
-    /// characterization.method refine only: the winner match's candidate record and the discriminating round
+    /// identification.method refine only: the winner match's candidate record and the discriminating round
     /// (ADR-0049). Set at finalize from the winner's ProteoformMatch::refine; empty under flashtnt.
     std::optional<RefineState> refine;
 

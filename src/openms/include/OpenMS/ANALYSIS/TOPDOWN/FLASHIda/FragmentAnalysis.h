@@ -116,7 +116,7 @@ namespace OpenMS
       double correction_factor = 1.0;  ///< 1/(1 + ppm_offset * 1e-6) (MS3 only)
       float ms3_fragment_coverage = -1.0f;  ///< MS3 only: distinct backbone bonds covered / (L-1) over the matched sub-fragments; -1 = non-MS3/none
 
-      /// characterization.method refine only (ADR-0049): Detect, Assemble (every candidate) and the precursor mass
+      /// identification.method refine only (ADR-0049): Detect, Assemble (every candidate) and the precursor mass
       /// difference of the best path. nullptr under flashtnt. APPEND-ONLY position, like FragmentMatch::qscore.
       std::shared_ptr<const RefineCandidates> refine;
     };
@@ -376,7 +376,7 @@ namespace OpenMS
                                     double tolerance_ppm = 0.0);
 
     /**
-     * @brief Refine's MS2 match (characterization.method refine, ADR-0049): the sibling of runTagBasedFragmentMatching_.
+     * @brief Refine's MS2 match (identification.method refine, ADR-0049): the sibling of runTagBasedFragmentMatching_.
      *
      * Detect + Assemble on the stored MS2's deconvolved masses against @p protein_sequence; prints [LEVELS] and one
      * [CANDIDATES] line per candidate, then fills @p result from the best path (score, the full-length region, ptm_sites

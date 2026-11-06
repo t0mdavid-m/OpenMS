@@ -593,7 +593,7 @@ FLASHIda::FLASHIda(char* arg) :
     auto next = exploration_.dispatchFromModel(precursor_id, *winner_spectrum, parent_ctx.faims_cv, queue_,
                                                winner_cmd.get(), &tracker_, tracker_.buildWinnerProteoformContext(precursor_id),
                                                config_.level(3).scans[0], config_.level(2).min_charge, 3,
-                                               config_.characterization().protein_sequence);
+                                               config_.identification().sequence);
     int pushed = 0;
     for (auto& c : next.commands)
     {
@@ -786,7 +786,7 @@ FLASHIda::FLASHIda(char* arg) :
         // Identification yield for an MS2 exploration VARIANT. Every MS2 variant is identified under
         // every metric (computeFragmentMatch_'s whole-protein matcher is correct at MS2), so these are
         // real readings, gated only on a sequence being configured.
-        if (!config_.characterization().protein_sequence.empty())
+        if (config_.identification().enabled())
         {
           results_row.tag_count      = expl_result.identification.result.tag_count;
           results_row.fragment_count = expl_result.identification.result.total_match_count;
@@ -920,7 +920,7 @@ FLASHIda::FLASHIda(char* arg) :
         // MS3 both belong to the 'R' identification scan, which is the one chosen to fragment
         // informatively -- and which this Q scan may be about to buy.
         Exploration::NextLevelResult ms3_targeting;
-        if (!config_.characterization().protein_sequence.empty() && !is_quant_scan)
+        if (config_.identification().enabled() && !is_quant_scan)
         {
           // initiateNextLevel stamps each command's parent with the MS2 id (parent_ctx.scan_id) at creation.
           // It serves BOTH MS3 shapes, chosen by config_.hasExploration(3): with MS3 exploration off it
@@ -928,7 +928,7 @@ FLASHIda::FLASHIda(char* arg) :
           // sweep. The `exploration_` receiver names the owning object, not a precondition on the scan.
           // Refine prints its [LEVELS]/[CANDIDATES] block inside the match below with scan=0 (the stored MS2 carries no
           // scan number), so one attribution line precedes it naming the precursor, the scan's tracking id and number.
-          if (config_.characterization().method == AnnotationMethod::Refine)
+          if (config_.identification().method == AnnotationMethod::Refine)
             std::cout << "[REFINE] precursor_id=" << precursor_id << " tracking_id=" << parent_id_str
                       << " scan=" << instrument_scan_number << std::endl;
           ms3_targeting = exploration_.initiateNextLevel(2, deconv_.storedMS2(), parent_ctx.faims_cv, queue_, &parent_ctx, &tracker_, precursor_id);
@@ -993,7 +993,7 @@ FLASHIda::FLASHIda(char* arg) :
         // which is the reading 0 carries. ms3_targeting.tic_coverage is written only inside its own
         // found>0 guard and otherwise stays 0.0f, so it needs the same treatment or a spectrum that
         // matched nothing would be indistinguishable from one never examined.
-        if (!config_.characterization().protein_sequence.empty())
+        if (config_.identification().enabled())
         {
           results_row.tag_count      = ms3_targeting.proteoform_match.tag_count;
           results_row.fragment_count = ms3_targeting.proteoform_match.total_match_count;
@@ -1133,10 +1133,10 @@ FLASHIda::FLASHIda(char* arg) :
         // Identification: look up MS2 context from cache and run fragment matching
         {
           auto cache_it = ms2_context_cache_.find(parent_tracking_id);
-          // characterization.method refine, objective discriminating (ADR-0049): every MS3 that ARRIVES returns its
+          // identification.method refine, objective discriminating (ADR-0049): every MS3 that ARRIVES returns its
           // discriminating record -- with its pieces when it deconvolved to something, with no evidence when it did
           // not (decision 9: the round completes when every MS3 has been received). true only under refine.
-          const bool refine_discriminating = config_.characterization().method == AnnotationMethod::Refine
+          const bool refine_discriminating = config_.identification().method == AnnotationMethod::Refine
               && config_.characterization().objective == CharacterizationObjective::Discriminating;
           bool refine_round_complete = false;
           if (cache_it != ms2_context_cache_.end() && ms3_spec != nullptr && !ms3_spec->empty())
@@ -1160,7 +1160,7 @@ FLASHIda::FLASHIda(char* arg) :
             std::vector<FragmentAnalysis::ProteoformMatch> ms3_matches;
             ProteoformTracker::scoreCalibratedVariants(
               spectra,
-              config_.characterization().protein_sequence,
+              config_.identification().sequence,
               proto_ctx,
               cached_ms2_ctx.fragment_ion_type,
               cached_ms2_ctx.fragment_ion_index,

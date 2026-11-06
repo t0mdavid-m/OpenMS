@@ -23,17 +23,17 @@
 */
 namespace OpenMS
 {
-  /// The settings of one Refine run. All but tolerance_ppm are characterization.refine.*; tolerance_ppm is level(2)'s.
+  /// The settings of one Refine run. All but tolerance_ppm are identification.refine.*; tolerance_ppm is level(2)'s.
   struct OPENMS_DLLAPI RefineSettings
   {
-    double fdr = 0.2;            ///< characterization.refine.fdr
-    int shuffles = 300;          ///< characterization.refine.shuffles
-    double grid_da = 0.01;       ///< characterization.refine.grid_da
-    double max_shift_da = 700.0; ///< characterization.refine.max_shift_da  (grid runs -max..+max)
-    int min_ions = 3;            ///< characterization.refine.min_ions      (smallest cut tried)
+    double fdr = 0.2;            ///< identification.refine.fdr
+    int shuffles = 300;          ///< identification.refine.shuffles
+    double grid_da = 0.01;       ///< identification.refine.grid_da
+    double max_shift_da = 700.0; ///< identification.refine.max_shift_da  (grid runs -max..+max)
+    int min_ions = 3;            ///< identification.refine.min_ions      (smallest cut tried)
     double tolerance_ppm = 10.0; ///< level(2).tolerance_ppm
-    int max_levels = 20;         ///< characterization.refine.max_levels    (the cap on the kept levels)
-    int jump_penalty = 2;        ///< characterization.refine.jump_penalty  (ions a jump costs: S = ions - penalty x jumps)
+    int max_levels = 20;         ///< identification.refine.max_levels    (the cap on the kept levels)
+    int jump_penalty = 2;        ///< identification.refine.jump_penalty  (ions a jump costs: S = ions - penalty x jumps)
     static constexpr uint64_t kSeed = 12345ULL; ///< the shuffle stream's seed (the prototype's)
     static constexpr double kSame = 0.004;      ///< two shifts within this are one (prototype SAME)
   };

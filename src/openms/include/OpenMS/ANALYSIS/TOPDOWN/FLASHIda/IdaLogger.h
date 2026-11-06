@@ -249,7 +249,7 @@ namespace OpenMS
       /// self-identify — it is a winner-re-matched non-winner row (fragments matched the WINNER ladder).
       /// Score presence is the sole distinguisher between self-ID rows and re-matched rows. Appended LAST.
       double flash_extender_score = -1.0;
-      /// ADR-0049: Refine's candidate record (characterization.method refine), the seven columns appended after
+      /// ADR-0049: Refine's candidate record (identification.method refine), the seven columns appended after
       /// tic_coverage. Filled from match.refine on the MS2 identification row; when @p refine is false (flashtnt,
       /// exploration, MS3) the writer emits the sentinels `-1`, ``, ``, `-1`, `-1`, `-1`, `` and ignores the values.
       bool refine = false;

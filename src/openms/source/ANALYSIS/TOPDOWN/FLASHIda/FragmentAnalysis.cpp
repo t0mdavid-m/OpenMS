@@ -196,13 +196,13 @@ namespace
     FLASHTaggerAlgorithm tagger;
     Param p = tagger.getDefaults();
     p.setValue("ion_type", ion_types);
-    p.setValue("min_length", config.targeting().min_tag_length);
-    p.setValue("max_length", config.targeting().max_tag_length);
-    p.setValue("allow_gap", config.targeting().allow_gap ? "true" : "false");
-    p.setValue("max_aa_in_gap", config.targeting().max_aa_in_gap);
+    p.setValue("min_length", config.identification().flashtnt.min_length);
+    p.setValue("max_length", config.identification().flashtnt.max_length);
+    p.setValue("allow_gap", config.identification().flashtnt.allow_gap ? "true" : "false");
+    p.setValue("max_aa_in_gap", config.identification().flashtnt.max_aa_in_gap);
     // Unconditional: an empty config list is passed through verbatim as an empty Param list,
     // NOT left at the algorithm's declared {""} placeholder.
-    p.setValue("fixed_mod", config.targeting().fixed_mod);
+    p.setValue("fixed_mod", config.identification().flashtnt.fixed_mod);
     return p;
   }
 
@@ -214,9 +214,9 @@ namespace
     p.setValue("ion_type", ion_types);
     p.setValue("max_mod_mass", max_mod_mass);
     p.setValue("skip_precursor_inference", "true");
-    p.setValue("max_blind_mod_count", config.targeting().max_blind_mod_count);
+    p.setValue("max_blind_mod_count", config.identification().flashtnt.max_blind_mod_count);
     // Unconditional -- see buildTaggerParam.
-    p.setValue("fixed_mod", config.targeting().fixed_mod);
+    p.setValue("fixed_mod", config.identification().flashtnt.fixed_mod);
     return p;
   }
 
@@ -544,7 +544,7 @@ namespace
     std::vector<std::unordered_set<int>> rev_vec_pro = {rev_vec};
 
     // 6. Run FLASHTagger matching
-    double max_mod_mass = config_.targeting().max_mod_mass;  // default 700.0 preserves prior hardcoded behavior
+    double max_mod_mass = config_.identification().flashtnt.max_mod_mass;  // default 700.0 preserves prior hardcoded behavior
     std::cout << "max_mod_mass=" << max_mod_mass << std::endl;
     std::cout << "ion_types_str=";
     for (const auto& ion : ion_types_str) {
@@ -789,7 +789,7 @@ namespace
     return static_cast<int>(matches.size());
   }
 
-  // Refine's MS2 match (ADR-0049): the sibling of runTagBasedFragmentMatching_, chosen by characterization.method. Nothing
+  // Refine's MS2 match (ADR-0049): the sibling of runTagBasedFragmentMatching_, chosen by identification.method. Nothing
   // here reaches into FLASHTnT; the ladder's residue arithmetic is computePTMAdjustedFragmentMasses (via Refine::ladder).
   int FragmentAnalysis::runRefineMatching_(const String& protein_sequence,
                                            std::vector<TagBasedFragmentMatch>& matches,
@@ -821,7 +821,7 @@ namespace
     }
 
     // 2. Detect, Assemble. tolerance_ppm overrides the configured tolerance the way it does on the tag path.
-    RefineSettings settings = config_.characterization().refine;
+    RefineSettings settings = config_.identification().refine;
     if (tolerance_ppm > 0.0) settings.tolerance_ppm = tolerance_ppm;
     const Refine::Ladder ladder = Refine::ladder(protein_sequence, FragmentAnalysis::getIonTypesForFragmentationMethod(fragmentation_method));
     auto rec = std::make_shared<RefineCandidates>();
@@ -944,10 +944,10 @@ namespace
                                               FragmentScores* frag_scores)
   {
     std::cout << "Matching fragments!" << std::endl;
-    // characterization.method (ADR-0049): Refine, or the tag-based workflow (FLASHTagger + FLASHExtender)
+    // identification.method (ADR-0049): Refine, or the tag-based workflow (FLASHTagger + FLASHExtender)
     std::vector<TagBasedFragmentMatch> matches;
     result.refine.reset(); // set only by the Refine path; a reused result must not carry a stale record
-    if (config_.characterization().method == AnnotationMethod::Refine)
+    if (config_.identification().method == AnnotationMethod::Refine)
       runRefineMatching_(protein_sequence, matches, stored_ms2, result, fragmentation_method, tolerance_ppm);
     else
       runTagBasedFragmentMatching_(protein_sequence, matches, stored_ms2, result, fragmentation_method, tolerance_ppm);

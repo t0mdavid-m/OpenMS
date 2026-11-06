@@ -59,7 +59,7 @@ namespace OpenMS
     Fragments  ///< Every mapped fragment with a bond inside it (ADR-0052)
   };
 
-  /// Which annotation method interprets the MS2 fragments against characterization.protein_sequence
+  /// Which annotation method interprets the MS2 fragments against identification.reference
   /// (ADR-0049). FLASHTnT is the default and the pre-ADR-0049 behaviour; Refine detects a mass shift
   /// before it builds a path.
   enum class AnnotationMethod
@@ -364,19 +364,51 @@ namespace OpenMS
     double snr_threshold = 1.0;
     std::vector<std::string> target_log_files;
     std::string inclusion_list_file;
-    int min_tag_length = 3;
-    int max_tag_length = 8;
-    // --- FLASHTnT (FLASHTagger/FLASHExtender) tuning, from the `flashtnt` config block ---
-    bool allow_gap = false;                 ///< FLASHTagger allow_gap (passed as "true"/"false")
+  };
+
+  /// FLASHTnT (FLASHTagger/FLASHExtender) tuning, from identification.flashtnt (ADR-0061).
+  struct OPENMS_DLLAPI FlashTnTSettings
+  {
+    int min_length = 3;                      ///< FLASHTagger min_length
+    int max_length = 8;                      ///< FLASHTagger max_length
+    bool allow_gap = false;                  ///< FLASHTagger allow_gap (passed as "true"/"false")
     int max_aa_in_gap = 2;                   ///< FLASHTagger max_aa_in_gap
     std::vector<std::string> fixed_mod;      ///< Fixed mods, passed VERBATIM to tagger+extender; empty = empty Param list, NOT the declared {""}
     int max_blind_mod_count = 2;             ///< FLASHExtender max_blind_mod_count
     double max_mod_mass = 700.0;             ///< FLASHExtender max_mod_mass. 700 preserves current MS2 behavior; NOT the extender's own 500 default.
   };
 
-  /// Characterization configuration: objective + protein sequence
-  /// The single MS3 switch. `Off` means no MS3 is emitted at all; the on-values ARE the
-  /// objectives, so there is no separate enable flag and no way to express "on but with no
+  /// The `identification` section (ADR-0061): which protein reference every MS2 is matched against,
+  /// and how. Its PRESENCE is the matching switch: absent, no MS2 is matched and no MS3 is planned.
+  /// The `characterization` block nested inside it is parsed into CharacterizationConfig.
+  struct OPENMS_DLLAPI IdentificationConfig
+  {
+    /// identification.reference.sequence -- the one protein every MS2 is matched against. A present
+    /// section with an empty sequence is a load error, so non-empty <=> the section was authored.
+    std::string sequence;
+
+    /// identification.method (ADR-0049): "flashtnt" (default) | "refine". Case-sensitive; an
+    /// unknown value throws.
+    AnnotationMethod method = AnnotationMethod::FlashTnT;
+
+    /// identification.refine.* -- the seven Refine knobs. tolerance_ppm is not authored here: it is
+    /// filled from levels_[2].tolerance_ppm at parse end, so Refine matches at the MS2 tolerance.
+    RefineSettings refine;
+
+    /// Whether identification.refine was authored at all. Only for the load errors: a refine block
+    /// under method "flashtnt" is an authored value nobody reads, which Config refuses.
+    bool has_refine_block = false;
+
+    /// identification.flashtnt -- the matcher's tagger/extender tuning.
+    FlashTnTSettings flashtnt;
+
+    /// Whether MS2s are matched at all.
+    bool enabled() const { return !sequence.empty(); }
+  };
+
+  /// The MS3 objective. `Off` is the internal state for "identification.characterization is
+  /// absent" (ADR-0061): it is not an authored value any more, and no MS3 is emitted. The on-values
+  /// ARE the objectives, so there is no separate enable flag and no way to express "on but with no
   /// objective". Supersedes ADR-0004, which decided there would be no enable flag at all.
   enum class CharacterizationMode
   {
@@ -388,7 +420,7 @@ namespace OpenMS
     /// rather than matched.
     Exhaustive,
     /// Target the fragments that discriminate between Refine's candidate paths (ADR-0049). Only
-    /// meaningful under characterization.method "refine" -- a load error otherwise.
+    /// meaningful under identification.method "refine" -- a load error otherwise.
     Discriminating,
     /// Target every mapped fragment that has a bond inside it, strongest first, up to the budget,
     /// with no coverage test (ADR-0052).
@@ -454,24 +486,10 @@ namespace OpenMS
   {
     CharacterizationMode mode = CharacterizationMode::Off;
 
-    /// characterization.method (ADR-0049): "flashtnt" (default) | "refine". Case-sensitive; an
-    /// unknown value throws.
-    AnnotationMethod method = AnnotationMethod::FlashTnT;
-
-    /// characterization.refine.* -- the seven Refine knobs. tolerance_ppm is not authored here: it is
-    /// filled from levels_[2].tolerance_ppm at parse end, so Refine matches at the MS2 tolerance.
-    RefineSettings refine;
-
-    /// Whether characterization.refine was authored at all. Only for the load errors: a refine block
-    /// under method "flashtnt" is an authored value nobody reads, which Config refuses.
-    bool has_refine_block = false;
-
     /// Kept as a separate field so every existing objective read site (ProteoformTracker.cpp:353
     /// and friends) is untouched. It is derived from `mode` at parse time and is meaningless when
     /// mode == Off, because nothing downstream runs in that case.
     CharacterizationObjective objective = CharacterizationObjective::Ambiguity;
-
-    std::string protein_sequence;
 
     /// The MS3 budget, and the fragment-charge floor for MS3 targeting. Moved here from
     /// selection_strategy.ms2.{max_targets,min_charge}, which named them one level off their
@@ -655,6 +673,7 @@ namespace OpenMS
     const QuantConfig& quantification() const { return quant_; }
     const RuntimeConfig& runtime() const { return runtime_; }
     const CharacterizationConfig& characterization() const { return characterization_; }
+    const IdentificationConfig& identification() const { return identification_; }
 
     /**
      * @brief The complete set of keys any scan object may carry (ms1, ms2, ms3, additional_ms2 entries).
@@ -706,6 +725,7 @@ namespace OpenMS
     FAIMSConfig faims_;
     SchedulingConfig scheduling_;
     TargetingConfig targeting_;
+    IdentificationConfig identification_;
     CharacterizationConfig characterization_;
     QuantConfig quant_;
     RuntimeConfig runtime_;

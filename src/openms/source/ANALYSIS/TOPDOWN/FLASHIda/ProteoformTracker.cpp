@@ -344,7 +344,7 @@ namespace OpenMS
     ps.id_score = id_score;
     // Refine only: keep the spectrum and the acquiring command for the post-decision MS3 re-dispatch
     // (finalizeMS2 -> winner_spectrum, winner_cmd).
-    if (config_.characterization().method == AnnotationMethod::Refine)
+    if (config_.identification().method == AnnotationMethod::Refine)
     {
       ps.spectrum = std::make_shared<const DeconvolvedSpectrum>(deconv);
       ps.cmd = std::make_shared<const ScanCommand>(ms2_ctx);
@@ -437,7 +437,7 @@ namespace OpenMS
     m.winner_peaks = win->peaks;
     m.winner_params = win->params;
     // Refine only: the winner's spectrum, which the MS3 return path re-dispatches from after the round (ADR-0049).
-    if (config_.characterization().method == AnnotationMethod::Refine)
+    if (config_.identification().method == AnnotationMethod::Refine)
     {
       m.winner_spectrum = win->spectrum;
       m.winner_cmd = win->cmd;
@@ -450,7 +450,7 @@ namespace OpenMS
       m.modifications.push_back(ModificationState{s.mass_shift, s.start_position, s.end_position, 0.0, 0.0});
     }
 
-    // 3b) characterization.method refine (ADR-0049): keep the winner's candidate record on the model, and with two or
+    // 3b) identification.method refine (ADR-0049): keep the winner's candidate record on the model, and with two or
     //     more totals the masses the two best paths explain differently -- the discriminating targets, intensity-desc.
     //     The paths index the winner scan's masses in Refine's own order, so that list is rebuilt from winner_peaks.
     m.refine.reset();
@@ -1215,7 +1215,7 @@ namespace OpenMS
       const bool seen = r.dispatched && r.returned;
       confirmed.emplace_back(seen && r.fits_a, seen && r.fits_b);
     }
-    const int penalty = config_.characterization().refine.jump_penalty;
+    const int penalty = config_.identification().refine.jump_penalty;
     const Refine::Recount rc = Refine::recount(a, b, targets, confirmed, penalty);
     const bool flipped = !rc.a_wins;
 
@@ -1794,10 +1794,10 @@ namespace OpenMS
     }
     if (ion_types.empty()) return;
 
-    // characterization.method refine (ADR-0049): only a fragment that CARRIES the shift moves a boundary. A fragment that
+    // identification.method refine (ADR-0049): only a fragment that CARRIES the shift moves a boundary. A fragment that
     // matches without it is what Refine's windows already account for (the window is every residue the jump may sit on
     // keeping the explained ions), so under refine it neither confirms nor narrows anything.
-    const bool shift_only = config_.characterization().method == AnnotationMethod::Refine;
+    const bool shift_only = config_.identification().method == AnnotationMethod::Refine;
 
     // Process each ambiguous modification independently.
     for (size_t mi = 0; mi < m.modifications.size(); ++mi)

@@ -322,7 +322,7 @@ namespace OpenMS
     if (config.contains("ms3"))
       throw std::invalid_argument(
           "Config: 'ms3' is no longer a top-level section. "
-          "MS3 is configured under 'characterization' (mode/protein_sequence/max_targets) with its "
+          "MS3 is configured under 'identification.characterization' (mode/max_targets) with its "
           "scan parameters in 'ms_settings.ms3'.");
     // Dedicated migration error rather than the generic unknown-key message, which would say only
     // "unknown key 'selection_strategy'" and leave the reader to find all seven destinations.
@@ -334,16 +334,31 @@ namespace OpenMS
           "  ms1.max_targets  -> precursor_selection.max_precursors   (it is the MS2 count)\n"
           "  ms1.min_charge   -> precursor_selection.min_precursor_charge\n"
           "  ms2.exploration  -> precursor_selection.exploration\n"
-          "  ms2.max_targets  -> characterization.max_targets         (it is the MS3 budget)\n"
-          "  ms2.min_charge   -> characterization.min_fragment_charge\n"
-          "  ms3.exploration  -> characterization.exploration\n"
-          "  ms2.selection and ms3.selection are replaced by characterization.mode "
-          "(off|ambiguity|coverage|fragments|exhaustive|discriminating); ms3.max_targets and ms3.min_charge were never read and are "
+          "  ms2.max_targets  -> identification.characterization.max_targets         (it is the MS3 budget)\n"
+          "  ms2.min_charge   -> identification.characterization.min_fragment_charge\n"
+          "  ms3.exploration  -> identification.characterization.exploration\n"
+          "  ms2.selection and ms3.selection are replaced by the presence of identification.characterization "
+          "and its mode (ambiguity|coverage|fragments|exhaustive|discriminating); ms3.max_targets and ms3.min_charge were never read and are "
           "deleted.");
+    // ADR-0061. The pre-ADR-0061 homes of the identification keys get dedicated messages (the generic
+    // unknown-key error would leave the reader to find the new path); the C# loader refuses them first.
+    if (config.contains("characterization"))
+      throw std::invalid_argument(
+          "Config: the top-level 'characterization' section moved into 'identification' (ADR-0061): "
+          "characterization.protein_sequence -> identification.reference.sequence, characterization.method "
+          "and .refine -> identification.method and identification.refine, and the MS3 keys (mode, "
+          "max_targets, min_fragment_charge, min_target_mass, fragment_charges, exploration) -> "
+          "identification.characterization. mode \"off\" is gone: no characterization block means no MS3. "
+          "FlashIDA/test-scripts/migrate_identification.py rewrites a method file or folder.");
+    if (config.contains("flashtnt"))
+      throw std::invalid_argument(
+          "Config: the top-level 'flashtnt' section moved to identification.flashtnt (ADR-0061), with the "
+          "same keys and defaults. FlashIDA/test-scripts/migrate_identification.py rewrites a method file "
+          "or folder.");
     rejectUnknownKeys(config,
-        {"global", "deconvolution", "precursor_selection", "flashtnt",
+        {"global", "deconvolution", "precursor_selection", "identification",
          "quantification", "faims", "ms_settings", "scheduling",
-         "characterization", "files", "runtime"},
+         "files", "runtime"},
         "(root)");
     rejectUnknownKeys(config.value("global", json::object()),
         {"method_name", "method_description", "duration"}, "global");
@@ -448,22 +463,92 @@ namespace OpenMS
     if (targeting_.mode == 1)
       std::cout << "Inclusion mode: " << (targeting_.strict_inclusion ? "strict" : "non-strict") << "\n";
 
-    // --- flashtnt section (FLASHTagger/FLASHExtender tuning) ---
-    auto flashtnt = config.value("flashtnt", json::object());
-    rejectUnknownKeys(flashtnt,
-        {"min_length", "max_length", "allow_gap", "max_aa_in_gap", "max_blind_mod_count", "max_mod_mass", "fixed_mod"},
-        "flashtnt");
-    targeting_.min_tag_length = flashtnt.value("min_length", 3);
-    targeting_.max_tag_length = flashtnt.value("max_length", 8);
-    targeting_.allow_gap = flashtnt.value("allow_gap", false);
-    targeting_.max_aa_in_gap = flashtnt.value("max_aa_in_gap", 2);
-    targeting_.max_blind_mod_count = flashtnt.value("max_blind_mod_count", 2);
-    targeting_.max_mod_mass = flashtnt.value("max_mod_mass", 700.0);  // 700 preserves current MS2 behavior; NOT the extender's own 500 default
-    targeting_.fixed_mod.clear();
-    if (flashtnt.contains("fixed_mod") && flashtnt["fixed_mod"].is_array())
+    // --- identification section (ADR-0061): WHICH protein every MS2 is matched against, and HOW ---
+    // Its PRESENCE is the matching switch, and the presence of its nested `characterization` block is
+    // the MS3 switch. Absent and null both mean "unauthored" (ToCppJson's serializer emits nulls).
+    json charact = json::object();
+    bool has_characterization = false;
+    if (config.contains("identification") && !config["identification"].is_null())
     {
-      for (const auto& m : flashtnt["fixed_mod"])
-        targeting_.fixed_mod.push_back(m.get<std::string>());
+      const auto& ident = config["identification"];
+      if (!ident.is_object())
+        throw std::invalid_argument("Config: identification must be an object.");
+      rejectUnknownKeys(ident, {"reference", "method", "flashtnt", "refine", "characterization"}, "identification");
+
+      // An identification that searches nothing would be an inert block: refused rather than carried.
+      if (!ident.contains("reference") || ident["reference"].is_null())
+        throw std::invalid_argument(
+            "Config: identification.reference is required: the protein every MS2 is matched against, as "
+            "{ \"sequence\": \"...\" }. Delete the identification section to match nothing (ADR-0061).");
+      const auto& ref = ident["reference"];
+      if (!ref.is_object())
+        throw std::invalid_argument("Config: identification.reference must be an object.");
+      rejectUnknownKeys(ref, {"sequence"}, "identification.reference");
+      identification_.sequence = nullableString(ref, "sequence", "");
+      if (identification_.sequence.empty())
+        throw std::invalid_argument(
+            "Config: identification.reference.sequence is empty. Every MS2 is matched against it, so an "
+            "empty sequence matches nothing; delete the identification section instead (ADR-0061).");
+
+      // ADR-0049. Which annotation method reads the MS2 fragments. Hard-rejected rather than
+      // defaulted: a typo'd "Refine" must not silently run FLASHTnT.
+      const std::string meth = nullableString(ident, "method", "flashtnt");
+      if (meth == "flashtnt")
+        identification_.method = AnnotationMethod::FlashTnT;
+      else if (meth == "refine")
+        identification_.method = AnnotationMethod::Refine;
+      else
+        throw std::invalid_argument(
+            "Config: identification.method must be one of \"flashtnt\", \"refine\"; "
+            "got \"" + meth + "\" (values are case-sensitive).");
+
+      // The seven Refine knobs. Bounds are checked in validate(); presence is recorded so a block
+      // authored under method "flashtnt" can be refused there rather than carried unread.
+      if (ident.contains("refine") && !ident["refine"].is_null())
+      {
+        const auto& rb = ident["refine"];
+        if (!rb.is_object())
+          throw std::invalid_argument("Config: identification.refine must be an object.");
+        rejectUnknownKeys(rb,
+            {"fdr", "shuffles", "grid_da", "max_shift_da", "min_ions", "max_levels", "jump_penalty"},
+            "identification.refine");
+        identification_.has_refine_block = true;
+        RefineSettings& r = identification_.refine;
+        r.fdr = rb.value("fdr", r.fdr);
+        r.shuffles = rb.value("shuffles", r.shuffles);
+        r.grid_da = rb.value("grid_da", r.grid_da);
+        r.max_shift_da = rb.value("max_shift_da", r.max_shift_da);
+        r.min_ions = rb.value("min_ions", r.min_ions);
+        r.max_levels = rb.value("max_levels", r.max_levels);
+        r.jump_penalty = rb.value("jump_penalty", r.jump_penalty);
+      }
+
+      // FLASHTagger/FLASHExtender tuning, read only by the matcher.
+      const json flashtnt = (ident.contains("flashtnt") && !ident["flashtnt"].is_null()) ? ident["flashtnt"] : json::object();
+      rejectUnknownKeys(flashtnt,
+          {"min_length", "max_length", "allow_gap", "max_aa_in_gap", "max_blind_mod_count", "max_mod_mass", "fixed_mod"},
+          "identification.flashtnt");
+      FlashTnTSettings& ft = identification_.flashtnt;
+      ft.min_length = flashtnt.value("min_length", 3);
+      ft.max_length = flashtnt.value("max_length", 8);
+      ft.allow_gap = flashtnt.value("allow_gap", false);
+      ft.max_aa_in_gap = flashtnt.value("max_aa_in_gap", 2);
+      ft.max_blind_mod_count = flashtnt.value("max_blind_mod_count", 2);
+      ft.max_mod_mass = flashtnt.value("max_mod_mass", 700.0);  // 700 preserves current MS2 behavior; NOT the extender's own 500 default
+      ft.fixed_mod.clear();
+      if (flashtnt.contains("fixed_mod") && flashtnt["fixed_mod"].is_array())
+      {
+        for (const auto& m : flashtnt["fixed_mod"])
+          ft.fixed_mod.push_back(m.get<std::string>());
+      }
+
+      if (ident.contains("characterization") && !ident["characterization"].is_null())
+      {
+        charact = ident["characterization"];
+        if (!charact.is_object())
+          throw std::invalid_argument("Config: identification.characterization must be an object.");
+        has_characterization = true;
+      }
     }
 
     // --- files section (paths only; loading stays in FLASHIda) ---
@@ -481,32 +566,49 @@ namespace OpenMS
     if (files.contains("inclusion_list") && !files["inclusion_list"].get<std::string>().empty())
       targeting_.inclusion_list_file = files["inclusion_list"].get<std::string>();
 
-    // --- characterization section: WHETHER and HOW we characterize ---
-    // `mode` is the single MS3 switch. It absorbs the old `objective` key AND the two
-    // selection gates (selection_strategy.ms2.selection / .ms3.selection), which were booleans in
-    // disguise. Decisions only -- the MS3 scan's instrument parameters stay in ms_settings.ms3.
-    auto charact = config.value("characterization", json::object());
-    // Migration, checked BEFORE the allowlist so the message names the replacement instead of the
-    // generic unknown-key error. ms3_all_charges was a bool; its two states are now values of a
-    // three-valued mode whose third value (multiplexed) it could not express.
-    if (charact.contains("ms3_all_charges"))
-      throw std::invalid_argument(
-          "Config: characterization.ms3_all_charges was replaced by characterization.fragment_charges "
-          "(ADR-0016). Use \"single\" for the old false (the fragment's best-MS2 charge) or "
-          "\"separate\" for the old true (one MS3 per observed charge); \"multiplexed\" co-isolates "
-          "them into one MS3.");
-    rejectUnknownKeys(charact,
-        {"mode", "protein_sequence", "max_targets", "min_fragment_charge", "min_target_mass",
-         "fragment_charges", "exploration", "method", "refine"},
-        "characterization");
+    // --- identification.characterization: WHETHER and HOW we characterize (MS3) ---
+    // Its presence is the single MS3 switch (ADR-0061); `mode` names the objective and is required,
+    // because there is no "off" left to default to. Decisions only -- the MS3 scan's instrument
+    // parameters stay in ms_settings.ms3. Absent, mode stays Off and the MS3 keys keep their defaults.
+    if (has_characterization)
     {
+      // Migration, checked BEFORE the allowlist so the message names the replacement instead of the
+      // generic unknown-key error. ms3_all_charges was a bool; its two states are now values of a
+      // three-valued mode whose third value (multiplexed) it could not express.
+      if (charact.contains("ms3_all_charges"))
+        throw std::invalid_argument(
+            "Config: characterization.ms3_all_charges was replaced by identification.characterization.fragment_charges "
+            "(ADR-0016). Use \"single\" for the old false (the fragment's best-MS2 charge) or "
+            "\"separate\" for the old true (one MS3 per observed charge); \"multiplexed\" co-isolates "
+            "them into one MS3.");
+      // ADR-0061. The keys that moved up a level, named rather than reported as unknown.
+      if (charact.contains("protein_sequence"))
+        throw std::invalid_argument(
+            "Config: identification.characterization.protein_sequence moved to identification.reference.sequence "
+            "(ADR-0061).");
+      if (charact.contains("method"))
+        throw std::invalid_argument(
+            "Config: identification.characterization.method moved to identification.method (ADR-0061).");
+      if (charact.contains("refine"))
+        throw std::invalid_argument(
+            "Config: identification.characterization.refine moved to identification.refine (ADR-0061).");
+      rejectUnknownKeys(charact,
+          {"mode", "max_targets", "min_fragment_charge", "min_target_mass", "fragment_charges", "exploration"},
+          "identification.characterization");
+
       // Hard-rejected, not defaulted. The old parse was
       //     if (obj_str == "coverage") Coverage; else Ambiguity;
-      // so "Coverage", "covrage" or any typo silently selected ambiguity, and with mode now
-      // carrying the on/off bit a typo'd "Off" would silently ENABLE MS3.
-      const std::string m = charact.value("mode", std::string("off"));
-      if (m == "off")
-        characterization_.mode = CharacterizationMode::Off;
+      // so "Coverage", "covrage" or any typo silently selected ambiguity.
+      const std::string m = nullableString(charact, "mode", "");
+      if (m.empty())
+        throw std::invalid_argument(
+            "Config: identification.characterization.mode is required: one of \"ambiguity\", \"coverage\", "
+            "\"fragments\", \"exhaustive\", \"discriminating\". The block's presence turns MS3 on, so it must "
+            "name an objective (ADR-0061).");
+      else if (m == "off")
+        throw std::invalid_argument(
+            "Config: identification.characterization.mode \"off\" is gone (ADR-0061): delete the "
+            "characterization block to run no MS3.");
       else if (m == "ambiguity")
       {
         characterization_.mode = CharacterizationMode::Ambiguity;
@@ -540,54 +642,16 @@ namespace OpenMS
       }
       else
         throw std::invalid_argument(
-            "Config: characterization.mode must be one of \"off\", \"ambiguity\", \"coverage\", "
+            "Config: identification.characterization.mode must be one of \"ambiguity\", \"coverage\", "
             "\"fragments\", \"exhaustive\", \"discriminating\"; "
             "got \"" + m + "\" (values are case-sensitive).");
 
-      // ADR-0049. Which annotation method reads the MS2 fragments. Hard-rejected rather than
-      // defaulted, for mode's reason: a typo'd "Refine" must not silently run FLASHTnT.
-      // Absent and null both mean "unauthored" (ToCppJson's serializer emits nulls; see
-      // quantification.identify below for the idiom).
-      const std::string meth = (charact.contains("method") && !charact["method"].is_null())
-                                   ? charact["method"].get<std::string>()
-                                   : std::string("flashtnt");
-      if (meth == "flashtnt")
-        characterization_.method = AnnotationMethod::FlashTnT;
-      else if (meth == "refine")
-        characterization_.method = AnnotationMethod::Refine;
-      else
-        throw std::invalid_argument(
-            "Config: characterization.method must be one of \"flashtnt\", \"refine\"; "
-            "got \"" + meth + "\" (values are case-sensitive).");
-
-      // The seven Refine knobs. Bounds are checked in validate(); presence is recorded so a block
-      // authored under method "flashtnt" can be refused there rather than carried unread.
-      if (charact.contains("refine") && !charact["refine"].is_null())
-      {
-        const auto& ref = charact["refine"];
-        if (!ref.is_object())
-          throw std::invalid_argument("Config: characterization.refine must be an object.");
-        rejectUnknownKeys(ref,
-            {"fdr", "shuffles", "grid_da", "max_shift_da", "min_ions", "max_levels", "jump_penalty"},
-            "characterization.refine");
-        characterization_.has_refine_block = true;
-        RefineSettings& r = characterization_.refine;
-        r.fdr = ref.value("fdr", r.fdr);
-        r.shuffles = ref.value("shuffles", r.shuffles);
-        r.grid_da = ref.value("grid_da", r.grid_da);
-        r.max_shift_da = ref.value("max_shift_da", r.max_shift_da);
-        r.min_ions = ref.value("min_ions", r.min_ions);
-        r.max_levels = ref.value("max_levels", r.max_levels);
-        r.jump_penalty = ref.value("jump_penalty", r.jump_penalty);
-      }
-
-      characterization_.protein_sequence = charact.value("protein_sequence", "");
       characterization_.max_targets = charact.value("max_targets", 3);
       characterization_.min_fragment_charge = charact.value("min_fragment_charge", 0);
       // Read beside its sibling floors. Inert unless mode == Exhaustive; no other objective
       // consults it, because no other objective targets a raw deconvolved mass.
       characterization_.min_target_mass = charact.value("min_target_mass", 0.0);
-      characterization_.fragment_charges = parseChargeMode(charact, "fragment_charges", "characterization");
+      characterization_.fragment_charges = parseChargeMode(charact, "fragment_charges", "identification.characterization");
     }
 
     // --- quantification (ADR-0038) ---
@@ -1140,7 +1204,7 @@ namespace OpenMS
       }
     };
     parseExploration(ps, "precursor_selection", 2);
-    parseExploration(charact, "characterization", 3);
+    parseExploration(charact, "identification.characterization", 3);
 
     // --- THE PROJECTION: derive every level's selection state from characterization.mode ---
     // Runs after all sections are parsed and BEFORE the tol loop below, which sizes itself from
@@ -1170,7 +1234,7 @@ namespace OpenMS
 
     // ADR-0049. Refine matches MS2 fragments, so it matches at the MS2 level's tolerance -- not an
     // authored refine key, so the two can never disagree.
-    characterization_.refine.tolerance_ppm = levels_[2].tolerance_ppm;
+    identification_.refine.tolerance_ppm = levels_[2].tolerance_ppm;
 
     // Compute convenience boolean
     exploration_enabled_ = false;
@@ -1277,7 +1341,7 @@ namespace OpenMS
     {
       auto it = levels_.find(lvl);
       if (it == levels_.end() || !it->second.monitor_ms1_enabled) continue;
-      const std::string path = (lvl == 2) ? "precursor_selection" : "characterization";
+      const std::string path = (lvl == 2) ? "precursor_selection" : "identification.characterization";
       if (it->second.monitor_ms1_interval_ms <= 0.0)
         throw std::invalid_argument(
             "Config: " + path + ".exploration.monitor_ms1.interval_ms must be > 0 when enabled "
@@ -1428,7 +1492,7 @@ namespace OpenMS
     {
       if (cfg.exploration != ExplorationMetric::None && cfg.scans.size() != 1)
         throw std::invalid_argument(
-            std::string(lvl == 2 ? "precursor_selection" : "characterization")
+            std::string(lvl == 2 ? "precursor_selection" : "identification.characterization")
             + ".exploration is enabled, so level " + std::to_string(lvl)
             + " must dispatch exactly one scan config; it dispatches "
             + std::to_string(cfg.scans.size())
@@ -1437,25 +1501,25 @@ namespace OpenMS
 
     for (const auto& [lvl, cfg] : levels_)
     {
-      if (cfg.exploration == ExplorationMetric::FragmentCount && characterization_.protein_sequence.empty())
+      if (cfg.exploration == ExplorationMetric::FragmentCount && !identification_.enabled())
         throw std::invalid_argument(
             "ExplorationMetric::FragmentCount at level " + std::to_string(lvl) +
-            " requires a non-empty characterization.protein_sequence.");
+            " requires an identification section with a reference (ADR-0061).");
     }
 
-    // --- characterization.method / refine (ADR-0049) --------------------------------------------
+    // --- identification.method / refine (ADR-0049) ----------------------------------------------
     // Two cross-key refusals, both "an authored value nobody reads": a refine block under FLASHTnT,
     // and the discriminating mode, whose targets only Refine's candidate paths can supply.
-    if (characterization_.method != AnnotationMethod::Refine)
+    if (identification_.method != AnnotationMethod::Refine)
     {
-      if (characterization_.has_refine_block)
+      if (identification_.has_refine_block)
         throw std::invalid_argument(
-            "characterization.refine is set but characterization.method is \"flashtnt\". The refine "
-            "block is read only under characterization.method \"refine\"; set the method or remove "
+            "identification.refine is set but identification.method is \"flashtnt\". The refine "
+            "block is read only under identification.method \"refine\"; set the method or remove "
             "the block.");
       if (characterization_.mode == CharacterizationMode::Discriminating)
         throw std::invalid_argument(
-            "characterization.mode \"discriminating\" requires characterization.method \"refine\" "
+            "identification.characterization.mode \"discriminating\" requires identification.method \"refine\" "
             "(ADR-0049): its targets are the fragments that tell Refine's candidate paths apart.");
     }
     // The discriminating round pools MS3 evidence only on the REGULAR MS3 return path; an MS3 exploration variant
@@ -1463,13 +1527,13 @@ namespace OpenMS
     // Refused at load rather than wired untested.
     if (characterization_.mode == CharacterizationMode::Discriminating && hasExploration(3))
       throw std::invalid_argument(
-          "characterization.mode \"discriminating\" does not yet pool MS3 exploration variants; disable "
-          "characterization.exploration or choose another mode (ADR-0049).");
+          "identification.characterization.mode \"discriminating\" does not yet pool MS3 exploration variants; disable "
+          "identification.characterization.exploration or choose another mode (ADR-0049).");
     {
-      const RefineSettings& r = characterization_.refine;
+      const RefineSettings& r = identification_.refine;
       auto bound = [](bool ok, const std::string& key, const std::string& rule, const std::string& got) {
         if (!ok)
-          throw std::invalid_argument("characterization.refine." + key + " must be " + rule + "; got " + got + ".");
+          throw std::invalid_argument("identification.refine." + key + " must be " + rule + "; got " + got + ".");
       };
       bound(r.fdr > 0.0 && r.fdr <= 1.0, "fdr", "in (0, 1]", std::to_string(r.fdr));
       bound(r.shuffles >= 1, "shuffles", ">= 1", std::to_string(r.shuffles));
@@ -1519,7 +1583,7 @@ namespace OpenMS
       // of scope, not a claim that it is right.
       if (lvl == 3 && characterization_.mode == CharacterizationMode::Off) continue;
 
-      const std::string sect = (lvl == 2 ? "precursor_selection" : "characterization");
+      const std::string sect = (lvl == 2 ? "precursor_selection" : "identification.characterization");
       const auto ov = cfg.overrides.find("analyzer");
       if (ov != cfg.overrides.end() && isTrapAnalyzer(ov->second)
           && cfg.exploration != ExplorationMetric::None
@@ -1579,8 +1643,8 @@ namespace OpenMS
         && shareBased(level(3).exploration)
         && characterization_.fragment_charges == ChargeAcquisitionMode::Multiplexed)
       throw std::invalid_argument(
-          "characterization.exploration.metric is a share-based metric (\"remaining_precursor\" or "
-          "\"kinetic_model\") but characterization.fragment_charges is \"multiplexed\". The precursor share "
+          "identification.characterization.exploration.metric is a share-based metric (\"remaining_precursor\" or "
+          "\"kinetic_model\") but identification.characterization.fragment_charges is \"multiplexed\". The precursor share "
           "sums the ANCHOR's isolation window only, so under co-isolation it reports one charge state's "
           "depletion while the same collision energy depletes its siblings at other rates -- a reading of the "
           "anchor decides nothing about the rest. Set fragment_charges to \"single\" or \"separate\", or "
@@ -1592,10 +1656,11 @@ namespace OpenMS
     // requirement tracks the thing that actually consumes it, and those 17 placeholders are blanked --
     // an empty sequence is the honest encoding of "no protein was supplied", and a non-empty one is
     // load-bearing rather than decorative.
-    if (characterization_.mode != CharacterizationMode::Off
-        && characterization_.protein_sequence.empty())
+    // ADR-0061 made "MS3 with no sequence" unrepresentable: the characterization block lives inside
+    // identification, whose reference.sequence is refused empty at parse. Kept as an invariant.
+    if (characterization_.mode != CharacterizationMode::Off && !identification_.enabled())
       throw std::invalid_argument(
-          "characterization.mode is not \"off\" but characterization.protein_sequence is empty. "
+          "identification.characterization is set but identification has no reference sequence. "
           "MS3 characterization matches fragments against that sequence.");
 
 
@@ -1604,7 +1669,7 @@ namespace OpenMS
     // reachable with no level-3 scan config is an OOB read, not a no-op.
     if (characterization_.mode != CharacterizationMode::Off && level(3).scans.empty())
       throw std::invalid_argument(
-          "characterization.mode is \"" +
+          "identification.characterization.mode is \"" +
           std::string(characterizationModeName(characterization_.mode))
           + "\" but ms_settings.ms3 is not defined. An MS3 scan config is required to build the "
             "MS3 command into.");
@@ -1628,7 +1693,7 @@ namespace OpenMS
       // no-op: Exploration.cpp's `for (ce = ce_min; ce <= ce_max + 1e-9; ce += ce_step)` never
       // advances, so it spins forever INSIDE processScan -- on the C# TPL ActionBlock thread, with
       // the instrument still waiting for commands. A hang, not an error.
-      const std::string sect = (lvl == 2 ? "precursor_selection" : "characterization");
+      const std::string sect = (lvl == 2 ? "precursor_selection" : "identification.characterization");
       if (cfg.ce_step <= 0.0)
         throw std::invalid_argument(
             sect + ".exploration.ce_step must be > 0; got " + std::to_string(cfg.ce_step)

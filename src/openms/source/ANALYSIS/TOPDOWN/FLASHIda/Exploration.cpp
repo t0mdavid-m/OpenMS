@@ -477,7 +477,7 @@ namespace OpenMS
     {
       MS2Context ctx;
       ctx.proteoform_sequence = (group.proteoform_ctx.region_start >= 0)
-          ? config_.characterization().protein_sequence.substr(group.proteoform_ctx.region_start,
+          ? config_.identification().sequence.substr(group.proteoform_ctx.region_start,
               group.proteoform_ctx.region_end - group.proteoform_ctx.region_start)
           : "";
       ctx.start_pos = group.proteoform_ctx.region_start;
@@ -522,7 +522,7 @@ namespace OpenMS
     if (group.msn_level >= 3 && !info.identification.ms2_context.proteoform_sequence.empty())
     {
       info.identification.proteoform_sequence = info.identification.ms2_context.proteoform_sequence;
-      info.identification.matched_protein = config_.characterization().protein_sequence;
+      info.identification.matched_protein = config_.identification().sequence;
     }
     
     auto& meta = v.result.getOrCreateOptimizationMetadata();
@@ -567,7 +567,7 @@ namespace OpenMS
       std::vector<FragmentAnalysis::ProteoformMatch> detailed_results;
       auto calibrated_scores = ProteoformTracker::scoreCalibratedVariants(
         variant_spectra,
-        config_.characterization().protein_sequence,
+        config_.identification().sequence,
         score_ctx,
         group.fragment_ion_type,
         group.fragment_ion_index,
@@ -911,7 +911,7 @@ namespace OpenMS
     int next_level = msn_level + 1;
     const auto& this_cfg = config_.level(msn_level);
     const auto& next_cfg = config_.level(next_level);
-    const auto& seq = config_.characterization().protein_sequence;
+    const auto& seq = config_.identification().sequence;
 
     // Identification is gated by the SEQUENCE, not by characterization.mode. The four conditions that
     // used to bail here gate MS3 DISPATCH, and they are re-asserted below, immediately above the
@@ -990,7 +990,7 @@ namespace OpenMS
     nlr.proteoform_match = frag_result;
     if (!seq.empty() && found > 0)
     {
-      nlr.matched_protein = config_.characterization().protein_sequence;
+      nlr.matched_protein = config_.identification().sequence;
       nlr.proteoform_sequence = seq;
       // TIC coverage: sum of matched qscores / total spectrum intensity
       double total_tic = 0.0;
@@ -1331,7 +1331,7 @@ namespace OpenMS
                                                                       const std::string& activation_type) const
   {
     FragmentAnalysis::ProteoformMatch result;
-    const auto& seq = config_.characterization().protein_sequence;
+    const auto& seq = config_.identification().sequence;
     if (seq.empty() || spec.empty())
       return result;
 
@@ -1354,7 +1354,7 @@ namespace OpenMS
 
     if (result.total_match_count > 0)
     {
-      result.matched_protein = config_.characterization().protein_sequence;
+      result.matched_protein = config_.identification().sequence;
     }
     return result;
   }

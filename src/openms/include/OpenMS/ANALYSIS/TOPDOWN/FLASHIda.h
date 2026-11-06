@@ -346,7 +346,7 @@ namespace OpenMS
                                       IdaLogger::ScanRowDescriptor& results_row);
 
     /**
-     * @brief Close a characterization.method refine discriminating round (ADR-0049): decide, then re-dispatch MS3 from
+     * @brief Close a identification.method refine discriminating round (ADR-0049): decide, then re-dispatch MS3 from
      *        the decided model through Exploration::dispatchFromModel, replaying the WINNER MS2's own command as stage 0.
      *
      * Pushes the new MS3 (each stamped with @p precursor_id and appended to @p child_ids), caches their MS2 contexts so
