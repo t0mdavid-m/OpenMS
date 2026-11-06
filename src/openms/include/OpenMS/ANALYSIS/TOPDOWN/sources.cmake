@@ -23,6 +23,7 @@ set(sources_list_h
         FLASHIda/LogCell.h
         FLASHIda/MS3FragmentMatcher.h
         FLASHIda/PrecursorSelection.h
+        FLASHIda/ProteomeSearch.h
         FLASHIda/Quantification.h
         FLASHIda/ScanCommandJoin.h
         FLASHIda/ScanCommand.h

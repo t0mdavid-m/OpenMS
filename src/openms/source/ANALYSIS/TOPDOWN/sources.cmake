@@ -21,6 +21,7 @@ set(sources_list
         FLASHIda/MS3FragmentMatcher.cpp
         FLASHIda/PrecursorSelection.cpp
         FLASHIda/ProteoformTracker.cpp
+        FLASHIda/ProteomeSearch.cpp
         FLASHIda/Quantification.cpp
         FLASHIda/ScanCommandQueue.cpp
         FLASHIda/SearchPool.cpp
