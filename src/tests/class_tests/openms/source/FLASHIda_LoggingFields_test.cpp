@@ -2237,15 +2237,16 @@ START_SECTION(identification_refine_columns_are_sentinels_under_flashtnt)
   std::ifstream in(dir + "/identification.tsv");
   std::string line;
   std::getline(in, line);  // header
-  const std::string sentinel_tail = "\t-1\t\t\t-1\t-1\t-1\t";
+  // ADR-0061 push 4b: the refine sentinels are no longer the row's end; its five columns follow them.
+  const std::string sentinel_tail = "\t-1\t\t\t-1\t-1\t-1\t\tsequence\t-1.0000\t-1.0000\t0\t-1.0000";
   int n_rows = 0, n_ms2 = 0;
   while (std::getline(in, line))
   {
     if (!line.empty() && line.back() == '\r') line.pop_back();
     if (line.empty()) continue;
     ++n_rows;
-    // 41 columns = 40 tabs, whatever the row type
-    TEST_EQUAL(std::count(line.begin(), line.end(), '\t'), 40)
+    // 46 columns = 45 tabs, whatever the row type
+    TEST_EQUAL(std::count(line.begin(), line.end(), '\t'), 45)
     const bool tail_ok = line.size() >= sentinel_tail.size()
                          && line.compare(line.size() - sentinel_tail.size(), sentinel_tail.size(), sentinel_tail) == 0;
     TEST_TRUE(tail_ok)
@@ -2309,11 +2310,13 @@ START_SECTION(identification_refine_columns_carry_the_candidates)
     return s.size() >= tail.size() && s.compare(s.size() - tail.size(), tail.size(), tail) == 0;
   };
   // tic_coverage, then the seven
-  TEST_TRUE(endsWith(header, "\ttic_coverage\tannotation_score\ttotal_shift\tsecond_total_shift\tsecond_score\tcut\tn_levels\tprecursor_mass_difference"))
-  TEST_EQUAL(std::count(two.begin(), two.end(), '\t'), 40)
-  TEST_EQUAL(std::count(one.begin(), one.end(), '\t'), 40)
-  TEST_TRUE(endsWith(two, "\t0.5000\t61\t526.1400\t655.1900\t46\t5\t5\t-0.9800"))
-  TEST_TRUE(endsWith(one, "\t0.5000\t61\t526.1400\t\t-1\t5\t5\t-0.9800"))
+  // (ADR-0061 push 4b: then its five; a hand-built row chose no protein, so protein is empty)
+  TEST_TRUE(endsWith(header, "\ttic_coverage\tannotation_score\ttotal_shift\tsecond_total_shift\tsecond_score\tcut\tn_levels\tprecursor_mass_difference"
+                             "\tprotein\traw_score\tidentification_score\tclosed_out\tinferred_precursor_mass"))
+  TEST_EQUAL(std::count(two.begin(), two.end(), '\t'), 45)
+  TEST_EQUAL(std::count(one.begin(), one.end(), '\t'), 45)
+  TEST_TRUE(endsWith(two, "\t0.5000\t61\t526.1400\t655.1900\t46\t5\t5\t-0.9800\t\t-1.0000\t-1.0000\t0\t-1.0000"))
+  TEST_TRUE(endsWith(one, "\t0.5000\t61\t526.1400\t\t-1\t5\t5\t-0.9800\t\t-1.0000\t-1.0000\t0\t-1.0000"))
 }
 END_SECTION
 
