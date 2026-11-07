@@ -576,9 +576,22 @@ namespace
     }
     std::cout << "matching-proteoform-hits" << std::endl;
 
-    // === Diagnostic Output: Proteoform and PTM sites ===
+    // 8. The best proteoform hit: its FLASHExtender score is this matcher's evidence; matchFromPrSM converts it and
+    //    re-matches the spectrum's fragments on the proteoform (shared with the proteome search, ADR-0061 push 4c).
     const auto& best_hit = proteoform_hits[0];
     result.score = best_hit.getScore();
+    return matchFromPrSM(best_hit, protein_sequence, stored_ms2, ion_types_str, ppm_tolerance, result, matches);
+  }
+
+  // A PrSM on @p protein_sequence (FLASHExtender's, or FLASHTnT's whose positions are the same 1-based inclusive ones)
+  // as a ProteoformMatch, and every deconvolved mass of @p stored_ms2 re-matched on that proteoform. Lifted out of
+  // runTagBasedFragmentMatching_ as it was (ADR-0061 push 4c); it sets all of @p result but score, tag_count and matched_protein.
+  int FragmentAnalysis::matchFromPrSM(const ProteinHit& best_hit, const String& protein_sequence,
+                                      const DeconvolvedSpectrum& stored_ms2, const std::vector<std::string>& ion_types_str,
+                                      double ppm_tolerance, ProteoformMatch& result,
+                                      std::vector<TagBasedFragmentMatch>& matches)
+  {
+    matches.clear();
 
     // Print matched proteoform sequence (using FLASHExtender truncation info)
     // Note: FLASHExtender positions are 1-based, convert to 0-based for substr
@@ -588,6 +601,20 @@ namespace
     if (best_hit.metaValueExists("EndPosition"))
       // TODO: Why not end??
       end_pos = static_cast<int>(best_hit.getMetaValue("EndPosition"));
+    // An open terminus is -1 on the PrSM. With exactly one open, keep the closed side's real bound and take the protein's
+    // own end on the open side: written as -1, the region read as "full sequence" at every reader, which dropped the
+    // closed bound too. Both open stays "full sequence" (StartPosition -1 gave -2 here; every reader tests the sign only).
+    if ((start_pos >= 0) != (end_pos >= 0))
+    {
+      if (start_pos < 0)
+        start_pos = 0;
+      else
+        end_pos = static_cast<int>(protein_sequence.size());
+    }
+    else if (start_pos < 0)
+    {
+      start_pos = -1;
+    }
 
     // Populate proteoform region in result
     result.region_start = start_pos;  // 0-based, or -1 if not found
@@ -748,7 +775,7 @@ namespace
               });
 
     // === Diagnostic Output: Matched fragment ions ===
-    std::cout << "[runTagBasedFragmentMatching_] Matched " << matches.size() << " fragment ions (" << dspec.size() << " masses):" << std::endl;
+    std::cout << "[runTagBasedFragmentMatching_] Matched " << matches.size() << " fragment ions (" << stored_ms2.size() << " masses):" << std::endl;
     Size display_count = std::min(Size(10), matches.size());
     for (Size i = 0; i < display_count; ++i)
     {

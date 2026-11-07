@@ -39,6 +39,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/DATASTRUCTURES/Param.h>
 #include <OpenMS/DATASTRUCTURES/String.h>
+#include <OpenMS/METADATA/ProteinHit.h>
 
 #include <map>
 #include <memory>
@@ -384,6 +385,22 @@ namespace OpenMS
                                     ProteoformMatch& result,
                                     const String& fragmentation_method = "HCD",
                                     double tolerance_ppm = 0.0);
+
+    /**
+     * @brief One PrSM as a match: convert @p hit (a proteoform on @p protein_sequence) and re-match @p stored_ms2 on it.
+     *
+     * @p hit carries FLASHExtender's meta values (StartPosition/EndPosition 1-based inclusive, -1 = an open terminus;
+     * Modifications with 0-based ModificationStarts/Ends), as the Extender's hits and FLASHTnT's PrSMs both do. Fills
+     * region (0-based, exclusive end; -1/-1 = both termini open, the full sequence; with one open, that side is the
+     * protein's own end), proteoform_sequence = @p protein_sequence, ptm_sites (1-based, protein frame), fragments and
+     * total_match_count, and @p matches with every deconvolved mass matched within @p ppm_tolerance on @p ion_types,
+     * sorted by intensity descending. Leaves score, tag_count and matched_protein to the caller.
+     *
+     * @return number of matches
+     */
+    static int matchFromPrSM(const ProteinHit& hit, const String& protein_sequence, const DeconvolvedSpectrum& stored_ms2,
+                             const std::vector<std::string>& ion_types, double ppm_tolerance, ProteoformMatch& result,
+                             std::vector<TagBasedFragmentMatch>& matches);
 
     /**
      * @brief Refine's MS2 match (identification.method refine, ADR-0049): the sibling of runTagBasedFragmentMatching_.
