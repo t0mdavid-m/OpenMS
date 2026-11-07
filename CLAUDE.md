@@ -165,8 +165,8 @@ private `monitor_deconv_` (ADR-0042). **Do not merge the monitor engine into `de
 
 Five streams in `runtime.log_dir` (empty = nothing opens; the host creates the directory):
 `ida.log` (free text, decision record), `scan_commands.tsv` (36 columns, one row per dequeued
-command; what FLASHDeconv reads), `scan_results.tsv` (53), `identification.tsv` (41),
-`pooled_identification.tsv` (19). `IdaLogger` serialises each stream itself.
+command; what FLASHDeconv reads), `scan_results.tsv` (56), `identification.tsv` (46),
+`pooled_identification.tsv` (20). `IdaLogger` serialises each stream itself.
 
 - **Every value written must set its own precision**: the ostream is sticky. `Mass=` and `AllMass=`
   are asserted identical (ADR-0035); `scan_commands` `mono_mass` has four decimals, and no golden can
