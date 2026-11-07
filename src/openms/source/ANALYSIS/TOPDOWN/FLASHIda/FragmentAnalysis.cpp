@@ -961,8 +961,9 @@ namespace
                                        const String& fragmentation_method, double tolerance_ppm)
   {
     matches.clear();
-    // tag_count's vocabulary: -1 = no tagger produced this match (Refine annotates), 0 = the search found nothing
-    result.tag_count = refine ? -1 : 0;
+    // tag_count's vocabulary: -1 = no tagger ran; on a searched MS2 the search's tagger ran, under either method, so it is
+    // every tag the search produced (ADR-0061 push 4c), PrSM or not
+    result.tag_count = searched.tag_count;
     if (!searched.found || stored_ms2.empty() || searched.protein_sequence.empty())
     {
       return 0;
@@ -978,6 +979,7 @@ namespace
     {
       // Refine annotates the protein the search chose (ADR-0061 d.11); its best path's score is the method's score
       n = runRefineMatching_(searched.protein_sequence, matches, stored_ms2, result, fragmentation_method, tolerance_ppm);
+      result.tag_count = searched.tag_count;  // runRefineMatching_ writes -1 (no tagger of its own); the search's ran
       if (result.proteoform_sequence.empty())
       {
         return n;  // Refine assembled no path: nothing identified
@@ -986,10 +988,6 @@ namespace
     }
     else
     {
-      if (hit.metaValueExists("TagIndices"))
-      {
-        result.tag_count = static_cast<int>(hit.getMetaValue("TagIndices").toIntList().size());
-      }
       result.score = extension;
       const double ppm_tolerance = (tolerance_ppm > 0.0) ? tolerance_ppm : config_.level(2).tolerance_ppm;
       n = matchFromPrSM(hit, searched.protein_sequence, stored_ms2, FragmentAnalysis::getIonTypesForFragmentationMethod(fragmentation_method),

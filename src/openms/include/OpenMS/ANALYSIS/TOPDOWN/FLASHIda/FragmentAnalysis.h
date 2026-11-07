@@ -157,6 +157,7 @@ namespace OpenMS
       ProteinHit hit;                 ///< the best PrSM (FLASHTnT's rank: score, then coverage)
       std::string protein_sequence;   ///< its reference entry's sequence (never the hit's: run() rewrites it)
       std::string accession;          ///< its reference entry's accession
+      int tag_count = -1;             ///< every tag the search produced, PrSM or not; -1 = no search ran (a dropped one)
     };
 
     /// Format a proteoform sequence with PTM annotations in ProForma notation.

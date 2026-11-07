@@ -76,8 +76,11 @@ namespace OpenMS
       explicit Worker(const ProteomeSearch& search);
 
       /// every PrSM FLASHTnT reports for @p ms2 (the engine's deconvolution of an MS2 at @p tol_ppm, whose raw
-      /// spectrum is @p raw and scan number @p scan), in FLASHTnT's order; empty when @p ms2 has no mass
-      std::vector<ProteinHit> search(const DeconvolvedSpectrum& ms2, double tol_ppm, const MSSpectrum& raw, int scan);
+      /// spectrum is @p raw and scan number @p scan), in FLASHTnT's order; empty when @p ms2 has no mass. When
+      /// @p tag_count is given it receives the number of tags the search produced (FLASHTnTAlgorithm::getTags, read
+      /// before the results are released; 0 for a spectrum with no mass).
+      std::vector<ProteinHit> search(const DeconvolvedSpectrum& ms2, double tol_ppm, const MSSpectrum& raw, int scan,
+                                     int* tag_count = nullptr);
 
     private:
       const ProteomeSearch& search_;

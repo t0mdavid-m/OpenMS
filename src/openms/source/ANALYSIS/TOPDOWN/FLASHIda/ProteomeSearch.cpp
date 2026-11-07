@@ -102,8 +102,10 @@ namespace OpenMS
     tnt_.setLogType(ProgressLogger::NONE);
   }
 
-  std::vector<ProteinHit> ProteomeSearch::Worker::search(const DeconvolvedSpectrum& ms2, double tol_ppm, const MSSpectrum& raw, int scan)
+  std::vector<ProteinHit> ProteomeSearch::Worker::search(const DeconvolvedSpectrum& ms2, double tol_ppm, const MSSpectrum& raw, int scan,
+                                                         int* tag_count)
   {
+    if (tag_count != nullptr) *tag_count = 0;
     if (ms2.empty()) return {};  // toSpectrum reads the first mass
     DeconvolvedSpectrum sorted = ms2;  // toSpectrum is non-const, and sorts its peaks but not its per-mass lists
     sorted.sort();
@@ -118,6 +120,7 @@ namespace OpenMS
     });
     tnt_.run(one, search_.reference_);
     std::vector<ProteinHit> hits = tnt_.getProteoforms();
+    if (tag_count != nullptr) *tag_count = static_cast<int>(tnt_.getTags().size());  // every tag this spectrum produced
     tnt_.releaseResults();  // run() keeps its results (and tags) until released; the next search must start from nothing
     tnt_.setRawSpectrumLoader(nullptr);
     return hits;

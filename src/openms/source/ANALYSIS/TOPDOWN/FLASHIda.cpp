@@ -172,7 +172,9 @@ namespace OpenMS
                                + "' has no prepared proteome search on this thread (its ion types were not collected at construction)");
       const ProteomeSearch& proteome = *proteome_it->second;
       FragmentAnalysis::SearchedPrSM out;
-      const std::vector<ProteinHit> hits = worker_it->second->search(ms2, tol_ppm, ms2.getOriginalSpectrum(), scan > 0 ? scan : 0);
+      int tags = 0;
+      const std::vector<ProteinHit> hits = worker_it->second->search(ms2, tol_ppm, ms2.getOriginalSpectrum(), scan > 0 ? scan : 0, &tags);
+      out.tag_count = tags;  // every tag the search produced, PrSM or not
       const ProteinHit* best = bestPrSM(hits);
       if (best == nullptr) return out;
 
