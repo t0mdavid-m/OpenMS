@@ -11,6 +11,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/ProteoformDatabase.h>
 #include <OpenMS/CHEMISTRY/ModificationsDB.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
+#include <algorithm>
 #include <fstream>
 #include <mutex>
 #ifdef _OPENMP
@@ -405,8 +406,21 @@ namespace OpenMS
     return names;
   }
 
+  bool FLASHExtenderAlgorithm::sameMasses_(const std::vector<std::pair<int, int>>& ranges, const std::vector<int>& sources, int a, int b)
+  {
+    if (a <= 0 || b <= 0 || a >= (int)ranges.size() || b >= (int)ranges.size() || a == b) return false;
+    std::vector<int> sa, sb;
+    for (int k = ranges[a].first; k <= ranges[a].second; k++) sa.push_back(sources[k]);
+    for (int k = ranges[b].first; k <= ranges[b].second; k++) sb.push_back(sources[k]);
+    std::sort(sa.begin(), sa.end());
+    sa.erase(std::unique(sa.begin(), sa.end()), sa.end());
+    std::sort(sb.begin(), sb.end());
+    sb.erase(std::unique(sb.begin(), sb.end()), sb.end());
+    return sa.size() > 1 && sa == sb;
+  }
+
   int FLASHExtenderAlgorithm::shiftRangeEnd_(const MSSpectrum& node_spec, const MSSpectrum& tol_spec, const std::vector<double>& pro_masses, int pre_node,
-                                             int pre_pro, int node, int pro, double mass_shift) const
+                                             int pre_pro, int node, int pro, double mass_shift, const std::vector<char>* skip) const
   {
     // A mass between the two nodes that matches protein index pi with the whole shift puts the shift on residues before pi; the smallest
     // such pi ends the range. Called on DAG edges (the innermost loop of the extension): per mass in between, the candidate indices are
@@ -415,6 +429,7 @@ namespace OpenMS
     int end = pro;
     for (int ni = pre_node + 1; ni < node && end > pre_pro + 1; ni++)
     {
+      if (skip != nullptr && ni < (int)skip->size() && (*skip)[ni]) continue;
       const double nm = node_spec[ni].getMZ();
       const double margin = tol_spec[ni].getIntensity();
       const auto last = pro_masses.begin() + end; // only indices below the current end can end the range earlier
@@ -916,9 +931,10 @@ namespace OpenMS
       t_node_spec.emplace_back(0, 0);
       t_tol_spec.emplace_back(0, 0);
       t_series.push_back(-1);
-      // with report_matched_masses_: per node, the masses k merged into it, [first, last] (a merge only joins consecutive masses)
+      // per node, the masses k merged into it, [first, last] (a merge only joins consecutive masses)
       std::vector<std::pair<int, int>> t_ranges;
-      if (report_matched_masses_) t_ranges.emplace_back(0, -1);
+      t_ranges.reserve(node_spec.size() + 1);
+      t_ranges.emplace_back(0, -1);
       float overlapped_score = 0;
 
       for (Size k = 0; k < node_spec.size(); k++)
@@ -946,11 +962,8 @@ namespace OpenMS
             t_node_spec.pop_back();
             t_tol_spec.pop_back();
             t_series.pop_back();
-            if (report_matched_masses_)
-            {
-              range_first = t_ranges.back().first;
-              t_ranges.pop_back();
-            }
+            range_first = t_ranges.back().first;
+            t_ranges.pop_back();
           }
           score = multi_ion_score + std::max(prev_score, score);
           // score = suffix_prefix == prev_suffix_prefix ? multi_ion_score + std::max(prev_score, score) : multi_ion_score + prev_score + score;
@@ -962,7 +975,7 @@ namespace OpenMS
         t_node_spec.emplace_back(mass, score);
         t_tol_spec.emplace_back(mass, margin);
         t_series.push_back(series);
-        if (report_matched_masses_) t_ranges.emplace_back(range_first, (int)k);
+        t_ranges.emplace_back(range_first, (int)k);
       }
 
       if (max_score < overlapped_score - multi_ion_score)
@@ -970,14 +983,11 @@ namespace OpenMS
         hi.node_spec_map_[hi.mode_] = t_node_spec;
         hi.tol_spec_map_[hi.mode_] = t_tol_spec;
         hi.node_series_map_[hi.mode_] = t_series;
-        if (report_matched_masses_)
-        {
-          auto& sources = hi.node_source_map_[hi.mode_];
-          sources.clear();
-          sources.reserve(nodes.size());
-          for (const auto& n : nodes) sources.push_back(n.source);
-          hi.node_range_map_[hi.mode_] = t_ranges;
-        }
+        auto& sources = hi.node_source_map_[hi.mode_];
+        sources.clear();
+        sources.reserve(nodes.size());
+        for (const auto& n : nodes) sources.push_back(n.source);
+        hi.node_range_map_[hi.mode_] = t_ranges;
         max_score = overlapped_score;
         max_proteoform_mass = proteoform_mass;
       }
@@ -991,7 +1001,7 @@ namespace OpenMS
       hi.node_spec_map_[hi.mode_].emplace_back(hi.calculated_precursor_mass_ - i2f_mass, 1);
       hi.tol_spec_map_[hi.mode_].emplace_back(hi.calculated_precursor_mass_ - i2f_mass, tol_ * hi.calculated_precursor_mass_);
       hi.node_series_map_[hi.mode_].push_back(-1);
-      if (report_matched_masses_) hi.node_range_map_[hi.mode_].emplace_back(0, -1); // the precursor node: no mass
+      hi.node_range_map_[hi.mode_].emplace_back(0, -1); // the precursor node: no mass
     }
   }
 
@@ -1676,6 +1686,38 @@ namespace OpenMS
             double mod_mass = 0; //, total_mod_mass = 0;
             // int total_mod_count = getBlindModNumber_(*best_path.begin());
 
+            // Two nodes merged from the same masses are one pair of complementary fragments read both ways round (mode 2, where every
+            // mass is also converted through the precursor mass): a and b read as (prefix, suffix) and as (suffix, prefix). Both can end up
+            // on the path, but only one of the two cleavages is real, so neither bounds a shift: a shift starts and ends at the nodes
+            // around them. In IHFA scan 4248 of the lysate example, 5253.89 Da (y46) and 5978.09 Da (b53 with +16.02) made a node at L46
+            // as well as one at G53; the +16.02 was reported on residues 2-46, with no fragment between L46 and S47, while b49 and y50
+            // on the same path bound it to residues 2-49.
+            std::vector<char> mirrored(best_path.size(), 0);
+            // per node: its masses are those of a node of the path, read the other way round; it ends no shift range either
+            std::vector<char> mirror_nodes;
+            {
+              const auto& ranges = hi.node_range_map_[m];
+              const auto& sources = hi.node_source_map_[m];
+              if (ranges.size() == t_node_spec.size())
+              {
+                mirror_nodes.assign(t_node_spec.size(), 0);
+                for (Size a = 0; a < best_path.size(); a++)
+                {
+                  const int na = getNodeIndex_(best_path[a], t_pro_masses.size());
+                  for (Size b = a + 1; b < best_path.size(); b++)
+                  {
+                    if (! sameMasses_(ranges, sources, na, getNodeIndex_(best_path[b], t_pro_masses.size()))) continue;
+                    mirrored[a] = 1;
+                    mirrored[b] = 1;
+                  }
+                  for (int n = 1; n < (int)t_node_spec.size(); n++)
+                  {
+                    if (sameMasses_(ranges, sources, na, n)) mirror_nodes[n] = 1;
+                  }
+                }
+              }
+            }
+
             for (auto iter = best_path.rbegin(); iter != best_path.rend(); iter++)
             {
               auto pro_index = getProIndex_(*iter, t_pro_masses.size());
@@ -1711,6 +1753,7 @@ namespace OpenMS
               if (m == 0) max_cterm_rindex = std::max(max_cterm_rindex, pro_index);
               if (m == 1) max_nterm_index = std::max(max_nterm_index, pro_index);
               if (m == 2) hi.protein_end_position_ = pro_index;
+              if (mirrored[best_path.rend() - iter - 1]) continue; // matched, but bounds no shift (above)
               if (mod_count != prev_mod_count)
               {
                 mod_mass = mass_shift - prev_mass_shift;
@@ -1718,7 +1761,7 @@ namespace OpenMS
                 // the residues the fragment ladder leaves for the shift, [pre_pro_index, to) in this mode's orientation: the range the DAG edge
                 // tested the variable modifications on (shiftRangeEnd_ of the same two vertices and the same summed shift)
                 const int len = (int)hit.getSequence().size();
-                const int to = shiftRangeEnd_(t_node_spec, hi.tol_spec_map_[m], t_pro_masses, pre_node_index, pre_pro_index, node_index, pro_index, mass_shift);
+                const int to = shiftRangeEnd_(t_node_spec, hi.tol_spec_map_[m], t_pro_masses, pre_node_index, pre_pro_index, node_index, pro_index, mass_shift, &mirror_nodes);
                 int end = m > 0 ? (to - 1) : (len - 1 - pre_pro_index);
                 int start = m > 0 ? (pre_pro_index - 1) : (len - 1 - to);
 

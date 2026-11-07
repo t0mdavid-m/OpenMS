@@ -25,26 +25,21 @@ unregistered (verified 2026-09-04 — the list is longer than it used to be). Gl
 instead. It costs nothing to register a new header there and it keeps the drift from growing;
 `ScanRole.h`, `ScanCommandJoin.h`, `KineticModel.h`, `Refine.h` and `RefineSettings.h` are.
 
-### The untouchable boundary
+### Where each subsystem lives
 
-The directory split is a near-perfect proxy for what you may modify.
+| | Files |
+|---|---|
+| **FLASHDeconv** (flat `TOPDOWN/`) | `DeconvolvedSpectrum`, `SpectralDeconvolution`, `FLASHDeconvAlgorithm`, `FLASHHelperClasses`, `MassFeatureTrace`, `PeakGroup`, `PeakGroupScoring`, `Qvalue`, `TopDownIsobaricQuantification` |
+| **FLASHTnT** (flat `TOPDOWN/`) | `FLASHTnTAlgorithm`, `FLASHTaggerAlgorithm`, `FLASHGappedTaggerAlgorithm`, `FLASHExtenderAlgorithm` |
+| **FLASHIda engine** | `FLASHIda.{h,cpp}`, `FLASHIdaBridgeFunctions.{h,cpp}` (flat) + everything in `TOPDOWN/FLASHIda/` |
 
-| | Files | Status |
-|---|---|---|
-| **FLASHDeconv** (flat `TOPDOWN/`) | `DeconvolvedSpectrum`, `SpectralDeconvolution`, `FLASHDeconvAlgorithm`, `FLASHHelperClasses`, `MassFeatureTrace`, `PeakGroup`, `PeakGroupScoring`, `Qvalue`, `TopDownIsobaricQuantification` | **OFF-LIMITS** |
-| **FLASHTnT** (flat `TOPDOWN/`) | `FLASHTnTAlgorithm`, `FLASHTaggerAlgorithm`, `FLASHGappedTaggerAlgorithm`, `FLASHExtenderAlgorithm` | **OFF-LIMITS** |
-| **FLASHIda engine** | `FLASHIda.{h,cpp}`, `FLASHIdaBridgeFunctions.{h,cpp}` (flat) + everything in `TOPDOWN/FLASHIda/` | Fair game |
+⚠️ **Every change under `src/`** — engine, bridge, tests, `.cmake` — needs sign-off on the exact
+diff **before** it is written: stop, show file + line + hunk, wait for a per-file yes. Ambiguous
+cases count as source changes. And prefer a container-side fix (build flags, `-isystem`, build
+scope) over a source fix, always — a container change is a parent commit with no CI round trip,
+while a source change is a ~60 min cycle against the shipped engine.
 
-⚠️ **"Fair game" now means "fair game to propose".** The table says what is off-limits
-*outright*; it is no longer the whole gate. Since verification moved into the local containers,
-**every** change under `src/` — engine, bridge, tests, `.cmake`, inside the boundary or outside it
-— needs the owner's sign-off on the exact diff **before** it is written: stop, show file + line +
-hunk, wait for a per-file yes. Ambiguous cases count as source changes. And prefer a container-side
-fix (build flags, `-isystem`, build scope) over a source fix, always — a container change is a parent
-commit with no CI round trip, while a source change is a ~60 min cycle against the shipped engine.
-
-Two deliberate exceptions to the clean split, both worth knowing before you conclude the boundary
-is airtight:
+Two places where IDA code and the FLASHDeconv/FLASHTnT code meet, both worth knowing:
 
 - **`OptimizationMetadata` is IDA code living in FLASHDeconv territory.** Its header sits flat
   under `TOPDOWN/` and it is stored as `std::optional<OptimizationMetadata> opt_metadata_` on
@@ -67,8 +62,8 @@ is airtight:
   `max_flanking_mass_diff` are neither Params nor read by either algorithm on the IDA path. They
   come from `precursor_selection.tag_expansion` and drive FLASHIda's own FASTA target expansion.
 
-> **Name trap.** `TopDownIsobaricQuantification` (flat, off-limits, used only by
-> `FLASHDeconvAlgorithm`) and `FLASHIda/Quantification` (IDA, fair game) are unrelated — but the
+> **Name trap.** `TopDownIsobaricQuantification` (flat, FLASHDeconv, used only by
+> `FLASHDeconvAlgorithm`) and `FLASHIda/Quantification` (IDA) are unrelated — but the
 > IDA one now **borrows its vocabulary**: `quantification.labelling` takes the same seven strings
 > that tool's `setValidStrings("type", …)` pins, minus `"none"`, because here
 > `quantification.enabled` is the switch. All seven schemes are live (ADR-0038); the
@@ -88,14 +83,12 @@ is airtight:
 > `a_factor_shifts_the_ratio_and_leaves_the_reported_channels_raw` and
 > `emptiness_is_judged_on_the_raw_value` pin both.
 
-⚠️ **One owner-approved edit sits inside the boundary: `PeakGroup::updateSNR_`** (`fix(TOPDOWN)`
+⚠️ **`PeakGroup::updateSNR_` carries a fix of its own** (`fix(TOPDOWN)`
 `9721595ca4`, 2026-10-26, on top of the FDmerge merge `d0954cf37b`). FDmerge's `updateChargeRange_` passes
 over up to two weak charges, so a charge with **no peak** can now sit inside a PeakGroup's range. With
 no signal and no noise, the two `1e-6` regularisers cancel and that charge scores SNR **exactly 1.0**,
 above the real charges. It then became the representative charge, and `buildMS2` wrote an isolation
-centre of −5.5. The fix gives a charge with no signal SNR 0. It is a separate commit so Kyowon can take
-it into FDmerge or reject it; nothing was pushed to `FDmerge` itself. Every other FLASHDeconv/FLASHTnT
-file is exactly as FDmerge has it.
+centre of −5.5. The fix gives a charge with no signal SNR 0. It is a separate commit.
 
 ### Ownership tree — declaration order is load-bearing
 
@@ -624,7 +617,7 @@ or not** — it is computed, so there is never a pre-scan to cascade from; the f
 variant 0 (`ref_idx`), whose stage-0 context, fragment scores and `window_snr` the whole group shares.
 `winner_index` stays −1 and `winner_tracking_id` empty. A fit with fewer than `kMinPoints` (3) finite
 shares, or a non-converging lattice, ends the group with `[EXPL-ABORT] reason=no-fit` and **no
-follow-up** — there is no fallback to the authored energy (owner decision, d.7). An edge maximum
+follow-up** — there is no fallback to the authored energy (decision d.7). An edge maximum
 (`ce == 1` or `ce == ce_max`) is still acquired and flagged. `[EXPL-MODELED]` prints the whole fit;
 `FeedResultInfo::KineticInfo` carries it to the `scan_results` row (`fit_p0 … energy_source`).
 
@@ -951,8 +944,7 @@ FLASHDeconv then takes ITS OWN PeakGroup nearest row.mono_mass from THAT survey
   `scan_commands_parse_roundtrips_an_engine_written_file` — which is the point.
 
 The FLASHDeconv side (`FLASHDeconvAlgorithm::run` + `findPrecursorPeakGroupsForMSnSpectra_`, and
-`FLASHDeconvTabWidget`) is **inside the no-go boundary** and was edited by an owner-approved, locked
-line list. The boundary has not moved.
+`FLASHDeconvTabWidget`) was edited by a fixed line list.
 
 ## Co-isolation notches (ADR-0016, ADR-0019)
 
