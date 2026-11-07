@@ -939,6 +939,7 @@ START_SECTION(narrowing_ignores_bare_fragments_under_refine)
   // mod on residues 2..6; b3 matches WITHOUT the shift (brackets: 2 <= 3 < 6), b5 WITH it (2 <= 5 < 6)
   FragmentAnalysis::ProteoformMatch match;
   match.score = 1.0;
+  match.identification_score = 1.0;  // finalizeMS2 ranks the winner by it (ADR-0061 d.5)
   match.region_start = -1;
   match.region_end = -1;
   match.matched_protein = "synthetic";

@@ -190,6 +190,7 @@ namespace
   {
     FragmentAnalysis::ProteoformMatch m;
     m.score = 1.0;                 // >= 0 + non-empty sequence => eligible winner (finalize)
+    m.identification_score = 1.0;  // finalizeMS2 ranks the winner by it (ADR-0061 d.5)
     m.region_start = -1;           // full-sequence region (identity frame mapping)
     m.region_end = -1;
     m.matched_protein = "synthetic";
@@ -216,6 +217,7 @@ namespace
   {
     FragmentAnalysis::ProteoformMatch m;
     m.score = 1.0;
+    m.identification_score = 1.0;  // finalizeMS2 ranks the winner by it (ADR-0061 d.5)
     m.region_start = -1;   // full-sequence region (identity frame mapping)
     m.region_end = -1;
     m.matched_protein = "synthetic";
@@ -516,6 +518,7 @@ START_SECTION(winner_context_reflects_id_best_split_not_metric_fused)
   {
     FragmentAnalysis::ProteoformMatch m;
     m.score = score;                 // finalizeMS2 winner = highest match.score
+    m.identification_score = score;  // finalizeMS2 ranks the winner by it (ADR-0061 d.5)
     m.region_start = -1;             // full-sequence region (identity frame mapping)
     m.region_end = -1;
     m.matched_protein = "synthetic";
@@ -563,6 +566,58 @@ START_SECTION(winner_context_reflects_id_best_split_not_metric_fused)
   TEST_EQUAL(has_nterm, true)
   TEST_EQUAL(has_heme, true)
   TEST_EQUAL(has_fused, false)
+}
+END_SECTION
+
+// ADR-0061 d.5 (push 4c): finalizeMS2's winner is the staged scan with the highest Identification score -- not
+// the method's score -- then the higher total_match_count, then the lower collision energy. Each case stages
+// two identifying scans whose order would pick the other winner under any rule but this one; the winner is
+// read back from the model's matched_protein, which the winner's match carries.
+START_SECTION(winner_is_the_highest_identification_score)
+{
+  Config cfg{std::string(tracker_config)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  ScanCommand ms2_ctx = makeMs2Ctx(30.0);
+
+  auto makeId = [](const std::string& protein, double score, double identification_score, int fragments)
+  {
+    FragmentAnalysis::ProteoformMatch m;
+    m.score = score;
+    m.identification_score = identification_score;
+    m.region_start = -1;
+    m.region_end = -1;
+    m.matched_protein = protein;
+    m.proteoform_sequence = WINNER_SEQ;
+    for (int i = 0; i < fragments; ++i)
+    {
+      FragmentAnalysis::ProteoformMatch::FragmentMatch fm;
+      fm.ion_type = "b"; fm.ion_index = 2 + i; fm.observed_mass = 300.0 + 100.0 * i;
+      m.fragments.push_back(fm);
+    }
+    m.total_match_count = fragments;
+    return m;
+  };
+  auto stageTwo = [&](int precursor_id, const FragmentAnalysis::ProteoformMatch& first, double ce_first,
+                      const FragmentAnalysis::ProteoformMatch& second, double ce_second) -> std::string
+  {
+    Ms2Params p1; p1.collision_energy = ce_first; p1.activation_type = "HCD"; p1.reaction_time = 0.0;
+    Ms2Params p2; p2.collision_energy = ce_second; p2.activation_type = "HCD"; p2.reaction_time = 0.0;
+    DeconvolvedSpectrum d1(precursor_id * 10 + 1); d1.push_back(makeSyntheticPeakGroup(351.0, 700.0, 2));
+    DeconvolvedSpectrum d2(precursor_id * 10 + 2); d2.push_back(makeSyntheticPeakGroup(351.0, 700.0, 2));
+    tracker.feedScan(precursor_id, 2, p1, precursor_id * 10 + 1, d1, first, first.score, ms2_ctx);
+    tracker.feedScan(precursor_id, 2, p2, precursor_id * 10 + 2, d2, second, second.score, ms2_ctx);
+    tracker.finalizeMS2(precursor_id);
+    const ProteoformModel* mdl = tracker.getModel(precursor_id);
+    return mdl == nullptr ? std::string("<no model>") : mdl->matched_protein;
+  };
+
+  // The higher Identification score wins over the higher method score (A is staged first and scores higher).
+  TEST_EQUAL(stageTwo(21, makeId("A", 3.0, 4.0, 1), 30.0, makeId("B", 2.0, 5.0, 1), 30.0), "B")
+  // Equal Identification scores: the higher total_match_count wins (B has more, A is staged first).
+  TEST_EQUAL(stageTwo(22, makeId("A", 3.0, 5.0, 1), 30.0, makeId("B", 3.0, 5.0, 2), 30.0), "B")
+  // Both equal: the lower collision energy wins (B's, A is staged first).
+  TEST_EQUAL(stageTwo(23, makeId("A", 3.0, 5.0, 1), 35.0, makeId("B", 3.0, 5.0, 1), 25.0), "B")
 }
 END_SECTION
 

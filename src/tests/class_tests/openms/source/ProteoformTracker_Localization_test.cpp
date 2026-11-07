@@ -86,6 +86,7 @@ namespace
   {
     FragmentAnalysis::ProteoformMatch m;
     m.score = 1.0;
+    m.identification_score = 1.0;  // finalizeMS2 ranks the winner by it (ADR-0061 d.5)
     m.region_start = -1;
     m.region_end = -1;
     m.matched_protein = "synthetic";

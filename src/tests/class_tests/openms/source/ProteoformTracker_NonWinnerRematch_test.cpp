@@ -181,6 +181,7 @@ namespace
     d.push_back(makeSyntheticPeakGroup(observed_mass / 2.0 + 1.0, observed_mass, 2));
     FragmentAnalysis::ProteoformMatch m;
     m.score = 1.0;
+    m.identification_score = 1.0;  // finalizeMS2 ranks the winner by it (ADR-0061 d.5)
     m.region_start = -1; m.region_end = -1;
     m.matched_protein = "synthetic";
     m.proteoform_sequence = WINNER_SEQ;
@@ -201,6 +202,7 @@ namespace
     for (double mm : peak_masses) d.push_back(makeSyntheticPeakGroup(mm / 2.0 + 1.0, mm, 2));
     FragmentAnalysis::ProteoformMatch m;
     m.score = 0.5;                 // valid winner candidate but loses to the 1.0 winner
+    m.identification_score = 0.5;  // finalizeMS2 ranks the winner by it (ADR-0061 d.5)
     m.region_start = -1; m.region_end = -1;
     m.proteoform_sequence = WINNER_SEQ;
     t.feedScan(pid, 2, p, scan_id, d, m, 0.5, ctx);
