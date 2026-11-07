@@ -110,7 +110,7 @@ namespace
     "max_precursors": 3
   },
   "identification": {
-    "flashtnt": {"min_length": 3, "max_length": 8},
+    "flashtnt": {"min_length": 3, "max_length": 8, "max_blind_mod_count": 2, "max_mod_mass": 700},
     "reference": {"sequence": ")JSON";
 
   const char* kConfigTail = R"JSON(
@@ -697,6 +697,7 @@ START_SECTION(unassigned_ms3_sweep_is_scored_by_remaining_precursor)
       "reference": {
         "sequence": "PEPTIDEK"
       },
+      "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 },
       "characterization": {
         "mode": "exhaustive",
         "max_targets": 3,
@@ -833,6 +834,7 @@ START_SECTION(unassigned_ms3_sweep_keeps_kinetic_model)
       "reference": {
         "sequence": "PEPTIDEK"
       },
+      "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 },
       "characterization": {
         "mode": "exhaustive",
         "max_targets": 3,
@@ -903,7 +905,7 @@ START_SECTION(ms2_exploration_metric_is_never_overridden)
         "rank_by": "qscore", "max_precursors": 3,
         "exploration": {"metric": ")JSON" + metric + R"JSON(", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0}
       },
-      "identification": { "reference": { "sequence": "PEPTIDEK" } },
+      "identification": { "reference": { "sequence": "PEPTIDEK" }, "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 } },
       "ms_settings": {
         "ms1": {"analyzer": "Orbitrap", "resolution": 120000},
         "ms2": {"analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29},
@@ -963,6 +965,7 @@ START_SECTION(ms3_unrecorded_ion_type_keeps_the_configured_metric)
       "reference": {
         "sequence": "PEPTIDEK"
       },
+      "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 },
       "characterization": {
         "mode": "exhaustive",
         "max_targets": 3,

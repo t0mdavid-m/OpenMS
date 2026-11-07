@@ -182,7 +182,7 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
     },
     "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
     "files": { "target_logs": [], "inclusion_list": "" },
-    "identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "coverage", "max_targets": 10 } },
+    "identification": { "reference": { "sequence": "PEPTIDEK" }, "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 }, "characterization": { "mode": "coverage", "max_targets": 10 } },
     "runtime": { "log_dir": ")") + log_dir + R"(" } })";
 
   Config cfg{cfg_json};

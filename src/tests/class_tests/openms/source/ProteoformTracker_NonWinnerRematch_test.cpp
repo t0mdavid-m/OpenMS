@@ -100,7 +100,9 @@ namespace
     },
     "flashtnt": {
       "min_length": 3,
-      "max_length": 8
+      "max_length": 8,
+      "max_blind_mod_count": 2,
+      "max_mod_mass": 700
     },
     "characterization": {
       "mode": "coverage",

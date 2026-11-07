@@ -167,7 +167,9 @@ namespace
     },
     "flashtnt": {
       "min_length": 3,
-      "max_length": 8
+      "max_length": 8,
+      "max_blind_mod_count": 2,
+      "max_mod_mass": 700
     },
     "characterization": {
       "mode": "ambiguity",
@@ -1188,6 +1190,7 @@ namespace
     nlohmann::json j = nlohmann::json::parse(standard_json);
     j["identification"] = {
       {"reference", {{"sequence", "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"}}},
+      {"flashtnt", {{"max_blind_mod_count", 2}, {"max_mod_mass", 700}}},
       {"search_threads", threads}};
     if (!log_dir.empty()) j["runtime"] = {{"log_dir", log_dir}};
     return j.dump();

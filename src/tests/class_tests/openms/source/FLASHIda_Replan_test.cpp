@@ -433,7 +433,7 @@ namespace
     cfg = with(cfg, R"("max_precursors": 5)", R"("max_precursors": 1, "precursor_charges": "separate", "max_charge_states": 3)");
     // ADR-0061: the base config has no identification section; the twin adds one in front of ms_settings.
     cfg = with(cfg, R"("ms_settings": {)",
-               R"("identification": { "reference": { "sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },
+               R"("identification": { "reference": { "sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" }, "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 },
                     "characterization": { "mode": "ambiguity", "max_targets": 3, "fragment_charges": "separate" } },
   "ms_settings": {)");
     return with(cfg, R"("activation": "ETD", "reaction_time": 7,

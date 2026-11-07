@@ -161,7 +161,7 @@ namespace
     },
     "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
     "files": { "target_logs": [], "inclusion_list": "" },
-    "identification": { "reference": { "sequence": ")") + std::string(WINNER_SEQ) + R"(" }, "flashtnt": { "min_length": 3, "max_length": 8 },
+    "identification": { "reference": { "sequence": ")") + std::string(WINNER_SEQ) + R"(" }, "flashtnt": { "min_length": 3, "max_length": 8, "max_blind_mod_count": 2, "max_mod_mass": 700 },
                         "characterization": { "mode": "coverage", "max_targets": 10 } },
     "runtime": {} })";
   }

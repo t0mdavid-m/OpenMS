@@ -87,7 +87,7 @@ namespace
   },
   "identification": {
     "reference": {"sequence": ")JSON";
-    s += std::string(SEQ) + "\"},\n    \"method\": \"" + method + "\",\n    \"flashtnt\": {\"min_length\": 3, \"max_length\": 8},\n"
+    s += std::string(SEQ) + "\"},\n    \"method\": \"" + method + "\",\n    \"flashtnt\": {\"min_length\": 3, \"max_length\": 8, \"max_blind_mod_count\": 2, \"max_mod_mass\": 700},\n"
          "    \"characterization\": {\"mode\": \"" + mode + "\", \"max_targets\": " + std::to_string(max_targets) + "}";
     s += R"JSON(
   },

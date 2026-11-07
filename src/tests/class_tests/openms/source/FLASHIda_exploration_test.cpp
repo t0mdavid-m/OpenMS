@@ -53,7 +53,7 @@ namespace
     return R"({
       "deconvolution": { "tol": [10, 10, 10] },
       "precursor_selection": { "rank_by": ")" + rank_by + R"(", "max_precursors": 3 },
-      "identification": { "reference": { "sequence": "PEPTIDER" }, "characterization": { "mode": ")" + mode + R"(" } },
+      "identification": { "reference": { "sequence": "PEPTIDER" }, "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 }, "characterization": { "mode": ")" + mode + R"(" } },
       "ms_settings": {
         "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
         "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 },
@@ -108,7 +108,7 @@ namespace
                          bool identify = false)
   {
     const std::string ident = (identify || !charact.empty())
-        ? R"("identification": { "reference": { "sequence": "PEPTIDER" })"
+        ? R"("identification": { "reference": { "sequence": "PEPTIDER" }, "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 })"
           + (charact.empty() ? std::string() : R"(, "characterization": { )" + charact + " }") + " },"
         : std::string();
     return std::string(R"({
@@ -182,7 +182,9 @@ namespace
     },
     "flashtnt": {
       "min_length": 3,
-      "max_length": 8
+      "max_length": 8,
+      "max_blind_mod_count": 2,
+      "max_mod_mass": 700
     }
   },
   "ms_settings": {
@@ -271,7 +273,9 @@ namespace
     },
     "flashtnt": {
       "min_length": 3,
-      "max_length": 8
+      "max_length": 8,
+      "max_blind_mod_count": 2,
+      "max_mod_mass": 700
     },
     "characterization": {
       "mode": "ambiguity",
@@ -370,7 +374,9 @@ namespace
     },
     "flashtnt": {
       "min_length": 3,
-      "max_length": 8
+      "max_length": 8,
+      "max_blind_mod_count": 2,
+      "max_mod_mass": 700
     },
     "characterization": {
       "mode": "ambiguity",
@@ -606,7 +612,9 @@ namespace
     "reference": { "sequence": "PEPTIDER" },
     "flashtnt": {
       "min_length": 3,
-      "max_length": 8
+      "max_length": 8,
+      "max_blind_mod_count": 2,
+      "max_mod_mass": 700
     },
     "characterization": {
       "mode": "ambiguity",
@@ -707,7 +715,9 @@ namespace
     "reference": { "sequence": "PEPTIDER" },
     "flashtnt": {
       "min_length": 3,
-      "max_length": 8
+      "max_length": 8,
+      "max_blind_mod_count": 2,
+      "max_mod_mass": 700
     },
     "characterization": {
       "mode": "ambiguity",
@@ -874,7 +884,9 @@ namespace
     },
     "flashtnt": {
       "min_length": 3,
-      "max_length": 8
+      "max_length": 8,
+      "max_blind_mod_count": 2,
+      "max_mod_mass": 700
     },
     "characterization": {
       "mode": "ambiguity",
@@ -1001,7 +1013,9 @@ namespace
     "reference": { "sequence": "PEPTIDER" },
     "flashtnt": {
       "min_length": 3,
-      "max_length": 8
+      "max_length": 8,
+      "max_blind_mod_count": 2,
+      "max_mod_mass": 700
     },
     "characterization": {
       "mode": "ambiguity",
@@ -1103,7 +1117,9 @@ namespace
     },
     "flashtnt": {
       "min_length": 3,
-      "max_length": 8
+      "max_length": 8,
+      "max_blind_mod_count": 2,
+      "max_mod_mass": 700
     }
   },
   "ms_settings": {
@@ -1173,7 +1189,7 @@ namespace
       "activations": [)" << activations << R"(])" << overrides << R"(
     }
   },
-  "identification": { "reference": { "sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" } },
+  "identification": { "reference": { "sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" }, "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 } },
   "ms_settings": {
     "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
     "ms2": { "analyzer": "Orbitrap", "activation": ")" << ms2_activation
@@ -1218,7 +1234,7 @@ namespace
     return std::string(R"({
       "deconvolution": { "tol": [10, 10, 10] },
       "precursor_selection": { "rank_by": "qscore", "max_precursors": 3 },
-      "identification": { "reference": { "sequence": "PEPTIDER" }, "characterization": { "mode": "ambiguity", "max_targets": 3,
+      "identification": { "reference": { "sequence": "PEPTIDER" }, "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 }, "characterization": { "mode": "ambiguity", "max_targets": 3,
         "exploration": { "metric": "kinetic_model", "ce_min": )") + std::to_string(ce_min)
         + R"(, "ce_max": )" + std::to_string(ce_max) + R"(, "ce_step": )" + std::to_string(ce_step)
         + R"(, "activations": ["CID"], "kinetic_model": { "k2": { "CID": )" + std::to_string(k2) + R"( } } } } },
@@ -1286,7 +1302,8 @@ namespace
       // inside identification.characterization (ADR-0061), so the block is added only when a level-3
       // monitor or metric is asked for -- the two config-load checks below. Every processScan caller asks
       // for neither and gets no block, which is what its old mode "off" meant.
-      "\"identification\": { \"reference\": { \"sequence\": \"PEPTIDERPEPTIDER\" }"
+      "\"identification\": { \"reference\": { \"sequence\": \"PEPTIDERPEPTIDER\" },"
+      " \"flashtnt\": { \"max_blind_mod_count\": 2, \"max_mod_mass\": 700 }"
       + ((ms3_metric != "none" || !ms3_monitor.empty())
             ? ", \"characterization\": { \"mode\": \"ambiguity\", \"max_targets\": 3,"
               "  \"exploration\": { \"metric\": \"" + ms3_metric + "\"" + ms3_monitor + " } }"
@@ -2608,6 +2625,7 @@ START_SECTION(pre_scans_read_out_the_levels_scan_range_ms3)
       "reference": {
         "sequence": "PEPTIDER"
       },
+      "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 },
       "characterization": {
         "mode": "ambiguity",
         "max_targets": 3,
@@ -2689,6 +2707,7 @@ START_SECTION(production_scan_is_built_from_the_unoverridden_config)
       "reference": {
         "sequence": "PEPTIDER"
       },
+      "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 },
       "characterization": {
         "mode": "ambiguity",
         "max_targets": 3,
@@ -2863,6 +2882,7 @@ START_SECTION(forced_remaining_precursor_reads_the_configured_range)
       "reference": {
         "sequence": "PEPTIDEK"
       },
+      "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 },
       "characterization": {
         "mode": "exhaustive",
         "max_targets": 3,
@@ -3535,6 +3555,7 @@ START_SECTION(selection_without_next_level_scan_config_rejected)
     "reference": {
       "sequence": "PEPTIDER"
     },
+    "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 },
     "characterization": {
       "mode": "ambiguity",
       "max_targets": 3
@@ -3838,7 +3859,9 @@ START_SECTION(inclusion_ms3_full_acquisition_roundtrip)
     },
     "flashtnt": {
       "min_length": 3,
-      "max_length": 8
+      "max_length": 8,
+      "max_blind_mod_count": 2,
+      "max_mod_mass": 700
     },
     "characterization": {
       "mode": "ambiguity",
@@ -3999,7 +4022,9 @@ START_SECTION(exploration_multiplexed_ms3_inherits_the_variant_notch_set)
     },
     "flashtnt": {
       "min_length": 3,
-      "max_length": 8
+      "max_length": 8,
+      "max_blind_mod_count": 2,
+      "max_mod_mass": 700
     },
     "characterization": {
       "mode": "ambiguity",
@@ -4182,7 +4207,9 @@ START_SECTION(ms3_min_charge_floor_filters_all_targets)
     },
     "flashtnt": {
       "min_length": 3,
-      "max_length": 8
+      "max_length": 8,
+      "max_blind_mod_count": 2,
+      "max_mod_mass": 700
     },
     "characterization": {
       "mode": "ambiguity",
@@ -4292,7 +4319,9 @@ START_SECTION(ms3_min_charge_default_emits_ms3)
     },
     "flashtnt": {
       "min_length": 3,
-      "max_length": 8
+      "max_length": 8,
+      "max_blind_mod_count": 2,
+      "max_mod_mass": 700
     },
     "characterization": {
       "mode": "ambiguity",
@@ -5018,7 +5047,7 @@ START_SECTION(a_trap_pre_scan_is_measured_never_identified)
       "precursor_selection": { "rank_by": "qscore", "max_precursors": 3,
         "exploration": { "metric": "remaining_precursor", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0,
                          "overrides": { "analyzer": ")" + analyzer + R"(" } } },
-      "identification": { "reference": { "sequence": ")" + std::string(ca_sequence) + R"(" } },
+      "identification": { "reference": { "sequence": ")" + std::string(ca_sequence) + R"(" }, "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 } },
       "ms_settings": {
         "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
         "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "first_mass": 150, "last_mass": 2000 }

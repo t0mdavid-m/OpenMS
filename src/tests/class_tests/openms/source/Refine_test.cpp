@@ -1066,7 +1066,7 @@ auto methodConfigJson = [](const std::string& method, const std::string& refine_
   return std::string(R"({
     "deconvolution": { "tol": [10, 10, 10] },
     "precursor_selection": { "rank_by": "qscore", "max_precursors": 5 },
-    "identification": { "reference": { "sequence": ")") + std::string(CYTC105) + R"(" }, "method": ")" + method + "\"" +
+    "identification": { "reference": { "sequence": ")") + std::string(CYTC105) + R"(" }, "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 }, "method": ")" + method + "\"" +
          refine_block + R"( },
     "ms_settings": {
       "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
