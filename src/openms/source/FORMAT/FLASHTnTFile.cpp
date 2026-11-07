@@ -33,7 +33,7 @@ void FLASHTnTFile::writeTagHeader(std::fstream& fs)
 void FLASHTnTFile::writePrSMHeader(std::fstream& fs, bool chimeric)
 {
   fs << "PrSMIndex\tScan\tRetentionTime\tNumMass\tProteinAccession\tProteinDescription\tPrecursorMass\tProteoformMass\tProteoformMassFromComplementaryFragmentIonPairs\tDatabaseSequence\tProteinSequence\tProf"
-        "orma\tMatchingFragments\tCoverage(%)\tStartPosition\tEndPosition"
+        "orma\tProteoformLevel\tMatchingFragments\tCoverage(%)\tStartPosition\tEndPosition"
         "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tPrecursorQscore\tPrecursorSNR\tScore\tPrSMLevelQvalue\tProteoformLevelQvalue"
         "\tProteoformIndex\tCandidateSource\tFDRClass\tModVariable\tDecoyPrecursorWeight\tProteinLevelQvalue"
         "\tExtensionScore\tRawScore\tRawMatchedFragments\tRawFragmentHypotheses\tRawCoverage(%)"
@@ -44,7 +44,7 @@ void FLASHTnTFile::writePrSMHeader(std::fstream& fs, bool chimeric)
 void FLASHTnTFile::writeProHeader(std::fstream& fs, bool chimeric)
 {
   fs << "ProteoformIndex\tPrSMIndices\tScan\tRetentionTime\tNumMass\tProteinAccession\tProteinDescription\tPrecursorMass\tProteoformMass\tProteoformMassFromComplementaryFragmentIonPairs\tDatabaseSequence\tProteinSequence\tProf"
-        "orma\tMatchingFragments\tCoverage(%)\tStartPosition\tEndPosition"
+        "orma\tProteoformLevel\tMatchingFragments\tCoverage(%)\tStartPosition\tEndPosition"
         "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tPrecursorQscore\tPrecursorSNR\tScore\tProteoformLevelQvalue\tCandidateSource\tFDRClass\tModVariable\tProteinLevelQvalue"
         "\tExtensionScore\tRawScore\tRawMatchedFragments\tRawFragmentHypotheses\tRawCoverage(%)"
      << (chimeric ? "\tChimericRound\tMatchedMasses\tRemovedMasses\tResidualNullScore\tResidualScoreRatio\tUniqueMasses\tUniqueScore" : "") << "\tCombinedPrSMs\tCombinedCoverage(%)\tCombinedCoverageChance(%)\n";
@@ -246,7 +246,7 @@ namespace
     static const std::unordered_map<std::string, OpenMS::UInt> keys = [] {
       auto& registry = OpenMS::MetaInfoInterface::metaRegistry();
       std::unordered_map<std::string, OpenMS::UInt> k;
-      for (const char* n : {"ChimericRound", "CombinedCoverage", "CombinedCoverageChance", "CombinedPrSMs", "DecoyPrecursor", "Description", "EndPosition", "ExtensionScore", "FDRClass", "GappedTag", "GivenMass", "Index", "Mass", "MatchedAA", "MatchedMassIndices", "ModificationACCs", "ModificationEnds", "ModificationIDs", "ModificationStarts", "ModificationVariable", "Modifications", "NumMass", "PrecursorLadder", "PrecursorSNR", "PrecursorScore", "ProteinQvalue", "ProteoformIndex", "ProteoformMassByFragmentMass", "RT", "RawCoverage", "RawFragmentHypotheses", "RawMatchedFragments", "RawScore", "RemovedMasses", "ResidualNullScore", "ResidualScoreRatio", "Scan", "SlidingLadder", "StartPosition", "TagIndices", "TerminalLadder", "TheoreticalMass", "UniqueMasses", "UniqueScore", "proqvalue", "qvalue"})
+      for (const char* n : {"ChimericRound", "CombinedCoverage", "CombinedCoverageChance", "CombinedPrSMs", "DecoyPrecursor", "Description", "EndPosition", "ExtensionScore", "FDRClass", "GappedTag", "GivenMass", "Index", "Mass", "MatchedAA", "MatchedMassIndices", "ModificationACCs", "ModificationEnds", "ModificationIDs", "ModificationStarts", "ModificationVariable", "Modifications", "NumMass", "PrecursorLadder", "PrecursorSNR", "PrecursorScore", "ProteinQvalue", "ProteoformIndex", "ProteoformLevel", "ProteoformMassByFragmentMass", "RT", "RawCoverage", "RawFragmentHypotheses", "RawMatchedFragments", "RawScore", "RemovedMasses", "ResidualNullScore", "ResidualScoreRatio", "Scan", "SlidingLadder", "StartPosition", "TagIndices", "TerminalLadder", "TheoreticalMass", "UniqueMasses", "UniqueScore", "proqvalue", "qvalue"})
         k.emplace(n, registry.registerName(n));
       return k;
     }();
@@ -530,7 +530,7 @@ void OpenMS::FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::
     std::string proformaStr = getProFormaString(hit);
     ss << hit.getMetaValue(prsmKey("Index")) << "\t" << hit.getMetaValue(prsmKey("Scan")) << "\t" << hit.getMetaValue(prsmKey("RT")) << "\t" << hit.getMetaValue(prsmKey("NumMass"))
        << "\t" << hit.getAccession() << "\t" << hit.getMetaValue(prsmKey("Description")).toString() << "\t" << hit.getMetaValue(prsmKey("GivenMass"))  << "\t" << reportedMass(hit) << "\t" << ((int)hit.getMetaValue(prsmKey("ProteoformMassByFragmentMass")) > 0) << "\t" <<  hit.getSequence() << "\t"
-       << StringUtils::substr(hit.getSequence(), start_in_seq, end_in_seq - start_in_seq) << "\t" << proformaStr << "\t" << hit.getMetaValue(prsmKey("MatchedAA")) << "\t"
+       << StringUtils::substr(hit.getSequence(), start_in_seq, end_in_seq - start_in_seq) << "\t" << proformaStr << "\t" << (hit.metaValueExists(prsmKey("ProteoformLevel")) ? hit.getMetaValue(prsmKey("ProteoformLevel")).toString() : std::string()) << "\t" << hit.getMetaValue(prsmKey("MatchedAA")) << "\t"
        << 100.0 * hit.getCoverage() << "\t" << start << "\t" << end << "\t" << cntr << "\t" << tagindices << "\t" << mod_masses.size() << "\t"
        << modmasses << "\t" << modids << "\t" << modaccs << "\t" << modstarts << "\t" << modends << "\t" << hit.getMetaValue(prsmKey("PrecursorScore"))  << "\t" << hit.getMetaValue(prsmKey("PrecursorSNR"))  << "\t" << hit.getScore() << "\t"
        << std::to_string((hit.metaValueExists(prsmKey("qvalue")) ? (double)hit.getMetaValue(prsmKey("qvalue")) : -1)) << "\t"
@@ -619,7 +619,7 @@ void OpenMS::FLASHTnTFile::writeProteoforms(const std::vector<ProteinHit>& hits,
     const int this_index = pro_index++;
     ss << (hit.metaValueExists("ProteoformIndex") ? (int)hit.getMetaValue("ProteoformIndex") : this_index) << "\t" << prsmindices << "\t" << hit.getMetaValue("Scan") << "\t" << hit.getMetaValue("RT") << "\t" << hit.getMetaValue("NumMass")
        << "\t" << hit.getAccession() << "\t" << hit.getDescription() << "\t" << hit.getMetaValue("GivenMass") << "\t" << reportedMass(hit) << "\t" << ((int)hit.getMetaValue("ProteoformMassByFragmentMass") > 0) << "\t" << hit.getSequence() << "\t"
-       << StringUtils::substr(hit.getSequence(), start_in_seq, end_in_seq - start_in_seq) << "\t" << proformaStr << "\t" << hit.getMetaValue("MatchedAA") << "\t"
+       << StringUtils::substr(hit.getSequence(), start_in_seq, end_in_seq - start_in_seq) << "\t" << proformaStr << "\t" << (hit.metaValueExists("ProteoformLevel") ? hit.getMetaValue("ProteoformLevel").toString() : std::string()) << "\t" << hit.getMetaValue("MatchedAA") << "\t"
        << 100.0 * hit.getCoverage() << "\t" << start << "\t" << end << "\t" << cntr << "\t" << tagindices << "\t" << mod_masses.size() << "\t"
        << modmasses << "\t" << modids << "\t" << modaccs << "\t" << modstarts << "\t" << modends << "\t" << hit.getMetaValue("PrecursorScore") << "\t" << hit.getMetaValue("PrecursorSNR") << "\t" << hit.getScore() << "\t"
        << std::to_string((hit.metaValueExists("proqvalue") ? (double)hit.getMetaValue("proqvalue") : -1)) << "\t" << candidateSource(hit) << "\t"

@@ -18,6 +18,7 @@
 #include <boost/math/special_functions/gamma.hpp>
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <atomic>
 #include <cmath>
@@ -4176,6 +4177,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     }
   }
   if (native_rule) setNativeTermini_();
+  setProteoformLevels_(*db);
   // the large locals freed with all threads instead of by their destructors on return
   releaseInParallel(dspecs);
   releaseInParallel(uncapped_masses);
@@ -4192,6 +4194,204 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   // get all protoeforms - mass and score.
   // get all combinations with a certain tolerance.
   // record the best ranking combination(s) along with summed score (can score be non overlapping?) and mass difference
+}
+
+// The proteoform level of every hit, by the five-level classification of proteoform identifications (Smith et al., Nat. Methods 16,
+// 939-940, 2019) with the labels of its reference code (mzLib ProteoformLevelClassifier): four aspects, each known or ambiguous; level 1
+// all known; 2A, 2B, 2C or 2D one ambiguous (A PTM localization, B PTM identity, C amino acid sequence, D gene of origin); 3, 4 and 5
+// two, three and four ambiguous. The reference code compares the tied candidates of a spectrum; a PrSM here is one proteoform, so each
+// aspect is judged by what the PrSM itself leaves open:
+// - PTM localization: known when every modification sits on one residue; a range of residues (ModStart < ModEnd) leaves it open.
+// - PTM identity: known when every modification is named: a variable modification with one name (or a sum of named ones, "A+B"), or a
+//   fixed one of the database entry (PEFF). A blind shift is a mass, not an identity, even where Unimod entries of its mass are listed
+//   (ModID), as the reference code counts a mass shift ("+15.99") against the identity.
+// - Amino acid sequence: known when both termini are known and the residues have no ambiguous letter (B, J, X, Z). A blind shift does not
+//   open the sequence; as in the reference code, a mass shift counts against the PTM identity only.
+// - Gene: known when no other gene's protein of the same kind (target or decoy) contains the proteoform's residues, I and L counted as
+//   one (the same mass). At an open terminus the residues are those of the ProteinSequence column (up to the end of the entry's form).
+//   The gene of a protein is GN= of its UniProt description or \GName= of its PEFF description, else its accession without an isoform
+//   suffix (-n), so that the isoforms of a gene are one gene.
+// A PrSM without a proteoform mass (undetermined) has a mass difference that no modification accounts for: it may be a PTM of any identity
+// at any position, so both PTM aspects are open; with an open terminus the sequence is open as well.
+void FLASHTnTAlgorithm::setProteoformLevels_(const ProteoformDatabase& db)
+{
+  if (proteoform_hits_.empty()) return;
+  const auto& protein_of = db.proteinOfEntry();
+
+  // the gene of every protein, as an index
+  std::vector<Size> gene_of(db.proteins.size());
+  {
+    std::unordered_map<std::string, Size> gene_index;
+    auto value_after = [](const std::string& text, const std::string& key) -> std::string {
+      for (Size k = text.find(key); k != std::string::npos; k = text.find(key, k + 1))
+      {
+        if (k > 0 && text[k - 1] != ' ' && text[k - 1] != '\\') continue; // a key starts a word (GN=) or follows its backslash (\GName=)
+        const Size from = k + key.size();
+        const Size to = text.find_first_of(" \\", from);
+        std::string value = text.substr(from, to == std::string::npos ? std::string::npos : to - from);
+        if (! value.empty()) return value;
+      }
+      return "";
+    };
+    for (Size p = 0; p < db.proteins.size(); p++)
+    {
+      const auto& protein = db.proteins[p];
+      std::string gene = value_after(protein.description, "GN=");
+      if (gene.empty()) gene = value_after(protein.description, "\\GName=");
+      if (! gene.empty()) gene = "GN " + gene;
+      else
+      {
+        // the accession: the middle field of db|accession|name, without an isoform suffix (-n)
+        std::vector<std::string> fields;
+        StringUtils::split(protein.identifier, '|', fields);
+        gene = fields.size() >= 3 ? fields[1] : protein.identifier;
+        const Size dash = gene.rfind('-');
+        if (dash != std::string::npos && dash + 1 < gene.size() &&
+            std::all_of(gene.begin() + (long)dash + 1, gene.end(), [](char c) { return std::isdigit((unsigned char)c) != 0; }))
+        {
+          gene.erase(dash);
+        }
+        gene = "AC " + gene;
+      }
+      gene_of[p] = gene_index.emplace(gene, gene_index.size()).first->second;
+    }
+  }
+
+  // the residues of every hit (I as L), the distinct ones as needles
+  std::vector<std::string> needles;
+  std::unordered_map<std::string, Size> needle_index;
+  std::vector<Size> needle_of_hit(proteoform_hits_.size());
+  std::vector<bool> ambiguous_letters(proteoform_hits_.size(), false);
+  for (Size i = 0; i < proteoform_hits_.size(); i++)
+  {
+    const auto& hit = proteoform_hits_[i];
+    const int start = hit.getMetaValue(tntKey("StartPosition")), end = hit.getMetaValue(tntKey("EndPosition"));
+    const std::string& sequence = hit.getSequence();
+    const int size = (int)sequence.size();
+    // as FLASHTnTFile's ProteinSequence column: an open terminus bounded by the entry's processed form
+    const int entry_first = hit.metaValueExists("EntryStart") ? (int)hit.getMetaValue("EntryStart") - 1 : 0;
+    const int entry_end = hit.metaValueExists("EntryEnd") ? (int)hit.getMetaValue("EntryEnd") : size;
+    const int first = std::max(0, start < 0 ? entry_first : start - 1);
+    const int last = std::min(size, end < 0 ? entry_end : end);
+    std::string residues = last > first ? sequence.substr((Size)first, (Size)(last - first)) : std::string();
+    std::replace(residues.begin(), residues.end(), 'I', 'L');
+    ambiguous_letters[i] = residues.find_first_of("BJXZ") != std::string::npos;
+    needle_of_hit[i] = needle_index.emplace(residues, needles.size()).first->second;
+    if (needle_of_hit[i] == needles.size()) needles.push_back(residues);
+  }
+
+  // the proteins that contain each needle: an Aho-Corasick trie of the needles of plain residues over all proteins (I as L), in parallel;
+  // the few needles with other letters (U, O, ambiguous ones) by a plain search
+  static const std::string plain_letters = "ACDEFGHKLMNPQRSTVWY";
+  std::vector<bool> plain(needles.size());
+  std::vector<std::string> trie_needles;
+  std::vector<Size> trie_to_needle;
+  for (Size n = 0; n < needles.size(); n++)
+  {
+    plain[n] = ! needles[n].empty() && needles[n].find_first_not_of(plain_letters) == std::string::npos;
+    if (! plain[n]) continue;
+    trie_needles.push_back(needles[n]);
+    trie_to_needle.push_back(n);
+  }
+  std::vector<std::string> haystacks(db.proteins.size());
+  for (Size p = 0; p < db.proteins.size(); p++)
+  {
+    haystacks[p] = db.proteins[p].sequence;
+    std::replace(haystacks[p].begin(), haystacks[p].end(), 'I', 'L');
+  }
+  std::vector<std::vector<Size>> proteins_of_needle(needles.size());
+  if (! trie_needles.empty())
+  {
+    ACTrie ac_trie(0, 0); // no ambiguities, no mismatches
+    ac_trie.addNeedlesAndCompress(trie_needles);
+    std::vector<std::pair<Size, Size>> found; // needle, protein
+#pragma omp parallel
+    {
+      OpenMS::ACTrieState ac_state;
+      std::vector<std::pair<Size, Size>> local;
+#pragma omp for schedule(dynamic, 64) nowait
+      for (SignedSize p = 0; p < (SignedSize)haystacks.size(); p++)
+      {
+        ac_state.setQuery(haystacks[p]);
+        ac_trie.getAllHits(ac_state);
+        for (const auto& h : ac_state.hits) local.emplace_back(trie_to_needle[h.needle_index], (Size)p);
+      }
+#pragma omp critical(proteoform_levels)
+      found.insert(found.end(), local.begin(), local.end());
+    }
+    for (const auto& [n, p] : found) proteins_of_needle[n].push_back(p);
+  }
+  for (Size n = 0; n < needles.size(); n++)
+  {
+    if (plain[n] || needles[n].empty()) continue;
+    for (Size p = 0; p < haystacks.size(); p++)
+    {
+      if (haystacks[p].find(needles[n]) != std::string::npos) proteins_of_needle[n].push_back(p);
+    }
+  }
+
+  // the four aspects and the level of every hit
+  const char* const aspect_names[] = {"PTM localization", "PTM identity", "sequence", "gene"};
+  std::map<std::string, Size> level_counts;
+  std::array<Size, 4> open_counts {};
+  Size counted = 0;
+  const double pro_fdr = param_.getValue("pro_fdr");
+  for (Size i = 0; i < proteoform_hits_.size(); i++)
+  {
+    auto& hit = proteoform_hits_[i];
+    const bool determined = isDetermined(hit);
+    const int start = hit.getMetaValue(tntKey("StartPosition")), end = hit.getMetaValue(tntKey("EndPosition"));
+    bool localized = determined, identified = determined;
+    const bool sequence_known = start > 0 && end > 0 && ! ambiguous_letters[i];
+    if (determined && hit.metaValueExists(tntKey("Modifications")))
+    {
+      const std::vector<double> masses = hit.getMetaValue(tntKey("Modifications"));
+      const std::vector<int> starts = hit.getMetaValue(tntKey("ModificationStarts"));
+      const std::vector<int> ends = hit.getMetaValue(tntKey("ModificationEnds"));
+      const std::vector<std::string> ids = hit.metaValueExists("ModificationIDs") ? hit.getMetaValue("ModificationIDs").toStringList() : std::vector<std::string>();
+      const std::vector<int> variable = hit.metaValueExists("ModificationVariable") ? (std::vector<int>)hit.getMetaValue("ModificationVariable").toIntList() : std::vector<int>();
+      for (Size m = 0; m < masses.size(); m++)
+      {
+        if (m >= starts.size() || m >= ends.size() || starts[m] != ends[m]) localized = false;
+        const int kind = m < variable.size() ? variable[m] : 0; // 1 variable, 2 fixed of the entry, 0 blind
+        if (kind == 2) continue;
+        std::string names = m < ids.size() ? ids[m] : std::string();
+        while (StringUtils::hasSuffix(names, ",")) names.pop_back();
+        // one name (or a sum of named ones); alternatives "A,B" leave the identity open, as the ProForma column writes them as a mass
+        if (kind != 1 || names.empty() || StringUtils::has(names, ',')) identified = false;
+      }
+    }
+    const Size own_protein = protein_of[(Size)(int)hit.getMetaValue(tntKey("FastaIndex"))];
+    bool gene_known = true;
+    for (Size p : proteins_of_needle[needle_of_hit[i]])
+    {
+      if (db.proteins[p].decoy == db.proteins[own_protein].decoy && gene_of[p] != gene_of[own_protein])
+      {
+        gene_known = false;
+        break;
+      }
+    }
+    const bool known[] = {localized, identified, sequence_known, gene_known};
+    const int known_count = (int)localized + (int)identified + (int)sequence_known + (int)gene_known;
+    std::string level;
+    if (known_count == 3) level = ! localized ? "2A" : ! identified ? "2B" : ! sequence_known ? "2C" : "2D";
+    else level = std::to_string(5 - known_count);
+    hit.setMetaValue("ProteoformLevel", level);
+
+    // the log: the reported target proteoforms (as FLASHTnTFile::writeProteoforms)
+    if (! hit.metaValueExists(tntKey("Representative")) || (int)hit.getMetaValue(tntKey("Representative")) == 0) continue;
+    if (hit.metaValueExists(tntKey("proqvalue")) && (double)hit.getMetaValue(tntKey("proqvalue")) > pro_fdr) continue;
+    if (db.proteins[own_protein].decoy) continue;
+    counted++;
+    level_counts[level]++;
+    for (Size a = 0; a < 4; a++) open_counts[a] += ! known[a];
+  }
+  std::string line;
+  for (const auto& [level, count] : level_counts) line += (line.empty() ? "" : ", ") + level + " " + std::to_string(count);
+  std::string open_line;
+  for (Size a = 0; a < 4; a++) open_line += (a == 0 ? "" : ", ") + std::string(aspect_names[a]) + " " + std::to_string(open_counts[a]);
+  OPENMS_LOG_INFO << "Proteoform levels (Smith et al. 2019) of the " << counted << " reported target proteoforms: " << line
+                  << "; ambiguous: " << open_line << std::endl;
 }
 
 void FLASHTnTAlgorithm::setNativeTermini_()

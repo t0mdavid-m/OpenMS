@@ -147,6 +147,9 @@ private:
   /// native mode: a terminus of a PrSM without a proteoform mass whose side has no more fragments on the raw spectrum than chance is
   /// reported undetermined (-1)
   void setNativeTermini_();
+  /// the proteoform level of every hit (meta value ProteoformLevel: 1, 2A, 2B, 2C, 2D, 3, 4 or 5), by the five-level classification of
+  /// proteoform identifications (Smith et al., Nat. Methods 16, 939-940, 2019); @p db the database of the search (the genes of its proteins)
+  void setProteoformLevels_(const ProteoformDatabase& db);
   /// the raw-spectrum PrSM of @p hit (its proteoform, bounded by the entry where a terminus is open) and its given precursor mass (-1:
   /// none); false if its spectrum is not loaded
   bool toRawPrSM_(const ProteinHit& hit, FLASHAnnotatorAlgorithm::PrSM& prsm, double& precursor_mass) const;
