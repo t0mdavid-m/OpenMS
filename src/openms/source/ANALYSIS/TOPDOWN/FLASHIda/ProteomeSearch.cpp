@@ -9,10 +9,12 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ProteomeSearch.h>
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/KERNEL/MSExperiment.h>
 
 #include <map>
 #include <set>
+#include <stdexcept>
 #include <utility>
 
 namespace OpenMS
@@ -22,6 +24,55 @@ namespace OpenMS
     Param p = FLASHTnTAlgorithm().getDefaults();
     p.setValue("one_proteoform_per_feature", "false");
     p.setValue("ex:skip_precursor_inference", "true");
+    return p;
+  }
+
+  const std::vector<std::pair<std::string, std::string>>& ProteomeSearch::knobNames()
+  {
+    // FLASHTnTAlgorithm's constructor inserts the Tagger's parameters under "tag:" and the Extender's under
+    // "ex:"; max_blind_mod_count, max_mod_mass, var_mod and max_var_mod_count are its own top-level copies,
+    // which it hands to the Extender.
+    static const std::vector<std::pair<std::string, std::string>> names = {
+      {"min_length", "tag:min_length"},
+      {"max_length", "tag:max_length"},
+      {"allow_gap", "tag:allow_gap"},
+      {"max_aa_in_gap", "tag:max_aa_in_gap"},
+      {"max_blind_mod_count", "max_blind_mod_count"},
+      {"max_mod_mass", "max_mod_mass"},
+      {"var_mod", "var_mod"},
+      {"max_var_mod_count", "max_var_mod_count"},
+      {"max_protein_hits", "max_protein_hits"},
+      {"gapped_tags", "gapped_tags"},
+      {"terminal_ladders", "terminal_ladders"},
+      {"precursor_ladders", "precursor_ladders"},
+      {"skip_precursor_inference", "ex:skip_precursor_inference"},
+    };
+    return names;
+  }
+
+  Param ProteomeSearch::parametersFor(const FlashTnTSettings& s)
+  {
+    const auto name = [](const std::string& key) -> const std::string& {
+      for (const auto& kn : knobNames())
+        if (kn.first == key) return kn.second;
+      throw std::logic_error("ProteomeSearch::parametersFor: no FLASHTnT name for identification.flashtnt." + key);
+    };
+    const auto flag = [](bool b) { return std::string(b ? "true" : "false"); };
+
+    Param p = defaultParameters();
+    p.setValue(name("min_length"), s.min_length);
+    p.setValue(name("max_length"), s.max_length);
+    p.setValue(name("allow_gap"), flag(s.allow_gap));
+    p.setValue(name("max_aa_in_gap"), s.max_aa_in_gap);
+    p.setValue(name("max_blind_mod_count"), s.max_blind_mod_count);
+    p.setValue(name("max_mod_mass"), s.max_mod_mass);
+    p.setValue(name("var_mod"), s.var_mod);
+    p.setValue(name("max_var_mod_count"), s.max_var_mod_count);
+    p.setValue(name("max_protein_hits"), s.max_protein_hits);
+    p.setValue(name("gapped_tags"), s.gapped_tags);
+    p.setValue(name("terminal_ladders"), flag(s.terminal_ladders));
+    p.setValue(name("precursor_ladders"), flag(s.precursor_ladders));
+    p.setValue(name("skip_precursor_inference"), flag(s.skip_precursor_inference));
     return p;
   }
 

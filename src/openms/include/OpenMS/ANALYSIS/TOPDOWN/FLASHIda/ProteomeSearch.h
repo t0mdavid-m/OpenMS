@@ -15,11 +15,14 @@
 #include <OpenMS/METADATA/ProteinHit.h>
 
 #include <memory>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace OpenMS
 {
   class DeconvolvedSpectrum;
+  struct FlashTnTSettings;
 
   /**
    * @brief FLASHTnT's own search of one MS2 against the Protein reference (ADR-0061 d.3).
@@ -42,6 +45,15 @@ namespace OpenMS
     /// FLASHTnTAlgorithm's defaults with the real-time diffs: one_proteoform_per_feature false (it needs MS1
     /// input), ex:skip_precursor_inference true (ADR-0061 d.13)
     static Param defaultParameters();
+
+    /// identification.flashtnt's knobs, each as (config key, FLASHTnTAlgorithm parameter name), in the order
+    /// Config declares them. The one place the mapping lives: parametersFor writes through it and the tests
+    /// read it. fixed_mod is not here: it has no FLASHTnT parameter and Config refuses it non-empty.
+    static const std::vector<std::pair<std::string, std::string>>& knobNames();
+
+    /// defaultParameters() with every knob of @p settings written to its FLASHTnT name (booleans as the
+    /// strings "true"/"false", as FLASHTnT declares them)
+    static Param parametersFor(const FlashTnTSettings& settings);
 
     /// @p reference: the Protein reference's entries (decoys are dropped); @p tnt_params: FLASHTnTAlgorithm's
     ProteomeSearch(std::vector<FASTAFile::FASTAEntry> reference, const Param& tnt_params);

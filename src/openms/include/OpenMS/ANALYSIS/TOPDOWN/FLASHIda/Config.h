@@ -366,16 +366,29 @@ namespace OpenMS
     std::string inclusion_list_file;
   };
 
-  /// FLASHTnT (FLASHTagger/FLASHExtender) tuning, from identification.flashtnt (ADR-0061).
+  /// FLASHTnT tuning, from identification.flashtnt (ADR-0061 d.13). Every default is FLASHTnT's own
+  /// (FLASHTnTAlgorithm().getDefaults(), under the name ProteomeSearch::knobNames() gives), except
+  /// skip_precursor_inference, which is ADR-0061's choice: an unauthored key behaves as FLASHTnT does.
+  /// FLASHIda_LegacyConfig_test pins every default to FLASHTnT and to docs/site/method.schema.json.
   struct OPENMS_DLLAPI FlashTnTSettings
   {
-    int min_length = 3;                      ///< FLASHTagger min_length
-    int max_length = 8;                      ///< FLASHTagger max_length
-    bool allow_gap = false;                  ///< FLASHTagger allow_gap (passed as "true"/"false")
-    int max_aa_in_gap = 2;                   ///< FLASHTagger max_aa_in_gap
-    std::vector<std::string> fixed_mod;      ///< Fixed mods, passed VERBATIM to tagger+extender; empty = empty Param list, NOT the declared {""}
-    int max_blind_mod_count = 2;             ///< FLASHExtender max_blind_mod_count
-    double max_mod_mass = 700.0;             ///< FLASHExtender max_mod_mass. 700 preserves current MS2 behavior; NOT the extender's own 500 default.
+    int min_length = 3;                      ///< tag:min_length
+    int max_length = 8;                      ///< tag:max_length
+    bool allow_gap = false;                  ///< tag:allow_gap (a Param string "true"/"false")
+    int max_aa_in_gap = 2;                   ///< tag:max_aa_in_gap
+    /// Always empty: a non-empty identification.flashtnt.fixed_mod is refused at load (no FLASHTnT
+    /// parameter takes it in real time). Still passed to the single-protein matcher's Tagger and
+    /// Extender as the empty Param list, NOT their declared {""}.
+    std::vector<std::string> fixed_mod;
+    int max_blind_mod_count = 1;             ///< max_blind_mod_count
+    double max_mod_mass = 500.0;             ///< max_mod_mass, Da
+    std::vector<std::string> var_mod = {"Acetyl (Protein N-term)"};  ///< var_mod
+    int max_var_mod_count = 3;               ///< max_var_mod_count
+    int max_protein_hits = 50;               ///< max_protein_hits
+    std::string gapped_tags = "fallback";    ///< gapped_tags: "off" | "fallback" (FLASHTnT's both/only are refused)
+    bool terminal_ladders = true;            ///< terminal_ladders
+    bool precursor_ladders = true;           ///< precursor_ladders
+    bool skip_precursor_inference = true;    ///< ex:skip_precursor_inference. FLASHTnT's is false; true is ADR-0061's
   };
 
   /// The `identification` section (ADR-0061): which protein reference every MS2 is matched against,
@@ -383,9 +396,14 @@ namespace OpenMS
   /// The `characterization` block nested inside it is parsed into CharacterizationConfig.
   struct OPENMS_DLLAPI IdentificationConfig
   {
-    /// identification.reference.sequence -- the one protein every MS2 is matched against. A present
-    /// section with an empty sequence is a load error, so non-empty <=> the section was authored.
+    /// identification.reference.sequence -- one inline protein every MS2 is matched against. The
+    /// reference is exactly one of `sequence` and `fasta`, non-empty (a load error otherwise), so
+    /// with a present section exactly one of the two is non-empty.
     std::string sequence;
+
+    /// identification.reference.fasta -- the path of a FASTA reference, as authored (a relative path
+    /// resolves against the process working directory). Empty when the reference is `sequence`.
+    std::string fasta;
 
     /// identification.method (ADR-0049): "flashtnt" (default) | "refine". Case-sensitive; an
     /// unknown value throws.
@@ -408,7 +426,7 @@ namespace OpenMS
     int search_threads = 1;
 
     /// Whether MS2s are matched at all.
-    bool enabled() const { return !sequence.empty(); }
+    bool enabled() const { return !sequence.empty() || !fasta.empty(); }
 
     /// The accession of the inline reference (identification.reference.sequence): the literal
     /// "sequence". A match against it carries this as ProteoformMatch::matched_protein (ADR-0061 push 4b).

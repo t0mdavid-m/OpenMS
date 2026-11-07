@@ -481,13 +481,30 @@ namespace OpenMS
       if (!ident.contains("reference") || ident["reference"].is_null())
         throw std::invalid_argument(
             "Config: identification.reference is required: the protein every MS2 is matched against, as "
-            "{ \"sequence\": \"...\" }. Delete the identification section to match nothing (ADR-0061).");
+            "{ \"fasta\": \"<path>\" } or { \"sequence\": \"...\" }. Delete the identification section to match "
+            "nothing (ADR-0061).");
       const auto& ref = ident["reference"];
       if (!ref.is_object())
         throw std::invalid_argument("Config: identification.reference must be an object.");
-      rejectUnknownKeys(ref, {"sequence"}, "identification.reference");
+      rejectUnknownKeys(ref, {"fasta", "sequence"}, "identification.reference");
+      // Exactly one of the two, non-empty. null is unauthored (the C# serializer emits nulls).
+      const bool has_fasta = ref.contains("fasta") && !ref["fasta"].is_null();
+      const bool has_sequence = ref.contains("sequence") && !ref["sequence"].is_null();
+      if (has_fasta && has_sequence)
+        throw std::invalid_argument(
+            "Config: identification.reference has both 'fasta' and 'sequence'; author exactly one: a FASTA "
+            "path or one inline sequence (ADR-0061).");
+      if (!has_fasta && !has_sequence)
+        throw std::invalid_argument(
+            "Config: identification.reference has neither 'fasta' nor 'sequence'; author exactly one: a FASTA "
+            "path or one inline sequence. Delete the identification section to match nothing (ADR-0061).");
+      identification_.fasta = nullableString(ref, "fasta", "");
       identification_.sequence = nullableString(ref, "sequence", "");
-      if (identification_.sequence.empty())
+      if (has_fasta && identification_.fasta.empty())
+        throw std::invalid_argument(
+            "Config: identification.reference.fasta is empty. Every MS2 is matched against the reference, so "
+            "it must name a FASTA file; delete the identification section instead (ADR-0061).");
+      if (has_sequence && identification_.sequence.empty())
         throw std::invalid_argument(
             "Config: identification.reference.sequence is empty. Every MS2 is matched against it, so an "
             "empty sequence matches nothing; delete the identification section instead (ADR-0061).");
@@ -525,24 +542,44 @@ namespace OpenMS
         r.jump_penalty = rb.value("jump_penalty", r.jump_penalty);
       }
 
-      // FLASHTagger/FLASHExtender tuning, read only by the matcher.
+      // FLASHTnT's tuning (ADR-0061 d.13). An unauthored or null key keeps FlashTnTSettings' default,
+      // which is FLASHTnT's own (skip_precursor_inference aside); ProteomeSearch::parametersFor maps
+      // each knob to its FLASHTnT name.
       const json flashtnt = (ident.contains("flashtnt") && !ident["flashtnt"].is_null()) ? ident["flashtnt"] : json::object();
+      if (!flashtnt.is_object())
+        throw std::invalid_argument("Config: identification.flashtnt must be an object.");
       rejectUnknownKeys(flashtnt,
-          {"min_length", "max_length", "allow_gap", "max_aa_in_gap", "max_blind_mod_count", "max_mod_mass", "fixed_mod"},
+          {"min_length", "max_length", "allow_gap", "max_aa_in_gap", "max_blind_mod_count", "max_mod_mass", "fixed_mod",
+           "var_mod", "max_var_mod_count", "max_protein_hits", "gapped_tags", "terminal_ladders", "precursor_ladders",
+           "skip_precursor_inference"},
           "identification.flashtnt");
       FlashTnTSettings& ft = identification_.flashtnt;
-      ft.min_length = flashtnt.value("min_length", 3);
-      ft.max_length = flashtnt.value("max_length", 8);
-      ft.allow_gap = flashtnt.value("allow_gap", false);
-      ft.max_aa_in_gap = flashtnt.value("max_aa_in_gap", 2);
-      ft.max_blind_mod_count = flashtnt.value("max_blind_mod_count", 2);
-      ft.max_mod_mass = flashtnt.value("max_mod_mass", 700.0);  // 700 preserves current MS2 behavior; NOT the extender's own 500 default
-      ft.fixed_mod.clear();
-      if (flashtnt.contains("fixed_mod") && flashtnt["fixed_mod"].is_array())
+      ft = FlashTnTSettings{};
+      auto authored = [&](const char* key) { return flashtnt.contains(key) && !flashtnt[key].is_null(); };
+      if (authored("min_length")) ft.min_length = flashtnt["min_length"].get<int>();
+      if (authored("max_length")) ft.max_length = flashtnt["max_length"].get<int>();
+      if (authored("allow_gap")) ft.allow_gap = flashtnt["allow_gap"].get<bool>();
+      if (authored("max_aa_in_gap")) ft.max_aa_in_gap = flashtnt["max_aa_in_gap"].get<int>();
+      if (authored("max_blind_mod_count")) ft.max_blind_mod_count = flashtnt["max_blind_mod_count"].get<int>();
+      if (authored("max_mod_mass")) ft.max_mod_mass = flashtnt["max_mod_mass"].get<double>();
+      if (authored("var_mod")) ft.var_mod = flashtnt["var_mod"].get<std::vector<std::string>>();
+      if (authored("max_var_mod_count")) ft.max_var_mod_count = flashtnt["max_var_mod_count"].get<int>();
+      if (authored("max_protein_hits")) ft.max_protein_hits = flashtnt["max_protein_hits"].get<int>();
+      if (authored("gapped_tags"))
       {
-        for (const auto& m : flashtnt["fixed_mod"])
-          ft.fixed_mod.push_back(m.get<std::string>());
+        ft.gapped_tags = flashtnt["gapped_tags"].get<std::string>();
+        if (ft.gapped_tags != "off" && ft.gapped_tags != "fallback")
+          throw std::invalid_argument(
+              "Config: identification.flashtnt.gapped_tags must be one of \"off\", \"fallback\"; got \"" + ft.gapped_tags +
+              "\" (values are case-sensitive; FLASHTnT's \"both\" and \"only\" are not supported in real time).");
       }
+      if (authored("terminal_ladders")) ft.terminal_ladders = flashtnt["terminal_ladders"].get<bool>();
+      if (authored("precursor_ladders")) ft.precursor_ladders = flashtnt["precursor_ladders"].get<bool>();
+      if (authored("skip_precursor_inference")) ft.skip_precursor_inference = flashtnt["skip_precursor_inference"].get<bool>();
+      // fixed_mod has no FLASHTnT parameter in real time: only [] (or null) is accepted.
+      if (authored("fixed_mod") && !(flashtnt["fixed_mod"].is_array() && flashtnt["fixed_mod"].empty()))
+        throw std::invalid_argument(
+            "Config: identification.flashtnt.fixed_mod is not supported in real time; leave it empty (ADR-0061).");
 
       // ADR-0062 d.1: the search pool's size. Unauthored = the core count minus two, at least 1. An
       // authored value must be a whole number of threads, at least 1: a pool of zero searches nothing.
@@ -1676,7 +1713,7 @@ namespace OpenMS
     // an empty sequence is the honest encoding of "no protein was supplied", and a non-empty one is
     // load-bearing rather than decorative.
     // ADR-0061 made "MS3 with no sequence" unrepresentable: the characterization block lives inside
-    // identification, whose reference.sequence is refused empty at parse. Kept as an invariant.
+    // identification, whose reference (fasta XOR sequence) is refused empty at parse. Kept as an invariant.
     if (characterization_.mode != CharacterizationMode::Off && !identification_.enabled())
       throw std::invalid_argument(
           "identification.characterization is set but identification has no reference sequence. "
