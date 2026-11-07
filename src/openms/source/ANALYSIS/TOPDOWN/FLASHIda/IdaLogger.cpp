@@ -783,9 +783,11 @@ namespace OpenMS
       render_ctx.region_start = ctx.start_pos;   // render context (region frame) from the cached MS2Context
       render_ctx.region_end = ctx.end_pos;
       render_ctx.ptm_sites = ctx.ptm_sites;
+      render_ctx.protein_sequence = ctx.protein_sequence;
+      render_ctx.protein_accession = ctx.protein_accession;
       std::string wide_seq;
       std::vector<FragmentAnalysis::PTMSite> wide_sites;
-      if (MS3FragmentMatcher::fragmentProFormaSites(config_.identification().sequence, render_ctx,
+      if (MS3FragmentMatcher::fragmentProFormaSites(config_.identification().proteinOr(ctx.protein_sequence), render_ctx,
               ctx.fragment_ion_type, ctx.fragment_ion_index, wide_seq, wide_sites))
       {
         narrowed_sites = FragmentAnalysis::narrowFragmentPTMSites(

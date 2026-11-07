@@ -409,6 +409,24 @@ namespace OpenMS
 
     /// Whether MS2s are matched at all.
     bool enabled() const { return !sequence.empty(); }
+
+    /// The accession of the inline reference (identification.reference.sequence): the literal
+    /// "sequence". A match against it carries this as ProteoformMatch::matched_protein (ADR-0061 push 4b).
+    static constexpr const char* kSequenceAccession = "sequence";
+
+    /// The protein a reader works in: the one its match, model or context chose (@p chosen), else the
+    /// inline reference. A reader with no chosen protein (an unidentified model, ADR-0055; the matcher
+    /// before it has identified anything) takes the fallback. While the inline reference is the only
+    /// protein, every reader therefore reads exactly `sequence`.
+    const std::string& proteinOr(const std::string& chosen) const { return chosen.empty() ? sequence : chosen; }
+
+    /// The accession of that protein: @p chosen if non-empty; else kSequenceAccession when the inline
+    /// reference is configured; else "".
+    std::string accessionOr(const std::string& chosen) const
+    {
+      if (!chosen.empty()) return chosen;
+      return sequence.empty() ? std::string() : std::string(kSequenceAccession);
+    }
   };
 
   /// The MS3 objective. `Off` is the internal state for "identification.characterization is

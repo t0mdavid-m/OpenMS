@@ -612,10 +612,12 @@ FLASHIda::FLASHIda(char* arg) :
     // config_.level(3).scans is non-empty: validate requires ms_settings.ms3 whenever mode != off.
     const std::shared_ptr<const DeconvolvedSpectrum> winner_spectrum = mdl->winner_spectrum;
     const std::shared_ptr<const ScanCommand> winner_cmd = mdl->winner_cmd;
+    // The decided model's whole protein (ADR-0061 push 4b), stamped onto every re-dispatched MS2Context.
+    const std::string protein = config_.identification().proteinOr(mdl->proteoform_sequence);
     auto next = exploration_.dispatchFromModel(precursor_id, *winner_spectrum, parent_ctx.faims_cv, queue_,
                                                winner_cmd.get(), &tracker_, tracker_.buildWinnerProteoformContext(precursor_id),
                                                config_.level(3).scans[0], config_.level(2).min_charge, 3,
-                                               config_.identification().sequence);
+                                               protein);
     int pushed = 0;
     for (auto& c : next.commands)
     {
@@ -747,6 +749,8 @@ FLASHIda::FLASHIda(char* arg) :
       ms2_ctx.start_pos = ms3_targeting.proteoform_match.region_start;
       ms2_ctx.end_pos = ms3_targeting.proteoform_match.region_end;
       ms2_ctx.ptm_sites = ms3_targeting.proteoform_match.ptm_sites;
+      ms2_ctx.protein_sequence = ms3_targeting.proteoform_match.proteoform_sequence;   // an MS2 match: the whole protein
+      ms2_ctx.protein_accession = ms3_targeting.proteoform_match.matched_protein;
       ms2_ctx.ms1_precursor_mass = parent_ctx.mono_mass;
       ms2_ctx.ms1_precursor_mz = parent_ctx.stages[0].precursor_mz;
       ms2_ctx.ms1_precursor_charge = parent_ctx.stages[0].charge_state;
@@ -1338,7 +1342,7 @@ FLASHIda::FLASHIda(char* arg) :
             std::vector<FragmentAnalysis::ProteoformMatch> ms3_matches;
             ProteoformTracker::scoreCalibratedVariants(
               spectra,
-              config_.identification().sequence,
+              config_.identification().proteinOr(proto_ctx.protein_sequence),
               proto_ctx,
               cached_ms2_ctx.fragment_ion_type,
               cached_ms2_ctx.fragment_ion_index,

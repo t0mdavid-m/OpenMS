@@ -421,6 +421,7 @@ namespace OpenMS
 
     // 2) Seed the model header from the winner.
     m.proteoform_sequence = win->match.proteoform_sequence;
+    m.matched_protein = win->match.matched_protein;   // the chosen protein's accession travels with the model (ADR-0061 push 4b)
     m.region_start = win->match.region_start;
     m.region_end = win->match.region_end;
     m.identification_score = win->match.score;
@@ -1245,7 +1246,7 @@ namespace OpenMS
       ps.match.region_start = 0;
       ps.match.region_end = static_cast<int>(m.proteoform_sequence.size());
       ps.match.proteoform_sequence = m.proteoform_sequence;
-      ps.match.matched_protein = "input_protein";
+      ps.match.matched_protein = m.matched_protein;
       ps.match.ptm_sites = sites;
       ps.match.refine = st.candidates;
       for (const Refine::Path::Ion& ion : b.ions_explained)
@@ -1314,6 +1315,9 @@ namespace OpenMS
     const int we = (m->region_end < 0) ? P : m->region_end;
     ctx.region_start = ws;   // 0-based inclusive (frame expected by MS3FragmentMatcher)
     ctx.region_end = we;     // 0-based exclusive
+    // The winner's whole protein and its accession (ADR-0061 push 4b): the region lies in this protein.
+    ctx.protein_sequence = m->proteoform_sequence;
+    ctx.protein_accession = m->matched_protein;
 
     // EVERY winner mod as a region-1-based PTMSite (same conversion as narrowModifications_ :782-789).
     // Include LOCALIZED mods (candidate_start == candidate_end): a localized point PTM's mass must
@@ -1597,6 +1601,7 @@ namespace OpenMS
     {
       FragmentAnalysis::ProteoformMatch& rm = m.rematched_nonwinner_[ps.scan_id];
       rm.proteoform_sequence = m.proteoform_sequence;
+      rm.matched_protein = m.matched_protein;   // the winner's protein, like the proteoform (ADR-0061 push 4b)
       rm.region_start = m.region_start;
       rm.region_end = m.region_end;
       rm.ptm_sites.clear();

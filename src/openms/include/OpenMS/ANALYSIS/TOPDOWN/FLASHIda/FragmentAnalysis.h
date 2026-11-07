@@ -81,8 +81,13 @@ namespace OpenMS
       int region_start = -1;       ///< 0-based proteoform start (-1 = full sequence)
       int region_end = -1;         ///< 0-based exclusive proteoform end (-1 = full sequence)
       std::vector<PTMSite> ptm_sites;        ///< PTM sites from FLASHExtender
-      std::string matched_protein;           ///< Protein file/DB name
-      std::string proteoform_sequence;       ///< Matched protein sequence
+      /// The ACCESSION of the reference entry an MS2 match chose (ADR-0061 push 4b): for the inline
+      /// reference, IdentificationConfig::kSequenceAccession. Set by the engine's MS2 match sites, never by
+      /// the matcher; empty on an MS3 match and on a match that identified nothing.
+      std::string matched_protein;
+      /// MS2 match: the WHOLE matched protein. MS3 match (MS3FragmentMatcher): the fragment SUB-sequence,
+      /// so never read the protein off an MS3 match.
+      std::string proteoform_sequence;
 
       /// Detail of a single matched fragment ion (MS2 or MS3)
       struct FragmentMatch
@@ -119,6 +124,11 @@ namespace OpenMS
       /// identification.method refine only (ADR-0049): Detect, Assemble (every candidate) and the precursor mass
       /// difference of the best path. nullptr under flashtnt. APPEND-ONLY position, like FragmentMatch::qscore.
       std::shared_ptr<const RefineCandidates> refine;
+
+      /// ADR-0061 push 4b, APPEND-ONLY like the two above. Logged on identification.tsv; nothing sets them yet.
+      double raw_score = -1;                ///< FLASHAnnotator raw score of the PrSM; -1 = none
+      double identification_score = -1;     ///< ADR-0061 d.5 identification score; -1 = not computed
+      double inferred_precursor_mass = -1;  ///< precursor mass the Extender inferred from fragments; -1 = none
     };
 
     /// Deconvolution scores of a selected MS2 fragment, copied into the stage-1 (fragment)

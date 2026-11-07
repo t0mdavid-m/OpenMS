@@ -113,6 +113,11 @@ namespace OpenMS
       double ms3_isolation_width = 0.0;
       double ms3_window_snr = 0.0;
       double ms3_charge_intensity = 0.0;
+      /// ADR-0061 push 4b: the WHOLE protein of the MS2 match or model this context describes, and its
+      /// accession (an MS3 row's render protein and its identification.tsv `protein`). Empty = none chosen;
+      /// readers fall back through IdentificationConfig::proteinOr / accessionOr.
+      std::string protein_sequence;
+      std::string protein_accession;
     };
 
     /// Group of CE variants for one precursor at one MSn level

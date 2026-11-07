@@ -524,7 +524,7 @@ namespace OpenMS
     // scan_commands.tsv ms3_proteoform column (drained by takeMS3Proteoform). Inline write —
     // queue_mutex_ is already held and is non-recursive.
     const std::string ms3_proteoform = MS3FragmentMatcher::fragmentProForma(
-        config_.identification().sequence, proto_ctx, ion_type, frag_index);
+        config_.identification().proteinOr(proto_ctx.protein_sequence), proto_ctx, ion_type, frag_index);
     if (!ms3_proteoform.empty()) ms3_cmd_proteoform_[id] = ms3_proteoform;
     cmd.msn_level = 3;
     cmd.priority = priority;

@@ -49,6 +49,13 @@
 
 namespace OpenMS
 {
+  namespace
+  {
+    /// The chosen protein of a matcher that has not identified anything yet (ADR-0061 push 4b): none, so
+    /// IdentificationConfig::proteinOr / accessionOr fall back to the inline reference. A named empty string
+    /// rather than a temporary, so the reference proteinOr returns can never bind to a dead argument.
+    const std::string kNoChosenProtein;
+  }
 
   Exploration::Exploration(const Config& config, FragmentAnalysis& fragments)
     : config_(config), fragments_(fragments)
@@ -543,9 +550,11 @@ namespace OpenMS
     {
       MS2Context ctx;
       ctx.proteoform_sequence = (group.proteoform_ctx.region_start >= 0)
-          ? config_.identification().sequence.substr(group.proteoform_ctx.region_start,
+          ? config_.identification().proteinOr(group.proteoform_ctx.protein_sequence).substr(group.proteoform_ctx.region_start,
               group.proteoform_ctx.region_end - group.proteoform_ctx.region_start)
           : "";
+      ctx.protein_sequence = group.proteoform_ctx.protein_sequence;
+      ctx.protein_accession = group.proteoform_ctx.protein_accession;
       ctx.start_pos = group.proteoform_ctx.region_start;
       ctx.end_pos = group.proteoform_ctx.region_end;
       ctx.ptm_sites = group.proteoform_ctx.ptm_sites;
@@ -588,7 +597,7 @@ namespace OpenMS
     if (group.msn_level >= 3 && !info.identification.ms2_context.proteoform_sequence.empty())
     {
       info.identification.proteoform_sequence = info.identification.ms2_context.proteoform_sequence;
-      info.identification.matched_protein = config_.identification().sequence;
+      info.identification.matched_protein = config_.identification().accessionOr(info.identification.ms2_context.protein_accession);
     }
     
     auto& meta = v.result.getOrCreateOptimizationMetadata();
@@ -633,7 +642,7 @@ namespace OpenMS
       std::vector<FragmentAnalysis::ProteoformMatch> detailed_results;
       auto calibrated_scores = ProteoformTracker::scoreCalibratedVariants(
         variant_spectra,
-        config_.identification().sequence,
+        config_.identification().proteinOr(score_ctx.protein_sequence),
         score_ctx,
         group.fragment_ion_type,
         group.fragment_ion_index,
@@ -986,7 +995,9 @@ namespace OpenMS
     int next_level = msn_level + 1;
     const auto& this_cfg = config_.level(msn_level);
     const auto& next_cfg = config_.level(next_level);
-    const auto& seq = config_.identification().sequence;
+    // The MS2 matcher chooses the protein; before it has, there is none, so it matches the fallback (the
+    // inline reference, ADR-0061 push 4b).
+    const std::string& seq = config_.identification().proteinOr(kNoChosenProtein);
 
     // Identification is gated by the SEQUENCE, not by characterization.mode. The four conditions that
     // used to bail here gate MS3 DISPATCH, and they are re-asserted below, immediately above the
@@ -1041,6 +1052,10 @@ namespace OpenMS
         masses.data(), qscores.data(), charges.data(),
         wstarts.data(), wends.data(),
         ion_types.data(), frag_indices.data(), result_copy, frag_result, scan_activation, 0.0, frag_scores.data());
+    // The chosen protein travels with the match (ADR-0061 push 4b): a match that identified something carries
+    // the accession of the protein it was matched against. Overwrites Refine's "input_protein" placeholder.
+    if (!frag_result.proteoform_sequence.empty())
+      frag_result.matched_protein = config_.identification().accessionOr(kNoChosenProtein);
 
     // RENDER context (build time): the TRIGGERING scan's frag_result, NOT the (unfinalized) winner. At
     // MS2/next-level build time the winner is not yet finalized, so buildWinnerProteoformContext would
@@ -1056,6 +1071,9 @@ namespace OpenMS
       proto_ctx.ptm_sites = frag_result.ptm_sites;
       if (proto_ctx.region_start < 0) proto_ctx.region_start = 0;
       if (proto_ctx.region_end < 0) proto_ctx.region_end = static_cast<int>(seq.size());
+      // The protein the match chose (empty when it identified nothing: readers then take the fallback).
+      proto_ctx.protein_sequence = frag_result.proteoform_sequence;
+      proto_ctx.protein_accession = frag_result.matched_protein;
     }
 
     // Populate fragment matching metadata. This is report assembly, not identification -- the match was
@@ -1065,7 +1083,7 @@ namespace OpenMS
     nlr.fragment_count = frag_result.total_match_count;
     if (!seq.empty() && found > 0)
     {
-      nlr.matched_protein = config_.identification().sequence;
+      nlr.matched_protein = config_.identification().accessionOr(frag_result.matched_protein);
       nlr.proteoform_sequence = seq;
       // TIC coverage: sum of matched qscores / total spectrum intensity
       double total_tic = 0.0;
@@ -1242,6 +1260,8 @@ namespace OpenMS
             mc.start_pos = proto_ctx.region_start;
             mc.end_pos = proto_ctx.region_end;
             mc.ptm_sites = proto_ctx.ptm_sites;
+            mc.protein_sequence = proto_ctx.protein_sequence;
+            mc.protein_accession = proto_ctx.protein_accession;
             mc.ms1_precursor_mass = ms_ctx->mono_mass;
             mc.ms1_precursor_mz = ms_ctx->stages[0].precursor_mz;
             mc.ms1_precursor_charge = ms_ctx->stages[0].charge_state;
@@ -1295,6 +1315,8 @@ namespace OpenMS
           mc.start_pos = proto_ctx.region_start;
           mc.end_pos = proto_ctx.region_end;
           mc.ptm_sites = proto_ctx.ptm_sites;
+          mc.protein_sequence = proto_ctx.protein_sequence;
+          mc.protein_accession = proto_ctx.protein_accession;
           mc.ms1_precursor_mass = ms_ctx->mono_mass;
           mc.ms1_precursor_mz = ms_ctx->stages[0].precursor_mz;
           mc.ms1_precursor_charge = ms_ctx->stages[0].charge_state;
@@ -1429,7 +1451,8 @@ namespace OpenMS
                                                                       const std::string& activation_type) const
   {
     FragmentAnalysis::ProteoformMatch result;
-    const auto& seq = config_.identification().sequence;
+    // No protein is chosen before this match (ADR-0061 push 4b): the fallback, the inline reference.
+    const std::string& seq = config_.identification().proteinOr(kNoChosenProtein);
     if (seq.empty() || spec.empty())
       return result;
 
@@ -1450,9 +1473,11 @@ namespace OpenMS
         spec_copy, result, activation_type,
         config_.level(msn_level).exploration_tolerance_ppm);
 
-    if (result.total_match_count > 0)
+    // The accession of the protein matched against (ADR-0061 push 4b), on every match that identified something.
+    // Overwrites Refine's "input_protein" placeholder.
+    if (result.total_match_count > 0 || !result.proteoform_sequence.empty())
     {
-      result.matched_protein = config_.identification().sequence;
+      result.matched_protein = config_.identification().accessionOr(kNoChosenProtein);
     }
     return result;
   }

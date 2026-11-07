@@ -215,6 +215,9 @@ namespace OpenMS
     int precursor_id = 0;
     bool finalized = false;
     std::string proteoform_sequence;
+    /// The accession of the protein the winner MS2 match chose (ADR-0061 push 4b), copied with
+    /// proteoform_sequence at finalize. Empty while unidentified.
+    std::string matched_protein;
     int region_start = -1, region_end = -1;
     double identification_score = -1;
     int winner_scan_id = 0;

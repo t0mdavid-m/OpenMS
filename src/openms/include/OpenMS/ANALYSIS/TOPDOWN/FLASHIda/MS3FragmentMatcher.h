@@ -67,6 +67,11 @@ namespace OpenMS
       int region_start = -1; ///< 0-based start position in protein sequence
       int region_end = -1;   ///< 0-based exclusive end position in protein sequence
       std::vector<FragmentAnalysis::PTMSite> ptm_sites; ///< 1-based positions relative to proteoform
+      /// ADR-0061 push 4b: the WHOLE protein the region lies in, and its accession, as the MS2 match or the
+      /// model this context was built from chose it. Empty = none chosen: a reader then takes
+      /// IdentificationConfig::proteinOr / accessionOr's fallback (the inline reference).
+      std::string protein_sequence;
+      std::string protein_accession;
     };
 
     /// Compile-time constant: loose tolerance for calibration pass
