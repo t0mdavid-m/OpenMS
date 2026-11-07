@@ -58,6 +58,7 @@
 #include <fstream>
 #include <functional>
 #include <iomanip>
+#include <map>
 #include <memory>
 #include <mutex>
 
@@ -459,12 +460,14 @@ namespace OpenMS
     /// the search runs while a test holds analysis_mutex_). Set before the first feed; empty in production.
     std::function<void()> before_search_;
 
-    /// The Protein reference, loaded and prepared once (ADR-0061 push 4c): identification.reference.fasta read as
-    /// authored, or the inline sequence as one entry with the accession "sequence". Null without an identification
-    /// section. Immutable after the constructor, so every search worker reads it unlocked; each worker thread owns a
-    /// ProteomeSearch::Worker over it (FLASHIda.cpp, thread_local). Declared BEFORE search_pool_, so the pool -- and
-    /// with it every worker thread and its Worker -- is gone before this is destroyed.
-    std::unique_ptr<ProteomeSearch> proteome_;
+    /// The Protein reference, loaded and prepared once per ion-type set (ADR-0061 push 4c): identification.reference.fasta
+    /// read as authored, or the inline sequence as one entry with the accession "sequence". FLASHTnT builds its mass
+    /// ladders from ion_type when it prepares, so each set of ion types an MS2 activation of this method has
+    /// (FragmentAnalysis::getIonTypesForFragmentationMethod; b/y always) gets its own prepared search, keyed by that set.
+    /// Empty without an identification section. Immutable after the constructor, so every search worker reads it
+    /// unlocked; each worker thread owns one ProteomeSearch::Worker per entry (FLASHIda.cpp, thread_local). Declared
+    /// BEFORE search_pool_, so the pool -- and with it every worker thread and its Workers -- is gone before this is.
+    std::map<std::vector<std::string>, std::unique_ptr<ProteomeSearch>> proteomes_;
 
     /// The pool. Null without an identification section (nothing is ever searched then). Stopped and joined
     /// in ~FLASHIda's body, before any member a running apply touches is destroyed.

@@ -133,10 +133,11 @@ namespace OpenMS
     /// Search-pool backlog: waiting jobs per worker (ADR-0062 d.5). Provisional until measured.
     constexpr int kSearchBacklogPerThread = 4;
 
-    /// This search thread's Worker over its engine's ProteomeSearch (ADR-0061 push 4c): built by the pool's
-    /// on_thread_start before the thread's first job, destroyed when the thread exits inside SearchPool::stop().
-    /// One per pool thread, so a Worker (its FLASHTnTAlgorithm, Tagger, Extender, Annotator) is never shared.
-    thread_local std::unique_ptr<ProteomeSearch::Worker> t_search_worker;
+    /// This search thread's Workers, one over each of its engine's prepared searches and keyed by the same ion-type set
+    /// (ADR-0061 push 4c): built by the pool's on_thread_start before the thread's first job, destroyed when the thread
+    /// exits inside SearchPool::stop(). One set per pool thread, so a Worker (its FLASHTnTAlgorithm, Tagger, Extender,
+    /// Annotator) is never shared.
+    thread_local std::map<std::vector<std::string>, std::unique_ptr<ProteomeSearch::Worker>> t_search_workers;
 
     /// FLASHTnT's per-process INFO stream loses std::cout once (ADR-0061 push 4c): run() prints about 15 INFO lines
     /// per MS2. The engine itself logs nothing per scan through INFO.
@@ -155,16 +156,23 @@ namespace OpenMS
       return best;
     }
 
-    /// One MS2 searched against the Protein reference by this thread's Worker (ADR-0061 d.3): its raw peaks are the
+    /// One MS2 searched against the Protein reference by this thread's Worker for the ion types of @p activation (ADR-0061
+    /// d.3; FragmentAnalysis::getIonTypesForFragmentationMethod, the set today's matcher used): its raw peaks are the
     /// spectrum's own original, @p scan names it (<= 0, "not supplied", becomes 0). The best PrSM's protein is taken from
     /// the reference entry -- by FastaIndex, checked against the accession, else by accession -- never from the hit,
     /// whose sequence run() rewrites. Runs on a pool thread with no lock held.
-    FragmentAnalysis::SearchedPrSM searchProteome(const ProteomeSearch& proteome, const DeconvolvedSpectrum& ms2, double tol_ppm, int scan)
+    FragmentAnalysis::SearchedPrSM searchProteome(const std::map<std::vector<std::string>, std::unique_ptr<ProteomeSearch>>& proteomes,
+                                                  const std::string& activation, const DeconvolvedSpectrum& ms2, double tol_ppm, int scan)
     {
-      if (!t_search_worker)
-        throw std::logic_error("FLASHIda: a proteome search ran on a thread without its search worker");
+      const std::vector<std::string> ion_types = FragmentAnalysis::getIonTypesForFragmentationMethod(activation);
+      const auto proteome_it = proteomes.find(ion_types);
+      const auto worker_it = t_search_workers.find(ion_types);
+      if (proteome_it == proteomes.end() || worker_it == t_search_workers.end() || !worker_it->second)
+        throw std::logic_error("FLASHIda: activation '" + activation
+                               + "' has no prepared proteome search on this thread (its ion types were not collected at construction)");
+      const ProteomeSearch& proteome = *proteome_it->second;
       FragmentAnalysis::SearchedPrSM out;
-      const std::vector<ProteinHit> hits = t_search_worker->search(ms2, tol_ppm, ms2.getOriginalSpectrum(), scan > 0 ? scan : 0);
+      const std::vector<ProteinHit> hits = worker_it->second->search(ms2, tol_ppm, ms2.getOriginalSpectrum(), scan > 0 ? scan : 0);
       const ProteinHit* best = bestPrSM(hits);
       if (best == nullptr) return out;
 
@@ -251,9 +259,30 @@ FLASHIda::FLASHIda(char* arg) :
         throw std::invalid_argument("Config: identification.reference" + (ident.fasta.empty() ? std::string() : " '" + ident.fasta + "'")
                                     + " has no target entry (" + std::to_string(reference.size())
                                     + " entries, every one a DECOY); nothing could be identified (ADR-0061).");
-      proteome_ = std::make_unique<ProteomeSearch>(std::move(reference), ProteomeSearch::parametersFor(ident.flashtnt));
-      if (proteome_->reference().empty())
-        throw std::invalid_argument("Config: identification.reference has no target entry; nothing could be identified (ADR-0061).");
+      // One prepared search per ion-type set (ADR-0061 push 4c): FLASHTnT builds its mass ladders from ion_type when it
+      // prepares, so an ETD MS2 searched on a b/y database would find nothing a c/z ladder holds. The sets are those of
+      // every activation the method can acquire at MS2 -- the dispatch roster (additional_scans included), the sweep's
+      // activations and an exploration override -- mapped as today's matcher maps them; b/y always. An activation no
+      // source named throws at its search (searchProteome) instead of being searched with the wrong ion types.
+      std::set<std::vector<std::string>> ion_sets{FragmentAnalysis::getIonTypesForFragmentationMethod("HCD")};
+      const MSLevelConfig& ms2_cfg = config_.level(2);
+      for (const ScanConfig& sc : ms2_cfg.scans) ion_sets.insert(FragmentAnalysis::getIonTypesForFragmentationMethod(sc.activation));
+      for (const std::string& a : ms2_cfg.activations) ion_sets.insert(FragmentAnalysis::getIonTypesForFragmentationMethod(a));
+      if (const auto ov = ms2_cfg.overrides.find("activation"); ov != ms2_cfg.overrides.end())
+        ion_sets.insert(FragmentAnalysis::getIonTypesForFragmentationMethod(ov->second));
+      for (const std::vector<std::string>& ions : ion_sets)
+      {
+        const auto prepare_start = std::chrono::steady_clock::now();
+        Param params = ProteomeSearch::parametersFor(ident.flashtnt);
+        params.setValue("ion_type", ions);
+        auto proteome = std::make_unique<ProteomeSearch>(reference, params);
+        if (proteome->reference().empty())
+          throw std::invalid_argument("Config: identification.reference has no target entry; nothing could be identified (ADR-0061).");
+        std::cout << "[SEARCH-PREPARE] ion_types=" << ListUtils::concatenate(ions, ",") << " entries=" << proteome->reference().size()
+                  << " ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - prepare_start).count()
+                  << std::endl;
+        proteomes_.emplace(ions, std::move(proteome));
+      }
       // run() prints its INFO lines per MS2 through OpenMS_Log_info; silenced once per process, before any worker runs
       std::call_once(g_info_silenced, [] { OpenMS_Log_info.remove(std::cout); });
 
@@ -263,8 +292,9 @@ FLASHIda::FLASHIda(char* arg) :
   #ifdef _OPENMP
         omp_set_num_threads(4);
   #endif
-        // this thread's Worker over the reference (ADR-0061 push 4c), destroyed at thread exit inside stop()
-        t_search_worker = std::make_unique<ProteomeSearch::Worker>(*proteome_);
+        // this thread's Workers, one per prepared search (ADR-0061 push 4c), destroyed at thread exit inside stop()
+        for (const auto& [ions, proteome] : proteomes_)
+          t_search_workers[ions] = std::make_unique<ProteomeSearch::Worker>(*proteome);
       });
     }
 
@@ -1161,10 +1191,11 @@ FLASHIda::FLASHIda(char* arg) :
           {
             if (before_search_) before_search_();
             job->timing.started = std::chrono::steady_clock::now();
-            // The proteome search (ADR-0061 push 4c) at the variant's own tolerance, as its match always was; the
-            // variant keeps the PrSM (input.prsm), which its group's cascade plans from without searching again.
-            job->input.prsm = searchProteome(*proteome_, job->input.deconv, config_.level(2).exploration_tolerance_ppm,
-                                             job->instrument_scan_number);
+            // The proteome search (ADR-0061 push 4c) at the variant's own tolerance and with its own activation's ion
+            // types, as its match always was; the variant keeps the PrSM (input.prsm), which its group's cascade plans
+            // from without searching again.
+            job->input.prsm = searchProteome(proteomes_, job->input.activation_type, job->input.deconv,
+                                             config_.level(2).exploration_tolerance_ppm, job->instrument_scan_number);
             job->match = exploration_.searchVariant(job->input);
             job->timing.finished = std::chrono::steady_clock::now();
           };
@@ -1302,10 +1333,14 @@ FLASHIda::FLASHIda(char* arg) :
               std::cout << "[REFINE] precursor_id=" << job->precursor_id << " tracking_id=" << job->parent_id_str
                         << " scan=" << job->instrument_scan_number << std::endl;
             job->timing.started = std::chrono::steady_clock::now();
-            // The proteome search (ADR-0061 push 4c) at the MS2 tolerance, as the match always was; its PrSM, not a
+            // The proteome search (ADR-0061 push 4c) at the MS2 tolerance, as the match always was, with the ion types
+            // of the activation searchNextLevel matches with (stage 0's, else the level's first scan's); its PrSM, not a
             // configured sequence, is what the match converts and the MS3 targets are chosen from.
+            const std::string activation = (job->parent_ctx.num_stages > 0)
+                ? std::string(job->parent_ctx.stages[0].activation_type)
+                : (config_.level(2).scans.empty() ? std::string() : config_.level(2).scans[0].activation);
             const FragmentAnalysis::SearchedPrSM prsm =
-                searchProteome(*proteome_, job->spectrum, config_.level(2).tolerance_ppm, job->instrument_scan_number);
+                searchProteome(proteomes_, activation, job->spectrum, config_.level(2).tolerance_ppm, job->instrument_scan_number);
             job->result = exploration_.searchNextLevel(2, job->spectrum, &job->parent_ctx, &prsm);
             job->timing.finished = std::chrono::steady_clock::now();
           };
