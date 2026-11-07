@@ -138,7 +138,8 @@ namespace
   }
 
   // Split a TSV line on '\t'. NOTE: std::getline drops a TRAILING empty field, but in this scenario the
-  // last column (trigger_scan_id) is always non-empty, so every data row yields all 19 fields; interior
+  // last column (protein, the "synthetic" accession of every fed match) is always non-empty, so every data
+  // row yields all 20 fields; interior
   // empty fields (localized_mods/ambiguous_mods) sit between tabs and ARE preserved as "".
   std::vector<std::string> splitTab(const std::string& line)
   {
@@ -276,7 +277,7 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   // ---------------------------------------------------------------------------------------------
   // (B) Pooled trajectory file: 3 data rows, one per emitRow_ call (finalize + 2x foldMs3).
   // Columns are resolved BY HEADER NAME (colOf, below), so this test is agnostic to the pooled column
-  // order — a reorder in IdaLogger's pooled writer needs no change here. The pooled stream has 19 columns.
+  // order — a reorder in IdaLogger's pooled writer needs no change here. The pooled stream has 20 columns.
   // ---------------------------------------------------------------------------------------------
   std::ifstream f(pooled_path.c_str());
   TEST_TRUE(f.good())
@@ -284,7 +285,7 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   std::string header;
   TEST_TRUE(static_cast<bool>(std::getline(f, header)))
   const std::vector<std::string> header_cols = splitTab(header);
-  TEST_EQUAL((int)header_cols.size(), 19)   // 14 base + grouped fragment-mass table (masses|ions|measured|theoretical|diff_da|diff_ppm)
+  TEST_EQUAL((int)header_cols.size(), 20)   // 14 base + grouped fragment-mass table (masses|ions|measured|theoretical|diff_da|diff_ppm) + protein (ADR-0061 push 4b)
 
   std::vector<std::vector<std::string>> rows;
   std::string line;
@@ -308,8 +309,8 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   TEST_TRUE(CI_COV >= 0 && CI_N_FRAG >= 0 && CI_MASSES >= 0 && CI_IONS >= 0 &&
             CI_UPDATE >= 0 && CI_PRECID >= 0 && CI_TRIGGER >= 0 && CI_TRIGGER_SCAN >= 0)
 
-  // Every data row must carry all 19 fields (the trailing trigger_scan_id is non-empty here).
-  for (const std::vector<std::string>& r : rows) TEST_EQUAL((int)r.size(), 19)
+  // Every data row must carry all 20 fields (the trailing protein is non-empty here).
+  for (const std::vector<std::string>& r : rows) TEST_EQUAL((int)r.size(), 20)
 
   // combined_ms2_fragment_ions (col 10) aligns 1-for-1 with combined_ms2_frame_masses (col 9), and each
   // label looks like a fragment ion (ion-type letter + index).

@@ -390,6 +390,16 @@ namespace OpenMS
     // are exactly the matcher's two callers on an MS2: the regular MS2 (Exploration::searchNextLevel)
     // and the MS2 exploration variant (Exploration::searchVariant). Nothing else is searched here.
 
+    /// When a job was submitted and when its search() ran (ADR-0061 push 4b): set by processScan and by the
+    /// worker, read by the apply on that same worker, which writes them as scan_results' search_wait_ms /
+    /// search_ms. Steady clock, so wall-clock steps cannot make either negative.
+    struct SearchTiming
+    {
+      std::chrono::steady_clock::time_point submitted{};
+      std::chrono::steady_clock::time_point started{};
+      std::chrono::steady_clock::time_point finished{};
+    };
+
     /// A regular MS2's search: the copies its apply needs once deconv_ has moved on to later scans.
     struct RegularSearch
     {
@@ -404,6 +414,7 @@ namespace OpenMS
       std::vector<std::string> child_ids;
       int commands_pushed = 0;
       Exploration::NextLevelSearch result;      ///< filled by the worker
+      SearchTiming timing;
     };
 
     /// An MS2 exploration variant's search.
@@ -414,6 +425,7 @@ namespace OpenMS
       Exploration::VariantInput input;          ///< prepareVariant's copy (spectrum, share, slot)
       IdaLogger::ScanRowDescriptor results_row{};
       FragmentAnalysis::ProteoformMatch match;  ///< filled by the worker
+      SearchTiming timing;
     };
 
     /// The regular-MS2 tail from MS3 targeting to the row fields (processScan inline, or a worker's apply).

@@ -575,6 +575,16 @@ FLASHIda::FLASHIda(char* arg) :
       row.energy_source = k.energy_source;
     }
 
+    /// ADR-0061 push 4b: a row whose MS2 went through the search pool -- "searched", the wait from submit to
+    /// search start and the search itself, in whole milliseconds. Called by the two applies only.
+    void fillSearchColumns(IdaLogger::ScanRowDescriptor& row, std::chrono::steady_clock::time_point submitted,
+                           std::chrono::steady_clock::time_point started, std::chrono::steady_clock::time_point finished)
+    {
+      row.search         = "searched";
+      row.search_wait_ms = std::chrono::duration_cast<std::chrono::milliseconds>(started - submitted).count();
+      row.search_ms      = std::chrono::duration_cast<std::chrono::milliseconds>(finished - started).count();
+    }
+
     /// ADR-0048 d.4: the share the returning scan carries in the window its command isolated LAST
     /// (stage 0 of an MS2, stage 1 of an MS3) -- the same window Exploration reads for a pre-scan, so
     /// a regular row and an exploration row of the same scan are comparable. -1 when the command has no
@@ -659,6 +669,7 @@ FLASHIda::FLASHIda(char* arg) :
                                          job.parent_ctx, job.precursor_id, job.parent_id_str, job.rt,
                                          job.instrument_scan_number, false, job.commands_pushed, job.child_ids,
                                          job.results_row, id_rows);
+    fillSearchColumns(job.results_row, job.timing.submitted, job.timing.started, job.timing.finished);
     logger_.writeScanResultRow(job.results_row);
     for (const auto& r : id_rows)
       logger_.writeIdentificationRow(r);
@@ -673,6 +684,7 @@ FLASHIda::FLASHIda(char* arg) :
     std::vector<IdaLogger::IdRowDescriptor> id_rows;
     const int pushed = finishVariantMS2_(expl_result, static_cast<int>(job.input.deconv.size()), &job.input.deconv,
                                          job.precursor_id, job.parent_id_str, false, job.results_row, id_rows);
+    fillSearchColumns(job.results_row, job.timing.submitted, job.timing.started, job.timing.finished);
     logger_.writeScanResultRow(job.results_row);
     for (const auto& r : id_rows)
       logger_.writeIdentificationRow(r);
@@ -1049,7 +1061,9 @@ FLASHIda::FLASHIda(char* arg) :
           pj->search = [this, job]
           {
             if (before_search_) before_search_();
+            job->timing.started = std::chrono::steady_clock::now();
             job->match = exploration_.searchVariant(job->input);
+            job->timing.finished = std::chrono::steady_clock::now();
           };
           pj->apply = [this, job] { return applyVariantSearch_(*job); };
           pj->drop = [this, job]
@@ -1060,9 +1074,11 @@ FLASHIda::FLASHIda(char* arg) :
             std::vector<IdaLogger::IdRowDescriptor> rows;
             finishVariantMS2_(r, static_cast<int>(job->input.deconv.size()), &job->input.deconv, job->precursor_id,
                               job->parent_id_str, true, job->results_row, rows);
+            job->results_row.search = "dropped_backlog";   // ADR-0061 push 4b; no timing: it never searched
             logger_.writeScanResultRow(job->results_row);
             for (const auto& row : rows) logger_.writeIdentificationRow(row);
           };
+          job->timing.submitted = std::chrono::steady_clock::now();
           submitSearch_(std::move(pj));
           return 0;   // the row is written by the apply
         }
@@ -1182,7 +1198,9 @@ FLASHIda::FLASHIda(char* arg) :
             if (config_.identification().method == AnnotationMethod::Refine)
               std::cout << "[REFINE] precursor_id=" << job->precursor_id << " tracking_id=" << job->parent_id_str
                         << " scan=" << job->instrument_scan_number << std::endl;
+            job->timing.started = std::chrono::steady_clock::now();
             job->result = exploration_.searchNextLevel(2, job->spectrum, &job->parent_ctx);
+            job->timing.finished = std::chrono::steady_clock::now();
           };
           pj->apply = [this, job] { return applyRegularSearch_(*job); };
           pj->drop = [this, job]
@@ -1193,8 +1211,10 @@ FLASHIda::FLASHIda(char* arg) :
             finishRegularMS2_(nullptr, true, job->spectrum, job->has_spectrum ? &job->spectrum : nullptr, job->parent_ctx,
                               job->precursor_id, job->parent_id_str, job->rt, job->instrument_scan_number, false,
                               job->commands_pushed, job->child_ids, job->results_row, no_rows);
+            job->results_row.search = "dropped_backlog";   // ADR-0061 push 4b; no timing: it never searched
             logger_.writeScanResultRow(job->results_row);
           };
+          job->timing.submitted = std::chrono::steady_clock::now();
           submitSearch_(std::move(pj));
           return commands_pushed;   // the row is written by the apply
         }

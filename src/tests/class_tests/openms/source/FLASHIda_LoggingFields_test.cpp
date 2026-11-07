@@ -238,7 +238,8 @@ START_SECTION(schema_column_counts)
   // fit_rss/energy_source (41 -> 50), written only on the row that completes a kinetic_model group.
   // Appended for the same reason as the two blocks before it: every pin below is <= 21.
   // ADR-0056: +quant_p_value, consensus_* renamed group_* with +group_p_value and +group_channels (50 -> 53).
-  TEST_EQUAL(r.headers.size(), 53)
+  // ADR-0061 push 4b: + search/search_wait_ms/search_ms, the search pool's verdict and timing, appended (53 -> 56).
+  TEST_EQUAL(r.headers.size(), 56)
   // I2: +6 iso/snr/intensity; P5: +precursor_id; +theoretical_masses/diff_da/diff_ppm; C2:
   // +ms3_fragment_coverage; + tic_coverage; C: + flash_extender_score; then + tag_count (beside
   // flash_extender_score, the other "how strong is this ID" scalar) and + fragment_qscores (inside the
@@ -246,7 +247,9 @@ START_SECTION(schema_column_counts)
   // total_shift/second_total_shift/second_score/cut/n_levels/precursor_mass_difference, Refine's candidate
   // record, APPENDED after tic_coverage (34 -> 41) so every i.colIndex pinned below is unchanged and only
   // this count and i.headers.back() move. Sentinel-valued under characterization.method flashtnt.
-  TEST_EQUAL(i.headers.size(), 41)
+  // ADR-0061 push 4b: + protein/raw_score/identification_score/closed_out/inferred_precursor_mass, appended
+  // after precursor_mass_difference (41 -> 46).
+  TEST_EQUAL(i.headers.size(), 46)
 
   // Spot-check exact header identities / order at the boundaries that matter for parsing.
   // NOTE: the four log streams were reordered for human legibility (LOG_COLUMN_ORDER_REFERENCE.md);
@@ -266,7 +269,12 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(c.colIndex("isolation_purity"), 34)
   TEST_EQUAL(r.headers.front(), std::string("tracking_id"))
   TEST_EQUAL(r.colIndex("ms_level"), 1)
-  TEST_EQUAL(r.headers.back(), std::string("energy_source"))  // ADR-0047: the kinetic block follows the consensus one
+  TEST_EQUAL(r.headers.back(), std::string("search_ms"))      // ADR-0061 push 4b: the search block follows the kinetic one
+  TEST_EQUAL(r.colIndex("energy_source"), 52)                 // ADR-0047: the kinetic block follows the consensus one
+  // ADR-0061 push 4b: the search block, pinned as a contiguous run.
+  TEST_EQUAL(r.colIndex("search"), 53)
+  TEST_EQUAL(r.colIndex("search_wait_ms"), 54)
+  TEST_EQUAL(r.colIndex("search_ms"), 55)
   TEST_EQUAL(r.colIndex("precursor_share"), 12)               // ADR-0048: renamed in place, never moved
   TEST_EQUAL(r.colIndex("winner_tracking_id"), 21)
   TEST_EQUAL(r.colIndex("processing_duration_ms"), 10)           // grouped up front with the other duration columns
@@ -277,7 +285,13 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(r.colIndex("fragment_count"), 14)
   TEST_EQUAL(r.colIndex("tic_coverage"), 15)
   TEST_EQUAL(i.headers.front(), std::string("tracking_id"))      // reordered: identification now leads with tracking_id
-  TEST_EQUAL(i.headers.back(), std::string("precursor_mass_difference"))  // ADR-0049: the refine block is appended last
+  TEST_EQUAL(i.headers.back(), std::string("inferred_precursor_mass"))  // ADR-0061 push 4b: its block is appended last
+  // ADR-0061 push 4b: the block after the refine record, pinned as a contiguous run.
+  TEST_EQUAL(i.colIndex("protein"), 41)
+  TEST_EQUAL(i.colIndex("raw_score"), 42)
+  TEST_EQUAL(i.colIndex("identification_score"), 43)
+  TEST_EQUAL(i.colIndex("closed_out"), 44)
+  TEST_EQUAL(i.colIndex("inferred_precursor_mass"), 45)
   TEST_EQUAL(i.colIndex("annotation_score"), 34)                // the refine block, pinned as a contiguous run
   TEST_EQUAL(i.colIndex("total_shift"), 35)
   TEST_EQUAL(i.colIndex("second_total_shift"), 36)
@@ -2890,6 +2904,101 @@ START_SECTION(results_ms3_real_fragment_data)
     // self-explaining message instead of an opaque leaf_active miss.
     TEST_TRUE(wide_cmd_ranges >= 1)
     TEST_TRUE(leaf_active >= 1)   // the leaf narrower is active & evidence-driven, not a copy of the wide base
+  }
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §S4B -- the ADR-0061 push 4b columns carry their 4b values
+//
+// scan_results: search / search_wait_ms / search_ms. Every regular MS2 of an identifying run is searched on
+// the pool (a backlog drop cannot happen here: the drive waits for the pool after every feed), so each MS2
+// row says "searched" with two non-negative integer timings; MS1 and MS3 never reach the pool ("none", -1).
+// identification: protein / raw_score / identification_score / closed_out / inferred_precursor_mass. The
+// only protein is the inline reference, whose accession is "sequence": an MS2 self-match carries it on its
+// match, an MS3 row through its MS2 context. Nothing sets the three scores or closes a Precursor out yet.
+// pooled: protein, the accession the model's winner chose.
+//
+// The §T9 drive (identifying cytC recipe + the real per-ion MS3 fixtures), because it is the one that yields
+// MS2 rows, MS3 identification rows and pooled rows in one run. Each kind is required, so no check is vacuous.
+/////////////////////////////////////////////////////////////
+START_SECTION(new_columns_carry_their_4b_values)
+{
+  auto manifest = buildMs3IonManifest("../../FlashIDA/test-data/spectra");
+  TEST_TRUE(!manifest.empty())   // the MS3 rows below need the committed fixtures
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  auto ms2 = loadTsvScans(CYTC_MS2);
+  ABORT_IF(manifest.empty() || ms1.empty() || ms2.empty())
+
+  const std::string dir = freshLogDir("lf_s4b");
+  std::string json = buildJsonWithLogDir(dir, true, "HCD", 50);
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+  runFullCycle(&ida, ms1, ms2, &manifest);
+
+  const std::string accession = "sequence";   // IdentificationConfig::kSequenceAccession, spelled out
+  auto isNonNegInt = [](const std::string& s) {
+    return !s.empty() && s.find_first_not_of("0123456789") == std::string::npos;
+  };
+
+  // --- scan_results ---------------------------------------------------------------------------------
+  auto res = TSVFile::parse(dir + "/scan_results.tsv");
+  int n_ms1 = 0, n_ms2 = 0, n_ms3 = 0;
+  for (const auto& row : res.rows)
+  {
+    TEST_EQUAL(row.size(), res.headers.size())
+    const int lvl = std::atoi(cell(res, row, "ms_level").c_str());
+    if (lvl == 2)
+    {
+      ++n_ms2;
+      TEST_EQUAL(cell(res, row, "search"), std::string("searched"))
+      TEST_TRUE(isNonNegInt(cell(res, row, "search_wait_ms")))
+      TEST_TRUE(isNonNegInt(cell(res, row, "search_ms")))
+    }
+    else
+    {
+      n_ms1 += (lvl == 1);
+      n_ms3 += (lvl == 3);
+      TEST_EQUAL(cell(res, row, "search"), std::string("none"))
+      TEST_EQUAL(cell(res, row, "search_wait_ms"), std::string("-1"))
+      TEST_EQUAL(cell(res, row, "search_ms"), std::string("-1"))
+    }
+  }
+  TEST_TRUE(n_ms1 > 0)
+  TEST_TRUE(n_ms2 > 0)
+  TEST_TRUE(n_ms3 > 0)
+
+  // --- identification -------------------------------------------------------------------------------
+  auto idf = TSVFile::parse(dir + "/identification.tsv");
+  int n_ms2_self = 0, n_ms3_id = 0;
+  for (const auto& row : idf.rows)
+  {
+    TEST_EQUAL(row.size(), idf.headers.size())
+    const int lvl = std::atoi(cell(idf, row, "ms_level").c_str());
+    if (lvl == 2 && toD(cell(idf, row, "flash_extender_score")) >= 0.0)   // the scan's own match (-1 = re-matched)
+    {
+      ++n_ms2_self;
+      TEST_EQUAL(cell(idf, row, "protein"), accession)
+      TEST_EQUAL(toD(cell(idf, row, "raw_score")), -1.0)
+      TEST_EQUAL(toD(cell(idf, row, "identification_score")), -1.0)
+      TEST_EQUAL(cell(idf, row, "closed_out"), std::string("0"))
+      TEST_EQUAL(toD(cell(idf, row, "inferred_precursor_mass")), -1.0)
+    }
+    else if (lvl == 3)
+    {
+      ++n_ms3_id;
+      TEST_EQUAL(cell(idf, row, "protein"), accession)
+    }
+  }
+  TEST_TRUE(n_ms2_self > 0)
+  TEST_TRUE(n_ms3_id > 0)
+
+  // --- pooled_identification: a row is written only for an identified model ----------------------------
+  auto pooled = TSVFile::parse(dir + "/pooled_identification.tsv");
+  TEST_TRUE(pooled.rows.size() > 0)
+  for (const auto& row : pooled.rows)
+  {
+    TEST_EQUAL(row.size(), pooled.headers.size())
+    TEST_EQUAL(cell(pooled, row, "protein"), accession)
   }
 }
 END_SECTION

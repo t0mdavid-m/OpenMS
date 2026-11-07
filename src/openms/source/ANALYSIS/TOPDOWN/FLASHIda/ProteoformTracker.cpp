@@ -1993,6 +1993,9 @@ namespace OpenMS
       r.proforma = FragmentAnalysis::toProForma(region_seq, ptm_sites);
     }
 
+    // --- protein: the accession the winner's MS2 match chose (ADR-0061 push 4b) ---
+    r.protein = m.matched_protein;
+
     // --- score / coverage / fragment count ---
     r.score = m.identification_score;
     r.coverage_pct = m.coveragePct();

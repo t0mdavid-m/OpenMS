@@ -155,9 +155,12 @@ namespace OpenMS
                             // kinetic_model group and sentinel-valued everywhere else. APPENDED, for the
                             // reason the two blocks above were: every scan_results index pinned in
                             // FLASHIda_LoggingFields_test is <= 21, so only the count and headers.back()
-                            // move. energy_source is last and is the new headers.back().
+                            // move. energy_source ends that block.
                             << "\tfit_p0\tfit_ce_max_s\tfit_width\tk2\tmodeled_ce\tmodeled_b"
-                               "\tfit_points\tfit_rss\tenergy_source\n";
+                               "\tfit_points\tfit_rss\tenergy_source"
+                            // ADR-0061 push 4b: the search pool's verdict and timing for this scan.
+                            // APPENDED, for the reason the blocks above were; search_ms is headers.back().
+                            << "\tsearch\tsearch_wait_ms\tsearch_ms\n";
         results_tsv_stream_.flush();
       }
     }
@@ -203,7 +206,11 @@ namespace OpenMS
                                    // ADR-0049: Refine's candidate record, APPENDED so no existing column moves.
                                    // Sentinel-valued (-1 / empty) on every row Refine did not decide.
                                    << "annotation_score\ttotal_shift\tsecond_total_shift\tsecond_score\t"
-                                   << "cut\tn_levels\tprecursor_mass_difference\n";
+                                   << "cut\tn_levels\tprecursor_mass_difference\t"
+                                   // ADR-0061 push 4b, APPENDED: the protein (accession) the match chose, the
+                                   // annotator's raw score, the identification score, whether the Precursor was
+                                   // closed out, and the precursor mass the Extender inferred. -1 / 0 = none.
+                                   << "protein\traw_score\tidentification_score\tclosed_out\tinferred_precursor_mass\n";
         identification_tsv_stream_.flush();
       }
     }
@@ -222,7 +229,9 @@ namespace OpenMS
                        // all aligned index-for-index with combined_ms2_frame_masses.
                        << "combined_ms2_frame_masses\tcombined_ms2_fragment_ions\t"
                        << "combined_measured_raw\tcombined_theoretical\tcombined_diff_da\tcombined_diff_ppm\t"
-                       << "contributing_scan_ids\tnominal_mass\n";
+                       << "contributing_scan_ids\tnominal_mass\t"
+                       // ADR-0061 push 4b, APPENDED: the accession of the protein the model's winner chose.
+                       << "protein\n";
         pooled_stream_.flush();
       }
     }
@@ -732,7 +741,11 @@ namespace OpenMS
                         << "\t" << row.modeled_b
                         << "\t" << row.fit_points
                         << "\t" << row.fit_rss
-                        << "\t" << row.energy_source << "\n";
+                        << "\t" << row.energy_source
+                        // ADR-0061 push 4b. A string and two integers: still no manipulator on this stream.
+                        << "\t" << row.search
+                        << "\t" << row.search_wait_ms
+                        << "\t" << row.search_ms << "\n";
     results_tsv_stream_.flush();
   }
 
@@ -916,6 +929,19 @@ namespace OpenMS
       << (ms_level == 3 ? match.ms3_fragment_coverage : -1.0f) << "\t"
       // Per-scan TIC / matched-fragment coverage (moved from scan_results); the scan's actual value at this row.
       << row.tic_coverage << "\t";
+    // ADR-0061 push 4b: the five columns after precursor_mass_difference, ending the row. Written by BOTH
+    // terminators below through this one lambda, so they cannot drift apart. protein: the match's chosen
+    // protein, else (an MS3 row, whose match is a fragment) the MS2 context's, else empty. The three doubles
+    // set std::fixed + setprecision(4) explicitly at the point of writing (-1 prints -1.0000).
+    const std::string& protein = !match.matched_protein.empty() ? match.matched_protein : ctx.protein_accession;
+    auto writeSearchTail = [&]() {
+      identification_tsv_stream_
+        << protein << "\t"
+        << std::fixed << std::setprecision(4) << match.raw_score << "\t"
+        << std::fixed << std::setprecision(4) << match.identification_score << "\t"
+        << (row.closed_out ? 1 : 0) << "\t"
+        << std::fixed << std::setprecision(4) << match.inferred_precursor_mass << "\n";
+    };
     // ADR-0049: Refine's candidate record. The three doubles re-establish std::fixed + setprecision(4)
     // themselves (the stream's float convention) rather than inheriting whatever the last field left sticky.
     if (row.refine)
@@ -930,11 +956,13 @@ namespace OpenMS
       identification_tsv_stream_
         << row.cut << "\t"
         << row.n_levels << "\t"
-        << std::fixed << std::setprecision(4) << row.precursor_mass_difference << "\n";
+        << std::fixed << std::setprecision(4) << row.precursor_mass_difference << "\t";
+      writeSearchTail();
     }
     else
     {
-      identification_tsv_stream_ << "-1\t\t\t-1\t-1\t-1\t\n";
+      identification_tsv_stream_ << "-1\t\t\t-1\t-1\t-1\t\t";
+      writeSearchTail();
     }
     identification_tsv_stream_.flush();
   }
@@ -1003,7 +1031,8 @@ namespace OpenMS
                    << masses_str << "\t" << ions_str << "\t"
                    << measured_str << "\t" << theo_str << "\t" << diff_da_str << "\t" << diff_ppm_str << "\t"
                    << quoteLogCell(scan_ids_str) << "\t"
-                   << r.nominal_mass << "\n";
+                   << r.nominal_mass << "\t"
+                   << r.protein << "\n";   // ADR-0061 push 4b: a string, no precision
     pooled_stream_.flush();
   }
 

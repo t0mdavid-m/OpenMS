@@ -229,6 +229,14 @@ namespace OpenMS
       int    fit_points   = 0;     ///< finite shares the fit used; 0 = no kinetic decision on this row
       double fit_rss      = -1.0;  ///< residual sum of squares of the fit
       std::string energy_source;   ///< modeled | modeled_edge_lower | modeled_edge_upper | measured | none | ""
+
+      // ---- the search pool (ADR-0061 push 4b, ADR-0062) -----------------------------------------
+      // APPENDED after energy_source. Integers only: this stream never gets a precision.
+      /// "searched": the MS2 went through the search pool (regular MS2 or MS2 exploration variant);
+      /// "dropped_backlog": the backlog dropped its search; "none": everything else (MS1, MS3, Q, inline).
+      std::string search = "none";
+      int64_t search_wait_ms = -1;   ///< submit -> search start, on a searched row; -1 otherwise
+      int64_t search_ms      = -1;   ///< duration of the search() call, on a searched row; -1 otherwise
     };
 
     /// One identification.tsv row. All members are held BY VALUE because the sources (info.*, a local
@@ -261,6 +269,9 @@ namespace OpenMS
       int cut = -1;                         ///< RefineCandidates::cut
       int n_levels = -1;                    ///< RefineCandidates::n_levels (levels kept after both exclusions and the cap)
       double precursor_mass_difference = 0; ///< RefineCandidates::precursor_mass_difference
+      /// ADR-0061 push 4b: whether the row's Precursor was closed out (written 0/1; always 0 in 4b).
+      /// APPENDED last: the id rows are aggregate-initialised positionally up to flash_extender_score.
+      bool closed_out = false;
     };
 
     /// One pooled_identification.tsv row: the current state of a ProteoformModel after each update.
@@ -287,6 +298,7 @@ namespace OpenMS
       int update_index = 0;
       std::string trigger;            ///< "MS2" for the baseline row; folded fragment ion (e.g. "y7") for an MS3 update row
       std::string trigger_scan_id;    ///< Encoded tracking-id of the scan that drove this row (MS2 winner / MS3 production-or-variant)
+      std::string protein;            ///< ADR-0061 push 4b: the model's matched_protein (accession), the last column
     };
 
     /// Write IDA log entry for MS1 deconvolution results.
