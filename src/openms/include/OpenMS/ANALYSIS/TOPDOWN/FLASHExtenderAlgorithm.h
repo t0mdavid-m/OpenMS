@@ -276,11 +276,9 @@ private:
     std::map<int, std::vector<int>> node_series_map_;
     /// per mode: the deconvolved-spectrum index of each mass of the mode before merging (node_source_map_, in mass order) and, per node
     /// of node_spec_map_, the range [first, last] of those masses merged into it (first > last: node 0 and the precursor node, which are
-    /// no masses). Reported with report_matched_masses_; shiftRangeEnd_ uses them always.
+    /// no masses). Reported with report_matched_masses_; the report of a path reads them always (sameMasses_).
     std::map<int, std::vector<int>> node_source_map_;
     std::map<int, std::vector<std::pair<int, int>>> node_range_map_;
-    const std::vector<int>* cur_node_source_ = nullptr;
-    const std::vector<std::pair<int, int>>* cur_node_range_ = nullptr;
     const std::vector<int>* cur_node_series_ = nullptr;
     /// per node k of the current mode, the smallest mass and the largest tolerance of the nodes k, k + 1, ... (index node count: none)
     std::vector<double> cur_tail_min_mass_, cur_tail_max_margin_;
@@ -397,14 +395,12 @@ private:
   /// summed shift at (@p node, @p pro) is @p mass_shift: [@p pre_pro, returned end) in this mode's orientation, where the end is the first
   /// protein index in (@p pre_pro, @p pro) that a mass in between matches with the whole shift, else @p pro. Used for the DAG edge and for
   /// the report of the path, so that a variable modification is tested and named on the same residues.
-  /// A mass in between that shares a deconvolved mass (@p ranges, @p sources: HitInformation::node_range_map_ and node_source_map_ of
-  /// the mode) with @p node or @p pre_node does not end the range: one mass is one ion of the proteoform.
-  int shiftRangeEnd_(const MSSpectrum& node_spec, const MSSpectrum& tol_spec, const std::vector<double>& pro_masses,
-                     const std::vector<std::pair<int, int>>& ranges, const std::vector<int>& sources, int pre_node, int pre_pro, int node, int pro,
-                     double mass_shift) const;
+  int shiftRangeEnd_(const MSSpectrum& node_spec, const MSSpectrum& tol_spec, const std::vector<double>& pro_masses, int pre_node, int pre_pro,
+                     int node, int pro, double mass_shift) const;
 
-  /// whether nodes @p a and @p b were merged from a common deconvolved mass (false for an index out of @p ranges)
-  static bool sharesMass_(const std::vector<std::pair<int, int>>& ranges, const std::vector<int>& sources, int a, int b);
+  /// whether nodes @p a and @p b (not node 0) were merged from the same two or more deconvolved masses (@p ranges, @p sources:
+  /// HitInformation::node_range_map_ and node_source_map_ of the mode): one pair of complementary fragments, read both ways round
+  static bool sameMasses_(const std::vector<std::pair<int, int>>& ranges, const std::vector<int>& sources, int a, int b);
 
   /// largest |mass| that up to @p count variable modifications can explain (0 without them)
   double varModRoom_(int count) const
