@@ -394,14 +394,9 @@ namespace OpenMS
 
     // 1) Pick the winner among the staged scans that actually identified a proteoform (score >= 0 and a non-empty
     //    sequence): the highest Identification score (ADR-0061 d.5, the method's score + the search's raw term), then
-    //    the higher total_match_count, then the lower collision energy; a full tie keeps the first-seen. A match the
-    //    proteome search never scored (identification_score -1: the single-protein matcher, which no searched MS2
-    //    reaches) ranks by its method score, as before the search.
-    const auto rank = [](const PendingScan& ps) {
-      return ps.match.identification_score >= 0 ? ps.match.identification_score : ps.match.score;
-    };
-    const auto better = [&rank](const PendingScan& a, const PendingScan& b) {
-      if (rank(a) != rank(b)) return rank(a) > rank(b);
+    //    the higher total_match_count, then the lower collision energy; a full tie keeps the first-seen.
+    const auto better = [](const PendingScan& a, const PendingScan& b) {
+      if (a.match.identification_score != b.match.identification_score) return a.match.identification_score > b.match.identification_score;
       if (a.match.total_match_count != b.match.total_match_count) return a.match.total_match_count > b.match.total_match_count;
       return a.params.collision_energy < b.params.collision_energy;
     };
