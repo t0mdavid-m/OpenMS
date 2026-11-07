@@ -394,9 +394,10 @@ private:
   /// the residues that can carry the shift between two matched masses of a path, (@p pre_node, @p pre_pro) and (@p node, @p pro), whose
   /// summed shift at (@p node, @p pro) is @p mass_shift: [@p pre_pro, returned end) in this mode's orientation, where the end is the first
   /// protein index in (@p pre_pro, @p pro) that a mass in between matches with the whole shift, else @p pro. Used for the DAG edge and for
-  /// the report of the path, so that a variable modification is tested and named on the same residues.
+  /// the report of the path, so that a variable modification is tested and named on the same residues. The report passes @p skip, the
+  /// nodes (by index, non-zero: skipped) whose masses another node of the path already reads the other way round (sameMasses_).
   int shiftRangeEnd_(const MSSpectrum& node_spec, const MSSpectrum& tol_spec, const std::vector<double>& pro_masses, int pre_node, int pre_pro,
-                     int node, int pro, double mass_shift) const;
+                     int node, int pro, double mass_shift, const std::vector<char>* skip = nullptr) const;
 
   /// whether nodes @p a and @p b (not node 0) were merged from the same two or more deconvolved masses (@p ranges, @p sources:
   /// HitInformation::node_range_map_ and node_source_map_ of the mode): one pair of complementary fragments, read both ways round

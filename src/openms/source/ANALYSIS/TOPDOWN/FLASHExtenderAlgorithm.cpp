@@ -420,7 +420,7 @@ namespace OpenMS
   }
 
   int FLASHExtenderAlgorithm::shiftRangeEnd_(const MSSpectrum& node_spec, const MSSpectrum& tol_spec, const std::vector<double>& pro_masses, int pre_node,
-                                             int pre_pro, int node, int pro, double mass_shift) const
+                                             int pre_pro, int node, int pro, double mass_shift, const std::vector<char>* skip) const
   {
     // A mass between the two nodes that matches protein index pi with the whole shift puts the shift on residues before pi; the smallest
     // such pi ends the range. Called on DAG edges (the innermost loop of the extension): per mass in between, the candidate indices are
@@ -429,6 +429,7 @@ namespace OpenMS
     int end = pro;
     for (int ni = pre_node + 1; ni < node && end > pre_pro + 1; ni++)
     {
+      if (skip != nullptr && ni < (int)skip->size() && (*skip)[ni]) continue;
       const double nm = node_spec[ni].getMZ();
       const double margin = tol_spec[ni].getIntensity();
       const auto last = pro_masses.begin() + end; // only indices below the current end can end the range earlier
@@ -1692,18 +1693,26 @@ namespace OpenMS
             // as well as one at G53; the +16.02 was reported on residues 2-46, with no fragment between L46 and S47, while b49 and y50
             // on the same path bound it to residues 2-49.
             std::vector<char> mirrored(best_path.size(), 0);
+            // per node: its masses are those of a node of the path, read the other way round; it ends no shift range either
+            std::vector<char> mirror_nodes;
             {
               const auto& ranges = hi.node_range_map_[m];
               const auto& sources = hi.node_source_map_[m];
               if (ranges.size() == t_node_spec.size())
               {
+                mirror_nodes.assign(t_node_spec.size(), 0);
                 for (Size a = 0; a < best_path.size(); a++)
                 {
+                  const int na = getNodeIndex_(best_path[a], t_pro_masses.size());
                   for (Size b = a + 1; b < best_path.size(); b++)
                   {
-                    if (! sameMasses_(ranges, sources, getNodeIndex_(best_path[a], t_pro_masses.size()), getNodeIndex_(best_path[b], t_pro_masses.size()))) continue;
+                    if (! sameMasses_(ranges, sources, na, getNodeIndex_(best_path[b], t_pro_masses.size()))) continue;
                     mirrored[a] = 1;
                     mirrored[b] = 1;
+                  }
+                  for (int n = 1; n < (int)t_node_spec.size(); n++)
+                  {
+                    if (sameMasses_(ranges, sources, na, n)) mirror_nodes[n] = 1;
                   }
                 }
               }
@@ -1752,7 +1761,7 @@ namespace OpenMS
                 // the residues the fragment ladder leaves for the shift, [pre_pro_index, to) in this mode's orientation: the range the DAG edge
                 // tested the variable modifications on (shiftRangeEnd_ of the same two vertices and the same summed shift)
                 const int len = (int)hit.getSequence().size();
-                const int to = shiftRangeEnd_(t_node_spec, hi.tol_spec_map_[m], t_pro_masses, pre_node_index, pre_pro_index, node_index, pro_index, mass_shift);
+                const int to = shiftRangeEnd_(t_node_spec, hi.tol_spec_map_[m], t_pro_masses, pre_node_index, pre_pro_index, node_index, pro_index, mass_shift, &mirror_nodes);
                 int end = m > 0 ? (to - 1) : (len - 1 - pre_pro_index);
                 int start = m > 0 ? (pre_pro_index - 1) : (len - 1 - to);
 
