@@ -428,9 +428,8 @@ namespace OpenMS
     // mass| <= tolerance. The search bounds are 1e-6 Da wider than the tolerance, far above rounding, so no match is skipped.
     // A node made (in part) of a mass that also makes one of the two path nodes does not end the range: a mass is one ion of the
     // proteoform, so it cannot be read once on the path and again, as another ion type or as the complement through the precursor mass,
-    // in between. In mode 2 every mass is also a converted suffix mass with the wide tolerance of fragment plus precursor, and such a
-    // reading of the path node's own mass matched a residue in the middle of the shifted stretch (IHFA scan 4248: 5978.09 Da, b52 with
-    // +16.02, read as y53 fell on b45 with the shift, and the range ended at L46 with no fragment between L46 and S47).
+    // in between. In mode 2 every mass is also a converted suffix mass with the wide tolerance of fragment plus precursor, so a path
+    // node's own mass, read the other way, can fall on a residue in the middle of the shifted stretch.
     const bool check_sources = ranges.size() == node_spec.size();
     int end = pro;
     for (int ni = pre_node + 1; ni < node && end > pre_pro + 1; ni++)
@@ -1694,8 +1693,37 @@ namespace OpenMS
             double mod_mass = 0; //, total_mod_mass = 0;
             // int total_mod_count = getBlindModNumber_(*best_path.begin());
 
+            // A mass is one ion of the proteoform: the path may hold it twice, once as itself and once, through the precursor mass, as
+            // the complement (mode 2), or as two ion types. The reading with the wider tolerance (the converted one) is left out here, so
+            // that it neither bounds a shift nor counts as a matched position. In IHFA scan 4248 of the lysate example, 5978.01 Da is
+            // b53 with +16.02 and, read as y53, a node at L46: the +16.02 was reported on residues 2-46, with no fragment between L46
+            // and S47. Without it the shift starts at b49, whose complement y50 is on the path as well: residues 2-49.
+            std::vector<char> reread(best_path.size(), 0);
+            {
+              const auto& ranges = hi.node_range_map_[m];
+              const auto& sources = hi.node_source_map_[m];
+              const auto& tols = hi.tol_spec_map_[m];
+              if (ranges.size() == t_node_spec.size() && tols.size() == t_node_spec.size())
+              {
+                for (Size a = 0; a < best_path.size(); a++)
+                {
+                  const int na = getNodeIndex_(best_path[a], t_pro_masses.size());
+                  if (na <= 0) continue;
+                  for (Size b = a + 1; b < best_path.size(); b++)
+                  {
+                    const int nb = getNodeIndex_(best_path[b], t_pro_masses.size());
+                    if (nb <= 0 || nb == na || ! sharesMass_(ranges, sources, na, nb)) continue;
+                    const double ta = tols[na].getIntensity(), tb = tols[nb].getIntensity();
+                    if (ta > tb) reread[a] = 1;
+                    else if (tb > ta) reread[b] = 1;
+                  }
+                }
+              }
+            }
+
             for (auto iter = best_path.rbegin(); iter != best_path.rend(); iter++)
             {
+              if (reread[best_path.rend() - iter - 1]) continue;
               auto pro_index = getProIndex_(*iter, t_pro_masses.size());
               auto node_index = getNodeIndex_(*iter, t_pro_masses.size());
               auto mass_shift = t_node_spec[node_index].getMZ() - t_pro_masses[pro_index];
