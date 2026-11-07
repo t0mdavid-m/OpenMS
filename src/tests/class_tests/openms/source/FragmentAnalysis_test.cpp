@@ -341,13 +341,13 @@ namespace
 )";
 
   // Param-builder fixture: every flashtnt key the tagger builder reads carries a NON-default value
-  // (min_length 4 != 3, max_length 9 != 8, allow_gap true != false, max_aa_in_gap 3 != 2,
-  // fixed_mod non-empty != {}), so a dropped setValue in buildTaggerParam cannot pass by accident.
-  // NOTE the custom JSON delimiter -- do not remove it. This fixture carries a real ModificationsDB
-  // modification name, Carbamidomethyl (C). In an UNdelimited raw string, a close-paren followed
-  // directly by a double-quote is the terminator -- and that sequence occurs inside any
-  // parenthesised mod name. Without the delimiter the literal ended 370 chars in, mid-JSON, and
-  // everything after it was compiled as C++ (broke CI 2026-08-09).
+  // (min_length 4 != 3, max_length 9 != 8, allow_gap true != false, max_aa_in_gap 3 != 2), so a
+  // dropped setValue in buildTaggerParam cannot pass by accident. fixed_mod is [] -- the only value
+  // Config accepts since ADR-0061 push 4c -- which differs from the Tagger's declared {""}.
+  // NOTE the custom JSON delimiter -- keep it. A fixture carrying a parenthesised modification name
+  // (e.g. Carbamidomethyl (C)) in an UNdelimited raw string ends at the first close-paren followed
+  // by a double-quote; without the delimiter the literal once ended mid-JSON and everything after it
+  // was compiled as C++ (broke CI 2026-08-09).
   const char* tagger_param_config = R"JSON({
   "deconvolution": {
     "score_threshold": 0.0,
@@ -399,9 +399,7 @@ namespace
       "max_length": 9,
       "allow_gap": true,
       "max_aa_in_gap": 3,
-      "fixed_mod": [
-        "Carbamidomethyl (C)"
-      ]
+      "fixed_mod": []
     },
     "characterization": {
       "mode": "ambiguity",
@@ -793,9 +791,9 @@ START_SECTION(buildTaggerParam_sets_every_key)
   TEST_STRING_EQUAL(ion_types[0], std::string("c"))
   TEST_STRING_EQUAL(ion_types[1], std::string("z"))
 
+  // fixed_mod: the authored [] reaches the Param as the empty list, not the Tagger's declared {""}.
   auto fixed_mod = p.getValue("fixed_mod").toStringVector();
-  TEST_EQUAL((int)fixed_mod.size(), 1)
-  TEST_STRING_EQUAL(fixed_mod[0], std::string("Carbamidomethyl (C)"))
+  TEST_EQUAL((int)fixed_mod.size(), 0)
 }
 END_SECTION
 
