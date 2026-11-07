@@ -4607,25 +4607,34 @@ void FLASHTnTAlgorithm::setCombinedCoverage_(const std::vector<std::vector<Size>
 
 void FLASHTnTAlgorithm::keepBestPerSpectrum_(std::vector<ProteinHit>& hits, const std::string& label, const std::string& score_name)
 {
-  // A PrSM whose proteoform fits the precursor mass (determined) is kept before one that does not, whatever their scores, as TopPIC
-  // reports only the former: a free blind shift on a PrSM without a mass took up the sequence differences of a similar protein and outscored
-  // the right one (B. theta entrapment, Eclip_1480 scan 9171: KPRS_ECOLI 243-315 at the MS1 mass 78, Q8A535_BACTN 1-799 without a mass 112).
-  const auto better = [](const ProteinHit& a, const ProteinHit& b) {
-    if (isDetermined(a) != isDetermined(b)) return isDetermined(a);
-    return isBetterPrSM(a, b);
-  };
-  std::map<int, Size> best;
+  // Of a spectrum's PrSMs, the best one whose proteoform fits the precursor mass (determined) is reported, unless the best one without a
+  // mass scores more than three times higher; a PrSM without a mass that wins is then replaced by the best determined PrSM of its protein,
+  // if there is one (the protein by the fragments, the proteoform by the mass).
+  // A higher score without a mass is weak evidence: the terminal paths are scored apart, so the b and y ions of one bond count twice there
+  // and once on the precursor-mass path, which is also penalised for an internal end (Eclip_1480: RL3 180-209 at the right MS1 mass scored
+  // 116, the same range without a mass 169). And a blind shift on a PrSM without a mass can take up the sequence differences of a similar
+  // protein (B. theta entrapment, Eclip_1480 scan 9171: KPRS_ECOLI 243-315 at the MS1 mass 78, Q8A535_BACTN 1-799 without a mass 112).
+  // A mass is no strong evidence for its protein either: one blind shift fits any precursor mass, and a weak PrSM with one (Eclip_1479
+  // scan 10849: Q8A047_BACTN 44) was reported instead of the right protein without a mass (AHPC_ECOLI 449); as the spectrum then counted
+  // as identified, the gapped tags of the search cascade did not see it. Where the protein changed against always keeping the determined
+  // PrSM (B. theta entrapment of the Eclip lysates), the PrSM without a mass was more often a B. theta or decoy protein than the determined
+  // one below three times its score, and less often above.
+  constexpr double undetermined_score_factor = 3.0;
+  std::map<int, Size> best_determined, best_undetermined;
   for (Size i = 0; i < hits.size(); i++)
   {
+    auto& best_of_kind = isDetermined(hits[i]) ? best_determined : best_undetermined;
     const int scan = hits[i].getMetaValue(tntKey("Scan"));
-    auto it = best.find(scan);
-    if (it == best.end()) best[scan] = i;
-    else if (better(hits[i], hits[it->second])) it->second = i;
+    auto it = best_of_kind.find(scan);
+    if (it == best_of_kind.end()) best_of_kind[scan] = i;
+    else if (isBetterPrSM(hits[i], hits[it->second])) it->second = i;
   }
-  // A PrSM without a mass is replaced by the best PrSM of the same spectrum and protein that has a mass and the same known termini: it is
-  // the same proteoform, and the precursor mass confirms it. Its higher score is no evidence against it: the terminal paths are scored
-  // apart, so the b and y ions of one bond count twice there and once on the precursor-mass path, which is also penalised for an internal
-  // end (Eclip_1480: RL3 180-209 at the right MS1 mass scored 116, the same range without a mass 169, and the latter was reported).
+  std::map<int, Size> best = best_determined;
+  for (const auto& [scan, u] : best_undetermined)
+  {
+    auto it = best.find(scan);
+    if (it == best.end() || hits[u].getScore() > undetermined_score_factor * hits[it->second].getScore()) best[scan] = u;
+  }
   {
     std::map<int, Size> best_with_mass;
     for (Size i = 0; i < hits.size(); i++)
@@ -4633,16 +4642,13 @@ void FLASHTnTAlgorithm::keepBestPerSpectrum_(std::vector<ProteinHit>& hits, cons
       const auto& h = hits[i];
       const int scan = h.getMetaValue(tntKey("Scan"));
       const auto& b = hits[best[scan]];
-      if ((double)b.getMetaValue(tntKey("Mass")) > 0 || (double)h.getMetaValue(tntKey("Mass")) <= 0 || ! isDetermined(h)) continue;
-      if (h.getAccession() != b.getAccession() || h.metaValueExists(tntKey("DecoyPrecursor")) != b.metaValueExists(tntKey("DecoyPrecursor"))) continue;
-      const int bs = b.getMetaValue(tntKey("StartPosition")), be = b.getMetaValue(tntKey("EndPosition"));
-      if ((bs >= 0 && bs != (int)h.getMetaValue(tntKey("StartPosition"))) || (be >= 0 && be != (int)h.getMetaValue(tntKey("EndPosition")))) continue;
+      if (isDetermined(b) || ! isDetermined(h) || h.getAccession() != b.getAccession()) continue;
       auto it = best_with_mass.find(scan);
       if (it == best_with_mass.end() || isBetterPrSM(h, hits[it->second])) best_with_mass[scan] = i;
     }
     for (const auto& [scan, i] : best_with_mass) best[scan] = i;
     if (! best_with_mass.empty())
-      OPENMS_LOG_INFO << "PrSMs" << label << ": " << best_with_mass.size() << " spectra report the PrSM with a mass instead of the same proteoform without one"
+      OPENMS_LOG_INFO << "PrSMs" << label << ": " << best_with_mass.size() << " spectra report the protein's PrSM with a mass instead of the one without"
                       << std::endl;
   }
   std::vector<ProteinHit> kept;
