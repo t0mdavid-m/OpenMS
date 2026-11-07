@@ -679,68 +679,82 @@ namespace OpenMS{
       std::string found_path_from;
       bool from_env(false);
 
+      // The compiled-in paths (install prefix, build tree) describe the installation this binary
+      // was built for. A binary that no longer lives under that install prefix was relocated
+      // (an app bundle, an AppImage, an unpacked .deb): there the compiled-in paths may name an
+      // unrelated OpenMS on the same machine (a /usr/local install of another version), whose
+      // share would silently win over the binary's own. A relocated binary therefore asks its own
+      // share (exe-relative, then OPENMS_DATA_PATH set by whoever relocated it) first.
+      const std::string exe_path = getExecutablePath();
+      std::string install_prefix = OPENMS_INSTALL_DATA_PATH;
+      StringUtils::substitute(install_prefix, "\\", "/");
+      const std::string share_suffix = "/share/OpenMS";
+      if (install_prefix.size() > share_suffix.size() &&
+          install_prefix.compare(install_prefix.size() - share_suffix.size(), share_suffix.size(), share_suffix) == 0)
+      {
+        install_prefix.resize(install_prefix.size() - share_suffix.size());
+      }
+      StringUtils::ensureLastChar(install_prefix, '/');
+      std::string exe_dir = exe_path;
+      StringUtils::substitute(exe_dir, "\\", "/");
+      const bool relocated = exe_dir.empty() || exe_dir.compare(0, install_prefix.size(), install_prefix) != 0;
+
+      auto probe = [&path, &path_checked, &found_path_from](const std::string& candidate, const char* source) {
+        if (path_checked) return;
+        path = candidate;
+        path_checked = isOpenMSDataPath_(path);
+        if (path_checked) found_path_from = source;
+      };
+      auto probe_install = [&]() {
   #if !defined(OPENMS_WINDOWSPLATFORM)
-      // Probe the compiled-in install path (baked to CMAKE_INSTALL_PREFIX at build time).
-      // Skipped on Windows: CMake's default prefix bakes to the wrong "(x86)/OpenMS_host"
-      // tree, which never matches the real 64-bit install dir and could pick up an
-      // unrelated OpenMS installation. On Linux/macOS the baked prefix is genuinely correct.
-      if (!path_checked)
-      {
-        path = OPENMS_INSTALL_DATA_PATH;
-        path_checked = isOpenMSDataPath_(path);
-        if (path_checked)
-        {
-          found_path_from = "OPENMS_INSTALL_DATA_PATH (compiled-in install)";
-        }
-      }
+        // Probe the compiled-in install path (baked to CMAKE_INSTALL_PREFIX at build time).
+        // Skipped on Windows: CMake's default prefix bakes to the wrong "(x86)/OpenMS_host"
+        // tree, which never matches the real 64-bit install dir and could pick up an
+        // unrelated OpenMS installation.
+        probe(OPENMS_INSTALL_DATA_PATH, "OPENMS_INSTALL_DATA_PATH (compiled-in install)");
   #endif
-
-      // probe the OPENMS_DATA_PATH macro (compiled-in build path; used by devs/CI in the build tree)
-      if (!path_checked)
-      {
-        path = OPENMS_DATA_PATH;
-        path_checked = isOpenMSDataPath_(path);
-        if (path_checked) found_path_from = "OPENMS_DATA_PATH (compiled-in build)";
-      }
-
+      };
+      auto probe_build = [&]() {
+        // probe the OPENMS_DATA_PATH macro (compiled-in build path; used by devs/CI in the build
+        // tree, a source directory that exists only on the machine OpenMS was built on)
+        probe(OPENMS_DATA_PATH, "OPENMS_DATA_PATH (compiled-in build)");
+      };
+      auto probe_own = [&]() {
   #if defined(__APPLE__)
-      // try to find it relative to the executable in the bundle (e.g. TOPPView)
-      if (!path_checked)
-      {
-        path = getExecutablePath() + "../../../share/OpenMS";
-        path_checked = isOpenMSDataPath_(path);
-        if (path_checked) found_path_from = "app bundle (exe-relative)";
-      }
+        // try to find it relative to the executable in the bundle (e.g. TOPPView)
+        probe(exe_path + "../../../share/OpenMS", "app bundle (exe-relative)");
   #endif
-
-      // Probe relative to the executable (../share/OpenMS).
-      // For installed builds this is the deterministic source of truth: it resolves from the
-      // binary's own location, so a stale OPENMS_DATA_PATH from an old or side-by-side install
-      // cannot hijack data resolution.
-      if (!path_checked)
-      {
-        path = getExecutablePath() + "../share/OpenMS";
-        path_checked = isOpenMSDataPath_(path);
-        if (path_checked)
+        // Probe relative to the executable (../share/OpenMS): resolves from the binary's own
+        // location, so a stale OPENMS_DATA_PATH from an old or side-by-side install cannot
+        // hijack data resolution.
+        probe(exe_path + "../share/OpenMS", "exe-relative (../share/OpenMS)");
+      };
+      auto probe_env = [&]() {
+        // The OPENMS_DATA_PATH environment variable. pyOpenMS relies on it: there the executable
+        // is python, the exe-relative probe fails, and resolution reaches the variable pyOpenMS
+        // sets itself in __init__.py. So does a relocated tool whose share is not at ../share.
+        if (!path_checked && getenv("OPENMS_DATA_PATH") != nullptr)
         {
-          found_path_from = "exe-relative (../share/OpenMS)";
+          from_env = true;
+          probe(getenv("OPENMS_DATA_PATH"), "OPENMS_DATA_PATH env");
         }
+      };
+
+      if (relocated)
+      {
+        probe_own();
+        probe_build();
+        probe_env();
+        probe_install();
       }
-
-      // Finally, fall back to the OPENMS_DATA_PATH environment variable.
-      // Probed LAST so installed tools resolve deterministically from the binary location and a
-      // stale/leftover OPENMS_DATA_PATH cannot override it. pyOpenMS still relies on this: there
-      // the executable is python.exe, the exe-relative probe fails, and resolution falls through
-      // to the env var pyOpenMS sets itself in __init__.py.
-      if (!path_checked && getenv("OPENMS_DATA_PATH") != nullptr)
+      else
       {
-        path = getenv("OPENMS_DATA_PATH");
-        from_env = true;
-        path_checked = isOpenMSDataPath_(path);
-        if (path_checked)
-        {
-          found_path_from = "OPENMS_DATA_PATH env";
-        }
+        // Installed where it was built for: the compiled-in install path is this installation's
+        // own share; the environment variable comes last, so a leftover one cannot override it.
+        probe_install();
+        probe_build();
+        probe_own();
+        probe_env();
       }
 
       // make its a proper path:
