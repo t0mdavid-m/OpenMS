@@ -98,6 +98,8 @@ namespace OpenMS
     // constructed and given the parameters, never copied: FLASHTnTAlgorithm's copy constructor copies only its Param
     tnt_.setParameters(search_.params_);
     tnt_.setPreparedDatabase(search_.prepared_);
+    // no progress lines per MS2: a prepared run() keeps this log type (FLASHTnTAlgorithm::run sets CMD only unprepared)
+    tnt_.setLogType(ProgressLogger::NONE);
   }
 
   std::vector<ProteinHit> ProteomeSearch::Worker::search(const DeconvolvedSpectrum& ms2, double tol_ppm, const MSSpectrum& raw, int scan)

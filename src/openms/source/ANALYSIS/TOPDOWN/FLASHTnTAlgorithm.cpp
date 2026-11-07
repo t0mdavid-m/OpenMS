@@ -1128,7 +1128,7 @@ void FLASHTnTAlgorithm::setPreparedDatabase(std::shared_ptr<const PreparedDataba
 
 void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile::FASTAEntry>& original_fasta_entry, const ProteoformDatabase* db)
 {
-  setLogType(CMD);
+  if (! prepared_) setLogType(CMD);  // a prepared run keeps its caller's log type (FLASHIda silences it)
 
   // The database (ProteoformDatabase): without one, the FASTA entries are the proteins (the identity database), and every step below
   // that reads it is the search as before. With a PEFF database, an entry is a processed form of a protein with fixed modifications: the
