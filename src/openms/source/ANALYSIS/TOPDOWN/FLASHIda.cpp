@@ -39,16 +39,21 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Refine.h>          // RefineCandidates for the identification refine columns (ADR-0049)
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanRole.h>
+#include <OpenMS/CONCEPT/LogStream.h>                          // OpenMS_Log_info: FLASHTnT's per-MS2 INFO lines (ADR-0061 push 4c)
 #include <OpenMS/DATASTRUCTURES/ListUtils.h>
+#include <OpenMS/FORMAT/FASTAFile.h>
 
 #include <algorithm>
 #include <climits>
 #include <cmath>
 #include <functional>
+#include <iostream>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #ifdef _OPENMP
   #include <omp.h>
 #endif
@@ -127,6 +132,64 @@ namespace OpenMS
     }
     /// Search-pool backlog: waiting jobs per worker (ADR-0062 d.5). Provisional until measured.
     constexpr int kSearchBacklogPerThread = 4;
+
+    /// This search thread's Worker over its engine's ProteomeSearch (ADR-0061 push 4c): built by the pool's
+    /// on_thread_start before the thread's first job, destroyed when the thread exits inside SearchPool::stop().
+    /// One per pool thread, so a Worker (its FLASHTnTAlgorithm, Tagger, Extender, Annotator) is never shared.
+    thread_local std::unique_ptr<ProteomeSearch::Worker> t_search_worker;
+
+    /// FLASHTnT's per-process INFO stream loses std::cout once (ADR-0061 push 4c): run() prints about 15 INFO lines
+    /// per MS2. The engine itself logs nothing per scan through INFO.
+    std::once_flag g_info_silenced;
+
+    /// The best PrSM by FLASHTnT's rank (FLASHTnTAlgorithm.cpp; FLASHIda_ProteomeSearch_test's bestOf): the higher
+    /// score, then the higher coverage; the earlier one on a tie. nullptr for none.
+    const ProteinHit* bestPrSM(const std::vector<ProteinHit>& hits)
+    {
+      const ProteinHit* best = nullptr;
+      for (const auto& h : hits)
+      {
+        if (best == nullptr || h.getScore() > best->getScore() || (h.getScore() == best->getScore() && h.getCoverage() > best->getCoverage()))
+          best = &h;
+      }
+      return best;
+    }
+
+    /// One MS2 searched against the Protein reference by this thread's Worker (ADR-0061 d.3): its raw peaks are the
+    /// spectrum's own original, @p scan names it (<= 0, "not supplied", becomes 0). The best PrSM's protein is taken from
+    /// the reference entry -- by FastaIndex, checked against the accession, else by accession -- never from the hit,
+    /// whose sequence run() rewrites. Runs on a pool thread with no lock held.
+    FragmentAnalysis::SearchedPrSM searchProteome(const ProteomeSearch& proteome, const DeconvolvedSpectrum& ms2, double tol_ppm, int scan)
+    {
+      if (!t_search_worker)
+        throw std::logic_error("FLASHIda: a proteome search ran on a thread without its search worker");
+      FragmentAnalysis::SearchedPrSM out;
+      const std::vector<ProteinHit> hits = t_search_worker->search(ms2, tol_ppm, ms2.getOriginalSpectrum(), scan > 0 ? scan : 0);
+      const ProteinHit* best = bestPrSM(hits);
+      if (best == nullptr) return out;
+
+      const auto& reference = proteome.reference();
+      const FASTAFile::FASTAEntry* entry = nullptr;
+      if (best->metaValueExists("FastaIndex"))
+      {
+        const int i = static_cast<int>(best->getMetaValue("FastaIndex"));
+        if (i >= 0 && static_cast<Size>(i) < reference.size() && reference[i].identifier == best->getAccession()) entry = &reference[i];
+      }
+      for (Size i = 0; entry == nullptr && i < reference.size(); ++i)
+      {
+        if (reference[i].identifier == best->getAccession()) entry = &reference[i];
+      }
+      if (entry == nullptr)
+      {
+        std::cerr << "[SEARCH-ERROR] PrSM accession " << best->getAccession() << " is not in the reference; the MS2 identifies nothing" << std::endl;
+        return out;
+      }
+      out.found = true;
+      out.hit = *best;
+      out.protein_sequence = entry->sequence;
+      out.accession = entry->identifier;
+      return out;
+    }
   } // namespace
 
 /// constructor
@@ -161,12 +224,47 @@ FLASHIda::FLASHIda(char* arg) :
     // (ADR-0062 d.5 sets it from measurement, once search_ms / search_wait_ms are logged).
     if (config_.identification().enabled())
     {
-      const int threads = config_.identification().search_threads;
-      search_pool_ = std::make_unique<SearchPool>(threads, static_cast<size_t>(kSearchBacklogPerThread * threads), []
+      // The Protein reference (ADR-0061 d.1, push 4c), loaded and prepared once, before any worker starts: a FASTA
+      // read as authored (a relative path is the process working directory's), or the inline sequence as one entry
+      // whose accession is "sequence". Decoys are dropped by ProteomeSearch; a reference left with no target refuses.
+      const IdentificationConfig& ident = config_.identification();
+      std::vector<FASTAFile::FASTAEntry> reference;
+      if (!ident.fasta.empty())
+      {
+        try
+        {
+          FASTAFile().load(ident.fasta, reference);
+        }
+        catch (const std::exception& e)
+        {
+          throw std::invalid_argument("Config: identification.reference.fasta '" + ident.fasta + "' cannot be read: " + e.what());
+        }
+      }
+      else
+      {
+        reference.emplace_back(IdentificationConfig::kSequenceAccession, "", ident.sequence);
+      }
+      // ProteomeSearch's decoy rule (FLASHTnT's DECOY prefix), checked before the database is prepared on nothing
+      const bool any_target = std::any_of(reference.begin(), reference.end(),
+                                          [](const FASTAFile::FASTAEntry& e) { return !String(e.identifier).hasPrefix("DECOY"); });
+      if (!any_target)
+        throw std::invalid_argument("Config: identification.reference" + (ident.fasta.empty() ? std::string() : " '" + ident.fasta + "'")
+                                    + " has no target entry (" + std::to_string(reference.size())
+                                    + " entries, every one a DECOY); nothing could be identified (ADR-0061).");
+      proteome_ = std::make_unique<ProteomeSearch>(std::move(reference), ProteomeSearch::parametersFor(ident.flashtnt));
+      if (proteome_->reference().empty())
+        throw std::invalid_argument("Config: identification.reference has no target entry; nothing could be identified (ADR-0061).");
+      // run() prints its INFO lines per MS2 through OpenMS_Log_info; silenced once per process, before any worker runs
+      std::call_once(g_info_silenced, [] { OpenMS_Log_info.remove(std::cout); });
+
+      const int threads = ident.search_threads;
+      search_pool_ = std::make_unique<SearchPool>(threads, static_cast<size_t>(kSearchBacklogPerThread * threads), [this]
       {
   #ifdef _OPENMP
         omp_set_num_threads(4);
   #endif
+        // this thread's Worker over the reference (ADR-0061 push 4c), destroyed at thread exit inside stop()
+        t_search_worker = std::make_unique<ProteomeSearch::Worker>(*proteome_);
       });
     }
 
@@ -1045,8 +1143,8 @@ FLASHIda::FLASHIda(char* arg) :
       if (exploration_.isExplorationVariant(parent_tracking_id))
       {
         // ADR-0062: the variant is routed and deconvolved here (exploration_deconv_ is analysis state); a
-        // variant today's matcher reads is then SEARCHED on the pool, and its group completes when that
-        // search returns, not when the scan did. A trap, MS3-free, sequence-less or empty variant is never
+        // variant with something to search is then SEARCHED on the pool, and its group completes when that
+        // search returns, not when the scan did. A trap, MS3, reference-less or empty variant is never
         // matched and is applied inline, exactly as before.
         Exploration::VariantInput variant_in = exploration_.prepareVariant(parent_tracking_id, mzs, ints, length, rt);
         if (search_pool_ != nullptr && exploration_.variantNeedsSearch(variant_in))
@@ -1054,6 +1152,7 @@ FLASHIda::FLASHIda(char* arg) :
           auto job = std::make_shared<VariantSearch>();
           job->precursor_id = precursor_id;
           job->parent_id_str = parent_id_str;
+          job->instrument_scan_number = instrument_scan_number;
           job->input = std::move(variant_in);
           job->results_row = results_row;
 
@@ -1062,6 +1161,10 @@ FLASHIda::FLASHIda(char* arg) :
           {
             if (before_search_) before_search_();
             job->timing.started = std::chrono::steady_clock::now();
+            // The proteome search (ADR-0061 push 4c) at the variant's own tolerance, as its match always was; the
+            // variant keeps the PrSM (input.prsm), which its group's cascade plans from without searching again.
+            job->input.prsm = searchProteome(*proteome_, job->input.deconv, config_.level(2).exploration_tolerance_ppm,
+                                             job->instrument_scan_number);
             job->match = exploration_.searchVariant(job->input);
             job->timing.finished = std::chrono::steady_clock::now();
           };
@@ -1199,7 +1302,11 @@ FLASHIda::FLASHIda(char* arg) :
               std::cout << "[REFINE] precursor_id=" << job->precursor_id << " tracking_id=" << job->parent_id_str
                         << " scan=" << job->instrument_scan_number << std::endl;
             job->timing.started = std::chrono::steady_clock::now();
-            job->result = exploration_.searchNextLevel(2, job->spectrum, &job->parent_ctx);
+            // The proteome search (ADR-0061 push 4c) at the MS2 tolerance, as the match always was; its PrSM, not a
+            // configured sequence, is what the match converts and the MS3 targets are chosen from.
+            const FragmentAnalysis::SearchedPrSM prsm =
+                searchProteome(*proteome_, job->spectrum, config_.level(2).tolerance_ppm, job->instrument_scan_number);
+            job->result = exploration_.searchNextLevel(2, job->spectrum, &job->parent_ctx, &prsm);
             job->timing.finished = std::chrono::steady_clock::now();
           };
           pj->apply = [this, job] { return applyRegularSearch_(*job); };

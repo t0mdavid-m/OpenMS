@@ -400,16 +400,19 @@ namespace OpenMS
 
   bool Exploration::variantNeedsSearch(const VariantInput& in) const
   {
-    // computeFragmentMatch_ returns an empty match without matching for no sequence or an empty
-    // spectrum; a trap variant is never matched (ADR-0045); an MS3 variant is not an MS2 search
-    // (ADR-0061 d.2) and stays on the analysis thread.
+    // An empty spectrum has nothing to search; a trap variant is never matched (ADR-0045); an MS3 variant is not
+    // an MS2 search (ADR-0061 d.2) and stays on the analysis thread. Any reference is searched, a FASTA as well as
+    // an inline sequence (ADR-0061 push 4c).
     return in.known && in.msn_level == 2 && !in.measured_only && in.deconvolved && !in.deconv.empty()
-           && !config_.identification().sequence.empty();
+           && config_.identification().enabled();
   }
 
   FragmentAnalysis::ProteoformMatch Exploration::searchVariant(const VariantInput& in) const
   {
-    return computeFragmentMatch_(in.deconv, in.msn_level, in.activation_type);
+    // The worker set in.prsm (ADR-0061 push 4c); without it, the inline reference, as before the search.
+    return computeFragmentMatch_(in.deconv, in.msn_level, in.activation_type,
+                                 config_.identification().proteinOr(kNoChosenProtein),
+                                 config_.identification().accessionOr(kNoChosenProtein), in.prsm ? &*in.prsm : nullptr);
   }
 
   Exploration::FeedResultInfo Exploration::feedResultImpl_(int tracking_id,
@@ -461,6 +464,12 @@ namespace OpenMS
     v.result = msn_deconv;
     v.measured_only = measured_only;
     v.precursor_share = in.precursor_share;   // read by prepareVariant (ADR-0048 d.1)
+    // The variant keeps its search for the cascade (ADR-0061 push 4c). A dropped search keeps an empty one: it
+    // identifies nothing and gives characterization nothing (ADR-0062 d.5), at the next level too.
+    if (dropped)
+      v.prsm = FragmentAnalysis::SearchedPrSM{};
+    else
+      v.prsm = in.prsm;
     FragmentAnalysis::ProteoformMatch frag{};
     const FragmentAnalysis::ProteoformMatch no_match{};
     if (measured_only)
@@ -549,8 +558,10 @@ namespace OpenMS
     auto buildMS2ContextForVariant = [&](int group_variant_index)
     {
       MS2Context ctx;
-      ctx.proteoform_sequence = (group.proteoform_ctx.region_start >= 0)
-          ? config_.identification().proteinOr(group.proteoform_ctx.protein_sequence).substr(group.proteoform_ctx.region_start,
+      // With no protein chosen and none inline (a FASTA reference, an unidentified Precursor) there is nothing to cut.
+      const std::string& render_protein = config_.identification().proteinOr(group.proteoform_ctx.protein_sequence);
+      ctx.proteoform_sequence = (group.proteoform_ctx.region_start >= 0 && !render_protein.empty())
+          ? render_protein.substr(group.proteoform_ctx.region_start,
               group.proteoform_ctx.region_end - group.proteoform_ctx.region_start)
           : "";
       ctx.protein_sequence = group.proteoform_ctx.protein_sequence;
@@ -902,9 +913,13 @@ namespace OpenMS
       // emits a fixed stage0;stage1 pair. Not generalized -- no MS4 path exists to validate it.
       else if (group.msn_level < 3)
       {
+        // The winner's own search (ADR-0061 push 4c): the next level is planned from the PrSM its worker found, so
+        // no proteome search runs here, under the analysis lock. No search ran (the inline path): the inline matcher.
+        const ExplorationVariant& winner = group.variants[best_idx];
         auto next_nlr = initiateNextLevel(group.msn_level,
-            group.variants[best_idx].result, group.faims_cv, queue,
-            &group.variants[best_idx].cmd, tracker, precursor_id);  // P5: same precursor_id model key
+            winner.result, group.faims_cv, queue,
+            &winner.cmd, tracker, precursor_id,  // P5: same precursor_id model key
+            winner.prsm ? &*winner.prsm : nullptr);
         info.commands.insert(info.commands.end(), next_nlr.commands.begin(), next_nlr.commands.end());
         // Carry the per-command MS2 contexts out ALONGSIDE the commands. Without this the MS3s this
         // branch dispatches are acquired but never identified: a fixed-CE MS3 returns on the REGULAR
@@ -979,33 +994,38 @@ namespace OpenMS
 
   Exploration::NextLevelResult Exploration::initiateNextLevel(int msn_level,
       const DeconvolvedSpectrum& result, double faims_cv, ScanCommandQueue& queue,
-      const ScanCommand* ms_ctx, ProteoformTracker* tracker, int precursor_id)
+      const ScanCommand* ms_ctx, ProteoformTracker* tracker, int precursor_id,
+      const FragmentAnalysis::SearchedPrSM* searched)
   {
-    return applyNextLevel(searchNextLevel(msn_level, result, ms_ctx), msn_level, result, faims_cv, queue, ms_ctx,
+    return applyNextLevel(searchNextLevel(msn_level, result, ms_ctx, searched), msn_level, result, faims_cv, queue, ms_ctx,
                           tracker, precursor_id);
   }
 
   // The measuring half (ADR-0062): reads only its arguments and the immutable Config, so a search worker
   // runs it with no lock held. The FragmentAnalysis it drives holds nothing but the Config.
   Exploration::NextLevelSearch Exploration::searchNextLevel(int msn_level, const DeconvolvedSpectrum& result,
-                                                            const ScanCommand* ms_ctx) const
+                                                            const ScanCommand* ms_ctx,
+                                                            const FragmentAnalysis::SearchedPrSM* searched) const
   {
     NextLevelSearch nlr;
 
     int next_level = msn_level + 1;
     const auto& this_cfg = config_.level(msn_level);
     const auto& next_cfg = config_.level(next_level);
-    // The MS2 matcher chooses the protein; before it has, there is none, so it matches the fallback (the
-    // inline reference, ADR-0061 push 4b).
-    const std::string& seq = config_.identification().proteinOr(kNoChosenProtein);
+    // The protein matched against. A searched MS2 (ADR-0061 push 4c): the one the proteome search chose, empty when it
+    // chose none. Otherwise the single-protein matcher's fallback, the inline reference (ADR-0061 push 4b).
+    const std::string& seq = (searched != nullptr) ? searched->protein_sequence
+                                                   : config_.identification().proteinOr(kNoChosenProtein);
 
-    // Identification is gated by the SEQUENCE, not by characterization.mode. The four conditions that
+    // Identification is gated by the REFERENCE, not by characterization.mode. The four conditions that
     // used to bail here gate MS3 DISPATCH, and they are re-asserted below, immediately above the
     // next_cfg.scans[0] read they protect. Bailing on them HERE cost every "mode": "off" run its whole
     // identification payload -- no sequence tags, no fragment matches, no identification.tsv row at all --
     // because this function owns identification as well as MS3 target selection, and the former sits above
-    // the latter. With no sequence there is nothing to match against, so that is the honest gate.
-    if (seq.empty()) return nlr;
+    // the latter. With no reference there is nothing to match against, so that is the honest gate. Not the
+    // configured sequence (ADR-0061 push 4c): a FASTA reference has none, and an MS2 with no PrSM (or matched
+    // against no protein) is an unidentified MS2 whose model may still dispatch, not a skipped one.
+    if (!config_.identification().enabled()) return nlr;
     nlr.ran = true;
 
     int num_targets = this_cfg.max_targets;
@@ -1051,10 +1071,11 @@ namespace OpenMS
     found = ProteoformTracker::selectNextLevelTargets(fragments_, matcher, seq, num_targets,
         masses.data(), qscores.data(), charges.data(),
         wstarts.data(), wends.data(),
-        ion_types.data(), frag_indices.data(), result_copy, frag_result, scan_activation, 0.0, frag_scores.data());
+        ion_types.data(), frag_indices.data(), result_copy, frag_result, scan_activation, 0.0, frag_scores.data(), searched);
     // The chosen protein travels with the match (ADR-0061 push 4b): a match that identified something carries
-    // the accession of the protein it was matched against. Overwrites Refine's "input_protein" placeholder.
-    if (!frag_result.proteoform_sequence.empty())
+    // the accession of the protein it was matched against. Overwrites Refine's "input_protein" placeholder. A
+    // searched match already carries its PrSM's accession.
+    if (searched == nullptr && !frag_result.proteoform_sequence.empty())
       frag_result.matched_protein = config_.identification().accessionOr(kNoChosenProtein);
 
     // RENDER context (build time): the TRIGGERING scan's frag_result, NOT the (unfinalized) winner. At
@@ -1070,7 +1091,7 @@ namespace OpenMS
       proto_ctx.region_end = frag_result.region_end;
       proto_ctx.ptm_sites = frag_result.ptm_sites;
       if (proto_ctx.region_start < 0) proto_ctx.region_start = 0;
-      if (proto_ctx.region_end < 0) proto_ctx.region_end = static_cast<int>(seq.size());
+      if (proto_ctx.region_end < 0) proto_ctx.region_end = static_cast<int>(config_.identification().proteinOr(seq).size());
       // The protein the match chose (empty when it identified nothing: readers then take the fallback).
       proto_ctx.protein_sequence = frag_result.proteoform_sequence;
       proto_ctx.protein_accession = frag_result.matched_protein;
@@ -1401,8 +1422,13 @@ namespace OpenMS
     // Every Orbitrap variant is matched under every metric at MS2 (the whole-protein matcher is the
     // right one there); at MS3 the FragmentCount batch re-score is the matcher that counts. A search
     // worker may already have run the same matcher on the same spectrum (ADR-0062).
-    FragmentAnalysis::ProteoformMatch fmr =
-        (searched != nullptr) ? *searched : computeFragmentMatch_(spec, group.msn_level, activation_type);
+    // Inline, an MS3 variant is matched against its group's CHOSEN protein (ADR-0061 push 4c; none chosen: nothing),
+    // an MS2 variant no search ran on against the inline reference.
+    const bool ms3 = group.msn_level >= 3;
+    FragmentAnalysis::ProteoformMatch fmr = (searched != nullptr) ? *searched
+        : computeFragmentMatch_(spec, group.msn_level, activation_type,
+                                ms3 ? group.proteoform_ctx.protein_sequence : config_.identification().proteinOr(kNoChosenProtein),
+                                config_.identification().accessionOr(ms3 ? group.proteoform_ctx.protein_accession : kNoChosenProtein));
     if (out_frag) *out_frag = fmr;
     switch (metric)
     {
@@ -1448,12 +1474,16 @@ namespace OpenMS
   }
 
   FragmentAnalysis::ProteoformMatch Exploration::computeFragmentMatch_(const DeconvolvedSpectrum& spec, int msn_level,
-                                                                      const std::string& activation_type) const
+                                                                      const std::string& activation_type,
+                                                                      const std::string& protein_sequence,
+                                                                      const std::string& protein_accession,
+                                                                      const FragmentAnalysis::SearchedPrSM* searched) const
   {
     FragmentAnalysis::ProteoformMatch result;
-    // No protein is chosen before this match (ADR-0061 push 4b): the fallback, the inline reference.
-    const std::string& seq = config_.identification().proteinOr(kNoChosenProtein);
-    if (seq.empty() || spec.empty())
+    // A searched MS2 is matched on the protein its PrSM lies in (ADR-0061 push 4c); the single-protein matcher on the
+    // protein its caller names, and on nothing when that is empty.
+    const std::string& seq = (searched != nullptr) ? searched->protein_sequence : protein_sequence;
+    if (spec.empty() || (searched == nullptr && seq.empty()))
       return result;
 
     DeconvolvedSpectrum spec_copy = spec;
@@ -1471,13 +1501,13 @@ namespace OpenMS
         wstarts.data(), wends.data(),
         ion_types.data(), frag_indices.data(),
         spec_copy, result, activation_type,
-        config_.level(msn_level).exploration_tolerance_ppm);
+        config_.level(msn_level).exploration_tolerance_ppm, nullptr, searched);
 
     // The accession of the protein matched against (ADR-0061 push 4b), on every match that identified something.
-    // Overwrites Refine's "input_protein" placeholder.
-    if (result.total_match_count > 0 || !result.proteoform_sequence.empty())
+    // Overwrites Refine's "input_protein" placeholder. A searched match already carries its PrSM's accession.
+    if (searched == nullptr && (result.total_match_count > 0 || !result.proteoform_sequence.empty()))
     {
-      result.matched_protein = config_.identification().accessionOr(kNoChosenProtein);
+      result.matched_protein = protein_accession;
     }
     return result;
   }

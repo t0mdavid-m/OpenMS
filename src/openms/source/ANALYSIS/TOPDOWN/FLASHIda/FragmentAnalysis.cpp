@@ -955,6 +955,56 @@ namespace
     return static_cast<int>(matches.size());
   }
 
+  // The searched MS2's match step (ADR-0061 push 4c): the proteome search already chose the PrSM, so nothing here tags.
+  int FragmentAnalysis::matchSearched_(const SearchedPrSM& searched, bool refine, std::vector<TagBasedFragmentMatch>& matches,
+                                       DeconvolvedSpectrum& stored_ms2, ProteoformMatch& result,
+                                       const String& fragmentation_method, double tolerance_ppm)
+  {
+    matches.clear();
+    // tag_count's vocabulary: -1 = no tagger produced this match (Refine annotates), 0 = the search found nothing
+    result.tag_count = refine ? -1 : 0;
+    if (!searched.found || stored_ms2.empty() || searched.protein_sequence.empty())
+    {
+      return 0;
+    }
+
+    const ProteinHit& hit = searched.hit;
+    // score = ExtensionScore + 8 x max(0, RawScore - log10 candidates) (FLASHTnTAlgorithm's raw annotation); the second
+    // term is the search's raw term, which every method adds to its own score (ADR-0061 d.5)
+    const double extension = hit.metaValueExists("ExtensionScore") ? static_cast<double>(hit.getMetaValue("ExtensionScore")) : hit.getScore();
+    const double raw_term = hit.getScore() - extension;
+    int n = 0;
+    if (refine)
+    {
+      // Refine annotates the protein the search chose (ADR-0061 d.11); its best path's score is the method's score
+      n = runRefineMatching_(searched.protein_sequence, matches, stored_ms2, result, fragmentation_method, tolerance_ppm);
+      if (result.proteoform_sequence.empty())
+      {
+        return n;  // Refine assembled no path: nothing identified
+      }
+      result.identification_score = result.score + raw_term;
+    }
+    else
+    {
+      if (hit.metaValueExists("TagIndices"))
+      {
+        result.tag_count = static_cast<int>(hit.getMetaValue("TagIndices").toIntList().size());
+      }
+      result.score = extension;
+      const double ppm_tolerance = (tolerance_ppm > 0.0) ? tolerance_ppm : config_.level(2).tolerance_ppm;
+      n = matchFromPrSM(hit, searched.protein_sequence, stored_ms2, FragmentAnalysis::getIonTypesForFragmentationMethod(fragmentation_method),
+                        ppm_tolerance, result, matches);
+      result.identification_score = hit.getScore();
+    }
+    result.raw_term = raw_term;
+    result.raw_score = hit.metaValueExists("RawScore") ? static_cast<double>(hit.getMetaValue("RawScore")) : -1.0;
+    const bool inferred = hit.metaValueExists("ProteoformMassByFragmentMass") && hit.metaValueExists("Mass")
+                          && static_cast<int>(hit.getMetaValue("ProteoformMassByFragmentMass")) == 1;
+    result.inferred_precursor_mass = inferred ? static_cast<double>(hit.getMetaValue("Mass")) : -1.0;
+    result.matched_protein = searched.accession;
+    return n;
+  }
+
   int FragmentAnalysis::getTopFragmentMatches(const String& protein_sequence,
                                               int n,
                                               double* masses,
@@ -968,13 +1018,18 @@ namespace
                                               ProteoformMatch& result,
                                               const String& fragmentation_method,
                                               double tolerance_ppm,
-                                              FragmentScores* frag_scores)
+                                              FragmentScores* frag_scores,
+                                              const SearchedPrSM* searched)
   {
     std::cout << "Matching fragments!" << std::endl;
-    // identification.method (ADR-0049): Refine, or the tag-based workflow (FLASHTagger + FLASHExtender)
+    // identification.method (ADR-0049): Refine, or the tag-based workflow (FLASHTagger + FLASHExtender). A searched MS2
+    // (ADR-0061 push 4c) takes the search's PrSM instead of tagging, under either method.
     std::vector<TagBasedFragmentMatch> matches;
     result.refine.reset(); // set only by the Refine path; a reused result must not carry a stale record
-    if (config_.identification().method == AnnotationMethod::Refine)
+    const bool refine = config_.identification().method == AnnotationMethod::Refine;
+    if (searched != nullptr)
+      matchSearched_(*searched, refine, matches, stored_ms2, result, fragmentation_method, tolerance_ppm);
+    else if (refine)
       runRefineMatching_(protein_sequence, matches, stored_ms2, result, fragmentation_method, tolerance_ppm);
     else
       runTagBasedFragmentMatching_(protein_sequence, matches, stored_ms2, result, fragmentation_method, tolerance_ppm);
@@ -1014,11 +1069,15 @@ namespace
                                                   ProteoformMatch& result,
                                                   const String& fragmentation_method,
                                                   double tolerance_ppm,
-                                                  FragmentScores* frag_scores)
+                                                  FragmentScores* frag_scores,
+                                                  const SearchedPrSM* searched)
   {
     // Get fragment matches AND PTM sites from FLASHExtender
     std::vector<TagBasedFragmentMatch> fragment_ion_match;
-    int match_count = runTagBasedFragmentMatching_(protein_sequence, fragment_ion_match, stored_ms2, result, fragmentation_method, tolerance_ppm);
+    // a searched MS2 (ADR-0061 push 4c) converts the search's PrSM; this matcher never ran Refine, and still does not
+    int match_count = (searched != nullptr)
+        ? matchSearched_(*searched, false, fragment_ion_match, stored_ms2, result, fragmentation_method, tolerance_ppm)
+        : runTagBasedFragmentMatching_(protein_sequence, fragment_ion_match, stored_ms2, result, fragmentation_method, tolerance_ppm);
 
     if (match_count == 0)
     {
@@ -1281,11 +1340,16 @@ namespace
       ProteoformMatch& result,
       const String& fragmentation_method,
       double tolerance_ppm,
-      FragmentScores* frag_scores)
+      FragmentScores* frag_scores,
+      const SearchedPrSM* searched)
   {
     // Run fragment matching to get all matches
     std::vector<TagBasedFragmentMatch> matches;
-    runTagBasedFragmentMatching_(protein_sequence, matches, stored_ms2, result, fragmentation_method, tolerance_ppm);
+    // a searched MS2 (ADR-0061 push 4c) converts the search's PrSM; this matcher never ran Refine, and still does not
+    if (searched != nullptr)
+      matchSearched_(*searched, false, matches, stored_ms2, result, fragmentation_method, tolerance_ppm);
+    else
+      runTagBasedFragmentMatching_(protein_sequence, matches, stored_ms2, result, fragmentation_method, tolerance_ppm);
 
     if (matches.empty()) return 0;
 

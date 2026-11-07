@@ -372,6 +372,7 @@ namespace OpenMS
     // they change nothing about the matching itself, so results are byte-identical to the direct calls.
 
     /// MS2 exploration scoring: forward to FragmentAnalysis::getTopFragmentMatches (see computeFragmentMatch_).
+    /// @p searched: the proteome search's answer for a searched MS2 (ADR-0061 push 4c), forwarded to the matcher.
     static int identifyExplorationFragments(FragmentAnalysis& frag, const String& protein_sequence, int n,
                                             double* masses, double* qscores, int* charges,
                                             double* window_starts, double* window_ends,
@@ -380,9 +381,11 @@ namespace OpenMS
                                             FragmentAnalysis::ProteoformMatch& result,
                                             const String& fragmentation_method,
                                             double tolerance_ppm,
-                                            FragmentAnalysis::FragmentScores* frag_scores = nullptr);
+                                            FragmentAnalysis::FragmentScores* frag_scores = nullptr,
+                                            const FragmentAnalysis::SearchedPrSM* searched = nullptr);
 
     /// Next-level target selection: the metric->matcher switch, moved verbatim from initiateNextLevel.
+    /// @p searched: as identifyExplorationFragments', forwarded to whichever matcher the metric selects.
     static int selectNextLevelTargets(FragmentAnalysis& frag, SelectionMetric selection,
                                       const String& protein_sequence, int n,
                                       double* masses, double* qscores, int* charges,
@@ -392,7 +395,8 @@ namespace OpenMS
                                       FragmentAnalysis::ProteoformMatch& result,
                                       const String& fragmentation_method,
                                       double tolerance_ppm,
-                                      FragmentAnalysis::FragmentScores* frag_scores);
+                                      FragmentAnalysis::FragmentScores* frag_scores,
+                                      const FragmentAnalysis::SearchedPrSM* searched = nullptr);
 
     /// MS3 calibrated batch/single scoring: forward to MS3FragmentMatcher::calibrateAndScore.
     static std::vector<double> scoreCalibratedVariants(

@@ -126,10 +126,15 @@ namespace OpenMS
       /// difference of the best path. nullptr under flashtnt. APPEND-ONLY position, like FragmentMatch::qscore.
       std::shared_ptr<const RefineCandidates> refine;
 
-      /// ADR-0061 push 4b, APPEND-ONLY like the two above. Logged on identification.tsv; nothing sets them yet.
+      /// ADR-0061 push 4b, APPEND-ONLY like the two above. Logged on identification.tsv. Set from the proteome
+      /// search's PrSM (push 4c); the single-protein matcher leaves them at -1.
       double raw_score = -1;                ///< FLASHAnnotator raw score of the PrSM; -1 = none
-      double identification_score = -1;     ///< ADR-0061 d.5 identification score; -1 = not computed
+      double identification_score = -1;     ///< ADR-0061 d.5: the method's score + raw_term; -1 = not computed
       double inferred_precursor_mass = -1;  ///< precursor mass the Extender inferred from fragments; -1 = none
+
+      /// ADR-0061 push 4c, APPEND-ONLY. The search's raw term: the PrSM's score minus its ExtensionScore
+      /// (8 x max(0, RawScore - log10 candidates)), which every method adds to its own score. -1 = none.
+      double raw_term = -1;
     };
 
     /// Deconvolution scores of a selected MS2 fragment, copied into the stage-1 (fragment)
@@ -141,6 +146,17 @@ namespace OpenMS
              snr = 0, charge_score = 0, ppm_error = 0, precursor_intensity = 0,
              peakgroup_intensity = 0;
       static FragmentScores fromPeakGroup(const PeakGroup& pg, int abs_charge);
+    };
+
+    /// The proteome search's answer for one MS2 (ADR-0061 push 4c), made by a search worker and handed to the
+    /// match step in place of a configured sequence. A matcher handed one never runs FLASHTagger/FLASHExtender:
+    /// it converts the PrSM (matchFromPrSM), or under identification.method refine runs Refine on its protein.
+    struct SearchedPrSM
+    {
+      bool found = false;             ///< the search reported a PrSM; false = the MS2 identified nothing
+      ProteinHit hit;                 ///< the best PrSM (FLASHTnT's rank: score, then coverage)
+      std::string protein_sequence;   ///< its reference entry's sequence (never the hit's: run() rewrites it)
+      std::string accession;          ///< its reference entry's accession
     };
 
     /// Format a proteoform sequence with PTM annotations in ProForma notation.
@@ -258,6 +274,9 @@ namespace OpenMS
      * @param fragment_indices output: 1-based fragment index
      * @param stored_ms2 deconvolved MS2 spectrum
      * @param fragmentation_method fragmentation method name (default "HCD")
+     * @param searched the proteome search's answer for this MS2 (ADR-0061 push 4c): when given, the match step
+     *        converts its PrSM on @p protein_sequence (its reference entry) instead of tagging, and nothing
+     *        matches when it found none. nullptr: the single-protein matcher, as before (MS3 spectra)
      * @return number of matches found (may be less than n)
      */
     int getTopFragmentMatches(const String& protein_sequence,
@@ -273,7 +292,8 @@ namespace OpenMS
                               ProteoformMatch& result,
                               const String& fragmentation_method = "HCD",
                               double tolerance_ppm = 0.0,
-                              FragmentScores* frag_scores = nullptr);
+                              FragmentScores* frag_scores = nullptr,
+                              const SearchedPrSM* searched = nullptr);
 
     /**
      * @brief Get terminal (innermost) fragment ions sorted by sequence position
@@ -295,6 +315,9 @@ namespace OpenMS
      * @param fragment_indices output: 1-based fragment index
      * @param stored_ms2 deconvolved MS2 spectrum
      * @param fragmentation_method fragmentation method name (default "HCD")
+     * @param searched the proteome search's answer for this MS2 (ADR-0061 push 4c): when given, the match step
+     *        converts its PrSM on @p protein_sequence (its reference entry) instead of tagging, and nothing
+     *        matches when it found none. nullptr: the single-protein matcher, as before (MS3 spectra)
      * @return number of results returned (may be < n)
      */
     int getTerminalFragmentIons(const String& protein_sequence,
@@ -310,7 +333,8 @@ namespace OpenMS
                                 ProteoformMatch& result,
                                 const String& fragmentation_method = "HCD",
                                 double tolerance_ppm = 0.0,
-                                FragmentScores* frag_scores = nullptr);
+                                FragmentScores* frag_scores = nullptr,
+                                const SearchedPrSM* searched = nullptr);
 
     /**
      * @brief Get unique fragment ions that enclose PTM ambiguity regions
@@ -330,6 +354,9 @@ namespace OpenMS
      * @param fragment_indices output: 1-based fragment index
      * @param stored_ms2 deconvolved MS2 spectrum
      * @param fragmentation_method fragmentation method name (default "HCD")
+     * @param searched the proteome search's answer for this MS2 (ADR-0061 push 4c): when given, the match step
+     *        converts its PrSM on @p protein_sequence (its reference entry) instead of tagging, and nothing
+     *        matches when it found none. nullptr: the single-protein matcher, as before (MS3 spectra)
      * @return number of enclosing ions found
      */
     int getAmbiguityEnclosingIons(const String& protein_sequence,
@@ -345,7 +372,8 @@ namespace OpenMS
                                   ProteoformMatch& result,
                                   const String& fragmentation_method = "HCD",
                                   double tolerance_ppm = 0.0,
-                                  FragmentScores* frag_scores = nullptr);
+                                  FragmentScores* frag_scores = nullptr,
+                                  const SearchedPrSM* searched = nullptr);
 
   private:
     const Config& config_;
@@ -385,6 +413,22 @@ namespace OpenMS
                                     ProteoformMatch& result,
                                     const String& fragmentation_method = "HCD",
                                     double tolerance_ppm = 0.0);
+
+    /**
+     * @brief The match step of a searched MS2 (ADR-0061 push 4c), in place of runTagBasedFragmentMatching_.
+     *
+     * No PrSM (or an empty spectrum): nothing matches, tag_count 0 (-1 under @p refine). Otherwise under flashtnt
+     * the PrSM is converted (matchFromPrSM): score = its ExtensionScore, identification_score = its score, tag_count =
+     * the tags it carries (TagIndices); under @p refine Refine annotates the PrSM's protein (runRefineMatching_) and
+     * identification_score = the best path's score + raw_term. Either way, when something was identified: raw_term =
+     * score - ExtensionScore of the PrSM, raw_score = its RawScore, inferred_precursor_mass = its Mass when the
+     * Extender inferred it from fragments, matched_protein = its accession.
+     *
+     * @return number of matches
+     */
+    int matchSearched_(const SearchedPrSM& searched, bool refine, std::vector<TagBasedFragmentMatch>& matches,
+                       DeconvolvedSpectrum& stored_ms2, ProteoformMatch& result, const String& fragmentation_method,
+                       double tolerance_ppm);
 
     /**
      * @brief One PrSM as a match: convert @p hit (a proteoform on @p protein_sequence) and re-match @p stored_ms2 on it.

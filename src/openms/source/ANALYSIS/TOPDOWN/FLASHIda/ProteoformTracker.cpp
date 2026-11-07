@@ -271,11 +271,12 @@ namespace OpenMS
                                                       FragmentAnalysis::ProteoformMatch& result,
                                                       const String& fragmentation_method,
                                                       double tolerance_ppm,
-                                                      FragmentAnalysis::FragmentScores* frag_scores)
+                                                      FragmentAnalysis::FragmentScores* frag_scores,
+                                                      const FragmentAnalysis::SearchedPrSM* searched)
   {
     return frag.getTopFragmentMatches(protein_sequence, n, masses, qscores, charges,
                                       window_starts, window_ends, ion_types, fragment_indices,
-                                      stored_ms2, result, fragmentation_method, tolerance_ppm, frag_scores);
+                                      stored_ms2, result, fragmentation_method, tolerance_ppm, frag_scores, searched);
   }
 
   int ProteoformTracker::selectNextLevelTargets(FragmentAnalysis& frag, SelectionMetric selection,
@@ -287,7 +288,8 @@ namespace OpenMS
                                                 FragmentAnalysis::ProteoformMatch& result,
                                                 const String& fragmentation_method,
                                                 double tolerance_ppm,
-                                                FragmentAnalysis::FragmentScores* frag_scores)
+                                                FragmentAnalysis::FragmentScores* frag_scores,
+                                                const FragmentAnalysis::SearchedPrSM* searched)
   {
     switch (selection)
     {
@@ -295,15 +297,15 @@ namespace OpenMS
       case SelectionMetric::QScore:
         return frag.getTopFragmentMatches(protein_sequence, n, masses, qscores, charges,
                                           window_starts, window_ends, ion_types, fragment_indices,
-                                          stored_ms2, result, fragmentation_method, tolerance_ppm, frag_scores);
+                                          stored_ms2, result, fragmentation_method, tolerance_ppm, frag_scores, searched);
       case SelectionMetric::TerminalFragments:
         return frag.getTerminalFragmentIons(protein_sequence, n, masses, qscores, charges,
                                             window_starts, window_ends, ion_types, fragment_indices,
-                                            stored_ms2, result, fragmentation_method, tolerance_ppm, frag_scores);
+                                            stored_ms2, result, fragmentation_method, tolerance_ppm, frag_scores, searched);
       case SelectionMetric::AmbiguityResolution:
         return frag.getAmbiguityEnclosingIons(protein_sequence, n, masses, qscores, charges,
                                               window_starts, window_ends, ion_types, fragment_indices,
-                                              stored_ms2, result, fragmentation_method, tolerance_ppm, frag_scores);
+                                              stored_ms2, result, fragmentation_method, tolerance_ppm, frag_scores, searched);
       default:
         return 0;
     }
@@ -390,13 +392,24 @@ namespace OpenMS
     ProteoformModel& m = it->second;
     if (m.pending.empty()) return;
 
-    // 1) Pick the winner: the staged scan with the highest match.score that actually identified a
-    //    proteoform (score >= 0 and a non-empty sequence). Ties keep the first-seen (strictly-greater).
+    // 1) Pick the winner among the staged scans that actually identified a proteoform (score >= 0 and a non-empty
+    //    sequence): the highest Identification score (ADR-0061 d.5, the method's score + the search's raw term), then
+    //    the higher total_match_count, then the lower collision energy; a full tie keeps the first-seen. A match the
+    //    proteome search never scored (identification_score -1: the single-protein matcher, which no searched MS2
+    //    reaches) ranks by its method score, as before the search.
+    const auto rank = [](const PendingScan& ps) {
+      return ps.match.identification_score >= 0 ? ps.match.identification_score : ps.match.score;
+    };
+    const auto better = [&rank](const PendingScan& a, const PendingScan& b) {
+      if (rank(a) != rank(b)) return rank(a) > rank(b);
+      if (a.match.total_match_count != b.match.total_match_count) return a.match.total_match_count > b.match.total_match_count;
+      return a.params.collision_energy < b.params.collision_energy;
+    };
     const PendingScan* win = nullptr;
     for (const PendingScan& ps : m.pending)
     {
       if (ps.match.score < 0 || ps.match.proteoform_sequence.empty()) continue;
-      if (win == nullptr || ps.match.score > win->match.score) win = &ps;
+      if (win == nullptr || better(ps, *win)) win = &ps;
     }
 
     if (win == nullptr)

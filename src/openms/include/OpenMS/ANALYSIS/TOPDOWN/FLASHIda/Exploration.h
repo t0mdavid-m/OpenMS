@@ -47,6 +47,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -86,6 +87,10 @@ namespace OpenMS
       DeconvolvedSpectrum result{0};
       ScanCommand cmd;
       FragmentAnalysis::ProteoformMatch identification_result;  ///< Per-fragment match details (populated at batch eval)
+      /// An MS2 variant's proteome search (ADR-0061 push 4c), kept for the cascade: a completed group's next level is
+      /// planned from the winner's PrSM, so no search runs under the analysis lock. Empty: no search ran (the inline
+      /// matcher's path); engaged but not found: the search identified nothing, or the backlog dropped it.
+      std::optional<FragmentAnalysis::SearchedPrSM> prsm;
     };
 
     /// Cached MS2 context for identification.tsv output from MS3 results
@@ -272,7 +277,7 @@ namespace OpenMS
     /// applyNextLevel takes it from there.
     struct NextLevelSearch
     {
-      bool ran = false;                              ///< false: no sequence configured, nothing was matched
+      bool ran = false;                              ///< false: no identification reference, nothing was matched
       FragmentAnalysis::ProteoformMatch frag_result;
       MS3FragmentMatcher::ProteoformContext proto_ctx;
       std::string matched_protein;
@@ -294,6 +299,9 @@ namespace OpenMS
       double precursor_share = -1.0;
       std::string activation_type;   ///< the variant's own activation, as computeExplorationScore_ reads it
       DeconvolvedSpectrum deconv;
+      /// The proteome search's answer (ADR-0061 push 4c), set by the search worker before searchVariant; empty when
+      /// no search ran (the inline matcher's path).
+      std::optional<FragmentAnalysis::SearchedPrSM> prsm;
     };
 
     /// Construct with a reference to the shared Config and FragmentAnalysis
@@ -341,11 +349,12 @@ namespace OpenMS
     /// nothing but exploration_deconv_ and the accessors' flag; the variant is still waiting afterwards.
     VariantInput prepareVariant(int tracking_id, const double* mzs, const double* ints, int length, double rt);
 
-    /// Whether the variant reaches today's matcher: a deconvolved, non-empty MS2 variant with a sequence
-    /// configured. Exactly the variants computeFragmentMatch_ does not return empty for.
+    /// Whether the variant is searched: a deconvolved, non-empty MS2 variant with an identification reference
+    /// (ADR-0061 push 4c: a sequence or a FASTA).
     bool variantNeedsSearch(const VariantInput& in) const;
 
-    /// The variant's match, from the copied input alone (no lock needed): computeFragmentMatch_.
+    /// The variant's match, from the copied input alone (no lock needed): computeFragmentMatch_ on @p in's PrSM
+    /// (in.prsm, set by the search worker), or the inline matcher when no search ran.
     FragmentAnalysis::ProteoformMatch searchVariant(const VariantInput& in) const;
 
     /// Score, pool, complete. @p searched: the worker's match (nullptr = match inline, today's path).
@@ -370,16 +379,21 @@ namespace OpenMS
     ///        legacy getTopFragmentMatches direct path (used by tests).
     /// @param precursor_id The originating MS2's per-MS1-selection identity; used as the
     ///        ProteoformTracker model key for the regular MS2->MS3 one-shot model + planNextScans.
+    /// @param searched The proteome search's answer for @p result (ADR-0061 push 4c): the match converts its PrSM.
+    ///        nullptr: the single-protein matcher against the inline reference, as before (tests; no search ran).
     NextLevelResult initiateNextLevel(int msn_level, const DeconvolvedSpectrum& result,
                                       double faims_cv, ScanCommandQueue& queue,
                                       const ScanCommand* ms_ctx = nullptr,
                                       ProteoformTracker* tracker = nullptr,
-                                      int precursor_id = 0);
+                                      int precursor_id = 0,
+                                      const FragmentAnalysis::SearchedPrSM* searched = nullptr);
 
     /// initiateNextLevel, split at its seam for the search pool (ADR-0062):
     /// initiateNextLevel == applyNextLevel(searchNextLevel(...), ...). searchNextLevel is everything above
     /// the dispatch gate -- the match and the report -- and reads only its arguments and the Config.
-    NextLevelSearch searchNextLevel(int msn_level, const DeconvolvedSpectrum& result, const ScanCommand* ms_ctx) const;
+    /// @p searched: as initiateNextLevel's. With one, the match never early-returns on an empty configured sequence.
+    NextLevelSearch searchNextLevel(int msn_level, const DeconvolvedSpectrum& result, const ScanCommand* ms_ctx,
+                                    const FragmentAnalysis::SearchedPrSM* searched = nullptr) const;
 
     /// Everything from the dispatch gate on: tracker seeding, planNextScans, the MS3 builds.
     NextLevelResult applyNextLevel(const NextLevelSearch& search, int msn_level, const DeconvolvedSpectrum& result,
@@ -507,9 +521,15 @@ namespace OpenMS
     /// strictly greater.
     double computeRemainingPrecursorScore_(const ExplorationGroup& group, double share) const;
 
-    /// Score: number of matched fragment ions + protein info
+    /// Score: number of matched fragment ions + protein info. @p searched (an MS2 the proteome search ran on,
+    /// ADR-0061 push 4c): its PrSM is converted. nullptr: the single-protein matcher against @p protein_sequence
+    /// (accession @p protein_accession), which matches nothing when it is empty: an MS3 variant passes its group's
+    /// chosen protein, so with none chosen nothing is assumed.
     FragmentAnalysis::ProteoformMatch computeFragmentMatch_(const DeconvolvedSpectrum& spec, int msn_level,
-                                                           const std::string& activation_type) const;
+                                                           const std::string& activation_type,
+                                                           const std::string& protein_sequence,
+                                                           const std::string& protein_accession,
+                                                           const FragmentAnalysis::SearchedPrSM* searched = nullptr) const;
 
     /// Compute TIC coverage for metadata
     float computeTICCoverage_(const DeconvolvedSpectrum& spec) const;

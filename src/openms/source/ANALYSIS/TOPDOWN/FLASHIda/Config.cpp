@@ -1716,8 +1716,8 @@ namespace OpenMS
     // identification, whose reference (fasta XOR sequence) is refused empty at parse. Kept as an invariant.
     if (characterization_.mode != CharacterizationMode::Off && !identification_.enabled())
       throw std::invalid_argument(
-          "identification.characterization is set but identification has no reference sequence. "
-          "MS3 characterization matches fragments against that sequence.");
+          "identification.characterization is set but identification has no reference. "
+          "MS3 characterization matches fragments against the protein the reference search chose.");
 
 
     // The converse of "mode: off does not forbid ms_settings.ms3" -- and the direction that

@@ -44,6 +44,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PrecursorSelection.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ProteomeSearch.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Quantification.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
@@ -422,7 +423,8 @@ namespace OpenMS
     {
       int precursor_id = 0;
       std::string parent_id_str;
-      Exploration::VariantInput input;          ///< prepareVariant's copy (spectrum, share, slot)
+      int instrument_scan_number = 0;           ///< the scan the proteome search names its spectrum by (ADR-0061 push 4c)
+      Exploration::VariantInput input;          ///< prepareVariant's copy (spectrum, share, slot); input.prsm by the worker
       IdaLogger::ScanRowDescriptor results_row{};
       FragmentAnalysis::ProteoformMatch match;  ///< filled by the worker
       SearchTiming timing;
@@ -456,6 +458,13 @@ namespace OpenMS
     /// Test seam run on the worker before every search (FLASHIda_TestAccess.h: block a worker, observe that
     /// the search runs while a test holds analysis_mutex_). Set before the first feed; empty in production.
     std::function<void()> before_search_;
+
+    /// The Protein reference, loaded and prepared once (ADR-0061 push 4c): identification.reference.fasta read as
+    /// authored, or the inline sequence as one entry with the accession "sequence". Null without an identification
+    /// section. Immutable after the constructor, so every search worker reads it unlocked; each worker thread owns a
+    /// ProteomeSearch::Worker over it (FLASHIda.cpp, thread_local). Declared BEFORE search_pool_, so the pool -- and
+    /// with it every worker thread and its Worker -- is gone before this is destroyed.
+    std::unique_ptr<ProteomeSearch> proteome_;
 
     /// The pool. Null without an identification section (nothing is ever searched then). Stopped and joined
     /// in ~FLASHIda's body, before any member a running apply touches is destroyed.
