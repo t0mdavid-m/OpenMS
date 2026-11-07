@@ -2912,20 +2912,22 @@ START_SECTION(results_ms3_real_fragment_data)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
-// §S4B -- the ADR-0061 push 4b columns carry their 4b values
+// §S4B -- the ADR-0061 push 4b columns carry their values (push 4c: the proteome search's)
 //
 // scan_results: search / search_wait_ms / search_ms. Every regular MS2 of an identifying run is searched on
 // the pool (a backlog drop cannot happen here: the drive waits for the pool after every feed), so each MS2
 // row says "searched" with two non-negative integer timings; MS1 and MS3 never reach the pool ("none", -1).
 // identification: protein / raw_score / identification_score / closed_out / inferred_precursor_mass. The
 // only protein is the inline reference, whose accession is "sequence": an MS2 self-match carries it on its
-// match, an MS3 row through its MS2 context. Nothing sets the three scores or closes a Precursor out yet.
-// pooled: protein, the accession the model's winner chose.
+// match, an MS3 row through its MS2 context. An MS2 self-match is FLASHTnT's PrSM: its raw score is a
+// -log10 probability (>= 0), and its identification score = the ExtensionScore (flash_extender_score) + 8 x
+// max(0, ...), so never below it. skip_precursor_inference is on, so the inferred mass is -1 or a real mass.
+// Nothing closes a Precursor out yet. pooled: protein, the accession the model's winner chose.
 //
 // The §T9 drive (identifying cytC recipe + the real per-ion MS3 fixtures), because it is the one that yields
 // MS2 rows, MS3 identification rows and pooled rows in one run. Each kind is required, so no check is vacuous.
 /////////////////////////////////////////////////////////////
-START_SECTION(new_columns_carry_their_4b_values)
+START_SECTION(new_columns_carry_their_values)
 {
   auto manifest = buildMs3IonManifest("../../FlashIDA/test-data/spectra");
   TEST_TRUE(!manifest.empty())   // the MS3 rows below need the committed fixtures
@@ -2981,10 +2983,14 @@ START_SECTION(new_columns_carry_their_4b_values)
     {
       ++n_ms2_self;
       TEST_EQUAL(cell(idf, row, "protein"), accession)
-      TEST_EQUAL(toD(cell(idf, row, "raw_score")), -1.0)
-      TEST_EQUAL(toD(cell(idf, row, "identification_score")), -1.0)
+      const double extension = toD(cell(idf, row, "flash_extender_score"));
+      const double identification = toD(cell(idf, row, "identification_score"));
+      const double inferred = toD(cell(idf, row, "inferred_precursor_mass"));
+      TEST_TRUE(toD(cell(idf, row, "raw_score")) >= 0.0)
+      TEST_TRUE(identification > -1.0)
+      TEST_TRUE(identification >= extension)
       TEST_EQUAL(cell(idf, row, "closed_out"), std::string("0"))
-      TEST_EQUAL(toD(cell(idf, row, "inferred_precursor_mass")), -1.0)
+      TEST_TRUE(inferred == -1.0 || inferred > 0.0)
     }
     else if (lvl == 3)
     {
@@ -3003,6 +3009,84 @@ START_SECTION(new_columns_carry_their_4b_values)
     TEST_EQUAL(row.size(), pooled.headers.size())
     TEST_EQUAL(cell(pooled, row, "protein"), accession)
   }
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §FASTA -- a FASTA reference identifies and characterizes its protein (ADR-0061 push 4c)
+//
+// The §S4B drive twice: with buildJsonWithLogDir's cytC sequence inline, and with a two-entry FASTA holding that
+// sequence (as sp|P00004|CYC_HORSE) and one unrelated E. coli K-12 protein (APHA_ECOLI, copied from OpenMS's K-12
+// test FASTA). The search chooses cytC in both, so every identification row names its accession in the FASTA run
+// and "sequence" in the other, the Identification scores are the same row for row, and the two runs plan the same
+// MS3 targets. With a FASTA there is no configured sequence for any reader to fall back on, so this checks the
+// chosen protein travelling from the match through the model and the MS3 context to every reader (push 4b) end to
+// end. Non-vacuous: at least one identification row and one MS3 command.
+/////////////////////////////////////////////////////////////
+START_SECTION(a_fasta_reference_identifies_and_characterizes_its_protein)
+{
+  auto manifest = buildMs3IonManifest("../../FlashIDA/test-data/spectra");
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  auto ms2 = loadTsvScans(CYTC_MS2);
+  ABORT_IF(manifest.empty() || ms1.empty() || ms2.empty())
+
+  // buildJsonWithLogDir's inline reference, spelled out: the FASTA run replaces exactly this
+  const std::string cytc = "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
+  const std::string cytc_accession = "sp|P00004|CYC_HORSE";
+  const std::string aphA = "MRKITQAISAVCLLFALNSSAVALASSPSPLNPGTNVARLAEQAPIHWVSVAQIENSLAGRPPMAVGFDIDDTVLFSSPGFWRGKKTFSPESEDYLKNPVFWEKMNNGWDEF"
+                           "SIPKEVARQLIDMHVRRGDAIFFVTGRSPTKTETVSKTLADNFHIPATNMNPVIFAGDKPGQNTKSQWLQDKNIRIFYGDSDNDITAARDVGARGIRILRASNSTYKPLPQAG"
+                           "AFGEEVIVNSEY";
+  const std::string inline_ref = R"("reference": { "sequence": ")" + cytc + R"(" })";
+
+  struct Logs
+  {
+    TSVFile idf;
+    std::vector<std::string> ms3_mz;   // scan_commands MS3 rows' precursor_mz, in dequeue order
+  };
+  auto drive = [&](const std::string& tag, bool fasta) {
+    const std::string dir = freshLogDir(tag);
+    std::string json = buildJsonWithLogDir(dir, true, "HCD", 50);
+    const auto at = json.find(inline_ref);
+    TEST_TRUE(at != std::string::npos)
+    if (fasta && at != std::string::npos)
+    {
+      const std::string path = dir + "/reference.fasta";
+      std::ofstream out(path);
+      out << ">" << cytc_accession << " Cytochrome c OS=Equus caballus\n" << cytc << "\n"
+          << ">sp|P0AE22|APHA_ECOLI Class B acid phosphatase OS=Escherichia coli (strain K12) OX=83333 GN=aphA PE=1 SV=1\n"
+          << aphA << "\n";
+      out.close();
+      json.replace(at, inline_ref.size(), R"("reference": { "fasta": ")" + path + R"(" })");
+    }
+    {
+      FLASHIda ida(const_cast<char*>(json.c_str()));
+      runFullCycle(&ida, ms1, ms2, &manifest);
+    }   // the engine flushes and closes its streams
+    Logs logs;
+    logs.idf = TSVFile::parse(dir + "/identification.tsv");
+    auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
+    for (const auto& row : cmds.rows)
+      if (std::atoi(cell(cmds, row, "ms_level").c_str()) == 3) logs.ms3_mz.push_back(cell(cmds, row, "precursor_mz"));
+    return logs;
+  };
+  const Logs by_sequence = drive("lf_ref_seq", false);
+  const Logs by_fasta = drive("lf_ref_fasta", true);
+
+  TEST_TRUE(by_sequence.idf.rows.size() > 0)
+  TEST_EQUAL(by_fasta.idf.rows.size(), by_sequence.idf.rows.size())
+  for (const auto& row : by_sequence.idf.rows)
+    TEST_EQUAL(cell(by_sequence.idf, row, "protein"), std::string("sequence"))
+  for (const auto& row : by_fasta.idf.rows)
+    TEST_EQUAL(cell(by_fasta.idf, row, "protein"), cytc_accession)
+  for (Size i = 0; i < by_sequence.idf.rows.size() && i < by_fasta.idf.rows.size(); ++i)
+  {
+    TEST_EQUAL(cell(by_fasta.idf, by_fasta.idf.rows[i], "identification_score"),
+               cell(by_sequence.idf, by_sequence.idf.rows[i], "identification_score"))
+  }
+
+  TEST_TRUE(by_sequence.ms3_mz.size() > 0)
+  TEST_EQUAL(by_fasta.ms3_mz.size(), by_sequence.ms3_mz.size())
+  TEST_EQUAL(by_fasta.ms3_mz == by_sequence.ms3_mz, true)
 }
 END_SECTION
 
