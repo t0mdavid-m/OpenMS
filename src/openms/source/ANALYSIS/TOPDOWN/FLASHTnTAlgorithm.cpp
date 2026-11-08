@@ -168,12 +168,12 @@ struct RankedItem
 // q-values of a target-decoy ranking (best first). After each tie group, FDR = D / (D + T) with D the decoy weight and T the target
 // count so far; q is the running minimum of the FDR from the bottom. No pseudo-count: with (D + 1) / (D + T + 1), a class of fewer than
 // 99 targets above its best decoy passed nothing at 1% (a single ETD SEC fraction of PXD012247: 83 determined proteoforms and no decoy,
-// none reported).
+// none reported). @p pseudo_decoys starts the decoy count above 0 (for a class whose decoys miss its errors above the first decoy).
 template<typename Key>
-std::vector<double> targetDecoyQvalues(const std::vector<RankedItem<Key>>& items)
+std::vector<double> targetDecoyQvalues(const std::vector<RankedItem<Key>>& items, double pseudo_decoys = 0.0)
 {
   std::vector<double> qvalues(items.size(), 1.0);
-  double decoy_count = 0, target_count = 0;
+  double decoy_count = pseudo_decoys, target_count = 0;
   for (Size i = 0; i < items.size();)
   {
     Size j = i;
@@ -511,6 +511,23 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "of the free shift, as TopPIC's E-value charges it. 0: off.",
                      {"advanced"});
   defaults_.setMinFloat("shift_penalty", 0.0);
+  defaults_.setValue("undetermined_decoy_weight", 1.0,
+                     "PrSM and proteoform q-values of the class \"undetermined, both termini\": each decoy counts this many times. Its decoys "
+                     "underestimate its errors (shuffled entrapment of the development runs: 2E/D = 1.2 over the class). 1: off.",
+                     {"advanced"});
+  defaults_.setMinFloat("undetermined_decoy_weight", 1.0);
+  defaults_.setValue("undetermined_pseudo_decoys", 0.0,
+                     "PrSM and proteoform q-values of the class \"undetermined, both termini\": the decoy count starts at this value, so that its "
+                     "best PrSMs of a run do not pass at q-value 0 above the run's first decoy (where the development runs' shuffled entrapment "
+                     "held its excess errors). 0: off.",
+                     {"advanced"});
+  defaults_.setMinFloat("undetermined_pseudo_decoys", 0.0);
+  defaults_.setValue("open_terminus_prsms", "count",
+                     "PrSMs of the class \"undetermined, open terminus\" (one terminus and the mass unknown): 'count' gives them PrSM q-values as "
+                     "every class; 'separate' reports them with q-value 1, apart from the identifications (as their proteoforms and proteins "
+                     "already are): no decoy weight or pseudo-count brought the class to 1% on the development runs (3.7-7.3% shuffled entrapment).",
+                     {"advanced"});
+  defaults_.setValidStrings("open_terminus_prsms", {"count", "separate"});
   defaultsToParam_();
 }
 
@@ -623,6 +640,9 @@ void FLASHTnTAlgorithm::updateMembers_()
   const String scoring_file = param_.getValue("scoring_model").toString();
   scoring_model_ = scoring_file.empty() ? nullptr : LearnedScoringModel::load(scoring_file);
   shift_penalty_ = param_.getValue("shift_penalty");
+  undetermined_decoy_weight_ = param_.getValue("undetermined_decoy_weight");
+  undetermined_pseudo_decoys_ = param_.getValue("undetermined_pseudo_decoys");
+  open_terminus_separate_ = param_.getValue("open_terminus_prsms").toString() == "separate";
   terminal_ladders_ = param_.getValue("terminal_ladders").toString() == "true";
   precursor_ladders_ = param_.getValue("precursor_ladders").toString() == "true";
   search_cascade_ = param_.getValue("search_cascade").toString() == "true";
@@ -2698,12 +2718,18 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           by_stage[stage].push_back(i);
           if (stage > 0) (decoys[i] ? stage_counts[stage].second : stage_counts[stage].first)++;
         }
+        // undetermined_decoy_weight / undetermined_pseudo_decoys: the both-termini class counted with heavier decoys and a pseudo-count;
+        // open_terminus_prsms separate: the open-terminus class passes nothing (its rows stay, at q-value 1)
+        const bool both_termini_class = c == (int)fdr_class_both_termini;
+        const bool separate_class = c == (int)fdr_class_open_terminus && open_terminus_separate_;
         for (const auto& [stage, hits] : by_stage)
         {
           std::vector<RankedItem<double>> ranked;
           ranked.reserve(hits.size());
-          for (Size i : hits) ranked.push_back({proteoform_hits_[i].getScore(), decoys[i], decoy_weights[i]});
-          const auto class_qvalues = targetDecoyQvalues(ranked);
+          for (Size i : hits)
+            ranked.push_back({proteoform_hits_[i].getScore(), decoys[i], decoy_weights[i] * (both_termini_class ? undetermined_decoy_weight_ : 1.0)});
+          auto class_qvalues = targetDecoyQvalues(ranked, both_termini_class ? undetermined_pseudo_decoys_ : 0.0);
+          if (separate_class) std::fill(class_qvalues.begin(), class_qvalues.end(), 1.0);
           for (Size k = 0; k < hits.size(); k++)
           {
             const Size i = hits[k];
@@ -2864,8 +2890,16 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         std::stable_sort(order.begin(), order.end(), [&](Size l, Size r) { return cluster_score[l] > cluster_score[r]; });
         std::vector<RankedItem<double>> ranked;
         ranked.reserve(order.size());
-        for (Size k : order) ranked.push_back({-cluster_score[k], decoys[clusters[k][0]], decoy_weights[clusters[k][0]]});
-        const auto proteoform_qvalues = targetDecoyQvalues(ranked);
+        // the both-termini proteoforms with the class's decoy weight, and the group holding them with its pseudo-count (as their PrSMs above)
+        bool group_both_termini = false;
+        for (Size k : order)
+        {
+          const bool bt = cluster_class[k] == pf_class_both_termini;
+          group_both_termini |= bt;
+          ranked.push_back({-cluster_score[k], decoys[clusters[k][0]], decoy_weights[clusters[k][0]] * (bt ? undetermined_decoy_weight_ : 1.0)});
+        }
+        const double group_pseudo = group_both_termini ? undetermined_pseudo_decoys_ : 0.0;
+        const auto proteoform_qvalues = targetDecoyQvalues(ranked, group_pseudo);
         // Decoy precursors model wrong MS1 masses, which only a proteoform whose mass came from MS1 can have: they count against those, and a
         // proteoform without a mass or with a mass from fragment pairs takes its q-value from the same ranking without them (identical when
         // there are no decoy precursors).
@@ -2879,7 +2913,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           ranked_no_dp.push_back(ranked[k]);
         }
         const bool with_dp = ranked_no_dp.size() < ranked.size();
-        const auto proteoform_qvalues_no_dp = with_dp ? targetDecoyQvalues(ranked_no_dp) : proteoform_qvalues;
+        const auto proteoform_qvalues_no_dp = with_dp ? targetDecoyQvalues(ranked_no_dp, group_pseudo) : proteoform_qvalues;
         // and by blind group, as in the competition: a proteoform with an MS1 mass and no blind modification counts only the decoy
         // precursors without one, one with a blind modification only those with one (the targets and the database decoys as they are)
         const auto blindGroup = [this, &clusters, &order](Size k) { return blindModCount_(proteoform_hits_[clusters[order[k]][0]]) > 0 ? 1 : 0; };
@@ -2896,7 +2930,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           }
         }
         std::array<std::vector<double>, 2> proteoform_qvalues_dp;
-        for (int g = 0; with_dp && g < 2; g++) proteoform_qvalues_dp[g] = targetDecoyQvalues(ranked_dp[g]);
+        for (int g = 0; with_dp && g < 2; g++) proteoform_qvalues_dp[g] = targetDecoyQvalues(ranked_dp[g], group_pseudo);
         auto& counts = class_counts[c];
         counts = {0, 0, 0};
         for (Size k = 0; k < order.size(); k++)

@@ -172,6 +172,11 @@ private:
   bool protein_top_two_ = false;
   /// with scoring_model_: weight of the free shift's search space (log10 shiftedCandidateCount) taken from a determined blind-shift PrSM's confidence
   double shift_penalty_ = 0.0;
+  /// class "undetermined, both termini": decoy weight factor and pseudo-count of decoys in its PrSM and proteoform q-values
+  double undetermined_decoy_weight_ = 1.0;
+  double undetermined_pseudo_decoys_ = 0.0;
+  /// class "undetermined, open terminus" reported apart (PrSM q-value 1)
+  bool open_terminus_separate_ = false;
   /// with scoring_model_: the spectrum's PrSM chosen by the model's choice score, the others removed, and its score replaced by the model's
   /// confidence (the combined score kept as meta value CombinedScore). @p spectra: the deconvolved spectra by scan number.
   void applyLearnedScoring_(std::vector<ProteinHit>& hits, const std::map<int, const MSSpectrum*>& spectra) const;
