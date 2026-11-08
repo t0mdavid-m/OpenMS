@@ -33,6 +33,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Refine.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHExtenderAlgorithm.h>
@@ -415,13 +416,6 @@ namespace
     // 1. Copy and sort deconvolved spectrum
     DeconvolvedSpectrum dspec = stored_ms2;
     dspec.sort();
-    double precursor_mass = dspec.getPrecursorPeakGroup().getMonoMass();
-    std::cout << "PM=" << precursor_mass << std::endl;
-    for (const auto& pg : dspec)
-    {
-      double mono_mass = pg.getMonoMass();
-      std::cout << mono_mass << std::endl;
-    }
 
     // 2. Run FLASHTagger to generate sequence tags
     double ppm_tolerance = (tolerance_ppm > 0.0) ? tolerance_ppm : config_.level(2).tolerance_ppm;
@@ -440,10 +434,8 @@ namespace
     if (tags.empty())
     {
       // No tags found - return empty
-      std::cout << "no-tags" << std::endl;
       return 0;
     }
-    std::cout << "tags" << std::endl;
 
     // 3. Create ProteinHit with proper metadata for matching
     String clean_seq = protein_sequence;
@@ -470,10 +462,8 @@ namespace
     if (tag_positions.empty())
     {
       // No tags match the protein - return empty
-      std::cout << "no-matching-tags" << std::endl;
       return 0;
     }
-    std::cout << "matching-tags" << std::endl;
 
     hit.setMetaValue("TagIndices", std::vector<int>(tag_indices_set.begin(), tag_indices_set.end()));
     hit.setMetaValue("TagPositions", tag_positions);
@@ -545,21 +535,13 @@ namespace
 
     // 6. Run FLASHTagger matching
     double max_mod_mass = config_.identification().flashtnt.max_mod_mass;  // default 700.0 preserves prior hardcoded behavior
-    std::cout << "max_mod_mass=" << max_mod_mass << std::endl;
-    std::cout << "ion_types_str=";
-    for (const auto& ion : ion_types_str) {
-      std::cout << ion << " ";
-    }
-    std::cout << std::endl;
 
     FLASHTaggerAlgorithm::runMatching(hits, dspec, spec_vec, vec_pro, rev_vec_pro, max_mod_mass);
 
     if (hits.empty())
     {
-      std::cout << "no-hits" << std::endl;
       return 0;
     }
-    std::cout << "matching-hits" << std::endl;
 
     // 7. Run FLASHExtender for path-based validation
     FLASHExtenderAlgorithm extender;
@@ -571,10 +553,8 @@ namespace
 
     if (proteoform_hits.empty())
     {
-      std::cout << "no-proteoform-hits" << std::endl;
       return 0;
     }
-    std::cout << "matching-proteoform-hits" << std::endl;
 
     // 8. The best proteoform hit: its FLASHExtender score is this matcher's evidence; matchFromPrSM converts it and
     //    re-matches the spectrum's fragments on the proteoform (shared with the proteome search, ADR-0061 push 4c).
@@ -621,27 +601,6 @@ namespace
     result.region_end = end_pos;       // 0-based exclusive, or -1
     result.proteoform_sequence = protein_sequence;
 
-    if (start_pos >= 0 && end_pos >= 0 && end_pos > start_pos)
-    {
-      // Truncated proteoform detected by FLASHExtender
-      String truncated_seq = protein_sequence.substr(start_pos, end_pos - start_pos);
-      String display_seq = truncated_seq.size() > 30
-          ? truncated_seq.substr(0, 27) + "..."
-          : truncated_seq;
-      std::cout << "[runTagBasedFragmentMatching_] Matched proteoform: " << display_seq
-                << " (residues " << (start_pos + 1) << "-" << end_pos
-                << " of " << protein_sequence.size() << ")" << std::endl;
-    }
-    else
-    {
-      // Full sequence (no truncation detected)
-      String display_seq = protein_sequence.size() > 30
-          ? protein_sequence.substr(0, 15) + "..." + protein_sequence.substr(protein_sequence.size() - 12)
-          : protein_sequence;
-      std::cout << "[runTagBasedFragmentMatching_] Matched proteoform: " << display_seq
-                << " (full, " << protein_sequence.size() << " aa)" << std::endl;
-    }
-
     // Extract PTM sites from FLASHExtender metadata
     std::vector<double> mod_masses;
     std::vector<int> mod_starts;
@@ -657,18 +616,6 @@ namespace
       // Convert positions - TODO: Why??
       for (auto& pos : mod_starts) pos += 1;
       for (auto& pos : mod_ends) pos += 1;
-    }
-
-    // Print diagnostic output for PTM sites
-    std::cout << "[runTagBasedFragmentMatching_] PTM sites detected: " << mod_masses.size() << std::endl;
-    for (Size i = 0; i < mod_masses.size(); ++i)
-    {
-      int idx_start = std::max(0, mod_starts[i] - 1);
-      int idx_end = std::min(static_cast<int>(protein_sequence.size()), mod_ends[i]);
-      String subseq = protein_sequence.substr(idx_start, idx_end - idx_start);
-      std::cout << "  Residue " << mod_starts[i] << "-" << mod_ends[i] << ": "
-                << std::showpos << mod_masses[i] << std::noshowpos << " Da "
-                << "\"" << subseq << "\"" << std::endl;
     }
 
     // Populate PTM sites in result
@@ -714,9 +661,6 @@ namespace
         site.start_position = std::max(1, site.start_position);
         site.end_position = std::min(static_cast<int>(matching_sequence.size()), site.end_position);
       }
-
-      std::cout << "[runTagBasedFragmentMatching_] Using truncated sequence for matching ("
-                << matching_sequence.size() << " aa, offset " << start_pos << ")" << std::endl;
     }
 
     // 10. Calculate PTM-adjusted theoretical fragment masses for all configured ion types
@@ -774,20 +718,10 @@ namespace
                 return a.intensity > b.intensity;
               });
 
-    // === Diagnostic Output: Matched fragment ions ===
-    std::cout << "[runTagBasedFragmentMatching_] Matched " << matches.size() << " fragment ions (" << stored_ms2.size() << " masses):" << std::endl;
-    Size display_count = std::min(Size(10), matches.size());
-    for (Size i = 0; i < display_count; ++i)
-    {
-      const auto& m = matches[i];
-      std::cout << "  " << m.ion_type << m.fragment_index
-                << " - " << std::fixed << std::setprecision(2) << m.observed_mass << " Da"
-                << " (intensity:" << std::setprecision(2) << m.intensity << ")" << std::endl;
-    }
-    if (matches.size() > 10)
-    {
-      std::cout << "  ... (" << (matches.size() - 10) << " more)" << std::endl;
-    }
+    // ADR-0064: one summary event per matched PrSM, replacing the per-ion dump.
+    EventLine() << "[MATCH] region=" << (start_pos >= 0 ? start_pos + 1 : 1) << "-"
+                << (end_pos >= 0 ? end_pos : static_cast<int>(protein_sequence.size())) << " protein_length=" << protein_sequence.size()
+                << " ptm_sites=" << mod_masses.size() << " fragments=" << matches.size() << " masses=" << stored_ms2.size();
 
     result.total_match_count = static_cast<int>(matches.size());
     result.fragments.clear();
@@ -880,9 +814,9 @@ namespace
         if (i > 0) shifts << ';';
         shifts << l.shift << ':' << l.signal << ':' << l.n_prefix << ':' << l.n_suffix << letter;
       }
-      std::cout << "[LEVELS] scan=" << scan << " cut=" << rec->detect.cut << " n=" << rec->detect.n_kept << " b=" << n_b
+      EventLine() << "[LEVELS] scan=" << scan << " cut=" << rec->detect.cut << " n=" << rec->detect.n_kept << " b=" << n_b
                 << " y=" << n_y << " excluded=" << n_loss << '+' << n_sat << '+' << n_cap
-                << " shifts=" << (rec->detect.levels.empty() ? std::string("-") : shifts.str()) << std::endl;
+                << " shifts=" << (rec->detect.levels.empty() ? std::string("-") : shifts.str());
     }
     for (const Refine::Path& p : rec->assemble.candidates) // every candidate (decision 5)
     {
@@ -894,9 +828,8 @@ namespace
       line << " windows=";
       if (p.windows.empty()) line << '-';
       for (Size j = 0; j < p.windows.size(); ++j) line << (j > 0 ? ";" : "") << p.windows[j].first << '-' << p.windows[j].second;
-      std::cout << line.str() << '\n'; // no flush per candidate; one flush after the block
+      EventLine() << line.str();
     }
-    std::cout << std::flush;
 
     result.tag_count = -1; // no tagger ran (identification.tsv's tag_count vocabulary)
     result.refine = rec;
@@ -1020,7 +953,6 @@ namespace
                                               FragmentScores* frag_scores,
                                               const SearchedPrSM* searched)
   {
-    std::cout << "Matching fragments!" << std::endl;
     // identification.method (ADR-0049): Refine, or the tag-based workflow (FLASHTagger + FLASHExtender). A searched MS2
     // (ADR-0061 push 4c) takes the search's PrSM instead of tagging, under either method.
     std::vector<TagBasedFragmentMatch> matches;
@@ -1080,29 +1012,13 @@ namespace
 
     if (match_count == 0)
     {
-      std::cout << "[getAmbiguityEnclosingIons] No fragment matches found" << std::endl;
       return 0;
     }
-    std::cout << "[getAmbiguityEnclosingIons] Found " << match_count << " fragment matches" << std::endl;
 
     if (result.ptm_sites.empty())
     {
-      std::cout << "[getAmbiguityEnclosingIons] No PTM sites detected by FLASHExtender" << std::endl;
+      EventLine() << "[AMBIGUITY-IONS] fragments=" << match_count << " ptm_sites=0 output=0";
       return 0;
-    }
-
-    // Debug output for PTM sites
-    std::cout << "[getAmbiguityEnclosingIons] FLASHExtender detected " << result.ptm_sites.size() << " PTM sites:" << std::endl;
-    for (const auto& site : result.ptm_sites)
-    {
-      int start_idx = std::max(0, site.start_position - 1);
-      int end_idx = std::min(static_cast<int>(protein_sequence.size()), site.end_position);
-      String subsequence = protein_sequence.substr(start_idx, end_idx - start_idx);
-      bool is_ambiguous = site.start_position != site.end_position;
-      std::cout << "  PTM [" << site.start_position << "-" << site.end_position << "] "
-                << "\"" << subsequence << "\" "
-                << std::showpos << site.mass_shift << std::noshowpos << " Da"
-                << (is_ambiguous ? " (AMBIGUOUS)" : " (localized)") << std::endl;
     }
 
     // New data structures for interleaved PTM site output
@@ -1185,27 +1101,6 @@ namespace
       if (!brackets.left_ions.empty()) brackets.priority = std::max(brackets.priority, brackets.left_ions[0].intensity);
       if (!brackets.right_ions.empty()) brackets.priority = std::max(brackets.priority, brackets.right_ions[0].intensity);
 
-      // Debug output for this PTM site
-      std::cout << "[getAmbiguityEnclosingIons] PTM [" << site.start_position << "-" << site.end_position << "]:" << std::endl;
-      if (!brackets.left_ions.empty())
-      {
-        std::cout << "  Left bracket (primary): " << brackets.left_ions[0].ion_type << brackets.left_ions[0].fragment_index
-                  << " (intensity:" << brackets.left_ions[0].intensity << ", total candidates: " << brackets.left_ions.size() << ")" << std::endl;
-      }
-      else
-      {
-        std::cout << "  Left bracket: none found" << std::endl;
-      }
-      if (!brackets.right_ions.empty())
-      {
-        std::cout << "  Right bracket (primary): " << brackets.right_ions[0].ion_type << brackets.right_ions[0].fragment_index
-                  << " (intensity:" << brackets.right_ions[0].intensity << ", total candidates: " << brackets.right_ions.size() << ")" << std::endl;
-      }
-      else
-      {
-        std::cout << "  Right bracket: none found" << std::endl;
-      }
-
       if (!brackets.left_ions.empty() || !brackets.right_ions.empty())
         ptm_brackets.push_back(brackets);
     }
@@ -1258,8 +1153,6 @@ namespace
       ++output_idx;
     };
 
-    std::cout << "[getAmbiguityEnclosingIons] Output Phase 1: Primary brackets for " << ptm_brackets.size() << " PTM sites" << std::endl;
-
     // Phase 1: Primary brackets (first ion per PTM site)
     for (auto& brackets : ptm_brackets)
     {
@@ -1279,10 +1172,9 @@ namespace
       }
     }
 
-    std::cout << "[getAmbiguityEnclosingIons] After Phase 1: " << output_idx << " ions output" << std::endl;
+    const int primary_output = output_idx;
 
     // Phase 2: Secondary brackets (additional ions that don't cover ADDITIONAL PTMs)
-    std::cout << "[getAmbiguityEnclosingIons] Output Phase 2: Secondary brackets" << std::endl;
     for (size_t ion_idx = 1; output_idx < n; ++ion_idx)
     {
       bool any_output = false;
@@ -1320,7 +1212,10 @@ namespace
       if (!any_output) break;  // No more secondary ions available
     }
 
-    std::cout << "[getAmbiguityEnclosingIons] Total output: " << output_idx << " ions" << std::endl;
+    // ADR-0064: one summary event per call, replacing the per-site bracket dump.
+    EventLine() << "[AMBIGUITY-IONS] fragments=" << match_count << " ptm_sites=" << result.ptm_sites.size()
+                << " bracketed_sites=" << ptm_brackets.size() << " primary=" << primary_output
+                << " secondary=" << (output_idx - primary_output) << " output=" << output_idx;
 
     return output_idx;
   }
@@ -1360,9 +1255,6 @@ namespace
       else suffix_ions.push_back(m);
     }
 
-    std::cout << "[getTerminalFragmentIons] Found " << prefix_ions.size() << " prefix ions and "
-              << suffix_ions.size() << " suffix ions" << std::endl;
-
     // Sort prefix ions by fragment_index descending (rightmost first), then intensity descending
     std::sort(prefix_ions.begin(), prefix_ions.end(), [](const auto& a, const auto& b) {
       if (a.fragment_index != b.fragment_index) return a.fragment_index > b.fragment_index;
@@ -1374,25 +1266,6 @@ namespace
       if (a.fragment_index != b.fragment_index) return a.fragment_index > b.fragment_index;
       return a.intensity > b.intensity;
     });
-
-    if (!prefix_ions.empty())
-    {
-      std::cout << "[getTerminalFragmentIons] Top prefix ions (rightmost): ";
-      for (size_t i = 0; i < std::min(prefix_ions.size(), size_t(3)); ++i)
-      {
-        std::cout << prefix_ions[i].ion_type << prefix_ions[i].fragment_index << " ";
-      }
-      std::cout << std::endl;
-    }
-    if (!suffix_ions.empty())
-    {
-      std::cout << "[getTerminalFragmentIons] Top suffix ions (leftmost): ";
-      for (size_t i = 0; i < std::min(suffix_ions.size(), size_t(3)); ++i)
-      {
-        std::cout << suffix_ions[i].ion_type << suffix_ions[i].fragment_index << " ";
-      }
-      std::cout << std::endl;
-    }
 
     // Interleave output: prefix, suffix, prefix, suffix, ...
     int output_idx = 0;
@@ -1439,11 +1312,13 @@ namespace
       select_prefix = !select_prefix;  // Alternate between prefix and suffix
     }
 
-    std::cout << "[getTerminalFragmentIons] Returning " << output_idx << " interleaved ions:" << std::endl;
-    for (int i = 0; i < output_idx; ++i)
+    // ADR-0064: one summary event per call, replacing the per-ion dump.
     {
-      std::cout << "  " << ion_types[i] << fragment_indices[i] << " mass=" << masses[i]
-                << " qscore=" << qscores[i] << " charge=" << charges[i] << std::endl;
+      EventLine ev;
+      ev << "[TERMINAL-IONS] prefix=" << prefix_ions.size() << " suffix=" << suffix_ions.size() << " output=" << output_idx
+         << " ions=";
+      if (output_idx == 0) ev << '-';
+      for (int i = 0; i < output_idx; ++i) ev << (i > 0 ? "," : "") << ion_types[i] << fragment_indices[i];
     }
 
     return output_idx;

@@ -7,6 +7,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 #include <OpenMS/CHEMISTRY/Residue.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
 
@@ -587,41 +588,9 @@ namespace OpenMS
     auto theoretical = computeTheoreticalMasses(subseq, ion_types, rebased_ptms);
     if (theoretical.empty()) return scores;
 
-    // --- Log: precursor + subsequence ---
+    // The fragment's residues in the parent protein (1-based inclusive): the [MS3-SCORE] event and the detailed results.
     int prot_start_1based = ctx.region_start + subseq_start_1based;
     int prot_end_1based = prot_start_1based + fragment_ion_index - 1;
-    std::string display_seq = subseq.size() > 30
-        ? subseq.substr(0, 27) + "..."
-        : subseq;
-    std::cout << "[calibrateAndScore] Precursor: " << fragment_ion_type << fragment_ion_index
-              << " -> subsequence (residues " << prot_start_1based << "-" << prot_end_1based
-              << " of " << protein_sequence.size() << ")" << std::endl;
-    std::cout << "[calibrateAndScore] Subsequence: " << display_seq << std::endl;
-
-    // --- Log: PTM sites ---
-    std::cout << "[calibrateAndScore] PTM sites in subsequence: " << rebased_ptms.size() << std::endl;
-    for (const auto& ptm : rebased_ptms)
-    {
-      int idx_start = std::max(0, ptm.start_position - 1);
-      int idx_len = std::min(ptm.end_position, static_cast<int>(subseq.size())) - idx_start;
-      std::string ptm_subseq = subseq.substr(idx_start, std::max(idx_len, 0));
-      if (ptm.start_position == ptm.end_position)
-        std::cout << "  Residue " << ptm.start_position << ": ";
-      else
-        std::cout << "  Residue " << ptm.start_position << "-" << ptm.end_position << ": ";
-      std::cout << std::showpos << std::fixed << std::setprecision(3) << ptm.mass_shift
-                << std::noshowpos << " Da \"" << ptm_subseq << "\"" << std::endl;
-    }
-
-    // --- Log: ion types + theoretical count ---
-    std::cout << "[calibrateAndScore] Ion types: ";
-    for (size_t i = 0; i < ion_types.size(); ++i)
-    {
-      if (i > 0) std::cout << ", ";
-      std::cout << ion_types[i];
-    }
-    std::cout << std::endl;
-    std::cout << "[calibrateAndScore] Theoretical masses: " << theoretical.size() << std::endl;
 
     // Pass 1: loose matching for calibration
     std::vector<double> all_ppm_errors;
@@ -644,21 +613,6 @@ namespace OpenMS
         median_ppm = all_ppm_errors[mid];
 
       correction_factor = 1.0 / (1.0 + median_ppm * 1e-6);
-    }
-
-    // --- Log: calibration stats ---
-    if (all_ppm_errors.empty())
-    {
-      std::cout << "[calibrateAndScore] Calibration: no matches at loose tolerance (skipping correction)"
-                << std::endl;
-    }
-    else
-    {
-      std::cout << "[calibrateAndScore] Calibration: " << all_ppm_errors.size()
-                << " matches at " << std::fixed << std::setprecision(0) << loose_tolerance_ppm
-                << " ppm, median error: " << std::showpos << std::setprecision(2) << median_ppm
-                << std::noshowpos << " ppm, correction: " << std::setprecision(8)
-                << correction_factor << std::endl;
     }
 
     // Precompute protein prefix masses for detailed results
@@ -692,7 +646,6 @@ namespace OpenMS
     {
       if (variant_spectra[vi] == nullptr || variant_spectra[vi]->empty())
       {
-        std::cout << "[calibrateAndScore] Variant " << vi << ": (no spectrum)" << std::endl;
         continue;
       }
 
@@ -791,35 +744,17 @@ namespace OpenMS
           }
         }
       }
-
-      // --- Log: per-variant matches ---
-      std::cout << "[calibrateAndScore] Variant " << vi << ": "
-                << static_cast<int>(scores[vi]) << " matches ("
-                << variant_spectra[vi]->size() << " peaks, "
-                << theoretical.size() << " theoretical)" << std::endl;
-
-      // Sort by ion_type then position for readability
-      std::sort(details.begin(), details.end(),
-        [](const MatchDetail& a, const MatchDetail& b)
-        {
-          if (a.ion_type != b.ion_type) return a.ion_type < b.ion_type;
-          return a.position < b.position;
-        });
-
-      int show_count = std::min(static_cast<int>(details.size()), 10);
-      for (int di = 0; di < show_count; ++di)
-      {
-        const auto& md = details[di];
-        std::cout << "  " << md.ion_type << md.position
-                  << " - " << std::fixed << std::setprecision(2) << md.theoretical_mass
-                  << " Da -> " << md.observed_mass << " Da ("
-                  << std::showpos << std::setprecision(2) << md.ppm_error
-                  << std::noshowpos << " ppm)" << std::endl;
-      }
-      if (static_cast<int>(details.size()) > 10)
-        std::cout << "  ... (" << (details.size() - 10) << " more)" << std::endl;
     }
 
+    // ADR-0064: one summary event per MS3 scoring, replacing the per-variant and per-ion dump.
+    {
+      EventLine ev;
+      ev << "[MS3-SCORE] precursor=" << fragment_ion_type << fragment_ion_index << " residues=" << prot_start_1based << "-"
+         << prot_end_1based << " ptm_sites=" << rebased_ptms.size() << " theoretical=" << theoretical.size()
+         << " calibration_matches=" << all_ppm_errors.size() << " calibration_ppm=" << std::fixed << std::setprecision(2)
+         << median_ppm << " matched=";
+      for (size_t vi = 0; vi < scores.size(); ++vi) ev << (vi > 0 ? "," : "") << static_cast<int>(scores[vi]);
+    }
     return scores;
   }
 
