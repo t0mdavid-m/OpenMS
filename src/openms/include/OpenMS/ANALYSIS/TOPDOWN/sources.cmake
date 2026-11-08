@@ -14,6 +14,7 @@ set(sources_list_h
         FLASHIda/Config.h
         FLASHIda/Deconvolution.h
         FLASHIda/Exploration.h
+        FLASHIda/EventLog.h
         FLASHIda/FAIMS.h
         FLASHIda/KineticModel.h
         FLASHIda/Refine.h

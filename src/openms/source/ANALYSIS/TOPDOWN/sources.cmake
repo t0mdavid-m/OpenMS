@@ -13,6 +13,7 @@ set(sources_list
         FLASHIda/Config.cpp
         FLASHIda/Deconvolution.cpp
         FLASHIda/Exploration.cpp
+        FLASHIda/EventLog.cpp
         FLASHIda/FAIMS.cpp
         FLASHIda/KineticModel.cpp
         FLASHIda/Refine.cpp
