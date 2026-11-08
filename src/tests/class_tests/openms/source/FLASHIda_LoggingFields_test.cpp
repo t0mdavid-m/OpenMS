@@ -2219,10 +2219,11 @@ END_SECTION
 // §I1b -- identification.tsv : ADR-0049 refine columns
 /////////////////////////////////////////////////////////////
 // Under characterization.method flashtnt (the default every committed config runs) no match carries a
-// RefineCandidates record, so every identification row -- MS2 and MS3 alike -- ends in the seven sentinels:
+// RefineCandidates record, so every identification row -- MS2 and MS3 alike -- carries the seven sentinels:
 // annotation_score -1, total_shift empty, second_total_shift empty, second_score -1, cut -1, n_levels -1,
-// precursor_mass_difference empty. Asserted on the RAW line, because a tab-splitting parser can drop the
-// trailing empty field and the trailing-empty cell is exactly what is being pinned.
+// precursor_mass_difference empty. Asserted by header name on the RAW line split at every tab, because a
+// tab-splitting parser can drop an empty field and the empty cells are exactly what is being pinned. The five
+// ADR-0061 columns after them carry per-row values since push 4c; new_columns_carry_their_values pins those.
 START_SECTION(identification_refine_columns_are_sentinels_under_flashtnt)
 {
   auto ms1 = loadTsvScans(CYTC_MS1);
@@ -2236,9 +2237,30 @@ START_SECTION(identification_refine_columns_are_sentinels_under_flashtnt)
 
   std::ifstream in(dir + "/identification.tsv");
   std::string line;
+  // Every field, empty ones included (a stream-based split would drop a trailing empty field).
+  auto split_all = [](const std::string& l) {
+    std::vector<std::string> out;
+    size_t b = 0;
+    for (size_t e; (e = l.find('\t', b)) != std::string::npos; b = e + 1) out.push_back(l.substr(b, e - b));
+    out.push_back(l.substr(b));
+    return out;
+  };
   std::getline(in, line);  // header
-  // ADR-0061 push 4b: the refine sentinels are no longer the row's end; its five columns follow them.
-  const std::string sentinel_tail = "\t-1\t\t\t-1\t-1\t-1\t\tsequence\t-1.0000\t-1.0000\t0\t-1.0000";
+  if (!line.empty() && line.back() == '\r') line.pop_back();
+  const std::vector<std::string> header = split_all(line);
+  const std::vector<std::pair<std::string, std::string>> sentinels = {
+    {"annotation_score", "-1"}, {"total_shift", ""}, {"second_total_shift", ""}, {"second_score", "-1"},
+    {"cut", "-1"}, {"n_levels", "-1"}, {"precursor_mass_difference", ""}};
+  std::vector<size_t> sentinel_idx;
+  for (const auto& kv : sentinels)
+  {
+    const auto it = std::find(header.begin(), header.end(), kv.first);
+    TEST_TRUE(it != header.end())
+    if (it != header.end()) sentinel_idx.push_back(static_cast<size_t>(it - header.begin()));
+  }
+  const auto lvl = std::find(header.begin(), header.end(), std::string("ms_level"));
+  ABORT_IF(sentinel_idx.size() != sentinels.size() || lvl == header.end())
+  const size_t lvl_idx = static_cast<size_t>(lvl - header.begin());
   int n_rows = 0, n_ms2 = 0;
   while (std::getline(in, line))
   {
@@ -2247,12 +2269,10 @@ START_SECTION(identification_refine_columns_are_sentinels_under_flashtnt)
     ++n_rows;
     // 46 columns = 45 tabs, whatever the row type
     TEST_EQUAL(std::count(line.begin(), line.end(), '\t'), 45)
-    const bool tail_ok = line.size() >= sentinel_tail.size()
-                         && line.compare(line.size() - sentinel_tail.size(), sentinel_tail.size(), sentinel_tail) == 0;
-    TEST_TRUE(tail_ok)
-    // ms_level is column 2
-    const size_t t1 = line.find('\t'), t2 = line.find('\t', t1 + 1), t3 = line.find('\t', t2 + 1);
-    if (line.substr(t2 + 1, t3 - t2 - 1) == "2") ++n_ms2;
+    const std::vector<std::string> f = split_all(line);
+    ABORT_IF(f.size() != header.size())
+    for (size_t k = 0; k < sentinels.size(); ++k) TEST_EQUAL(f[sentinel_idx[k]], sentinels[k].second)
+    if (f[lvl_idx] == "2") ++n_ms2;
   }
   TEST_TRUE(n_rows > 0)
   TEST_TRUE(n_ms2 > 0)  // the MS2 identification row is the site Refine fills under method refine
