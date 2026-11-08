@@ -829,9 +829,102 @@ FLASHIda::FLASHIda(char* arg) :
         ms2_context_cache_[next.commands[ci].scan_id] = next.ms3_contexts[ci];
       }
     }
+    // ADR-0064: a governed re-dispatch is swapped in as the proteoform's live plan (its contexts cached there).
+    if (next.governed) pushed += pushGovernedMs3_(*next.governed, precursor_id, child_ids);
     results_row.commands_pushed = pushed;
     results_row.child_ids       = child_ids;
     return pushed;
+  }
+
+  int FLASHIda::pushGovernedMs3_(Exploration::GovernedMs3& gov, int precursor_id, std::vector<std::string>& child_ids)
+  {
+    // 1. Every new id carries its precursor id BEFORE the swap pushes it: the drain may dequeue it at once, and dequeue
+    //    acquires the queue_mutex_ the swap releases (stampAndPush_'s rule). A reconciled id is forgotten below.
+    std::map<int, std::pair<int, int>> owner_nominal_of;   // scan id -> (owner, nominal), for the sibling rule below
+    for (const Ms3PlanItem& item : gov.items)
+    {
+      for (const ScanCommand& c : item.commands)
+      {
+        setPrecursorForTracking_(c.scan_id, precursor_id);
+        owner_nominal_of[c.scan_id] = {item.owner_precursor_id, item.nominal};
+      }
+    }
+    // 2. The test seam between the plan and the swap.
+    beforeMs3Replan_();
+    // 3. The swap, in one queue_mutex_ hold: withdraw the proteoform's unsent items, insert the new ones re-checked
+    //    against what is sent now and the per-run cleavage cap.
+    const int max_targets = config_.characterization().max_targets;
+    const Ms3ReplanResult r = queue_.replaceMs3Plan(gov.key, std::move(gov.items), gov.snapshot_generation, max_targets);
+
+    // 4. Outside the queue lock. Withdrawn and reconciled ids never go out: no precursor id, no MS2 context (a
+    //    reconciled id never had one). Only an inserted id is cached, so it is identified when it returns.
+    std::vector<int> gone(r.withdrawn_scan_ids);
+    gone.insert(gone.end(), r.reconciled_scan_ids.begin(), r.reconciled_scan_ids.end());
+    forgetTracking_(gone);
+    for (int id : r.withdrawn_scan_ids) ms2_context_cache_.erase(id);
+    const std::set<int> inserted(r.inserted_scan_ids.begin(), r.inserted_scan_ids.end());
+    for (const auto& [id, ctx] : gov.contexts)
+      if (inserted.count(id) > 0) ms2_context_cache_[id] = ctx;
+    // A withdrawn or reconciled item keeps its stamp when a sibling of the same owner and nominal went out or is now
+    // queued (separate: another charge of the mass).
+    std::set<std::pair<int, int>> kept = r.committed_owner_nominals;
+    for (int id : r.inserted_scan_ids)
+    {
+      const auto o = owner_nominal_of.find(id);
+      if (o != owner_nominal_of.end() && o->second.second > 0) kept.insert(o->second);
+    }
+    undoMs3Items_(r.withdrawn, kept);
+    undoMs3Items_(r.reconciled, kept);
+    for (int id : r.inserted_scan_ids) child_ids.push_back(ScanCommandQueue::encode(id));
+
+    // 5. stdout only (ISSUE 8): no log column, no ida.log line.
+    {
+      std::ostringstream line;
+      line << std::fixed << std::setprecision(4);
+      line << "[MS3-REPLAN] key=" << (gov.key.accession.empty() ? std::string("-") : gov.key.accession) << ':'
+           << gov.key.region_start << '-' << gov.key.region_end << '@' << gov.key.commanded_mass << " entry=" << r.entry_id
+           << " owner=" << precursor_id << " withdrawn=" << r.withdrawn_scan_ids.size()
+           << " inserted=" << r.inserted_scan_ids.size() << " reconciled=" << r.reconciled_scan_ids.size()
+           << " committed_in_gap=" << r.committed_in_gap.size();
+      std::cout << line.str() << std::endl;
+    }
+    return static_cast<int>(r.inserted_scan_ids.size());
+  }
+
+  void FLASHIda::undoMs3Items_(const std::vector<Ms3PlanItem>& items, const std::set<std::pair<int, int>>& committed_owner_nominals)
+  {
+    if (items.empty()) return;
+    std::map<int, std::vector<Ms3PlanItem>> by_owner;
+    for (const Ms3PlanItem& item : items) by_owner[item.owner_precursor_id].push_back(item);
+    for (const auto& [owner, owned] : by_owner)
+    {
+      // ISSUE 5: a discriminating round the withdrawal completes is decided, not re-dispatched.
+      if (tracker_.withdrawMs3(owner, owned, committed_owner_nominals) == ProteoformTracker::Ms3Withdrawal::RoundComplete)
+        tracker_.decideRefine(owner);
+    }
+    // An unsent item's sweep group was never received, so it is forgotten whole.
+    for (const Ms3PlanItem& item : items)
+    {
+      if (item.sweep_group_id <= 0) continue;
+      if (!exploration_.dropGroup(item.sweep_group_id))
+        std::cout << "[MS3-REPLAN-INVARIANT] group=" << item.sweep_group_id << " owner=" << item.owner_precursor_id
+                  << " not dropped (unknown, or a variant was received)" << std::endl;
+    }
+    // A dropped group must not leave exploration_active_ set: it would suppress the cycle-time MS1.
+    publishExplorationState_();
+  }
+
+  void FLASHIda::undoExpiredMs3_()
+  {
+    if (!config_.characterization().per_proteoform) return;   // the inbox is only ever filled by governed items
+    const std::vector<Ms3PlanItem> expired = queue_.takeMs3Expired();
+    if (expired.empty()) return;
+    std::vector<int> ids;
+    for (const Ms3PlanItem& item : expired)
+      for (const ScanCommand& c : item.commands) ids.push_back(c.scan_id);
+    forgetTracking_(ids);
+    for (int id : ids) ms2_context_cache_.erase(id);
+    undoMs3Items_(expired, {});
   }
 
   int FLASHIda::waitForSearchIdle()
@@ -850,6 +943,7 @@ FLASHIda::FLASHIda(char* arg) :
   int FLASHIda::applyRegularSearch_(RegularSearch& job)
   {
     std::lock_guard<std::mutex> lock(analysis_mutex_);
+    undoExpiredMs3_();   // ADR-0064: before planning, give back what expired governed MS3s took
     std::vector<IdaLogger::IdRowDescriptor> id_rows;
     const int pushed = finishRegularMS2_(&job.result, false, job.spectrum, job.has_spectrum ? &job.spectrum : nullptr,
                                          job.parent_ctx, job.precursor_id, job.parent_id_str, job.rt,
@@ -866,6 +960,7 @@ FLASHIda::FLASHIda(char* arg) :
   int FLASHIda::applyVariantSearch_(VariantSearch& job)
   {
     std::lock_guard<std::mutex> lock(analysis_mutex_);
+    undoExpiredMs3_();   // ADR-0064: before planning, give back what expired governed MS3s took
     Exploration::FeedResultInfo expl_result =
         exploration_.applyVariant(job.input, &job.match, false, queue_, &tracker_, job.precursor_id);
     std::vector<IdaLogger::IdRowDescriptor> id_rows;
@@ -956,6 +1051,8 @@ FLASHIda::FLASHIda(char* arg) :
           ms2_context_cache_[ms3_targeting.commands[ci].scan_id] = ms3_targeting.ms3_contexts[ci];
         }
       }
+      // ADR-0064: a governed MS3 plan is swapped in as the proteoform's live plan (its contexts cached there).
+      if (ms3_targeting.governed) commands_pushed += pushGovernedMs3_(*ms3_targeting.governed, precursor_id, child_ids);
     }
 
     // ADR-0061 d.7: a searched MS2 whose FLASHTnT number reaches the threshold closes its species out, keyed on the
@@ -1057,6 +1154,9 @@ FLASHIda::FLASHIda(char* arg) :
     // returns on the regular MS3 path. Empty unless the group cascaded to MS3.
     for (const auto& [ms3_scan_id, parent_ms2_context] : expl_result.ms2_context_cache)
       ms2_context_cache_[ms3_scan_id] = parent_ms2_context;
+    // ADR-0064: the group's governed next-level plan, swapped in; its inserted ids join the group's children.
+    int governed_pushed = 0;
+    if (expl_result.governed) governed_pushed = pushGovernedMs3_(*expl_result.governed, precursor_id, expl_result.child_ids);
 
     int expl_mass_count = mass_count;
     const DeconvolvedSpectrum* expl_spec = spectrum;
@@ -1073,7 +1173,7 @@ FLASHIda::FLASHIda(char* arg) :
     }
     // Fill scan_results row in canonical order (copy expl_result.* by value — it dies at block end).
     results_row.mass_count          = expl_mass_count;
-    results_row.commands_pushed     = static_cast<int>(expl_result.commands.size());
+    results_row.commands_pushed     = static_cast<int>(expl_result.commands.size()) + governed_pushed;
     results_row.child_ids           = expl_result.child_ids;
     results_row.deconv_spectrum     = expl_spec;
     results_row.parent_tracking_id  = parent_id;
@@ -1122,7 +1222,7 @@ FLASHIda::FLASHIda(char* arg) :
       }
 
     publishExplorationState_();
-    return static_cast<int>(expl_result.commands.size());
+    return static_cast<int>(expl_result.commands.size()) + governed_pushed;
   }
 
   bool FLASHIda::isClosedOut_(double mass, double rt, int precursor_id)
@@ -1218,6 +1318,7 @@ FLASHIda::FLASHIda(char* arg) :
     std::lock_guard<std::mutex> lock(analysis_mutex_);
     EventLog::setRt(rt);   // ADR-0065: the events.log prefix carries the last retention time seen
     board_.setRt(rt);
+    undoExpiredMs3_();   // ADR-0064: before planning, give back what expired governed MS3s took
 
     // Tracking ID extraction (perspective: scan processed is parent of potential children)
     std::string parent_desc_str = scan_description ? std::string(scan_description) : "";
@@ -1593,6 +1694,9 @@ FLASHIda::FLASHIda(char* arg) :
         {
           stampAndPush_(c, precursor_id);
         }
+        // ADR-0064: a governed plan, swapped in (an MS3 group's completion makes none today; kept with the other sites).
+        int governed_pushed = 0;
+        if (expl_result.governed) governed_pushed = pushGovernedMs3_(*expl_result.governed, precursor_id, expl_result.child_ids);
         // Seed the parent-MS2 context of the production MS3 a completed MS3 group re-acquires (overrides
         // set); that scan is not a variant, so it returns on the regular MS3 path and needs the lookup.
         for (const auto& [ms3_scan_id, parent_ms2_context] : expl_result.ms2_context_cache)
@@ -1617,7 +1721,7 @@ FLASHIda::FLASHIda(char* arg) :
         results_row.tic_coverage        = expl_result.metric.tic_coverage;
         // Logging
         results_row.mass_count          = expl_mass_count;
-        results_row.commands_pushed     = static_cast<int>(expl_result.commands.size());
+        results_row.commands_pushed     = static_cast<int>(expl_result.commands.size()) + governed_pushed;
         results_row.child_ids           = expl_result.child_ids;
         results_row.deconv_spectrum     = expl_spec;
         results_row.parent_tracking_id  = parent_id;
@@ -1648,7 +1752,7 @@ FLASHIda::FLASHIda(char* arg) :
         }
 
         publishExplorationState_();
-        return_code = static_cast<int>(expl_result.commands.size());
+        return_code = static_cast<int>(expl_result.commands.size()) + governed_pushed;
       }
       else
       {

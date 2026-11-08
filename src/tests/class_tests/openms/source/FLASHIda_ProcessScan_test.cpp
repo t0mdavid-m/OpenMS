@@ -3962,4 +3962,63 @@ START_SECTION(authored_charge_species_buys_no_quant_ms3)
 }
 END_SECTION
 
+// ===== Per-proteoform MS3 re-planning (ADR-0064) end to end ======================================================
+//
+// The ms3_fragments_cytc recipe (inclusion-pinned cytC, objective fragments, budget 3) driven through runInterleaved
+// with characterization.per_proteoform off and on. The drive feeds the one MS2 fixture for every MS2 command, so every
+// MS2 identifies cytC again: surveys whose commanded masses are the same species (equal within the MS1 tolerance, or
+// 1..3 isotope steps apart) are one proteoform, whose second identification finds its fragments sent at the same
+// intensity (refused below 2x) and its cleavage room used. The MS3s return on the MS2-as-MS3 shortcut.
+//
+// FAILS UNDER: a governed plan that adds MS3s (on > off), a cap that is not per proteoform (more than max_targets
+// distinct cleavages for one commanded-mass cluster), or a gate without the SNR test (an on-run MS3 at window SNR <= 1
+// -- the off run, the non-vacuity, has such MS3s on this fixture).
+START_SECTION(per_proteoform_end_to_end_cytc)
+{
+  auto ms1 = loadTsvScans(ms1_cytc_tsv_path);
+  auto ms2 = loadTsvScans(ms2_cytc_fresh_tsv_path);
+  ABORT_IF(ms1.empty() || ms2.empty())
+  const int max_targets = 3;
+
+  auto drive = [&](bool per_proteoform) {
+    nlohmann::json j = nlohmann::json::parse(ms3_mode1_json);
+    j["deconvolution"]["tqscore_threshold"] = 0.0;
+    j["identification"]["characterization"] = {{"mode", "fragments"}, {"max_targets", max_targets}, {"per_proteoform", per_proteoform}};
+    const std::string cfg = j.dump();
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    return runInterleaved(&ida, ms1, ms2, nullptr, 4000).ms3_cmds;
+  };
+  const std::vector<ScanCommand> off = drive(false);
+  const std::vector<ScanCommand> on = drive(true);
+
+  int off_low_snr = 0, on_low_snr = 0;
+  for (const ScanCommand& c : off) off_low_snr += (c.window_snr <= 1.0) ? 1 : 0;
+  for (const ScanCommand& c : on) on_low_snr += (c.window_snr <= 1.0) ? 1 : 0;
+  std::cout << "[per_proteoform_end_to_end_cytc] ms3 off=" << off.size() << " on=" << on.size()
+            << " low_snr off=" << off_low_snr << " on=" << on_low_snr << std::endl;
+
+  TEST_EQUAL(off.empty(), false)          // non-vacuity: the recipe dispatches MS3
+  TEST_EQUAL(on.empty(), false)
+  TEST_EQUAL(on.size() <= off.size(), true)
+  TEST_EQUAL(off_low_snr > 0, true)       // non-vacuity: ungoverned, some MS3 window is not above SNR 1
+  TEST_EQUAL(on_low_snr, 0)               // governed, every MS3 window is
+
+  // Distinct cleavages per proteoform: the MS3s clustered by their commanded precursor mass (stage 0's mono_mass) with
+  // the engine's own rule, the first-seen mass anchoring a cluster (one inclusion target, one accession, one region).
+  std::vector<std::pair<Ms3ProteoformKey, std::set<std::string>>> clusters;
+  for (const ScanCommand& c : on)
+  {
+    Ms3ProteoformKey k;
+    k.commanded_mass = c.mono_mass;
+    std::string ion;
+    if (!decodeTrailingIonKey(c.scan_description, ion)) ion = std::string("-") + c.scan_description;
+    auto it = std::find_if(clusters.begin(), clusters.end(),
+                           [&](const std::pair<Ms3ProteoformKey, std::set<std::string>>& cl) { return sameProteoform(cl.first, k, 10.0); });
+    if (it == clusters.end()) clusters.push_back({k, {ion}});
+    else it->second.insert(ion);
+  }
+  for (const auto& cl : clusters) TEST_EQUAL(static_cast<int>(cl.second.size()) <= max_targets, true)
+}
+END_SECTION
+
 END_TEST

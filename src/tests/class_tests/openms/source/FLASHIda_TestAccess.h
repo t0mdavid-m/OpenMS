@@ -147,6 +147,8 @@ namespace OpenMS
     /// the one gap in which a commit can race a re-plan. Sets the engine's private beforeReplan_ hook (owner
     /// 2026-10-22: a private hook, not a production seam); an empty function clears it.
     static void onBeforeReplan(FLASHIda& f, std::function<void()> fn) { f.before_replan_ = std::move(fn); }
+    /// ADR-0064: run @p fn between a governed MS3 plan and its swap (replaceMs3Plan), the same kind of seam.
+    static void onBeforeMs3Replan(FLASHIda& f, std::function<void()> fn) { f.before_ms3_replan_ = std::move(fn); }
 
     /// Runs @p fn on every survey's deconvolved MS1 between the deconvolution and the selection
     /// (PrecursorSelection's private after_deconvolve_ seam), so the WHOLE survey path -- selection, plan units,

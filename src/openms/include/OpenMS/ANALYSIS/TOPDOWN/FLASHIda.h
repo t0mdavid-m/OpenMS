@@ -389,6 +389,35 @@ namespace OpenMS
     int refineRoundClose_(int precursor_id, const ScanCommand& parent_ctx, std::vector<std::string>& child_ids,
                           IdaLogger::ScanRowDescriptor& results_row);
 
+    // ===== Per-proteoform MS3 re-planning (ADR-0064, characterization.per_proteoform) ===========================
+
+    /// Swap in a governed MS3 plan (Exploration::GovernedMs3) for @p precursor_id, the one site that calls
+    /// queue_.replaceMs3Plan: stamp every new id's precursor id first (the drain may dequeue it at once), run the
+    /// test seam, swap in one queue_mutex_ hold, then -- outside it -- forget the withdrawn and reconciled ids, drop the
+    /// withdrawn ids' MS2 contexts, cache the inserted ids' and undo the withdrawn and reconciled items. Appends the
+    /// inserted ids to @p child_ids and prints `[MS3-REPLAN]`. Caller holds analysis_mutex_. Returns the commands
+    /// inserted.
+    int pushGovernedMs3_(Exploration::GovernedMs3& gov, int precursor_id, std::vector<std::string>& child_ids);
+
+    /// Give back what unsent governed MS3 items took at plan time (ADR-0064): per owner, tracker_.withdrawMs3 (a
+    /// discriminating round it completes is decided, not re-dispatched); every sweep group is dropped (an
+    /// `[MS3-REPLAN-INVARIANT]` line if one cannot be), then the exploration state is republished.
+    /// @p committed_owner_nominals: (precursor id, nominal) of items that went out or stay queued -- their siblings
+    /// keep the stamp. Caller holds analysis_mutex_.
+    void undoMs3Items_(const std::vector<Ms3PlanItem>& items, const std::set<std::pair<int, int>>& committed_owner_nominals);
+
+    /// Take the queue's expired governed items (cleanupExpired's inbox) and undo them: their ids are forgotten, their
+    /// MS2 contexts dropped. A no-op with characterization.per_proteoform off. Caller holds analysis_mutex_.
+    void undoExpiredMs3_();
+
+    /// Test seam between a governed MS3 plan and its swap (replaceMs3Plan), so a test can commit an MS3 in exactly
+    /// that gap. Empty in production; only FLASHIda_TestAccess.h sets it.
+    std::function<void()> before_ms3_replan_;
+    void beforeMs3Replan_()
+    {
+      if (before_ms3_replan_) before_ms3_replan_();
+    }
+
     /// Steady-clock reference for timestamps
     std::chrono::steady_clock::time_point engine_start_time_;
 

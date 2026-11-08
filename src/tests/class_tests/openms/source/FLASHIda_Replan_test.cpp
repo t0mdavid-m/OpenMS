@@ -22,6 +22,8 @@
 #include "FLASHIda_TestAccess.h"
 #include "FLASHIda_TestHelpers.h"  // ground-truth harness: ScanData/loadTsvScans/runInterleaved, TSVFile
 
+#include <nlohmann/json.hpp>   // the per-proteoform configs (ADR-0064) edit the parsed document
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -580,7 +582,7 @@ namespace
   std::multiset<std::string> pushSites(const std::string& source)
   {
     static const std::vector<std::string> calls = {"stampAndPush_(", "queue_.push(", "queue_.pushAndDequeue(", "queue_.replacePlan(",
-                                                   "queue_.registerAdjustable("};
+                                                   "queue_.registerAdjustable(", "queue_.replaceMs3Plan("};
     std::multiset<std::string> sites;
     std::istringstream in(source);
     std::string line, fn;
@@ -624,6 +626,149 @@ namespace
       }
     }
     return sites;
+  }
+
+  // ---- Per-proteoform MS3 re-planning (ADR-0064) -----------------------------------------------------------------
+
+  /// The cytC fragments-objective recipe (ms3_fragments_cytc's): inclusion-pinned cytC, one species per survey, MS3
+  /// budget 3, tqscore 0. @p per_proteoform: absent (nullopt) or the authored value. @p separate: a survey's cytC unit
+  /// is one MS2 per charge, each its own Precursor of the same proteoform (one commanded mass).
+  std::string perProteoformConfig(const std::string& log_dir, std::optional<bool> per_proteoform, bool separate = false)
+  {
+    nlohmann::json j = nlohmann::json::parse(buildJsonWithLogDir(log_dir, /*enable_ms3=*/true));
+    j["deconvolution"]["tqscore_threshold"] = 0.0;
+    j["precursor_selection"]["max_precursors"] = 1;
+    if (separate) j["precursor_selection"]["precursor_charges"] = "separate";
+    j["identification"]["flashtnt"] = {{"min_length", 3}, {"max_length", 8}, {"max_blind_mod_count", 2}, {"max_mod_mass", 700}};
+    nlohmann::json ch = {{"mode", "fragments"}, {"max_targets", 3}};
+    if (per_proteoform) ch["per_proteoform"] = *per_proteoform;
+    j["identification"]["characterization"] = ch;
+    return j.dump();
+  }
+
+  /// What a drive dequeued, as the fields a decision moves (no timestamps): level, priority, description, stages.
+  std::vector<std::string> commandSequence(const std::vector<ScanCommand>& cmds)
+  {
+    std::vector<std::string> out;
+    for (const ScanCommand& c : cmds)
+    {
+      std::ostringstream o;
+      o << c.msn_level << '|' << c.priority << '|' << c.scan_description << '|' << c.num_stages << '|' << c.mono_mass;
+      for (int k = 0; k < c.num_stages && k < 2; ++k)
+        o << '|' << c.stages[k].precursor_mz << '|' << c.stages[k].charge_state << '|' << c.stages[k].isolation_width << '|'
+          << c.stages[k].collision_energy;
+      o << '|' << c.window_snr << '|' << c.parent_scan_id;
+      out.push_back(o.str());
+    }
+    return out;
+  }
+
+  /// One `[MS3-REPLAN]` line, as pushGovernedMs3_ printed it.
+  struct Ms3ReplanLine
+  {
+    int entry = -1, owner = -1, withdrawn = -1, inserted = -1, reconciled = -1, committed_in_gap = -1;
+  };
+
+  std::vector<Ms3ReplanLine> ms3ReplanLines(const std::string& out)
+  {
+    std::vector<Ms3ReplanLine> lines;
+    std::istringstream in(out);
+    std::string line;
+    while (std::getline(in, line))
+    {
+      if (line.rfind("[MS3-REPLAN] ", 0) != 0) continue;
+      Ms3ReplanLine r;
+      std::istringstream tok(line.substr(13));
+      std::string kv;
+      while (tok >> kv)
+      {
+        const auto eq = kv.find('=');
+        if (eq == std::string::npos) continue;
+        const std::string k = kv.substr(0, eq);
+        const int v = std::atoi(kv.substr(eq + 1).c_str());
+        if (k == "entry") r.entry = v;
+        else if (k == "owner") r.owner = v;
+        else if (k == "withdrawn") r.withdrawn = v;
+        else if (k == "inserted") r.inserted = v;
+        else if (k == "reconciled") r.reconciled = v;
+        else if (k == "committed_in_gap") r.committed_in_gap = v;
+      }
+      lines.push_back(r);
+    }
+    return lines;
+  }
+
+  /// Two identifications of one proteoform, the second before any MS3 of the first went out. Surveys are fed until
+  /// one acquires cytC at two charges (separate); both MS2s are dequeued, then both fed (each identifies cytC at the
+  /// same commanded mass), and only then is the queue drained and every drained MS3 fed back.
+  struct TwoIdDrive
+  {
+    bool ok = false;                  ///< two MS2s of one survey were dequeued and fed
+    std::string out;                  ///< stdout of the two MS2 feeds
+    std::vector<ScanCommand> ms3;     ///< the MS3s the drain handed out after them
+    std::vector<int> ms3_pids;        ///< each drained MS3's precursor id
+    int pid_second = 0;               ///< the second MS2's precursor id
+    size_t cache_before = 0, cache_after_ms2 = 0, cache_after_ms3 = 0;
+  };
+
+  TwoIdDrive driveTwoIdentifications(const std::string& cfg, const std::vector<ScanData>& ms1, const ScanData& ms2)
+  {
+    TwoIdDrive d;
+    captureCout([&] {
+      FLASHIda ida(const_cast<char*>(cfg.c_str()));
+      std::vector<ScanCommand> ms2s;
+      size_t fed = 0;
+      for (int it = 0; it < 400 && ms2s.size() < 2; ++it)
+      {
+        ScanCommand c{};
+        if (ida.getNextScanCommand(c) != 1) break;
+        if (c.is_agc || c.scan_description[0] == '\0') continue;
+        if (c.msn_level == 2)
+        {
+          ms2s.push_back(c);
+          continue;
+        }
+        if (c.msn_level != 1) continue;
+        ms2s.clear();   // two MS2s of ONE survey: a survey that acquired one is not used
+        if (fed >= ms1.size()) break;
+        const ScanData& s = ms1[fed++];
+        ida.processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1, c.scan_description, c.faims_cv,
+                        instrumentScanNumberOf(s));
+        ida.waitForSearchIdle();
+      }
+      if (ms2s.size() < 2) return;
+
+      d.cache_before = FLASHIdaTestAccess::ms2ContextCacheSize(ida);
+      d.out = captureCout([&] {
+        for (int k = 0; k < 2; ++k)
+        {
+          ida.processScan(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt, 2, ms2s[k].scan_description, 0.0,
+                          instrumentScanNumberOf(ms2));
+          ida.waitForSearchIdle();
+        }
+      });
+      d.cache_after_ms2 = FLASHIdaTestAccess::ms2ContextCacheSize(ida);
+      d.pid_second = FLASHIdaTestAccess::precursorIdFor(ida, ms2s[1].scan_id);
+
+      for (int it = 0; it < 400; ++it)
+      {
+        ScanCommand c{};
+        if (ida.getNextScanCommand(c) != 1) break;
+        if (c.msn_level == 1 && c.priority == 3) break;   // the idle survey: the queue is drained
+        if (c.msn_level < 3) continue;                   // the survey's other charges: dequeued, not fed
+        d.ms3.push_back(c);
+        d.ms3_pids.push_back(FLASHIdaTestAccess::precursorIdFor(ida, c.scan_id));
+      }
+      for (const ScanCommand& c : d.ms3)
+      {
+        ida.processScan(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt, 3, c.scan_description, 0.0,
+                        instrumentScanNumberOf(ms2));
+        ida.waitForSearchIdle();
+      }
+      d.cache_after_ms3 = FLASHIdaTestAccess::ms2ContextCacheSize(ida);
+      d.ok = true;
+    });
+    return d;
   }
 } // namespace
 
@@ -1150,6 +1295,8 @@ START_SECTION(push_site_inventory)
   const std::multiset<std::string> expected = {
     // the survey's plan, in one call
     "runSurveyMS1_ | const ReplanResult replan = queue_.replacePlan(faims_cv, std::move(units), adjust, replace_remainder_of);",
+    // ADR-0064: a proteoform's governed MS3 plan, in one call (per_proteoform on; the stampAndPush_ rows below are the off branch)
+    "pushGovernedMs3_ | const Ms3ReplanResult r = queue_.replaceMs3Plan(gov.key, std::move(gov.items), gov.snapshot_generation, max_targets);",
     // the five permanent sites
     "refineRoundClose_ | stampAndPush_(c, precursor_id);",                  // refine re-dispatch
     // ADR-0062: the two MS2 tails a search worker's apply also runs (inline when nothing is searched)
@@ -1172,6 +1319,87 @@ START_SECTION(push_site_inventory)
   for (const auto& s : expected)
     if (expected.count(s) != found.count(s)) std::cerr << "expected push site: " << s << " x" << expected.count(s) << std::endl;
   TEST_EQUAL(found == expected, true)
+}
+END_SECTION
+
+// ---- Per-proteoform MS3 re-planning (ADR-0064) -------------------------------------------------------------------
+
+// With identification.characterization.per_proteoform false the engine is the engine without the key: the same cytC
+// fragments drive dequeues the same commands, field for field, and nothing is governed.
+START_SECTION(per_proteoform_off_is_identical_to_an_absent_key)
+{
+  const auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  const auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  std::vector<std::string> absent, off;
+  size_t ms3_absent = 0;
+  const std::string out_absent = captureCout([&] {
+    const std::string cfg = perProteoformConfig(freshLogDir("per_proteoform_absent"), std::nullopt);
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    const AcqResult r = runInterleaved(&ida, ms1, ms2, nullptr, 4000);
+    absent = commandSequence(r.all_cmds);
+    ms3_absent = r.ms3_cmds.size();
+  });
+  const std::string out_off = captureCout([&] {
+    const std::string cfg = perProteoformConfig(freshLogDir("per_proteoform_off"), false);
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    off = commandSequence(runInterleaved(&ida, ms1, ms2, nullptr, 4000).all_cmds);
+  });
+  TEST_EQUAL(ms3_absent > 0, true)   // non-vacuity: the drive dispatches MS3
+  TEST_EQUAL(absent.size(), off.size())
+  TEST_EQUAL(absent == off, true)
+  TEST_EQUAL(out_absent.find("[MS3-REPLAN]") == std::string::npos, true)
+  TEST_EQUAL(out_off.find("[MS3-REPLAN]") == std::string::npos, true)
+}
+END_SECTION
+
+// A second identification of a proteoform replaces its still-unsent MS3s: under separate, two charges of one cytC
+// survey are two Precursors of one proteoform; the second's plan withdraws all of the first's (none was sent), and only
+// the live plan -- stamped with the second Precursor's id -- goes out. Ungoverned, both plans go out.
+START_SECTION(per_proteoform_second_identification_replaces_unsent_ms3)
+{
+  const auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  const auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  const TwoIdDrive on = driveTwoIdentifications(perProteoformConfig(freshLogDir("pp_two_ids_on"), true, true), ms1, ms2[0]);
+  const TwoIdDrive off = driveTwoIdentifications(perProteoformConfig(freshLogDir("pp_two_ids_off"), false, true), ms1, ms2[0]);
+  ABORT_IF(!on.ok || !off.ok)
+
+  const std::vector<Ms3ReplanLine> lines = ms3ReplanLines(on.out);
+  TEST_EQUAL(lines.size(), 2)
+  ABORT_IF(lines.size() != 2)
+  TEST_EQUAL(lines[0].withdrawn, 0)
+  TEST_EQUAL(lines[0].inserted > 0, true)
+  TEST_EQUAL(lines[1].entry, lines[0].entry)              // one proteoform, one entry
+  TEST_NOT_EQUAL(lines[1].owner, lines[0].owner)          // ... planned by two Precursors
+  TEST_EQUAL(lines[1].withdrawn, lines[0].inserted)       // every unsent MS3 of the first plan
+  TEST_EQUAL(lines[1].inserted > 0, true)
+  TEST_EQUAL(lines[1].committed_in_gap, 0)
+  TEST_EQUAL(static_cast<int>(on.ms3.size()), lines[1].inserted)   // only the live plan goes out
+  for (int pid : on.ms3_pids) TEST_EQUAL(pid, on.pid_second)
+
+  TEST_EQUAL(off.out.find("[MS3-REPLAN]") == std::string::npos, true)
+  TEST_EQUAL(off.ms3.size() > on.ms3.size(), true)        // non-vacuity: ungoverned, both plans go out
+}
+END_SECTION
+
+// The withdrawn MS3s give their MS2 contexts back at the swap, and every live one is consumed by its return: the
+// context cache ends where it started.
+START_SECTION(per_proteoform_ms2_context_cache_returns_to_baseline)
+{
+  const auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  const auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  const TwoIdDrive on = driveTwoIdentifications(perProteoformConfig(freshLogDir("pp_cache_on"), true, true), ms1, ms2[0]);
+  ABORT_IF(!on.ok)
+  const std::vector<Ms3ReplanLine> lines = ms3ReplanLines(on.out);
+  ABORT_IF(lines.size() != 2)
+  TEST_EQUAL(lines[1].withdrawn > 0, true)                                  // non-vacuity: there were contexts to drop
+  TEST_EQUAL(static_cast<int>(on.cache_after_ms2), static_cast<int>(on.cache_before) + lines[1].inserted)   // the live plan's only
+  TEST_EQUAL(on.cache_after_ms3, on.cache_before)                           // baseline
 }
 END_SECTION
 
