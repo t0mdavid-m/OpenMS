@@ -34,6 +34,7 @@
 
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/KineticModel.h>   // precursorShare on the regular MSn rows (ADR-0048)
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/CandidateAdmission.h>   // sameSpeciesMass (ADR-0061 d.8)
@@ -48,10 +49,12 @@
 #include <climits>
 #include <cmath>
 #include <functional>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -192,7 +195,7 @@ namespace OpenMS
       }
       if (entry == nullptr)
       {
-        std::cerr << "[SEARCH-ERROR] PrSM accession " << best->getAccession() << " is not in the reference; the MS2 identifies nothing" << std::endl;
+        EventLine(EventLevel::Error) << "[SEARCH-ERROR] PrSM accession " << best->getAccession() << " is not in the reference; the MS2 identifies nothing";
         return out;
       }
       out.found = true;
@@ -200,6 +203,26 @@ namespace OpenMS
       out.protein_sequence = entry->sequence;
       out.accession = entry->identifier;
       return out;
+    }
+
+    /// ADR-0064: the operator's ID line for one searched MS2, from the values its identification row and close-out use.
+    void sayIdentification(const std::string& id, const FragmentAnalysis::ProteoformMatch& m, double commanded_mass,
+                           bool closed_out, const std::optional<double>& threshold, double rt_window_s)
+    {
+      std::ostringstream op;
+      op << '#' << id << "  " << SpectralDeconvolution::getNominalMass(commanded_mass) << "  ";
+      if (m.proteoform_sequence.empty() || m.fragments.empty())
+      {
+        op << "no ID";
+      }
+      else
+      {
+        op << "score " << std::fixed << std::setprecision(0) << m.search_identification_score;
+        if (closed_out) op << "  closed out " << rt_window_s << " s";
+        else if (threshold.has_value()) op << "  below " << *threshold;
+        if (!m.matched_protein.empty()) op << "  " << m.matched_protein;
+      }
+      EventLog::say(OperatorKind::Id, op.str());
     }
   } // namespace
 
@@ -281,9 +304,11 @@ FLASHIda::FLASHIda(char* arg) :
         auto proteome = std::make_unique<ProteomeSearch>(reference, params);
         if (proteome->reference().empty())
           throw std::invalid_argument("Config: identification.reference has no target entry; nothing could be identified (ADR-0061).");
-        std::cout << "[SEARCH-PREPARE] ion_types=" << ListUtils::concatenate(ions, ",") << " entries=" << proteome->reference().size()
-                  << " ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - prepare_start).count()
-                  << std::endl;
+        const auto prepare_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - prepare_start).count();
+        EventLine() << "[SEARCH-PREPARE] ion_types=" << ListUtils::concatenate(ions, ",") << " entries=" << proteome->reference().size()
+                  << " ms=" << prepare_ms;
+        EventLog::say(OperatorKind::Info, "Reference: " + std::to_string(proteome->reference().size()) + " entries, ion types "
+                                              + std::string(ListUtils::concatenate(ions, ",")) + " (prepared in " + std::to_string(prepare_ms) + " ms)");
         proteomes_.emplace(ions, std::move(proteome));
       }
       // run() prints its INFO lines per MS2 through OpenMS_Log_info; silenced once per process, before any worker runs
@@ -623,9 +648,17 @@ FLASHIda::FLASHIda(char* arg) :
     for (int g : replan.reconciled_sweep_groups) exploration_.dropGroup(g);
     forgetTracking_(replan.dropped_scan_ids);
     forgetTracking_(replan.reconciled_scan_ids);
-    std::cout << "[REPLAN] cv=" << faims_cv << " survey=" << ScanCommandQueue::encode(parent_tracking_id) << " kept=" << replan.kept
-              << " dropped=" << replan.dropped_scan_ids.size() << " added=" << replan.added << " adjusted=" << replan.adjusted
-              << std::endl;
+    EventLine() << "[REPLAN] cv=" << faims_cv << " survey=" << ScanCommandQueue::encode(parent_tracking_id) << " kept=" << replan.kept
+              << " dropped=" << replan.dropped_scan_ids.size() << " added=" << replan.added << " adjusted=" << replan.adjusted;
+    {
+      // ADR-0064: the operator's line for this decision survey, from the counts the [REPLAN] event logs.
+      std::ostringstream op;
+      op << '#' << ScanCommandQueue::encode(parent_tracking_id);
+      if (faims_.isEnabled()) op << "  cv " << faims_cv;
+      op << "  " << selection_.deconvolvedMS1().size() << " species, selected " << selected.size() << ", plan kept "
+         << replan.kept << " added " << replan.added << " dropped " << replan.dropped_scan_ids.size();
+      EventLog::say(OperatorKind::Ms1, op.str());
+    }
 
     // The survey's record covers the commands it actually queued: a reconciled one never was.
     if (!replan.reconciled_scan_ids.empty())
@@ -678,7 +711,7 @@ FLASHIda::FLASHIda(char* arg) :
       ScanCommandQueue::writeMs1Description(ms1, ScanRole::Survey);
 
       queue_.push(ms1);
-      std::cout << "[TRACK-CREATE] id=" << next_ms1_id << " ms_level=1 type=cv_transition cv=" << next_cv << std::endl;
+      EventLine() << "[TRACK-CREATE] id=" << next_ms1_id << " ms_level=1 type=cv_transition cv=" << next_cv;
     }
 
     // Update atomics for lock-free reads by getNextScanCommand
@@ -740,9 +773,8 @@ FLASHIda::FLASHIda(char* arg) :
     if (mdl == nullptr || !mdl->winner_spectrum || !mdl->winner_cmd)
     {
       // Never fall back to mdl->ms2_ctx: it is the FIRST fed scan's context, not the winner's.
-      std::cout << "[MS3-REDISPATCH] precursor_id=" << precursor_id
-                << " skipped reason=" << (mdl == nullptr ? "no_model" : !mdl->winner_spectrum ? "no_winner_spectrum" : "no_winner_command")
-                << std::endl;
+      EventLine() << "[MS3-REDISPATCH] precursor_id=" << precursor_id
+                << " skipped reason=" << (mdl == nullptr ? "no_model" : !mdl->winner_spectrum ? "no_winner_spectrum" : "no_winner_command");
       return 0;
     }
     // No publishExplorationState_() after this dispatch, unlike the other dispatch sites: dispatchFromModel opens an
@@ -859,8 +891,8 @@ FLASHIda::FLASHIda(char* arg) :
       else
       {
         if (config_.identification().method == AnnotationMethod::Refine)
-          std::cout << "[REFINE] precursor_id=" << precursor_id << " tracking_id=" << parent_id_str
-                    << " scan=" << instrument_scan_number << std::endl;
+          EventLine() << "[REFINE] precursor_id=" << precursor_id << " tracking_id=" << parent_id_str
+                    << " scan=" << instrument_scan_number;
         ms3_targeting = exploration_.initiateNextLevel(2, match_spec, parent_ctx.faims_cv, queue_, &parent_ctx,
                                                        &tracker_, precursor_id);
       }
@@ -886,6 +918,9 @@ FLASHIda::FLASHIda(char* arg) :
     const bool closed_out = !dropped && !is_quant_scan && parent_ctx.num_stages > 0
         && closeOutIfIdentified_(ms3_targeting.proteoform_match, parent_ctx.mono_mass, parent_ctx.stages[0].precursor_mz, rt,
                                  precursor_id);
+    if (config_.identification().enabled() && !is_quant_scan && !dropped && parent_ctx.num_stages > 0)
+      sayIdentification(parent_id_str, ms3_targeting.proteoform_match, parent_ctx.mono_mass, closed_out,
+                        config_.identification().threshold, config_.targeting().rt_window);
 
     // Write MS2 identification row if proteoform was matched.
     // Gate on the actual match (proteoform_match), NOT on ms3_targeting.proteoform_sequence — the
@@ -950,10 +985,9 @@ FLASHIda::FLASHIda(char* arg) :
     results_row.activation_type    = ms2_activation_type;
     results_row.reaction_time      = ms2_reaction_time;
 
-    std::cout << "[TRACK-RESOLVE] id=" << parent_id_str
+    EventLine() << "[TRACK-RESOLVE] id=" << parent_id_str
               << " rt=" << rt
-              << " commands=" << commands_pushed
-              << std::endl;
+              << " commands=" << commands_pushed;
 
     // Update atomic for lock-free reads by getNextScanCommand
     publishExplorationState_();
@@ -1012,6 +1046,9 @@ FLASHIda::FLASHIda(char* arg) :
     const bool closed_out = !dropped && !expl_result.identification.proteoform_sequence.empty()
         && closeOutIfIdentified_(expl_result.identification.result, vctx.ms1_precursor_mass, vctx.ms1_precursor_mz,
                                  results_row.rt * 60.0, precursor_id);
+    if (config_.identification().enabled() && !dropped)
+      sayIdentification(parent_id_str, expl_result.identification.result, vctx.ms1_precursor_mass, closed_out,
+                        config_.identification().threshold, config_.targeting().rt_window);
 
     // MS2 identification row (copy by value before expl_result goes out of scope).
     if (!expl_result.identification.proteoform_sequence.empty() && !expl_result.identification.result.fragments.empty())
@@ -1058,7 +1095,7 @@ FLASHIda::FLASHIda(char* arg) :
     // ADR-0061 d.10 (owner 2026-11-08): a species whose inclusion row names charges keeps walking them.
     if (selection_.hasAuthoredCharges(commanded_mass))
     {
-      std::cout << "[CLOSE-OUT-REFUSED] mass=" << commanded_mass << " reason=authored_charges" << std::endl;
+      EventLine() << "[CLOSE-OUT-REFUSED] mass=" << commanded_mass << " reason=authored_charges";
       return false;
     }
 
@@ -1100,11 +1137,13 @@ FLASHIda::FLASHIda(char* arg) :
     co.rt = co.closing_precursor_ids.empty() ? rt : std::max(co.rt, rt);   // a close-out only extends
     co.closing_precursor_ids.insert(precursor_id);
 
-    std::cout << "[CLOSE-OUT] nominal=" << nominal << " mz=" << integer_mz << " rt=" << rt
-              << " score=" << match.search_identification_score << " withdrawn=" << r.dropped_scan_ids.size()
-              << " kept=" << r.kept;
-    if (inferred_nominal != 0) std::cout << " inferred_nominal=" << inferred_nominal;
-    std::cout << std::endl;
+    {
+      EventLine ev;
+      ev << "[CLOSE-OUT] nominal=" << nominal << " mz=" << integer_mz << " rt=" << rt
+         << " score=" << match.search_identification_score << " withdrawn=" << r.dropped_scan_ids.size()
+         << " kept=" << r.kept;
+      if (inferred_nominal != 0) ev << " inferred_nominal=" << inferred_nominal;
+    }
     return true;
   }
 
@@ -1113,6 +1152,7 @@ FLASHIda::FLASHIda(char* arg) :
                              double faims_cv, int instrument_scan_number)
   {
     std::lock_guard<std::mutex> lock(analysis_mutex_);
+    EventLog::setRt(rt);   // ADR-0064: the events.log prefix carries the last retention time seen
 
     // Tracking ID extraction (perspective: scan processed is parent of potential children)
     std::string parent_desc_str = scan_description ? std::string(scan_description) : "";
@@ -1153,7 +1193,7 @@ FLASHIda::FLASHIda(char* arg) :
       }
       else
       {
-        std::cout << "[TRACK-RESOLVE] id=" << parent_id_str << " status=not_found" << std::endl;
+        EventLine() << "[TRACK-RESOLVE] id=" << parent_id_str << " status=not_found";
         return 0;
       }
     }
@@ -1169,7 +1209,7 @@ FLASHIda::FLASHIda(char* arg) :
     if (!resolved.has_value())
     {
       // peekPending above normally guarantees this; reaching here means an upstream race.
-      std::cout << "[TRACK-RESOLVE] id=" << parent_id_str << " status=context_lost_race" << std::endl;
+      EventLine() << "[TRACK-RESOLVE] id=" << parent_id_str << " status=context_lost_race";
       return 0;
     }
     ScanCommand parent_ctx = resolved.value();
@@ -1179,9 +1219,9 @@ FLASHIda::FLASHIda(char* arg) :
     const int required_stages = (ms_level == 1) ? 0 : (ms_level == 2) ? 1 : (ms_level == 3) ? 2 : -1;
     if (required_stages < 0 || parent_ctx.msn_level != ms_level || parent_ctx.num_stages < required_stages)
     {
-      std::cout << "[TRACK-RESOLVE] id=" << parent_id_str << " status=context_unsupported"
+      EventLine() << "[TRACK-RESOLVE] id=" << parent_id_str << " status=context_unsupported"
                 << " ms_level=" << ms_level << " ctx_msn=" << parent_ctx.msn_level
-                << " num_stages=" << parent_ctx.num_stages << std::endl;
+                << " num_stages=" << parent_ctx.num_stages;
       return 0;
     }
 
@@ -1272,7 +1312,7 @@ FLASHIda::FLASHIda(char* arg) :
         // dropped one is, so its group still completes.
         const bool needs_search = search_pool_ != nullptr && exploration_.variantNeedsSearch(variant_in);
         const bool skip_search = needs_search && isClosedOut_(parent_ctx.mono_mass, rt, precursor_id);
-        if (skip_search) std::cout << "[SEARCH-SKIPPED] id=" << parent_id_str << " reason=closed_out" << std::endl;
+        if (skip_search) EventLine() << "[SEARCH-SKIPPED] id=" << parent_id_str << " reason=closed_out";
         if (needs_search && !skip_search)
         {
           auto job = std::make_shared<VariantSearch>();
@@ -1299,7 +1339,7 @@ FLASHIda::FLASHIda(char* arg) :
           pj->drop = [this, job]
           {
             // Run by submitSearch_, under the submitting processScan's analysis_mutex_.
-            std::cout << "[SEARCH-DROPPED] id=" << job->parent_id_str << std::endl;
+            EventLine() << "[SEARCH-DROPPED] id=" << job->parent_id_str;
             auto r = exploration_.applyVariant(job->input, nullptr, true, queue_, &tracker_, job->precursor_id);
             std::vector<IdaLogger::IdRowDescriptor> rows;
             finishVariantMS2_(r, static_cast<int>(job->input.deconv.size()), &job->input.deconv, job->precursor_id,
@@ -1411,7 +1451,7 @@ FLASHIda::FLASHIda(char* arg) :
         // ADR-0062 d.6: a closed-out species' later scans are not searched; the scan is finished as a dropped one.
         const bool skip_search = search_pool_ != nullptr && config_.identification().enabled() && !is_quant_scan
             && isClosedOut_(parent_ctx.mono_mass, rt, precursor_id);
-        if (skip_search) std::cout << "[SEARCH-SKIPPED] id=" << parent_id_str << " reason=closed_out" << std::endl;
+        if (skip_search) EventLine() << "[SEARCH-SKIPPED] id=" << parent_id_str << " reason=closed_out";
         if (search_pool_ != nullptr && config_.identification().enabled() && !is_quant_scan && !skip_search)
         {
           auto job = std::make_shared<RegularSearch>();
@@ -1431,8 +1471,8 @@ FLASHIda::FLASHIda(char* arg) :
           {
             if (before_search_) before_search_();
             if (config_.identification().method == AnnotationMethod::Refine)
-              std::cout << "[REFINE] precursor_id=" << job->precursor_id << " tracking_id=" << job->parent_id_str
-                        << " scan=" << job->instrument_scan_number << std::endl;
+              EventLine() << "[REFINE] precursor_id=" << job->precursor_id << " tracking_id=" << job->parent_id_str
+                        << " scan=" << job->instrument_scan_number;
             job->timing.started = std::chrono::steady_clock::now();
             // The proteome search (ADR-0061 push 4c) at the MS2 tolerance, as the match always was, with the ion types
             // of the activation searchNextLevel matches with (stage 0's, else the level's first scan's); its PrSM, not a
@@ -1449,7 +1489,7 @@ FLASHIda::FLASHIda(char* arg) :
           pj->drop = [this, job]
           {
             // Run by submitSearch_, under the submitting processScan's analysis_mutex_.
-            std::cout << "[SEARCH-DROPPED] id=" << job->parent_id_str << std::endl;
+            EventLine() << "[SEARCH-DROPPED] id=" << job->parent_id_str;
             std::vector<IdaLogger::IdRowDescriptor> no_rows;
             finishRegularMS2_(nullptr, true, job->spectrum, job->has_spectrum ? &job->spectrum : nullptr, job->parent_ctx,
                               job->precursor_id, job->parent_id_str, job->rt, job->instrument_scan_number, false,
@@ -1594,8 +1634,8 @@ FLASHIda::FLASHIda(char* arg) :
             const char ion = cached_ms2_ctx.fragment_ion_type;
             if (MS3FragmentMatcher::isKnownIonClass(ion) && !MS3FragmentMatcher::isAnnotatableMs3Precursor(ion))
             {
-              std::cout << "[MS3-UNANNOTATED] precursor_id=" << precursor_id << " ion=" << ion << cached_ms2_ctx.fragment_ion_index
-                        << " scan=" << parent_id_str << std::endl;
+              EventLine() << "[MS3-UNANNOTATED] precursor_id=" << precursor_id << " ion=" << ion << cached_ms2_ctx.fragment_ion_index
+                        << " scan=" << parent_id_str;
             }
             // Score the returning MS3 against the LIVE WINNER proteoform held by the tracker
             // (ADR-0002), not this triggering MS2 scan's cached context. fragment_ion_type/index still
@@ -1751,7 +1791,7 @@ FLASHIda::FLASHIda(char* arg) :
       std::string id_str = ScanCommandQueue::encode(out.scan_id);
       ScanCommandQueue::writeMs1Description(out, ScanRole::Agc);
 
-      std::cout << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=agc" << std::endl;
+      EventLine() << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=agc";
       queue_.registerPending(out);
       // No analysis_mutex_. Taking it here would park the instrument event thread behind a whole
       // deconvolution to write one row -- see the note on analysis_mutex_ in FLASHIda.h. Serialising
@@ -1782,7 +1822,7 @@ FLASHIda::FLASHIda(char* arg) :
       std::string id_str = ScanCommandQueue::encode(ms1_cmd.scan_id);
       ScanCommandQueue::writeMs1Description(ms1_cmd, ScanRole::Survey);
 
-      std::cout << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=cycle_time" << std::endl;
+      EventLine() << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=cycle_time";
       queue_.push(ms1_cmd);
       // Fall through to Step 3 (cleanup) and Step 4 (dequeue)
     }
@@ -1825,8 +1865,8 @@ FLASHIda::FLASHIda(char* arg) :
         // NO recordMS1Time() here -- see the drain tail. A monitor scan is not a survey.
         ScanCommandQueue::writeMs1Description(mon_cmd, ScanRole::Monitor);
 
-        std::cout << "[TRACK-CREATE] id=" << ScanCommandQueue::encode(mon_cmd.scan_id)
-                  << " ms_level=1 type=monitor lvl=" << due_level << std::endl;
+        EventLine() << "[TRACK-CREATE] id=" << ScanCommandQueue::encode(mon_cmd.scan_id)
+                  << " ms_level=1 type=monitor lvl=" << due_level;
         queue_.push(mon_cmd);   // pushed, not returned: inherits Step 4's registerPending, the
                                 // timestamps and the scan_commands.tsv row
       }
@@ -1857,7 +1897,7 @@ FLASHIda::FLASHIda(char* arg) :
       std::string ms1_id_str = ScanCommandQueue::encode(ms1_cmd.scan_id);
       ScanCommandQueue::writeMs1Description(ms1_cmd, ScanRole::Survey);
 
-      std::cout << "[TRACK-CREATE] id=" << ms1_id_str << " ms_level=1 type=idle_ms1" << std::endl;
+      EventLine() << "[TRACK-CREATE] id=" << ms1_id_str << " ms_level=1 type=idle_ms1";
 
       dequeued = queue_.pushAndDequeue(ms1_cmd);
 

@@ -33,6 +33,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Exploration.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
@@ -40,6 +41,7 @@
 #include <OpenMS/DATASTRUCTURES/ListUtils.h>
 
 #include <algorithm>
+#include <sstream>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -303,11 +305,11 @@ namespace OpenMS
       variant_tracking_map_[id_int] = {group.group_id, i};
       commands.push_back(cmd);
 
-      std::cout << "[TRACK-CREATE] id=" << id_str
+      EventLine() << "[TRACK-CREATE] id=" << id_str
                 << " ms_level=" << msn_level << " type=exploration"
                 << " activation=" << vp.activation
                 << " CE=" << vp.collision_energy
-                << " RT=" << vp.reaction_time << std::endl;
+                << " RT=" << vp.reaction_time;
     }
 
     active_groups_[group.group_id] = std::move(group);
@@ -751,8 +753,8 @@ namespace OpenMS
       // no fallback to the authored energy -- an energy the model could not justify is not acquired in its
       // name). Falls through to the cleanup below.
       group.complete = true;
-      std::cout << "[EXPL-ABORT] group=" << group.group_id
-                << " reason=" << (kinetic ? "no-fit" : "no-winner") << " winner=none" << std::endl;
+      EventLine() << "[EXPL-ABORT] group=" << group.group_id
+                << " reason=" << (kinetic ? "no-fit" : "no-winner") << " winner=none";
     }
     else
     {
@@ -771,14 +773,13 @@ namespace OpenMS
       }
       else
       {
-        std::cout << "[EXPL-MODELED] group=" << group.group_id
+        EventLine() << "[EXPL-MODELED] group=" << group.group_id
                   << " activation=" << group.variants[0].activation_type
                   << " p0=" << group.kinetic_fit.p0 << " ce_max_s=" << group.kinetic_fit.ce_max_s
                   << " w=" << group.kinetic_fit.width << " k2=" << group.kinetic_k2
                   << " points=" << group.kinetic_fit.n_points << " rss=" << group.kinetic_fit.rss
                   << " CE=" << chosen_ce << " B=" << group.kinetic_max.b
-                  << (group.kinetic_max.at_lower_edge ? " edge=lower" : group.kinetic_max.at_upper_edge ? " edge=upper" : "")
-                  << std::endl;
+                  << (group.kinetic_max.at_lower_edge ? " edge=lower" : group.kinetic_max.at_upper_edge ? " edge=upper" : "");
       }
 
       // C: emit identification.tsv rows for NON-WINNER variants that did NOT self-identify (empty own FLASHTnT
@@ -808,12 +809,12 @@ namespace OpenMS
       }
 
       if (!kinetic)
-        std::cout << "[EXPL-WINNER] group=" << group.group_id
+        EventLine() << "[EXPL-WINNER] group=" << group.group_id
                   << " winner_idx=" << best_idx
                   << " activation=" << group.variants[best_idx].activation_type
                   << " CE=" << group.variants[best_idx].collision_energy
                   << " RT=" << group.variants[best_idx].reaction_time
-                  << " score=" << best_score << std::endl;
+                  << " score=" << best_score;
 
       const auto& level_config = config_.level(group.msn_level);
 
@@ -889,9 +890,8 @@ namespace OpenMS
         }
 
         std::string prod_id = ScanCommandQueue::encode(prod_cmd.scan_id);
-        std::cout << "[TRACK-CREATE] id=" << prod_id
-                  << " ms_level=" << group.msn_level << " type=production"
-                  << std::endl;
+        EventLine() << "[TRACK-CREATE] id=" << prod_id
+                  << " ms_level=" << group.msn_level << " type=production";
 
         info.commands.push_back(prod_cmd);
         if (group.msn_level >= 3)
@@ -1324,9 +1324,8 @@ namespace OpenMS
           }
 
           std::string id_str = ScanCommandQueue::encode(cmd.scan_id);
-          std::cout << "[TRACK-CREATE] id=" << id_str
-                    << " ms_level=" << next_level << " type=next_level"
-                    << std::endl;
+          EventLine() << "[TRACK-CREATE] id=" << id_str
+                    << " ms_level=" << next_level << " type=next_level";
 
           nlr.commands.push_back(cmd);
           variants_per_target = 1;  // no CE sweep at this level: one command per target
@@ -1364,11 +1363,27 @@ namespace OpenMS
       // target fans out into one command per variant -- so a budget of 20 can be ~100 scans.
       // Emitted even at zero targets, so a grep for [MS3-DISPATCH] pairs with every [MS3-PLAN]
       // line. stdout only, like every engine marker.
-      std::cout << "[MS3-DISPATCH] precursor_id=" << precursor_id
+      EventLine() << "[MS3-DISPATCH] precursor_id=" << precursor_id
                 << " targets=" << dispatched_targets
                 << " variants=" << variants_per_target
-                << " commands=" << nlr.commands.size()
-                << std::endl;
+                << " commands=" << nlr.commands.size();
+      if (dispatched_targets > 0 && !nlr.commands.empty())
+      {
+        // ADR-0064: the operator's line for this MS3 batch, from the commands [MS3-DISPATCH] counts.
+        std::ostringstream op;
+        op << '#' << ScanCommandQueue::encode(ms_ctx->scan_id) << "  " << dispatched_targets << " targets ";
+        std::vector<std::string> ions;
+        for (const MS2Context& mc : nlr.ms3_contexts)
+        {
+          const std::string ion = std::string(1, mc.fragment_ion_type) + std::to_string(mc.fragment_ion_index);
+          if (std::find(ions.begin(), ions.end(), ion) == ions.end()) ions.push_back(ion);
+        }
+        for (const std::string& ion : ions) op << ' ' << ion;
+        const ScanCommand& first = nlr.commands.front();
+        if (first.num_stages >= 2) op << "  " << first.stages[1].activation_type << ' ' << first.stages[1].collision_energy;
+        op << "  (" << nlr.commands.size() << " scans)";
+        EventLog::say(OperatorKind::Ms3, op.str());
+      }
 
       return nlr;
     }
@@ -1398,7 +1413,7 @@ namespace OpenMS
     for (const auto& v : git->second.variants)
       variant_tracking_map_.erase(v.cmd.scan_id);
     active_groups_.erase(git);
-    std::cout << "[EXPL-DROP] group=" << group_id << std::endl;
+    EventLine() << "[EXPL-DROP] group=" << group_id;
     return true;
   }
 

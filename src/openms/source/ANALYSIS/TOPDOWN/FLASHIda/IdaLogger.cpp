@@ -34,6 +34,7 @@
 
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/LogCell.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
@@ -54,6 +55,11 @@
 namespace OpenMS
 {
 
+  IdaLogger::~IdaLogger()
+  {
+    if (owns_event_log_) EventLog::closeFile();
+  }
+
   IdaLogger::IdaLogger(const Config& config) :
       config_(config)
   {
@@ -63,6 +69,10 @@ namespace OpenMS
     // this constructor never creates a directory, so a folder that does not exist leaves every
     // stream closed and every writer a no-op.
     const std::string dir = rt_cfg.log_dir.empty() ? std::string{} : rt_cfg.log_dir + "/";
+    // ADR-0064: the event log opens with the run folder, and the lines Config emitted while it parsed are written
+    // first. No folder: those lines are discarded (an open file another engine owns is left alone).
+    EventLog::openFile(dir.empty() ? std::string{} : dir + kEventLogName);
+    owns_event_log_ = !dir.empty();
     if (!dir.empty())
     {
       ida_log_stream_.open(dir + kIdaLogName, std::ios::app);
@@ -267,10 +277,9 @@ namespace OpenMS
     if (instrument_scan_number <= 0 && !warned_missing_scan_number_)
     {
       warned_missing_scan_number_ = true;
-      std::cout << "No instrument scan number supplied to processScan; ida.log 'MS1 Scan#' will "
+      EventLine(EventLevel::Warn) << "[SCAN-NUMBER-WARN] No instrument scan number supplied to processScan; ida.log 'MS1 Scan#' will "
                    "carry the tracking id instead, so this log cannot be placed against the converted "
-                   "data file by scan number."
-                << std::endl;
+                   "data file by scan number.";
     }
 
     ida_log_stream_ << "MS1 Scan# " << logged_scan_number
@@ -1058,12 +1067,12 @@ namespace OpenMS
     std::ifstream f(in_log_file.c_str());
     if (! f.good())
     {
-      std::cout << "FLASHIda log file " << in_log_file << " is NOT found. FLASHIda support is not active." << std::endl;
+      EventLine(EventLevel::Warn) << "[TARGETS-WARN] target log " << in_log_file << " is not found; no targets are read from it.";
       return precursor_map_for_real_time_acquisition;
     }
 
 
-    std::cout << "FLASHIda log file used: " << in_log_file << std::endl;
+    EventLog::say(OperatorKind::Info, "Target log: " + std::string(in_log_file));
     std::ifstream instream(in_log_file);
     if (instream.good())
     {
@@ -1191,7 +1200,7 @@ namespace OpenMS
       }
       instream.close();
     }
-    else { std::cout << in_log_file << " not found\n"; }
+    else { EventLine(EventLevel::Warn) << "[TARGETS-WARN] target log " << in_log_file << " cannot be opened"; }
     int mass_cntr = 0;
     for (auto& v : precursor_map_for_real_time_acquisition)
     {
@@ -1199,7 +1208,8 @@ namespace OpenMS
       mass_cntr += v.second.size();
     }
 
-    std::cout << "Used precursor size : " << precursor_map_for_real_time_acquisition.size() << " precursor masses : " << mass_cntr << std::endl;
+    EventLog::say(OperatorKind::Info, "Target log: " + std::to_string(precursor_map_for_real_time_acquisition.size()) + " scans, "
+                                          + std::to_string(mass_cntr) + " precursor masses");
 
     return precursor_map_for_real_time_acquisition;
   }

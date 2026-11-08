@@ -33,6 +33,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PrecursorSelection.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/CandidateAdmission.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
@@ -167,17 +168,17 @@ namespace OpenMS
     }
 
     if (targeting.mode == 1)
-      std::cout << log_files_msg.str() << "file(s) is(are) used for inclusion mode\n";
+      EventLog::say(OperatorKind::Info, "Target logs for inclusion mode: " + log_files_msg.str());
     else if (targeting.mode == 2)
-      std::cout << log_files_msg.str() << "file(s) is(are) used for in-depth mode\n";
+      EventLog::say(OperatorKind::Info, "Target logs for in-depth mode: " + log_files_msg.str());
     else if (targeting.mode == 3)
-      std::cout << log_files_msg.str() << "file(s) is(are) used for exclusion mode\n";
+      EventLog::say(OperatorKind::Info, "Target logs for exclusion mode: " + log_files_msg.str());
 
     // Parse TSV inclusion list files
     if (targeting.mode == 1 && !targeting.inclusion_list_file.empty())
     {
       parseInclusionListTSV_(targeting.inclusion_list_file);
-      std::cout << inclusion_targets_.size() << " targets loaded from TSV inclusion list\n";
+      EventLog::say(OperatorKind::Info, std::to_string(inclusion_targets_.size()) + " targets loaded from " + targeting.inclusion_list_file);
     }
   }
 
@@ -847,7 +848,7 @@ namespace OpenMS
                 else charge_set_msg << "snr " << pg.getChargeSNR(c) << " < " << config_.targeting().snr_threshold;
                 charge_set_msg << ")";
               }
-              std::cout << charge_set_msg.str() << std::endl;
+              EventLine() << charge_set_msg.str();
             }
 
             // Compute total qscore. Mass-keyed. Runs ONCE per species even when the scan isolates
@@ -1045,7 +1046,7 @@ namespace OpenMS
               budget_msg << (ai ? "," : "") << owed[ai];
             budget_msg << " reason=budget_exhausted(max_precursors " << mass_count
                        << " spent before this species could be completed)";
-            std::cout << budget_msg.str() << std::endl;
+            EventLine() << budget_msg.str();
           }
         }
       }
@@ -1281,7 +1282,7 @@ namespace OpenMS
       // Expect 5 columns: mass, charge, rt_start, rt_end, priority
       if (cells.size() < 5)
       {
-        OPENMS_LOG_WARN << "Skipping malformed line (expected 5 columns): " << line << std::endl;
+        EventLine(EventLevel::Warn) << "[TARGETS-WARN] skipping malformed inclusion line (expected 5 columns): " << line;
         continue;
       }
 

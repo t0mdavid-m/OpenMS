@@ -34,6 +34,7 @@
 
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/SearchPool.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 
 #include <algorithm>
 #include <exception>
@@ -133,11 +134,11 @@ namespace OpenMS
       }
       catch (const std::exception& e)
       {
-        std::cerr << "[SEARCH-ERROR] " << e.what() << std::endl;
+        EventLine(EventLevel::Error) << "[SEARCH-ERROR] " << e.what();
       }
       catch (...)
       {
-        std::cerr << "[SEARCH-ERROR] unknown exception" << std::endl;
+        EventLine(EventLevel::Error) << "[SEARCH-ERROR] unknown exception";
       }
       applies_finished_.fetch_add(1);
       pushed_since_wait_.fetch_add(pushed);

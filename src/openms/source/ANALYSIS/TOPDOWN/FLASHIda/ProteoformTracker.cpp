@@ -33,6 +33,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ProteoformTracker.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>  // getNominalMass (read-only) for the pooled nominal_mass column
@@ -544,8 +545,8 @@ namespace OpenMS
     // greps regression-stdout.txt) but NOT in an instrument run folder. Every other engine marker
     // ([TRACK-CREATE], [EXPL-WINNER], [EXPL-ABORT]) already has exactly this limitation.
     auto no_plan = [precursor_id](const char* reason) -> std::vector<Ms3Target> {
-      std::cout << "[MS3-PLAN] precursor_id=" << precursor_id
-                << " targets=0 reason=" << reason << std::endl;
+      EventLine() << "[MS3-PLAN] precursor_id=" << precursor_id
+                << " targets=0 reason=" << reason;
       return {};
     };
 
@@ -838,12 +839,11 @@ namespace OpenMS
     // Counterpart to the no_plan lines: the same marker on the success path, so grepping [MS3-PLAN]
     // yields every MS3 planning decision rather than only the negative ones. fragments and targets
     // differ under separate/multiplexed charge modes -- fragments is what the budget counts (ADR-0016).
-    std::cout << "[MS3-PLAN] precursor_id=" << precursor_id
+    EventLine() << "[MS3-PLAN] precursor_id=" << precursor_id
               << " targets=" << out.size()
               << " fragments=" << fragments_selected
               << " budget=" << budget
-              << " objective=" << objectiveName(obj)
-              << std::endl;
+              << " objective=" << objectiveName(obj);
     return out;
   }
 
@@ -852,8 +852,8 @@ namespace OpenMS
     // Same marker and the same zero-target vocabulary as planNextScans' guards, so one grep still
     // yields every MS3 planning decision in every mode.
     auto no_plan = [precursor_id](const char* reason) -> std::vector<Ms3Target> {
-      std::cout << "[MS3-PLAN] precursor_id=" << precursor_id
-                << " objective=exhaustive targets=0 reason=" << reason << std::endl;
+      EventLine() << "[MS3-PLAN] precursor_id=" << precursor_id
+                << " objective=exhaustive targets=0 reason=" << reason;
       return {};
     };
 
@@ -969,15 +969,14 @@ namespace OpenMS
       ++species_selected;
     }
 
-    std::cout << "[MS3-PLAN] precursor_id=" << precursor_id
+    EventLine() << "[MS3-PLAN] precursor_id=" << precursor_id
               << " objective=" << objectiveName(CharacterizationObjective::Exhaustive)
               << " identified=" << (m.proteoform_sequence.empty() ? 0 : 1)
               << " pool=" << pool.size()
               << " targets=" << out.size()
               << " species=" << species_selected
               << " truncated=" << (static_cast<int>(pool.size()) - species_selected)
-              << " budget=" << budget
-              << std::endl;
+              << " budget=" << budget;
     return out;
   }
 
@@ -1040,9 +1039,9 @@ namespace OpenMS
   {
     // The same marker and zero-target vocabulary as the other planners.
     auto no_plan = [precursor_id](const char* reason) -> std::vector<Ms3Target> {
-      std::cout << "[MS3-PLAN] precursor_id=" << precursor_id
+      EventLine() << "[MS3-PLAN] precursor_id=" << precursor_id
                 << " objective=" << objectiveName(CharacterizationObjective::Discriminating)
-                << " targets=0 reason=" << reason << std::endl;
+                << " targets=0 reason=" << reason;
       return {};
     };
 
@@ -1062,7 +1061,7 @@ namespace OpenMS
     auto dead_end = [&](const char* reason) -> std::vector<Ms3Target> {
       if (awaiting_return()) return no_plan(reason);
       st.decided = true;
-      std::cout << "[DISCRIMINATING] precursor_id=" << precursor_id << " decided=fallthrough reason=" << reason << std::endl;
+      EventLine() << "[DISCRIMINATING] precursor_id=" << precursor_id << " decided=fallthrough reason=" << reason;
       return {};
     };
 
@@ -1125,16 +1124,15 @@ namespace OpenMS
       line << "[DISCRIMINATING] precursor_id=" << precursor_id << " pair=" << c[0].total << '/' << c[1].total << " S=" << c[0].score << '/'
            << c[1].score << " candidates=" << st.records.size() << " dispatched=" << species_selected
            << " masses=" << (species_selected > 0 ? masses.str() : std::string("-"));
-      std::cout << line.str() << std::endl;
+      EventLine() << line.str();
     }
-    std::cout << "[MS3-PLAN] precursor_id=" << precursor_id
+    EventLine() << "[MS3-PLAN] precursor_id=" << precursor_id
               << " objective=" << objectiveName(CharacterizationObjective::Discriminating)
               << " pool=" << pool.size()
               << " targets=" << out.size()
               << " species=" << species_selected
               << " truncated=" << (static_cast<int>(pool.size()) - species_selected)
-              << " budget=" << budget
-              << std::endl;
+              << " budget=" << budget;
     return out;
   }
 
@@ -1207,7 +1205,7 @@ namespace OpenMS
     if (!any_annotatable)
     {
       st.decided = true;
-      std::cout << "[DISCRIMINATING] precursor_id=" << precursor_id << " decided=kept reason=no_annotatable_pieces" << std::endl;
+      EventLine() << "[DISCRIMINATING] precursor_id=" << precursor_id << " decided=kept reason=no_annotatable_pieces";
       return false;
     }
 
@@ -1280,7 +1278,7 @@ namespace OpenMS
       line << std::fixed << std::setprecision(2);
       line << "[MS3-DECIDE] precursor_id=" << precursor_id << " S=" << rc.score_a << '/' << rc.score_b << " confirmed=" << rc.confirmed_a
            << '/' << rc.confirmed_b << " penalty=" << penalty << " winner=" << c[st.winner_candidate].total << " flipped=" << (flipped ? 1 : 0);
-      std::cout << line.str() << std::endl;
+      EventLine() << line.str();
     }
 
     st.decided = true;

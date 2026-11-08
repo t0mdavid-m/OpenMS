@@ -33,6 +33,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 
@@ -497,12 +498,11 @@ namespace OpenMS
       cmd.parent_scan_id[3] = '\0';
     }
 
-    std::cout << "[TRACK-CREATE] id=" << id_str
+    EventLine() << "[TRACK-CREATE] id=" << id_str
               << " ms_level=2"
               << " mz=" << center_mz
               << " z=" << charge
-              << " mass=" << pg.getMonoMass()
-              << std::endl;
+              << " mass=" << pg.getMonoMass();
 
     syncEnergyMirrors_(cmd);
     return cmd;
@@ -616,9 +616,9 @@ namespace OpenMS
     {
       const int wrote = writeNotchesForStage(cmd, 1, *stage1_notches);
       if (wrote < static_cast<int>(stage1_notches->size()))
-        std::cout << "[NOTCH-CLAMP] MS3 stage1 kept=" << wrote
+        EventLine() << "[NOTCH-CLAMP] MS3 stage1 kept=" << wrote
                   << " dropped=" << (static_cast<int>(stage1_notches->size()) - wrote)
-                  << " (over this stage's own cap of " << MAX_NOTCHES_PER_STAGE << ")" << std::endl;
+                  << " (over this stage's own cap of " << MAX_NOTCHES_PER_STAGE << ")";
     }
 
     // Description: {3-char ID}R{frag_mass_kDa}k@{frag_charge}[{ion_type}{frag_index}]  (adaptive-precision)
@@ -637,10 +637,9 @@ namespace OpenMS
                     id_str.c_str(), mass_tok.c_str(), frag_charge);
     }
 
-    std::cout << "[TRACK-CREATE] id=" << id_str
+    EventLine() << "[TRACK-CREATE] id=" << id_str
               << " ms_level=3"
-              << " frag_mz=" << frag_mz
-              << std::endl;
+              << " frag_mz=" << frag_mz;
 
     // 2-stage scoring for the MS3 commands row: stage-0 = the MS2 precursor (carried from ms2_ctx),
     // stage-1 = the selected fragment precursor (frag_scores, re-computed from its PeakGroup).
@@ -717,9 +716,8 @@ namespace OpenMS
     std::snprintf(cmd.scan_description, 16, "%s%c%s@%d",
                   id_str.c_str(), suffix, mass_tok.c_str(), cmd.stages[0].charge_state);
 
-    std::cout << "[TRACK-CREATE] id=" << id_str
-              << " ms_level=2 type=followup_" << suffix
-              << std::endl;
+    EventLine() << "[TRACK-CREATE] id=" << id_str
+              << " ms_level=2 type=followup_" << suffix;
 
     syncEnergyMirrors_(cmd);
     return cmd;
@@ -747,7 +745,7 @@ namespace OpenMS
     const std::string parent(parent_begin, std::find(parent_begin, parent_begin + sizeof(cmd.parent_scan_id), '\0'));
     if (!parent.empty() && unit_of_.count(decode(parent)) > 0)
     {
-      std::cout << "[REPLAN-INVARIANT] child=" << encode(cmd.scan_id) << " parent=" << parent << std::endl;
+      EventLine(EventLevel::Warn) << "[REPLAN-INVARIANT] child=" << encode(cmd.scan_id) << " parent=" << parent;
     }
 
     cmd.enqueue_timestamp_ms = static_cast<uint64_t>(
@@ -870,10 +868,10 @@ namespace OpenMS
         ++it;
         continue;
       }
-      std::cout << "[TRACK-LOST] id=" << encode(it->first)
+      EventLine() << "[TRACK-LOST] id=" << encode(it->first)
                 << " ms_level=" << it->second.cmd.msn_level
                 << " sent_since=" << sent_since
-                << " (no result came back; the engine stops waiting for it)" << std::endl;
+                << " (no result came back; the engine stops waiting for it)";
       ms3_cmd_proteoform_.erase(it->first);  // drop any stashed MS3 proteoform (no-op once dequeued)
       it = pending_scan_map_.erase(it);
     }
@@ -909,10 +907,9 @@ namespace OpenMS
             (now_ms - it->enqueue_timestamp_ms) > static_cast<uint64_t>(config_.scheduling().timeout_ms))
         {
           std::string id_str = encode(it->scan_id);
-          std::cout << "[TRACK-EXPIRE] id=" << id_str
+          EventLine() << "[TRACK-EXPIRE] id=" << id_str
                     << " age_ms=" << (now_ms - it->enqueue_timestamp_ms)
-                    << " ms_level=" << it->msn_level
-                    << std::endl;
+                    << " ms_level=" << it->msn_level;
           ms3_cmd_proteoform_.erase(it->scan_id);  // drop any stashed MS3 proteoform (no-op for non-MS3)
           forgetQueued_(it->scan_id);              // never acquired: leaves the plan registry (no-op if unregistered)
           it = queues_[p].erase(it);
@@ -1226,8 +1223,8 @@ namespace OpenMS
         if (is_target(it->scan_id))
         {
           removed.push_back(it->scan_id);
-          std::cout << "[TRACK-CANCEL] id=" << encode(it->scan_id)
-                    << " ms_level=" << it->msn_level << " state=queued" << std::endl;
+          EventLine() << "[TRACK-CANCEL] id=" << encode(it->scan_id)
+                    << " ms_level=" << it->msn_level << " state=queued";
           ms3_cmd_proteoform_.erase(it->scan_id);  // drop any stashed MS3 proteoform (no-op for non-MS3)
           forgetQueued_(it->scan_id);              // never acquired: leaves the plan registry (no-op if unregistered)
           it = queues_[p].erase(it);
@@ -1247,8 +1244,8 @@ namespace OpenMS
       if (is_target(pit->first))
       {
         removed.push_back(pit->first);
-        std::cout << "[TRACK-CANCEL] id=" << encode(pit->first)
-                  << " ms_level=" << pit->second.cmd.msn_level << " state=in-flight" << std::endl;
+        EventLine() << "[TRACK-CANCEL] id=" << encode(pit->first)
+                  << " ms_level=" << pit->second.cmd.msn_level << " state=in-flight";
         ms3_cmd_proteoform_.erase(pit->first);  // drop any stashed MS3 proteoform (no-op for non-MS3)
         forgetQueued_(pit->first);              // registry hygiene, as for a queued one (no-op once dequeued)
         pit = pending_scan_map_.erase(pit);

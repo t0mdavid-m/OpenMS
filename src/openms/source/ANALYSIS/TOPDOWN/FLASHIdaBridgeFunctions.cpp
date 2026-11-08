@@ -33,19 +33,20 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIdaBridgeFunctions.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 
 namespace OpenMS
 {
   FLASHIda *CreateFLASHIda(char *arg)
   {
-    std::cout << " FLASHIda creating ... " << std::endl;
+    EventLog::say(OperatorKind::Info, "FLASHIda engine starting");
     try
     {
       return new FLASHIda(arg);
     }
     catch (const std::exception& e)
     {
-      std::cerr << "CreateFLASHIda error: " << e.what() << std::endl;
+      EventLine(EventLevel::Error) << "[CREATE-ERROR] " << e.what();
       return nullptr;
     }
   }

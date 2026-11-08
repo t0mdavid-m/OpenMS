@@ -33,6 +33,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FAIMS.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 
 #include <OpenMS/CONCEPT/LogStream.h>
 
@@ -121,13 +122,13 @@ namespace OpenMS
       if (cv_skip_count_[current_cv_index_] < cv_skip_amount_[current_cv_index_])
       {
         cv_skip_count_[current_cv_index_]++;         // skip this CV (audit Q3)
-        OPENMS_LOG_DEBUG << "[FAIMS] Skipping CV=" << cv_values_[current_cv_index_]
+        EventLine() << "[FAIMS] Skipping CV=" << cv_values_[current_cv_index_]
                          << " (" << cv_skip_count_[current_cv_index_]
                          << "/" << cv_skip_amount_[current_cv_index_] << ")" << std::endl;
       }
       else
       {
-        OPENMS_LOG_DEBUG << "[FAIMS] Changed to CV=" << cv_values_[current_cv_index_] << std::endl;
+        EventLine() << "[FAIMS] Changed to CV=" << cv_values_[current_cv_index_] << std::endl;
         return cv_values_[current_cv_index_];  // use this CV
       }
     }

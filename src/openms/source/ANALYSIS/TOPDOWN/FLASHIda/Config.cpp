@@ -33,6 +33,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 
 // For the isobaric labelling vocabulary and the channel-name table, so an authored condition
 // channel resolves to an ordinal HERE, at load. Quantification.h includes Config.h, not the other
@@ -462,7 +463,7 @@ namespace OpenMS
     }
 
     if (targeting_.mode == 1)
-      std::cout << "Inclusion mode: " << (targeting_.strict_inclusion ? "strict" : "non-strict") << "\n";
+      EventLog::say(OperatorKind::Info, std::string("Inclusion mode: ") + (targeting_.strict_inclusion ? "strict" : "non-strict"));
 
     // --- identification section (ADR-0061): WHICH protein every MS2 is matched against, and HOW ---
     // Its PRESENCE is the matching switch, and the presence of its nested `characterization` block is
@@ -1133,8 +1134,8 @@ namespace OpenMS
     // ms_settings.ms2 slots, so neither is an additional_ms2 definition that could go unreferenced.
     for (const auto& kv : additional_ms2)
       if (additional_scan_names_.count(kv.first) == 0)
-        std::cout << "[CONFIG-WARN] ms_settings.additional_ms2." << kv.first
-                  << " is defined but never referenced; it will never be acquired.\n";
+        EventLine(EventLevel::Warn) << "[CONFIG-WARN] ms_settings.additional_ms2." << kv.first
+                  << " is defined but never referenced; it will never be acquired.";
 
     // --- scheduling ---
     auto sched = config.value("scheduling", json::object());
@@ -1419,9 +1420,9 @@ namespace OpenMS
             "indefinitely and the sweep would never progress. Set enabled to false to turn the "
             "feature off.");
       if (it->second.exploration == ExplorationMetric::None)
-        std::cout << "[CONFIG-WARN] " << path << ".exploration.monitor_ms1 is enabled but "
+        EventLine(EventLevel::Warn) << "[CONFIG-WARN] " << path << ".exploration.monitor_ms1 is enabled but "
                   << path << ".exploration.metric is \"none\", so no sweep ever runs at this level "
-                     "and no monitor scan will be acquired. The key is inert, not invalid.\n";
+                     "and no monitor scan will be acquired. The key is inert, not invalid.";
     }
 
     // --- quantification (ADR-0038) --------------------------------------------------------------
@@ -1519,29 +1520,29 @@ namespace OpenMS
             + std::to_string(targeting_.max_charge_states) + "): no quantification group can ever "
               "hold that many members, so none would ever decide (ADR-0056).");
       if (quant_.min_usable_scans > 1 && quant_.min_usable_scans > targeting_.min_charge_states)
-        std::cout << "[CONFIG-WARN] quantification.min_usable_scans (" << quant_.min_usable_scans
+        EventLine(EventLevel::Warn) << "[CONFIG-WARN] quantification.min_usable_scans (" << quant_.min_usable_scans
                   << ") exceeds precursor_selection.min_charge_states (" << targeting_.min_charge_states
                   << "): only species that resolve more charge states than admission requires can "
-                     "reach it; every other group ends incomplete_channels.\n";
+                     "reach it; every other group ends incomplete_channels.";
 
       // ADR-0056 1. A threshold the authored test does not read. Warned, never thrown, so flipping
       // `test` never invalidates a template. Non-default is the only authored-ness visible here: the
       // C# side emits every key, with these same defaults.
       if (quant_.test == QuantTest::FoldChange && quant_.p_value_threshold != 0.05)
-        std::cout << "[CONFIG-WARN] quantification.p_value_threshold is " << quant_.p_value_threshold
+        EventLine(EventLevel::Warn) << "[CONFIG-WARN] quantification.p_value_threshold is " << quant_.p_value_threshold
                   << " but quantification.test is \"fold_change\", which does not read it; the p-value "
-                     "is still computed and logged.\n";
+                     "is still computed and logged.";
       if (quant_.test == QuantTest::Welch && quant_.fold_change_threshold != 1.4)
-        std::cout << "[CONFIG-WARN] quantification.fold_change_threshold is " << quant_.fold_change_threshold
+        EventLine(EventLevel::Warn) << "[CONFIG-WARN] quantification.fold_change_threshold is " << quant_.fold_change_threshold
                   << " but quantification.test is \"welch\", which does not read it; the fold change "
-                     "is still computed and logged.\n";
+                     "is still computed and logged.";
 
       if (quant_.enriched_in >= 0 && quant_.identify != QuantIdentify::Differential)
-        std::cout << "[CONFIG-WARN] quantification.enriched_in is set but quantification.identify "
+        EventLine(EventLevel::Warn) << "[CONFIG-WARN] quantification.enriched_in is set but quantification.identify "
                      "is \""
                   << quantIdentifyName(quant_.identify)
                   << "\", so direction is not applied; it restricts only the \"differential\" "
-                     "objective.\n";
+                     "objective.";
     }
 
     // NO ACTIVATION-COUPLING THROW HERE, deliberately (ADR-0030). This used to reject an authored
@@ -1794,8 +1795,8 @@ namespace OpenMS
                 "and leave the follow-up's reaction time undecided (ADR-0047).");
         for (const auto& [a, v] : cfg.kinetic_k2)
           if (std::find(acts.begin(), acts.end(), a) == acts.end())
-            std::cout << "[CONFIG-WARN] " << sect << ".exploration.kinetic_model.k2." << a
-                      << " names an activation this level does not sweep; the entry is inert, not invalid.\n";
+            EventLine(EventLevel::Warn) << "[CONFIG-WARN] " << sect << ".exploration.kinetic_model.k2." << a
+                      << " names an activation this level does not sweep; the entry is inert, not invalid.";
       }
 
       for (const auto& act : acts)
