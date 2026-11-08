@@ -1087,6 +1087,21 @@ namespace OpenMS
         case K::TqMassRt: memory_.tqscore_exceeding_mass_rt_map_[s.key] = s.value; break;
         case K::TqMzRt: memory_.tqscore_exceeding_mz_rt_map_[s.key] = s.value; break;
         case K::AuthoredAcquired: memory_.authored_acquired_rt_map_[{s.key, s.charge}] = s.value; break;
+        // ADR-0061 d.7: a close-out only ever EXTENDS a bar -- never moves its stamp earlier.
+        case K::CloseOutMassRt:
+        {
+          auto it = memory_.tqscore_exceeding_mass_rt_map_.find(s.key);
+          if (it == memory_.tqscore_exceeding_mass_rt_map_.end()) memory_.tqscore_exceeding_mass_rt_map_[s.key] = s.value;
+          else it->second = std::max(it->second, s.value);
+          break;
+        }
+        case K::CloseOutMzRt:
+        {
+          auto it = memory_.tqscore_exceeding_mz_rt_map_.find(s.key);
+          if (it == memory_.tqscore_exceeding_mz_rt_map_.end()) memory_.tqscore_exceeding_mz_rt_map_[s.key] = s.value;
+          else it->second = std::max(it->second, s.value);
+          break;
+        }
         case K::LegacyTargetChargeErase:
         {
           auto it = target_mass_charge_map_.find(s.legacy_mass);
@@ -1194,6 +1209,12 @@ namespace OpenMS
     memory_.id_mz_map_.erase(id);
     memory_.id_qscore_map_.erase(id);
     memory_.id_charge_map_.erase(id);
+  }
+
+  bool PrecursorSelection::hasAuthoredCharges(double mass) const
+  {
+    if (config_.targeting().mode != 1) return false;
+    return !authoredChargesFor_(mass, 2 * config_.level(1).tolerance_ppm * mass * 1e-6).empty();
   }
 
   std::vector<int> PrecursorSelection::authoredChargesFor_(double mass, double delta) const

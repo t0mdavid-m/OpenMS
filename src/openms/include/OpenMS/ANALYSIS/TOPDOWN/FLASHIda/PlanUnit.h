@@ -34,7 +34,9 @@ namespace OpenMS
       TqMassRt,
       TqMzRt,
       AuthoredAcquired,
-      LegacyTargetChargeErase
+      LegacyTargetChargeErase,
+      CloseOutMassRt,   ///< ADR-0061 d.7: the mass bar armed by an identification; applied as max(existing, value)
+      CloseOutMzRt      ///< ADR-0061 d.7: the m/z bar armed by an identification; applied as max(existing, value)
     };
     Kind   kind = Kind::AllMassRt;
     int    key = 0;            ///< nominal mass, or integer m/z for TqMzRt, or legacy target mass bin
@@ -109,8 +111,8 @@ namespace OpenMS
     const double* qbar = nullptr;
     for (const auto& s : committed)
     {
-      if (s.kind == K::TqMassRt && s.key == k.nominal_mass) mass_barred = true;
-      if (s.kind == K::TqMzRt && s.key == k.integer_mz) mz_barred = true;
+      if ((s.kind == K::TqMassRt || s.kind == K::CloseOutMassRt) && s.key == k.nominal_mass) mass_barred = true;
+      if ((s.kind == K::TqMzRt || s.kind == K::CloseOutMzRt) && s.key == k.integer_mz) mz_barred = true;
       if (s.kind == K::AuthoredAcquired && s.key == k.nominal_mass && s.charge == k.anchor_charge) anchor_spent = true;
       if (s.kind == K::MassQscore && s.key == k.nominal_mass) qbar = &s.value; // last write wins, as the map's overwrite
     }

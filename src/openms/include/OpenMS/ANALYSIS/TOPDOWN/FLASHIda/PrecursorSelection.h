@@ -167,6 +167,10 @@ namespace OpenMS
     /// writes use (an overwrite per map entry; an erase for a legacy target charge).
     void applyStamps(const std::vector<MemoryStamp>& stamps);
 
+    /// Whether an RT-active inclusion row matching @p mass names charges (ADR-0028), with the same mode and
+    /// tolerance the selection uses. Such a species is never closed out (ADR-0061 d.10, owner 2026-11-08).
+    bool hasAuthoredCharges(double mass) const;
+
     /// All of a species' stamps, species-level first then per charge. NOT sorted: callers that need the
     /// original write order sort by `seq`.
     static std::vector<MemoryStamp> flatten(const SpeciesStamps& species);
