@@ -15,6 +15,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTCandidateRanker.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/MassLadderAlgorithm.h>
+#include <OpenMS/SYSTEM/File.h>
 #include <boost/math/special_functions/gamma.hpp>
 #include <algorithm>
 #include <array>
@@ -491,10 +492,11 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   const auto aparam = FLASHAnnotatorAlgorithm().getDefaults();
   defaults_.setValue("raw:tol", aparam.getValue("tol"), aparam.getDescription("tol"));
   defaults_.setMinFloat("raw:tol", 0.0);
-  defaults_.setValue("scoring_model", "",
-                     "Learned PrSM scoring (needs -in_raw): a model file whose linear choice score picks each spectrum's PrSM among its candidates and "
+  defaults_.setValue("scoring_model", "default",
+                     "Learned PrSM scoring (needs -in_raw): a model whose linear choice score picks each spectrum's PrSM among its candidates and "
                      "whose gradient-boosted trees give the chosen PrSM's confidence, which replaces its score in the FDR (the combined score is kept "
-                     "as CombinedScore). Empty: the best combined score, as before.",
+                     "as CombinedScore). 'default': the model shipped with OpenMS (share/OpenMS/TOPDOWN/FLASHTnT_scoring_model.txt; not used with "
+                     "-native); 'none': the best combined score (determined PrSM first), as before; otherwise a model file.",
                      {"advanced"});
   defaults_.setValue("protein_open_terminus_model", "false",
                      "Protein q-values: score an undetermined PrSM with an open terminus with the model of the class \"undetermined, both "
@@ -502,31 +504,34 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "that are not the whole protein already are. PrSM and proteoform q-values are unchanged.",
                      {"advanced"});
   defaults_.setValidStrings("protein_open_terminus_model", {"true", "false"});
-  defaults_.setValue("protein_ranking", "proteoform",
-                     "Protein q-values (without -native): 'proteoform' ranks a protein by its best proteoform (the lowest proteoform q-value, then "
-                     "its best score); 'top_two_prsms' by the sum of the scores of its two best PrSMs (one PrSM per spectrum; a protein seen in "
-                     "one spectrum keeps that spectrum's score; with scoring_model, softplus of the confidence, -log P(wrong), is what is summed), "
-                     "targets and decoys in one ranking.",
+  defaults_.setValue("protein_ranking", "model",
+                     "Protein q-values (without -native): 'model' (with the learned scoring) ranks a protein by its best PrSM's confidence and "
+                     "takes the FDR at a cut as the mean chance, from that confidence, that the proteins above it are wrong (no decoy counting: a "
+                     "run's few decoy proteins never reached the top of the ranking); without the learned scoring it falls back to 'proteoform'. "
+                     "'proteoform' ranks a protein by its best proteoform (the lowest proteoform q-value, then its best score); 'top_two_prsms' by "
+                     "the sum of the scores of its two best PrSMs (one PrSM per spectrum; a protein seen in one spectrum keeps that spectrum's "
+                     "score; with scoring_model, softplus of the confidence, -log P(wrong), is what is summed), targets and decoys in one ranking.",
                      {"advanced"});
-  defaults_.setValidStrings("protein_ranking", {"proteoform", "top_two_prsms"});
-  defaults_.setValue("shift_penalty", 0.0,
+  defaults_.setValidStrings("protein_ranking", {"model", "proteoform", "top_two_prsms"});
+  defaults_.setValue("shift_penalty", 0.5,
                      "With scoring_model: a determined PrSM with a blind shift loses this weight times log10 of the candidates the shift opens "
                      "(the protein's windows within max_mod_mass of its mass) from its confidence, without a floor: the multiple-testing burden "
                      "of the free shift, as TopPIC's E-value charges it. 0: off.",
                      {"advanced"});
   defaults_.setMinFloat("shift_penalty", 0.0);
   defaults_.setValue("undetermined_decoy_weight", 1.0,
-                     "PrSM and proteoform q-values of the class \"undetermined, both termini\": each decoy counts this many times. Its decoys "
-                     "underestimate its errors (shuffled entrapment of the development runs: 2E/D = 1.2 over the class). 1: off.",
+                     "PrSM and proteoform q-values of the class \"undetermined, both termini\": each decoy counts this many times (2E/D = 1.2 "
+                     "over the class on the development runs' shuffled entrapment; at 1.2 the held-out results were those of 1 within two "
+                     "identifications). 1: off.",
                      {"advanced"});
   defaults_.setMinFloat("undetermined_decoy_weight", 1.0);
-  defaults_.setValue("undetermined_pseudo_decoys", 0.0,
+  defaults_.setValue("undetermined_pseudo_decoys", 1.0,
                      "PrSM q-values of the class \"undetermined, both termini\": the decoy count starts at this value, so that its "
                      "best PrSMs of a run do not pass at q-value 0 above the run's first decoy (where the development runs' shuffled entrapment "
                      "held its excess errors). 0: off.",
                      {"advanced"});
   defaults_.setMinFloat("undetermined_pseudo_decoys", 0.0);
-  defaults_.setValue("open_terminus_prsms", "count",
+  defaults_.setValue("open_terminus_prsms", "separate",
                      "PrSMs of the class \"undetermined, open terminus\" (one terminus and the mass unknown): 'count' gives them PrSM q-values as "
                      "every class; 'separate' reports them with q-value 1, apart from the identifications (as their proteoforms and proteins "
                      "already are): no decoy weight or pseudo-count brought the class to 1% on the development runs (3.7-7.3% shuffled entrapment).",
@@ -643,7 +648,15 @@ void FLASHTnTAlgorithm::updateMembers_()
   gapped_mode_ = param_.getValue("gapped_tags").toString();
   protein_open_terminus_model_ = param_.getValue("protein_open_terminus_model").toString() == "true";
   protein_top_two_ = param_.getValue("protein_ranking").toString() == "top_two_prsms";
-  const String scoring_file = param_.getValue("scoring_model").toString();
+  protein_model_fdr_ = param_.getValue("protein_ranking").toString() == "model";
+  // scoring_model: 'default' is the model shipped in share/OpenMS/TOPDOWN (trained on denatured HCD and ETD lysates; not with -native, which
+  // keeps the previous scoring), 'none' or empty switches it off, anything else is a model file
+  String scoring_file = param_.getValue("scoring_model").toString();
+  if (scoring_file == "default")
+  {
+    scoring_file = param_.getValue("native").toString() == "true" ? String("") : String(File::find("TOPDOWN/FLASHTnT_scoring_model.txt"));
+  }
+  if (scoring_file == "none") scoring_file = "";
   scoring_model_ = scoring_file.empty() ? nullptr : LearnedScoringModel::load(scoring_file);
   shift_penalty_ = param_.getValue("shift_penalty");
   undetermined_decoy_weight_ = param_.getValue("undetermined_decoy_weight");
@@ -4182,6 +4195,61 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   setCombinedCoverage_(clusters, qvalues, rep_q, use_fdr);
 
   if (use_fdr && native_rule) { setProteinQvalues_(hit_class, qvalues, decoys, decoy_weights, clusters, rep_q, *db); }
+  else if (use_fdr && protein_model_fdr_ && scoring_model_ && raw_loader_)
+  {
+    // Protein q-values from the learned confidence (protein_ranking model): each target protein is ranked by the confidence c of its best PrSM
+    // (one PrSM per spectrum, as below), a log-odds whose P(the PrSM is wrong) = 1 / (1 + e^c); the FDR at a cut is the mean of that chance
+    // over the proteins above it, q its running minimum from the bottom (ties take the value at the end of their group). No decoy is
+    // counted: per run the decoy proteins never reached the top of a ranking by proteoform q-value, so the proteins above a run's first
+    // decoy passed at q = 0 however many were false. Held-out benchmark (seed 2, 31 runs, proteins per run, upper bound 2E/N of shuffled
+    // entrapment): 2.69 % with the proteoform ranking, 1.34 % with this one (TopPIC 1.38 %); foreign entrapment 1.53 % (TopPIC 2.31 %).
+    // Decoy proteins keep q-value 1. It relies on the confidence being calibrated, which the learned model was trained for.
+    std::map<int, Size> best_of_scan;
+    for (Size i = 0; i < hit_count; i++)
+    {
+      if (hit_class[i] < 0) continue;
+      const auto& hit = proteoform_hits_[i];
+      if (hit.metaValueExists("DecoyPrecursor") && ! hit.getAccession().hasPrefix("DECOY")) continue;
+      auto [it, fresh] = best_of_scan.try_emplace((int)hit.getMetaValue(tntKey("Scan")), i);
+      if (! fresh && hit.getScore() > proteoform_hits_[it->second].getScore()) it->second = i;
+    }
+    std::map<String, double> best_confidence; // target proteins
+    for (const auto& [scan, i] : best_of_scan)
+    {
+      const auto& hit = proteoform_hits_[i];
+      if (hit.getAccession().hasPrefix("DECOY")) continue;
+      auto [it, fresh] = best_confidence.try_emplace(hit.getAccession(), hit.getScore());
+      if (! fresh) it->second = std::max(it->second, hit.getScore());
+    }
+    std::vector<std::pair<double, String>> ranked_proteins; // -confidence, accession
+    for (const auto& [acc, c] : best_confidence) ranked_proteins.emplace_back(-c, acc);
+    std::sort(ranked_proteins.begin(), ranked_proteins.end());
+    const Size n = ranked_proteins.size();
+    std::vector<double> fdr(n, 1.0);
+    double sum_wrong = 0;
+    for (Size k = 0; k < n;)
+    {
+      Size j = k;
+      for (; j < n && ranked_proteins[j].first == ranked_proteins[k].first; j++) sum_wrong += 1.0 / (1.0 + std::exp(-ranked_proteins[j].first));
+      std::fill(fdr.begin() + k, fdr.begin() + j, std::min(1.0, sum_wrong / (double)j));
+      k = j;
+    }
+    for (Size k = n; k-- > 1;) fdr[k - 1] = std::min(fdr[k - 1], fdr[k]);
+    std::map<String, double> protein_q;
+    Size passing = 0;
+    for (Size k = 0; k < n; k++)
+    {
+      protein_q[ranked_proteins[k].second] = fdr[k];
+      passing += fdr[k] <= rep_q;
+    }
+    OPENMS_LOG_INFO << "Proteins by the learned confidence of their best PrSM: " << n << " target proteins, " << passing << " at q <= " << rep_q
+                    << std::endl;
+    for (auto& hit : proteoform_hits_)
+    {
+      const auto it = protein_q.find(hit.getAccession());
+      hit.setMetaValue("ProteinQvalue", it == protein_q.end() ? 1.0 : it->second);
+    }
+  }
   else if (use_fdr && protein_top_two_)
   {
     // Protein q-values from the two best PrSMs of each protein (protein_ranking top_two_prsms): a protein's score is the sum of the scores
