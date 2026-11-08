@@ -32,10 +32,11 @@ Every change under `src/` (engine, bridge, tests, `.cmake`) needs the owner's ap
 written; an approved plan that names the files and describes the change **is** that approval. A
 departure from the plan goes back to the owner. Ambiguous cases count as source changes.
 
-- **Two owner-approved edits sit inside the boundary**: `PeakGroup::updateSNR_` (`9721595ca4`, a
-  charge with no signal has SNR 0), and `FLASHTnTAlgorithm`'s **prepared database** (ADR-0061 d.3):
+- **Three owner-approved edits sit inside the boundary**: `PeakGroup::updateSNR_` (`9721595ca4`, a
+  charge with no signal has SNR 0), `FLASHTnTAlgorithm`'s **prepared database** (ADR-0061 d.3):
   `prepareDatabase()` holds `run()`'s database side moved as it was, and `setPreparedDatabase()` makes
-  `run()` reuse it read-only. Everything else in FLASHDeconv/FLASHTnT is exactly as Kyowon's FDmerge has it.
+  `run()` reuse it read-only, and `FLASHTnTAlgorithm.cpp:1131` `if (! prepared_) setLogType(CMD);` (d.3 as
+  amended for push 4c: a prepared `run()` keeps its caller's log type). Everything else in FLASHDeconv/FLASHTnT is exactly as Kyowon's FDmerge has it.
 - **A prepared `run()` must never write the shared state**: it binds the mass ladders `const` and skips
   `preparePrecursorWindows`/`clearPrecursorWindows` (an unlisted precursor mass is swept: the same
   windows). `run()` keeps its results until `releaseResults()`, and FLASHTnTAlgorithm's copy

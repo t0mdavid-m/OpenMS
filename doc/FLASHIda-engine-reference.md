@@ -85,13 +85,17 @@ is airtight:
 > `a_factor_shifts_the_ratio_and_leaves_the_reported_channels_raw` and
 > `emptiness_is_judged_on_the_raw_value` pin both.
 
-⚠️ **Two owner-approved edits sit inside the boundary.** The first is `PeakGroup::updateSNR_` (`fix(TOPDOWN)`
+⚠️ **Three owner-approved edits sit inside the boundary.** The first is `PeakGroup::updateSNR_` (`fix(TOPDOWN)`
 `9721595ca4`, 2026-10-26, on top of the FDmerge merge `d0954cf37b`). FDmerge's `updateChargeRange_` passes
 over up to two weak charges, so a charge with **no peak** can now sit inside a PeakGroup's range. With
 no signal and no noise, the two `1e-6` regularisers cancel and that charge scores SNR **exactly 1.0**,
 above the real charges. It then became the representative charge, and `buildMS2` wrote an isolation
 centre of −5.5. The fix gives a charge with no signal SNR 0. It is a separate commit so Kyowon can take
 it into FDmerge or reject it; nothing was pushed to `FDmerge` itself.
+
+The third (ADR-0061 d.3 as amended for push 4c, 2026-11-07) is one line, `FLASHTnTAlgorithm.cpp:1131`
+`setLogType(CMD);` → `if (! prepared_) setLogType(CMD);`: a prepared `run()` keeps its caller's log type, so the
+real-time workers (`ProgressLogger::NONE`) print nothing per MS2; an offline run never prepares and is unchanged.
 
 The second is `FLASHTnTAlgorithm`'s **prepared database** (ADR-0061 d.3, 2026-11-06), so that the real-time
 search builds `run()`'s database side once instead of per MS2 (the gapped-tag index alone is seconds for
@@ -610,7 +614,8 @@ unchanged.
   NeutronSatellite | Capped`, first match wins); `Detect::n_kept` is what is built from and what
   `identification.tsv` logs as `n_levels`.
 - **The contract is the tag path's** (decision 6): score = S, `ptm_sites` = the best path's windows,
-  `fragments` = its explained ions, `tag_count` −1, plus one extra member,
+  `fragments` = its explained ions, `tag_count` −1 (since ADR-0061 push 4c the searched MS2's own tag count is set
+  after it), plus one extra member,
   `ProteoformMatch::refine` (`shared_ptr<const RefineCandidates>`: Detect, every candidate path, the
   precursor mass difference). `getTopFragmentMatches` **resets it before the switch**, so a reused
   result never carries a stale record; only the tracker reads it.
