@@ -2268,8 +2268,8 @@ START_SECTION(identification_refine_columns_are_sentinels_under_flashtnt)
     if (!line.empty() && line.back() == '\r') line.pop_back();
     if (line.empty()) continue;
     ++n_rows;
-    // 46 columns = 45 tabs, whatever the row type
-    TEST_EQUAL(std::count(line.begin(), line.end(), '\t'), 45)
+    // 47 columns = 46 tabs, whatever the row type (ADR-0064: + quant_ms3)
+    TEST_EQUAL(std::count(line.begin(), line.end(), '\t'), 46)
     const std::vector<std::string> f = split_all(line);
     ABORT_IF(f.size() != header.size())
     for (size_t k = 0; k < sentinels.size(); ++k) TEST_EQUAL(f[sentinel_idx[k]], sentinels[k].second)
@@ -2337,7 +2337,7 @@ START_SECTION(identification_refine_columns_carry_the_candidates)
   TEST_EQUAL(std::count(two.begin(), two.end(), '\t'), 46)
   TEST_EQUAL(std::count(one.begin(), one.end(), '\t'), 46)
   TEST_TRUE(endsWith(two, "\t0.5000\t61\t526.1400\t655.1900\t46\t5\t5\t-0.9800\t\t-1.0000\t-1.0000\t0\t-1.0000\tnone"))
-  TEST_TRUE(endsWith(one, "\t0.5000\t61\t526.1400\t\t-1\t5\t5\t-0.9800\t\t-1.0000\t-1.0000\t0\t-1.0000"))
+  TEST_TRUE(endsWith(one, "\t0.5000\t61\t526.1400\t\t-1\t5\t5\t-0.9800\t\t-1.0000\t-1.0000\t0\t-1.0000\tnone"))
 }
 END_SECTION
 
