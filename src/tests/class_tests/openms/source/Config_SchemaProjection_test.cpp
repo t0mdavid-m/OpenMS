@@ -1275,6 +1275,111 @@ START_SECTION(quantification_unread_threshold_is_a_warning_not_a_throw)
 }
 END_SECTION
 
+// ---- ADR-0064: quantification.scan, ms3_targets, ms_settings.ms3_quant ----------------------------
+#define MS3_QUANT R"(, "ms3_quant": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 80, "first_mass": 120, "last_mass": 140 })"
+#define IDENT_TH R"("identification": { "reference": { "sequence": "PEPTCIDEK" }, "threshold": 10 },)"
+
+// A quantification section reading at MS3: `body` is spliced after the shared conditions; `ident` is the identification
+// section (IDENT_TH by default); `ms_extra` the ms_settings additions (ms2_quant + ms3_quant by default).
+auto q3Cfg = [](const std::string& body, const std::string& ident = IDENT_TH,
+                const std::string& ms_extra = std::string(MS2_QUANT) + MS3_QUANT) {
+  return cfgJson("", ident + QUANT_ON(R"({ "enabled": true, "labelling": "tmt6plex", )" + std::string(QUANT_CONDS)
+                                      + (body.empty() ? std::string() : ", " + body) + R"( })"),
+                 ms_extra);
+};
+
+START_SECTION(quantification_scan_and_ms3_targets_parse_and_reject)
+{
+  // Unauthored: ms2, one target -- ADR-0038's behaviour, byte for byte.
+  Config def(quantCfg(""));
+  TEST_EQUAL(def.quantification().scan == QuantScan::Ms2, true)
+  TEST_EQUAL(def.quantification().ms3_targets, 1)
+  TEST_EQUAL(def.quantification().screensAtMs2(), true)
+  TEST_EQUAL(def.quantification().readsAtMs3(), false)
+  // Each value reaches its enumerator.
+  Config ms3(q3Cfg(R"("scan": "ms3", "ms3_targets": 2)"));
+  TEST_EQUAL(ms3.quantification().scan == QuantScan::Ms3, true)
+  TEST_EQUAL(ms3.quantification().ms3_targets, 2)
+  TEST_EQUAL(ms3.quantification().screensAtMs2(), false)
+  TEST_EQUAL(ms3.quantification().readsAtMs3(), true)
+  Config both(q3Cfg(R"("scan": "both")"));
+  TEST_EQUAL(both.quantification().scan == QuantScan::Both, true)
+  TEST_EQUAL(both.quantification().screensAtMs2(), true)
+  TEST_EQUAL(both.quantification().readsAtMs3(), true)
+  // ms3_quant parsed as a scan config.
+  TEST_STRING_EQUAL(ms3.quantification().ms3_quant_scan.activation, "HCD")
+  TEST_EQUAL(ms3.quantification().ms3_quant_scan.collision_energy, 80)
+  TEST_EQUAL(ms3.quantification().has_ms3_quant_scan, true)
+  // Explicit nulls (the C# serializer) are the defaults.
+  Config nulls(q3Cfg(R"("scan": null, "ms3_targets": null)"));
+  TEST_EQUAL(nulls.quantification().scan == QuantScan::Ms2, true)
+  TEST_EQUAL(nulls.quantification().ms3_targets, 1)
+  // Case-sensitive and closed; a count below one or not an integer is refused.
+  TEST_EXCEPTION(std::invalid_argument, Config(q3Cfg(R"("scan": "MS3")")))
+  TEST_EXCEPTION(std::invalid_argument, Config(q3Cfg(R"("scan": "ms4")")))
+  TEST_EXCEPTION(std::invalid_argument, Config(q3Cfg(R"("scan": "ms3", "ms3_targets": 0)")))
+  TEST_EXCEPTION(std::invalid_argument, Config(q3Cfg(R"("scan": "ms3", "ms3_targets": 1.5)")))
+}
+END_SECTION
+
+START_SECTION(quantification_ms3_keeps_ms2_primary_and_both_inverts)
+{
+  // ms3 has no screen: ms_settings.ms2 (HCD 29) is the primary MS2 even with ms2_quant authored.
+  Config ms3(q3Cfg(R"("scan": "ms3")"));
+  TEST_EQUAL(ms3.level(2).scans.size(), 1)
+  TEST_STRING_EQUAL(ms3.level(2).scans[0].activation, "HCD")
+  TEST_EQUAL(ms3.level(2).scans[0].collision_energy, 29)
+  // ...and ms2_quant is not required under ms3.
+  Config ms3_no_q(q3Cfg(R"("scan": "ms3")", IDENT_TH, MS3_QUANT));
+  TEST_STRING_EQUAL(ms3_no_q.level(2).scans[0].activation, "HCD")
+  // both keeps ADR-0038's inversion: ms2_quant (ETD) is primary.
+  Config both(q3Cfg(R"("scan": "both")"));
+  TEST_STRING_EQUAL(both.level(2).scans[0].activation, "ETD")
+  // ...and needs ms2_quant like ms2.
+  TEST_EXCEPTION(std::invalid_argument, Config(q3Cfg(R"("scan": "both")", IDENT_TH, MS3_QUANT)))
+}
+END_SECTION
+
+START_SECTION(quantification_ms3_structural_rejections)
+{
+  for (const char* sc : {R"("scan": "ms3")", R"("scan": "both")"})
+  {
+    // A loadable baseline, so each throw below is the rule it names and not something else.
+    Config ok(q3Cfg(sc));
+    TEST_EQUAL(ok.quantification().readsAtMs3(), true)
+    // identification with a threshold is what buys the MS3.
+    TEST_EXCEPTION(std::invalid_argument, Config(q3Cfg(sc, "")))
+    TEST_EXCEPTION(std::invalid_argument,
+                   Config(q3Cfg(sc, R"("identification": { "reference": { "sequence": "PEPTCIDEK" } },)")))
+    // stage 1 must be authored.
+    TEST_EXCEPTION(std::invalid_argument, Config(q3Cfg(sc, IDENT_TH, MS2_QUANT)))
+    // iodoTMT is a 6-plex reagent.
+    TEST_EXCEPTION(std::invalid_argument,
+        Config(cfgJson("", std::string(IDENT_TH) + QUANT_ON(R"({ "enabled": true, "labelling": "tmt10plex", )"
+                       R"("conditions": [ { "name": "a", "channels": ["126","127N"] }, { "name": "b", "channels": ["130C","131"] } ], )"
+                       + std::string(sc) + R"( })"), std::string(MS2_QUANT) + MS3_QUANT)))
+    // Refine never sees the fixed label.
+    TEST_EXCEPTION(std::invalid_argument,
+        Config(q3Cfg(sc, R"("identification": { "reference": { "sequence": "PEPTCIDEK" }, "threshold": 10, "method": "refine" },)")))
+  }
+  // ms3: no verdict buys anything, so identify / enriched_in are refused (non-default = authored).
+  TEST_EXCEPTION(std::invalid_argument, Config(q3Cfg(R"("scan": "ms3", "identify": "all")")))
+  TEST_EXCEPTION(std::invalid_argument, Config(q3Cfg(R"("scan": "ms3", "enriched_in": "a")")))
+  // both: identify none would buy no identification scan, so no MS3 ever.
+  TEST_EXCEPTION(std::invalid_argument, Config(q3Cfg(R"("scan": "both", "identify": "none")")))
+  Config both_all(q3Cfg(R"("scan": "both", "identify": "all")"));
+  TEST_EQUAL(both_all.quantification().identify == QuantIdentify::All, true)
+  // Quantification off: scan ms3 is inert and nothing is required (the generated reference relies on it).
+  Config off(cfgJson("", QUANT_ON(R"({ "enabled": false, "scan": "ms3" })"), ""));
+  TEST_EQUAL(off.quantification().readsAtMs3(), false)
+  // ms2 with the MS3 keys authored: a warning, never a throw.
+  const std::string warn = loadAndCapture(q3Cfg(R"("ms3_targets": 2)"));
+  TEST_EQUAL(warn.find("[CONFIG-WARN] quantification.ms3_targets") != std::string::npos, true)
+}
+END_SECTION
+
+#undef IDENT_TH
+#undef MS3_QUANT
 #undef QUANT_CONDS
 #undef QUANT_ON
 #undef MS2_QUANT

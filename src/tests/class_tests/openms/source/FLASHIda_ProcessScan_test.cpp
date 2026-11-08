@@ -1248,6 +1248,98 @@ namespace
   }
 }
 
+// ===== The quantification MS3 (ADR-0064) =============================================================================
+namespace
+{
+  const std::string kItmtMs1 = "../../FlashIDA/test-data/spectra/ms1_itmt_ydfz.txt";
+  const std::string kItmtMs2 = "../../FlashIDA/test-data/spectra/ms2_itmt_ydfz_cid28_scan1325.txt";
+  const std::string kReporterMs3 = "../../FlashIDA/test-data/spectra/ms2_quant_tmt.txt";   // synthetic, six TMT peaks
+
+  /// The real iodoTMT set: three surveys of a real E. coli iodoTMT run in which YdfZ (z=10 at
+  /// m/z 761.51) is the base peak, its CID 28 identification scan 1325, YdfZ as the reference, and quantification at
+  /// @p scan ("ms3" | "both") with identification.threshold @p threshold. @p charact adds characterization fragments;
+  /// @p inclusion (a configs/ file name) switches strict inclusion on.
+  std::string quantMs3Json(const std::string& dir, const std::string& scan, double threshold, bool charact = false,
+                           const std::string& inclusion = "")
+  {
+    nlohmann::json j = nlohmann::json::parse(buildJsonWithLogDir(dir));
+    j["precursor_selection"]["max_precursors"] = 1;
+    if (!inclusion.empty())
+    {
+      j["precursor_selection"]["targeting"] = "inclusion";
+      j["precursor_selection"]["strict_inclusion"] = true;
+      j["files"]["inclusion_list"] = "../../FlashIDA/test-data/configs/" + inclusion;
+    }
+    j["ms_settings"]["ms2"] = {{"analyzer", "Orbitrap"}, {"activation", "CID"}, {"collision_energy", 28},
+                               {"first_mass", 200}, {"last_mass", 2000}, {"resolution", 120000}};
+    j["ms_settings"]["ms3_quant"] = {{"analyzer", "Orbitrap"}, {"activation", "HCD"}, {"collision_energy", 80},
+                                     {"first_mass", 120}, {"last_mass", 140}, {"resolution", 30000}};
+    j["ms_settings"]["ms3"] = {{"analyzer", "Orbitrap"}, {"activation", "HCD"}, {"collision_energy", 35}, {"resolution", 120000}};
+    if (scan == "both")
+      j["ms_settings"]["ms2_quant"] = {{"analyzer", "Orbitrap"}, {"activation", "HCD"}, {"collision_energy", 80},
+                                       {"first_mass", 120}, {"last_mass", 140}};
+    j["identification"] = {
+      {"reference", {{"sequence", "MTTYDRNRNAITTGSRVMVSGTGHTGKILSIDTEGLTAEQIRRGKTVVVEGCEEKLAPLDLIRLGMN"}}},
+      {"flashtnt", {{"max_blind_mod_count", 2}, {"max_mod_mass", 700}}},
+      {"threshold", threshold}};
+    if (charact) j["identification"]["characterization"] = {{"mode", "fragments"}, {"max_targets", 3}};
+    j["quantification"] = {{"enabled", true}, {"labelling", "tmt6plex"}, {"scan", scan},
+                           {"conditions", {{{"name", "control"}, {"channels", {"126", "127", "128"}}},
+                                           {{"name", "treated"}, {"channels", {"129", "130", "131"}}}}}};
+    if (scan == "both") j["quantification"]["identify"] = "all";   // every screened precursor buys its R
+    return j.dump();
+  }
+
+  struct QuantMs3Run
+  {
+    AcqResult acq;
+    std::vector<ScanCommand> quant_ms3;   ///< MS3 commands with role Quantification, in dequeue order
+    int bought_rows = 0;                  ///< identification.tsv MS2 rows with quant_ms3 bought
+    int closed_rows = 0;                  ///< ... with closed_out 1
+    int none_rows = 0;                    ///< ... with quant_ms3 none
+    int ms3_id_rows_of_quant = 0;         ///< identification.tsv rows of a quantification MS3 (must stay 0)
+    int quant_ms3_with_verdict = 0;       ///< scan_results rows of a quantification MS3 with a quant_verdict
+  };
+
+  QuantMs3Run runQuantMs3(const std::string& dir, const std::string& cfg)
+  {
+    QuantMs3Run q;
+    auto ms1 = loadTsvScans(kItmtMs1);
+    auto ms2 = loadTsvScans(kItmtMs2);
+    auto rep3 = loadTsvScans(kReporterMs3);
+    const std::map<std::string, std::vector<ScanData>> no_char_fixtures;   // characterization MS3s: skipped
+    {
+      FLASHIda ida(const_cast<char*>(cfg.c_str()));
+      q.acq = runInterleaved(&ida, ms1, ms2, &no_char_fixtures, 600, false, 0.0, nullptr, nullptr,
+                             rep3.empty() ? nullptr : &rep3[0]);
+    }
+    std::set<std::string> quant_ids;
+    for (const auto& c : q.acq.ms3_cmds)
+      if (roleOf(c) == ScanRole::Quantification)
+      {
+        q.quant_ms3.push_back(c);
+        quant_ids.insert(ScanCommandQueue::encode(c.scan_id));
+      }
+    auto idf = TSVFile::parse(dir + "/identification.tsv");
+    for (const auto& row : idf.rows)
+    {
+      if (cell(idf, row, "ms_level") == "2")
+      {
+        if (cell(idf, row, "quant_ms3") == "bought") ++q.bought_rows;
+        if (cell(idf, row, "quant_ms3") == "none") ++q.none_rows;
+        if (cell(idf, row, "closed_out") == "1") ++q.closed_rows;
+      }
+      else if (quant_ids.count(cell(idf, row, "tracking_id"))) ++q.ms3_id_rows_of_quant;
+    }
+    auto res = TSVFile::parse(dir + "/scan_results.tsv");
+    for (const auto& row : res.rows)
+      if (cell(res, row, "ms_level") == "3" && quant_ids.count(cell(res, row, "tracking_id"))
+          && !cell(res, row, "quant_verdict").empty())
+        ++q.quant_ms3_with_verdict;
+    return q;
+  }
+}
+
 START_TEST(FLASHIda_ProcessScan, "$Id$")
 
 /////////////////////////////////////////////////////////////
@@ -3773,6 +3865,99 @@ START_SECTION(authored_charge_species_is_never_closed_out)
   TEST_EQUAL(with.ms2_cytc, without.ms2_cytc)
   TEST_EQUAL(with.closed_out_rows, 0)
   TEST_EQUAL(with.skipped, 0)
+}
+END_SECTION
+
+// ADR-0064: an identification that closes a cysteine proteoform out buys a quantification MS3 on a labelled fragment.
+// Real iodoTMT data: YdfZ (C52 labelled) identified on its CID 28 scan; the MS3 returns a synthetic reporter spectrum.
+START_SECTION(quant_ms3_fires_on_close_out_first_and_reads_reporters)
+{
+  const std::string dir = freshLogDir("quant_ms3_charact");
+  const QuantMs3Run q = runQuantMs3(dir, quantMs3Json(dir, "ms3", 10.0, /*charact=*/true));
+  TEST_EQUAL(q.closed_rows >= 1, true)           // the live search identified YdfZ and closed it out
+  TEST_EQUAL(q.bought_rows >= 1, true)
+  TEST_EQUAL(q.quant_ms3.empty(), false)
+  ABORT_IF(q.quant_ms3.empty())
+  const ScanCommand& qc = q.quant_ms3[0];
+  TEST_EQUAL(qc.msn_level, 3)
+  TEST_EQUAL(qc.priority, 1)
+  TEST_EQUAL(qc.num_stages >= 2, true)
+  // Stage 0 is the identification scan's own isolation and activation; stage 1 is ms3_quant's.
+  const ScanCommand* parent = nullptr;
+  for (const auto& c : q.acq.ms2_cmds)
+    if (ScanCommandQueue::encode(c.scan_id) == std::string(qc.parent_scan_id)) parent = &c;
+  TEST_EQUAL(parent != nullptr, true)
+  if (parent != nullptr)
+  {
+    TEST_REAL_SIMILAR(qc.stages[0].precursor_mz, parent->stages[0].precursor_mz)
+    TEST_REAL_SIMILAR(qc.stages[0].isolation_width, parent->stages[0].isolation_width)
+    TEST_STRING_EQUAL(std::string(qc.stages[0].activation_type), "CID")
+  }
+  TEST_STRING_EQUAL(std::string(qc.stages[1].activation_type), "HCD")
+  TEST_REAL_SIMILAR(qc.stages[1].collision_energy, 80.0)
+  TEST_EQUAL(qc.window_snr > 1.0, true)          // eligible: the fragment outweighs the rest of its window
+  // First: of the parent's MS3 children, the quantification MS3s are dequeued before any characterization MS3.
+  bool seen_characterization = false, quant_after_characterization = false;
+  for (const auto& c : q.acq.ms3_cmds)
+  {
+    if (std::string(c.parent_scan_id) != std::string(qc.parent_scan_id)) continue;
+    if (roleOf(c) == ScanRole::Quantification) { if (seen_characterization) quant_after_characterization = true; }
+    else seen_characterization = true;
+  }
+  TEST_EQUAL(quant_after_characterization, false)
+  // Read for reporters only: a verdict on its scan_results row, never an identification row.
+  TEST_EQUAL(q.quant_ms3_with_verdict, (int)q.quant_ms3.size())
+  TEST_EQUAL(q.ms3_id_rows_of_quant, 0)
+  // Once per close-out: one identification bought them.
+  TEST_EQUAL(q.bought_rows, 1)
+  TEST_EQUAL((int)q.quant_ms3.size() <= 1, true)   // ms3_targets 1
+}
+END_SECTION
+
+// Below the threshold nothing closes out, so nothing is bought; every MS2 row says quant_ms3 none.
+START_SECTION(no_close_out_no_quant_ms3)
+{
+  const std::string dir = freshLogDir("quant_ms3_no_close_out");
+  const QuantMs3Run q = runQuantMs3(dir, quantMs3Json(dir, "ms3", 1e9));
+  TEST_EQUAL(q.closed_rows, 0)
+  TEST_EQUAL(q.quant_ms3.empty(), true)
+  TEST_EQUAL(q.bought_rows, 0)
+  TEST_EQUAL(q.none_rows >= 1, true)   // non-vacuity: the scan was identified and logged, just not closed out
+}
+END_SECTION
+
+// scan both: the 'Q' MS2 screen buys the 'R' (identify all), and the R's close-out buys the quantification MS3.
+START_SECTION(both_q_screen_buys_R_and_R_buys_quant_ms3)
+{
+  const std::string dir = freshLogDir("quant_both");
+  const QuantMs3Run q = runQuantMs3(dir, quantMs3Json(dir, "both", 10.0));
+  int q_ms2 = 0;
+  std::set<std::string> r_ids;
+  for (const auto& c : q.acq.ms2_cmds)
+  {
+    if (roleOf(c) == ScanRole::Quantification) ++q_ms2;
+    else r_ids.insert(ScanCommandQueue::encode(c.scan_id));
+  }
+  TEST_EQUAL(q_ms2 >= 1, true)
+  TEST_EQUAL(r_ids.empty(), false)
+  TEST_EQUAL(q.quant_ms3.empty(), false)
+  for (const auto& c : q.quant_ms3) TEST_EQUAL(r_ids.count(std::string(c.parent_scan_id)), 1)   // bought by an R
+  TEST_EQUAL(q.quant_ms3_with_verdict, (int)q.quant_ms3.size())
+}
+END_SECTION
+
+// A species whose inclusion row names charges is never closed out (ADR-0061 d.10), so it buys no quantification MS3
+// either. Paired with the same inclusion without charges, so the refusal is not vacuous.
+START_SECTION(authored_charge_species_buys_no_quant_ms3)
+{
+  const std::string d1 = freshLogDir("quant_ms3_incl");
+  const QuantMs3Run open = runQuantMs3(d1, quantMs3Json(d1, "ms3", 10.0, false, "inclusion_itmt_ydfz.txt"));
+  const std::string d2 = freshLogDir("quant_ms3_incl_charges");
+  const QuantMs3Run named = runQuantMs3(d2, quantMs3Json(d2, "ms3", 10.0, false, "inclusion_itmt_ydfz_charges.txt"));
+  TEST_EQUAL(open.quant_ms3.empty(), false)   // non-vacuity
+  TEST_EQUAL(named.closed_rows, 0)
+  TEST_EQUAL(named.quant_ms3.empty(), true)
+  TEST_EQUAL(named.bought_rows, 0)
 }
 END_SECTION
 

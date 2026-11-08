@@ -478,6 +478,7 @@ set(analysis_executables_list
   ProteoformTracker_Trajectory_test
   ProteoformTracker_Localization_test
   ProteoformTracker_WinnerContext_test
+  ProteoformTracker_LabelledFragments_test
   ProteoformTracker_NonWinnerRematch_test
   ProteoformTracker_Exhaustive_test
   ProteoformTracker_Discriminating_test

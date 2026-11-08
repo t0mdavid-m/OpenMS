@@ -372,7 +372,13 @@ namespace
                                   //               would pass while testing nothing. Applied only when
                                   //               ms2_ce_map is null; the two key the same feed and a config
                                   //               that swept CE *and* voted would be ambiguous.
-                                  const std::map<int, ScanData>* ms2_charge_map = nullptr)
+                                  const std::map<int, ScanData>* ms2_charge_map = nullptr,
+                                  //   quant_ms3_spectrum : ADR-0064. The spectrum fed for every MS3 whose role is
+                                  //               Quantification ('Q', a quantification MS3 on a labelled fragment),
+                                  //               ahead of the ion-keyed manifest; null keeps the manifest rule for
+                                  //               it too. The C# twin is the ms3FixtureFor callback (a caller returns
+                                  //               the reporter fixture when ScanDescription[3] == 'Q').
+                                  const ScanData* quant_ms3_spectrum = nullptr)
   {
     AcqResult r;
     const int n_ms1 = static_cast<int>(ms1_scans.size());
@@ -470,6 +476,15 @@ namespace
       {
         r.ms3_cmds.push_back(cmd);
         const std::vector<ScanData>* spectra = nullptr;
+        if (quant_ms3_spectrum != nullptr && roleOf(cmd) == ScanRole::Quantification)
+        {
+          ida->processScan(quant_ms3_spectrum->mzs.data(), quant_ms3_spectrum->ints.data(),
+                           (int)quant_ms3_spectrum->mzs.size(), quant_ms3_spectrum->rt, 3, cmd.scan_description,
+                           0.0, instrumentScanNumberOf(*quant_ms3_spectrum));
+          ida->waitForSearchIdle();
+          cmd = ScanCommand{};
+          continue;
+        }
         if (ms3_ion_map != nullptr)
         {
           std::string ion_key;

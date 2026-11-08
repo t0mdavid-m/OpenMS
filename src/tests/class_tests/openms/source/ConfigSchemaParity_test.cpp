@@ -129,8 +129,30 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
     TEST_EQUAL(fus.reagent_agc_target, jf["reagent_agc_target"].get<int>())
   }
 
+  // --- ms_settings.ms3_quant, stage 1 of the quantification MS3 (ADR-0064) ---
+  // Copied unconditionally like ms2_quant above, so the reference (quantification off) still proves it reachable.
+  {
+    const auto& q3 = cfg.quantification().ms3_quant_scan;
+    const auto& jq = j["ms_settings"]["ms3_quant"];
+    TEST_EQUAL(cfg.quantification().has_ms3_quant_scan, true)
+    TEST_EQUAL(q3.analyzer, jq["analyzer"].get<std::string>())
+    TEST_EQUAL(q3.activation, jq["activation"].get<std::string>())
+    TEST_EQUAL(q3.collision_energy, jq["collision_energy"].get<int>())
+    TEST_EQUAL(q3.resolution, jq["resolution"].get<int>())
+    TEST_EQUAL(q3.agc_target, jq["agc_target"].get<int>())
+    TEST_REAL_SIMILAR(q3.max_it, jq["max_it"].get<double>())
+    TEST_REAL_SIMILAR(q3.first_mass, jq["first_mass"].get<double>())
+    TEST_REAL_SIMILAR(q3.last_mass, jq["last_mass"].get<double>())
+    TEST_EQUAL(q3.microscans, jq["microscans"].get<int>())
+    TEST_EQUAL(q3.data_type, jq["data_type"].get<std::string>())
+  }
+
   // --- quantification ---
   TEST_EQUAL(cfg.quantification().enabled, j["quantification"]["enabled"].get<bool>())
+  // ADR-0064: both non-default in the reference (scan both, ms3_targets 2).
+  TEST_EQUAL(j["quantification"]["scan"].get<std::string>(), "both")
+  TEST_EQUAL(cfg.quantification().scan == QuantScan::Both, true)
+  TEST_EQUAL(cfg.quantification().ms3_targets, j["quantification"]["ms3_targets"].get<int>())
   TEST_REAL_SIMILAR(cfg.quantification().reporter_mz_tol, j["quantification"]["reporter_mz_tol"].get<double>())
   TEST_REAL_SIMILAR(cfg.quantification().fold_change_threshold, j["quantification"]["fold_change_threshold"].get<double>())
   // ADR-0056. The reference authors every key NON-DEFAULT, so each pin proves the authored value
