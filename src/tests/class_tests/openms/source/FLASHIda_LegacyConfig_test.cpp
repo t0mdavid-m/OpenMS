@@ -709,6 +709,30 @@ START_SECTION(threshold_absent_never_closes_out_and_authored_round_trips)
 }
 END_SECTION
 
+// ADR-0064: identification.characterization.per_proteoform. Absent or null = false (every committed config); true
+// and false parse; a non-boolean is refused with a message naming the key.
+START_SECTION(per_proteoform_absent_is_off_and_only_a_boolean_parses)
+{
+  auto withCharacterization = [](const std::string& extra) {
+    return std::string(R"JSON({
+    "deconvolution": {"tol": [10, 10, 10]},
+    "precursor_selection": {"rank_by": "qscore", "max_precursors": 2},
+    "identification": { "reference": { "sequence": "PEPTIDEPEPTIDE" },
+                        "characterization": { "mode": "fragments", "max_targets": 3)JSON") + extra + R"JSON( } },
+    "ms_settings": {"ms1": {}, "ms2": {"activation": "HCD", "collision_energy": 29},
+                    "ms3": {"activation": "CID", "collision_energy": 35}}
+  })JSON";
+  };
+  TEST_EQUAL(Config{withCharacterization("")}.characterization().per_proteoform, false)
+  TEST_EQUAL(Config{withCharacterization(R"(, "per_proteoform": null)")}.characterization().per_proteoform, false)
+  TEST_EQUAL(Config{withCharacterization(R"(, "per_proteoform": false)")}.characterization().per_proteoform, false)
+  TEST_EQUAL(Config{withCharacterization(R"(, "per_proteoform": true)")}.characterization().per_proteoform, true)
+  for (const std::string bad : {std::string("1"), std::string("\"yes\""), std::string("[true]")})
+    TEST_EQUAL(contains(loadError(withCharacterization(", \"per_proteoform\": " + bad)),
+                        "identification.characterization.per_proteoform must be true or false"), true)
+}
+END_SECTION
+
 // ADR-0061 d.13: "Every unset key takes FLASHTnT's default". An identification without flashtnt, with an
 // empty one and with a null one gives FLASHTnT's Param for every knob (ex:skip_precursor_inference aside,
 // ADR-0061's true), and authored values reach FLASHTnT under its own names.

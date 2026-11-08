@@ -667,7 +667,8 @@ namespace OpenMS
         throw std::invalid_argument(
             "Config: identification.characterization.refine moved to identification.refine (ADR-0061).");
       rejectUnknownKeys(charact,
-          {"mode", "max_targets", "min_fragment_charge", "min_target_mass", "fragment_charges", "exploration"},
+          {"mode", "max_targets", "min_fragment_charge", "min_target_mass", "fragment_charges", "per_proteoform",
+           "exploration"},
           "identification.characterization");
 
       // Hard-rejected, not defaulted. The old parse was
@@ -726,6 +727,14 @@ namespace OpenMS
       // consults it, because no other objective targets a raw deconvolved mass.
       characterization_.min_target_mass = charact.value("min_target_mass", 0.0);
       characterization_.fragment_charges = parseChargeMode(charact, "fragment_charges", "identification.characterization");
+      // ADR-0064: per-proteoform MS3 re-planning. Absent or null = false; anything but a boolean is refused.
+      if (charact.contains("per_proteoform") && !charact["per_proteoform"].is_null())
+      {
+        if (!charact["per_proteoform"].is_boolean())
+          throw std::invalid_argument("Config: identification.characterization.per_proteoform must be true or false; got "
+                                      + charact["per_proteoform"].dump() + " (ADR-0064).");
+        characterization_.per_proteoform = charact["per_proteoform"].get<bool>();
+      }
     }
 
     // --- quantification (ADR-0038) ---
