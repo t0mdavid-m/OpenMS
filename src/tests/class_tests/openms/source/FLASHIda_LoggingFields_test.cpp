@@ -248,8 +248,8 @@ START_SECTION(schema_column_counts)
   // record, APPENDED after tic_coverage (34 -> 41) so every i.colIndex pinned below is unchanged and only
   // this count and i.headers.back() move. Sentinel-valued under characterization.method flashtnt.
   // ADR-0061 push 4b: + protein/raw_score/identification_score/closed_out/inferred_precursor_mass, appended
-  // after precursor_mass_difference (41 -> 46).
-  TEST_EQUAL(i.headers.size(), 46)
+  // after precursor_mass_difference (41 -> 46). ADR-0064: + quant_ms3, appended last (46 -> 47).
+  TEST_EQUAL(i.headers.size(), 47)
 
   // Spot-check exact header identities / order at the boundaries that matter for parsing.
   // NOTE: the four log streams were reordered for human legibility (LOG_COLUMN_ORDER_REFERENCE.md);
@@ -285,13 +285,14 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(r.colIndex("fragment_count"), 14)
   TEST_EQUAL(r.colIndex("tic_coverage"), 15)
   TEST_EQUAL(i.headers.front(), std::string("tracking_id"))      // reordered: identification now leads with tracking_id
-  TEST_EQUAL(i.headers.back(), std::string("inferred_precursor_mass"))  // ADR-0061 push 4b: its block is appended last
+  TEST_EQUAL(i.headers.back(), std::string("quant_ms3"))        // ADR-0064: appended after the ADR-0061 push 4b block
   // ADR-0061 push 4b: the block after the refine record, pinned as a contiguous run.
   TEST_EQUAL(i.colIndex("protein"), 41)
   TEST_EQUAL(i.colIndex("raw_score"), 42)
   TEST_EQUAL(i.colIndex("identification_score"), 43)
   TEST_EQUAL(i.colIndex("closed_out"), 44)
   TEST_EQUAL(i.colIndex("inferred_precursor_mass"), 45)
+  TEST_EQUAL(i.colIndex("quant_ms3"), 46)
   TEST_EQUAL(i.colIndex("annotation_score"), 34)                // the refine block, pinned as a contiguous run
   TEST_EQUAL(i.colIndex("total_shift"), 35)
   TEST_EQUAL(i.colIndex("second_total_shift"), 36)
@@ -2330,12 +2331,12 @@ START_SECTION(identification_refine_columns_carry_the_candidates)
     return s.size() >= tail.size() && s.compare(s.size() - tail.size(), tail.size(), tail) == 0;
   };
   // tic_coverage, then the seven
-  // (ADR-0061 push 4b: then its five; a hand-built row chose no protein, so protein is empty)
+  // (ADR-0061 push 4b: then its five; a hand-built row chose no protein, so protein is empty; ADR-0064: then quant_ms3)
   TEST_TRUE(endsWith(header, "\ttic_coverage\tannotation_score\ttotal_shift\tsecond_total_shift\tsecond_score\tcut\tn_levels\tprecursor_mass_difference"
-                             "\tprotein\traw_score\tidentification_score\tclosed_out\tinferred_precursor_mass"))
-  TEST_EQUAL(std::count(two.begin(), two.end(), '\t'), 45)
-  TEST_EQUAL(std::count(one.begin(), one.end(), '\t'), 45)
-  TEST_TRUE(endsWith(two, "\t0.5000\t61\t526.1400\t655.1900\t46\t5\t5\t-0.9800\t\t-1.0000\t-1.0000\t0\t-1.0000"))
+                             "\tprotein\traw_score\tidentification_score\tclosed_out\tinferred_precursor_mass\tquant_ms3"))
+  TEST_EQUAL(std::count(two.begin(), two.end(), '\t'), 46)
+  TEST_EQUAL(std::count(one.begin(), one.end(), '\t'), 46)
+  TEST_TRUE(endsWith(two, "\t0.5000\t61\t526.1400\t655.1900\t46\t5\t5\t-0.9800\t\t-1.0000\t-1.0000\t0\t-1.0000\tnone"))
   TEST_TRUE(endsWith(one, "\t0.5000\t61\t526.1400\t\t-1\t5\t5\t-0.9800\t\t-1.0000\t-1.0000\t0\t-1.0000"))
 }
 END_SECTION

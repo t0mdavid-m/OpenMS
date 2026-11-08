@@ -273,6 +273,9 @@ namespace OpenMS
       /// ADR-0061 d.7 (push 5): 1 on the MS2 row whose identification closed its species out, else 0.
       /// APPENDED last: the id rows are aggregate-initialised positionally up to flash_extender_score.
       bool closed_out = false;
+      /// ADR-0064: what this identification bought at MS3 for quantification: "none" (nothing, or not a
+      /// quantification-MS3 run), "bought", "no_cysteine", "no_labelled_fragment". APPENDED last, as closed_out.
+      std::string quant_ms3 = "none";
     };
 
     /// One pooled_identification.tsv row: the current state of a ProteoformModel after each update.

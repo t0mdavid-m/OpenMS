@@ -210,7 +210,10 @@ namespace OpenMS
                                    // ADR-0061 push 4b, APPENDED: the protein (accession) the match chose, the
                                    // annotator's raw score, the identification score, whether the Precursor was
                                    // closed out, and the precursor mass the Extender inferred. -1 / 0 = none.
-                                   << "protein\traw_score\tidentification_score\tclosed_out\tinferred_precursor_mass\n";
+                                   << "protein\traw_score\tidentification_score\tclosed_out\tinferred_precursor_mass\t"
+                                   // ADR-0064, APPENDED: what the identification bought at MS3 for quantification
+                                   // (none | bought | no_cysteine | no_labelled_fragment).
+                                   << "quant_ms3\n";
         identification_tsv_stream_.flush();
       }
     }
@@ -948,7 +951,8 @@ namespace OpenMS
         << std::fixed << std::setprecision(4) << match.raw_score << "\t"
         << std::fixed << std::setprecision(4) << match.identification_score << "\t"
         << (row.closed_out ? 1 : 0) << "\t"
-        << std::fixed << std::setprecision(4) << match.inferred_precursor_mass << "\n";
+        << std::fixed << std::setprecision(4) << match.inferred_precursor_mass << "\t"
+        << row.quant_ms3 << "\n";  // ADR-0064
     };
     // ADR-0049: Refine's candidate record. The three doubles re-establish std::fixed + setprecision(4)
     // themselves (the stream's float convention) rather than inheriting whatever the last field left sticky.
