@@ -336,13 +336,28 @@ FLASHIda::FLASHIda(char* arg) :
     // Initialize FAIMS CV atomic for getNextScanCommand reads.
     // relaxed is safe: no other thread can observe this object before construction completes.
     current_faims_cv_.store(faims_.isEnabled() ? faims_.currentCV() : 0.0, std::memory_order_relaxed);
+
+    // ADR-0065 push 2: the operator view, only on a console that takes VT sequences (null on a pipe or a file).
+    board_.setLogDir(config_.runtime().log_dir);
+    view_ = ConsoleView::start([this] { return boardSnapshot_(); });
+  }
+
+  BoardSnapshot FLASHIda::boardSnapshot_() const
+  {
+    return board_.snapshot(config_.targeting().rt_window, config_.global().duration,
+                           search_pool_ ? search_pool_->backlog() : 0);
   }
 
   // Stop the pool FIRST: a running apply touches the tracker, the queue and the logger, and members are
   // destroyed only after this body returns. Waiting jobs are discarded; a running one finishes.
   FLASHIda::~FLASHIda()
   {
+    if (view_) view_->stop();   // ADR-0065: the render thread reads the pool's backlog, so it stops first
     if (search_pool_) search_pool_->stop();
+    // The run summary, in every mode: on the console as plain lines, in events.log as [OP-SUMMARY].
+    try { ConsoleView::printSummary(boardSnapshot_(), view_ && view_->utf8()); }
+    catch (...) {}   // a summary is never worth an exception out of a destructor
+    view_.reset();   // restores the console's mode and code page
   }
 
   /**
@@ -665,6 +680,7 @@ FLASHIda::FLASHIda(char* arg) :
       op << "  " << selection_.deconvolvedMS1().size() << " species, selected " << selected.size() << ", plan kept "
          << replan.kept << " added " << replan.added << " dropped " << replan.dropped_scan_ids.size();
       EventLog::say(OperatorKind::Ms1, op.str());
+      board_.onPlanned(replan.kept + replan.added);
     }
 
     // The survey's record covers the commands it actually queued: a reconciled one never was.
@@ -840,6 +856,7 @@ FLASHIda::FLASHIda(char* arg) :
                                          job.instrument_scan_number, false, job.commands_pushed, job.child_ids,
                                          job.results_row, id_rows);
     fillSearchColumns(job.results_row, job.timing.submitted, job.timing.started, job.timing.finished);
+    board_.onSearchWait(static_cast<int>(job.results_row.search_wait_ms));
     logger_.writeScanResultRow(job.results_row);
     for (const auto& r : id_rows)
       logger_.writeIdentificationRow(r);
@@ -855,6 +872,7 @@ FLASHIda::FLASHIda(char* arg) :
     const int pushed = finishVariantMS2_(expl_result, static_cast<int>(job.input.deconv.size()), &job.input.deconv,
                                          job.precursor_id, job.parent_id_str, false, job.results_row, id_rows);
     fillSearchColumns(job.results_row, job.timing.submitted, job.timing.started, job.timing.finished);
+    board_.onSearchWait(static_cast<int>(job.results_row.search_wait_ms));
     logger_.writeScanResultRow(job.results_row);
     for (const auto& r : id_rows)
       logger_.writeIdentificationRow(r);
@@ -946,8 +964,11 @@ FLASHIda::FLASHIda(char* arg) :
         && closeOutIfIdentified_(ms3_targeting.proteoform_match, parent_ctx.mono_mass, parent_ctx.stages[0].precursor_mz, rt,
                                  precursor_id);
     if (config_.identification().enabled() && !is_quant_scan && !dropped && parent_ctx.num_stages > 0)
+    {
       sayIdentification(parent_id_str, ms3_targeting.proteoform_match, parent_ctx.mono_mass, closed_out,
                         config_.identification().threshold, config_.targeting().rt_window);
+      board_.onResult(parent_ctx.mono_mass, ms3_targeting.proteoform_match, closed_out, config_.identification().threshold);
+    }
 
     // Write MS2 identification row if proteoform was matched.
     // Gate on the actual match (proteoform_match), NOT on ms3_targeting.proteoform_sequence — the
@@ -1075,8 +1096,12 @@ FLASHIda::FLASHIda(char* arg) :
         && closeOutIfIdentified_(expl_result.identification.result, vctx.ms1_precursor_mass, vctx.ms1_precursor_mz,
                                  results_row.rt * 60.0, precursor_id);
     if (config_.identification().enabled() && !dropped)
+    {
       sayIdentification(parent_id_str, expl_result.identification.result, vctx.ms1_precursor_mass, closed_out,
                         config_.identification().threshold, config_.targeting().rt_window);
+      board_.onResult(vctx.ms1_precursor_mass, expl_result.identification.result, closed_out,
+                      config_.identification().threshold);
+    }
 
     // MS2 identification row (copy by value before expl_result goes out of scope).
     if (!expl_result.identification.proteoform_sequence.empty() && !expl_result.identification.result.fragments.empty())
@@ -1192,6 +1217,7 @@ FLASHIda::FLASHIda(char* arg) :
   {
     std::lock_guard<std::mutex> lock(analysis_mutex_);
     EventLog::setRt(rt);   // ADR-0065: the events.log prefix carries the last retention time seen
+    board_.setRt(rt);
 
     // Tracking ID extraction (perspective: scan processed is parent of potential children)
     std::string parent_desc_str = scan_description ? std::string(scan_description) : "";
@@ -1352,8 +1378,10 @@ FLASHIda::FLASHIda(char* arg) :
         const bool needs_search = search_pool_ != nullptr && exploration_.variantNeedsSearch(variant_in);
         const bool skip_search = needs_search && isClosedOut_(parent_ctx.mono_mass, rt, precursor_id);
         if (skip_search) EventLine() << "[SEARCH-SKIPPED] id=" << parent_id_str << " reason=closed_out";
+        if (!skip_search) board_.onReturned(parent_ctx.mono_mass, needs_search);   // ADR-0065
         if (needs_search && !skip_search)
         {
+          const double board_mass = parent_ctx.mono_mass;
           auto job = std::make_shared<VariantSearch>();
           job->precursor_id = precursor_id;
           job->parent_id_str = parent_id_str;
@@ -1375,10 +1403,11 @@ FLASHIda::FLASHIda(char* arg) :
             job->timing.finished = std::chrono::steady_clock::now();
           };
           pj->apply = [this, job] { return applyVariantSearch_(*job); };
-          pj->drop = [this, job]
+          pj->drop = [this, job, board_mass]
           {
             // Run by submitSearch_, under the submitting processScan's analysis_mutex_.
             EventLine() << "[SEARCH-DROPPED] id=" << job->parent_id_str;
+            board_.onDropped(board_mass);
             auto r = exploration_.applyVariant(job->input, nullptr, true, queue_, &tracker_, job->precursor_id);
             std::vector<IdaLogger::IdRowDescriptor> rows;
             finishVariantMS2_(r, static_cast<int>(job->input.deconv.size()), &job->input.deconv, job->precursor_id,
@@ -1491,6 +1520,8 @@ FLASHIda::FLASHIda(char* arg) :
         const bool skip_search = search_pool_ != nullptr && config_.identification().enabled() && !is_quant_scan
             && isClosedOut_(parent_ctx.mono_mass, rt, precursor_id);
         if (skip_search) EventLine() << "[SEARCH-SKIPPED] id=" << parent_id_str << " reason=closed_out";
+        if (!skip_search)   // ADR-0065: searched, or returned to nothing that searches it
+          board_.onReturned(parent_ctx.mono_mass, search_pool_ != nullptr && config_.identification().enabled() && !is_quant_scan);
         if (search_pool_ != nullptr && config_.identification().enabled() && !is_quant_scan && !skip_search)
         {
           auto job = std::make_shared<RegularSearch>();
@@ -1529,6 +1560,7 @@ FLASHIda::FLASHIda(char* arg) :
           {
             // Run by submitSearch_, under the submitting processScan's analysis_mutex_.
             EventLine() << "[SEARCH-DROPPED] id=" << job->parent_id_str;
+            board_.onDropped(job->parent_ctx.mono_mass);
             std::vector<IdaLogger::IdRowDescriptor> no_rows;
             finishRegularMS2_(nullptr, true, job->spectrum, job->has_spectrum ? &job->spectrum : nullptr, job->parent_ctx,
                               job->precursor_id, job->parent_id_str, job->rt, job->instrument_scan_number, false,
@@ -2005,6 +2037,7 @@ FLASHIda::FLASHIda(char* arg) :
     // proteoform above. A command no survey decided has none.
     const std::optional<DecisionInfo> decision = queue_.takeDecisionInfo(out.scan_id);
     logger_.writeScanCommandRow(out, precursorIdForTracking_(out.scan_id), ms3pf, decision ? &*decision : nullptr);
+    board_.onSent(out, precursorIdForTracking_(out.scan_id));   // ADR-0065: a dequeue is a commit
     return 1;
   }
 

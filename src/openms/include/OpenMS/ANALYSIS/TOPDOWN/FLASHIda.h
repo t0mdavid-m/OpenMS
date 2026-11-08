@@ -37,12 +37,14 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ConsoleView.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Exploration.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FAIMS.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ProteoformTracker.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PrecursorBoard.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PrecursorSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ProteomeSearch.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Quantification.h>
@@ -132,6 +134,10 @@ namespace OpenMS
 
     /// Owns all output logging: the 4 streams, TSV headers, row writers, and the ida_log parser
     IdaLogger logger_;
+
+    /// The operator view's model (ADR-0065 push 2): one row per committed Precursor. Its own mutex; fed under
+    /// analysis_mutex_ (processScan, the applies) and without it (the drain).
+    PrecursorBoard board_;
 
     /// Scan command queue (owns queue, tracking IDs, pending map, command builders)
     ScanCommandQueue queue_;
@@ -506,5 +512,13 @@ namespace OpenMS
     /// The pool. Null without an identification section (nothing is ever searched then). Stopped and joined
     /// in ~FLASHIda's body, before any member a running apply touches is destroyed.
     std::unique_ptr<SearchPool> search_pool_;
+
+    /// The operator view (ADR-0065 push 2): null unless stdout is a VT-capable console. Stopped in ~FLASHIda's
+    /// body before the pool, since its render thread reads the pool's backlog.
+    std::unique_ptr<ConsoleView> view_;
+
+    /// The board as the view draws it: the live set over precursor_selection.rt_window, global.duration, the
+    /// search backlog. Takes no analysis_mutex_ (the render thread calls it).
+    BoardSnapshot boardSnapshot_() const;
   };
 }
