@@ -235,6 +235,11 @@ namespace OpenMS
     /// this toolchain (MSVC ships no thread sanitizer).
     std::unordered_map<int, int> precursor_id_by_tracking_;
 
+    /// ADR-0061 d.7 / ADR-0062 d.6: nominal mass -> RT (seconds) of the latest close-out of that species. Analysis
+    /// state (read and written under analysis_mutex_): a later scan of a species closed out within rt_window is not
+    /// searched (scan_results search = closed_out_skip). Expired entries are erased as they are read.
+    std::unordered_map<int, double> closed_out_;
+
     /// Leaf lock for precursor_id_by_tracking_.
     ///
     /// Lock hierarchy: analysis_mutex_ -> { queue_mutex_, precursor_map_mutex_, the IdaLogger stream
@@ -447,6 +452,17 @@ namespace OpenMS
     int finishVariantMS2_(Exploration::FeedResultInfo& expl_result, int mass_count, const DeconvolvedSpectrum* spectrum,
                           int precursor_id, const std::string& parent_id_str, bool dropped,
                           IdaLogger::ScanRowDescriptor& results_row, std::vector<IdaLogger::IdRowDescriptor>& id_rows);
+
+    /// ADR-0061 d.7-d.10 / ADR-0062 d.3: when @p match's FLASHTnT Identification score reaches
+    /// identification.threshold, close its species out -- arm the mass and m/z bars keyed on the commanded precursor
+    /// (@p commanded_mass, @p isolation_mz) stamped at @p rt (seconds), plus an inferred mass that is the same species,
+    /// withdraw the species' wholly unsent plan units at every CV, and record it for the skip. A species whose
+    /// inclusion row names charges is never closed out. Caller holds analysis_mutex_. True when it closed out.
+    bool closeOutIfIdentified_(const FragmentAnalysis::ProteoformMatch& match, double commanded_mass,
+                               double isolation_mz, double rt);
+
+    /// Whether the species of @p mass was closed out within rt_window of @p rt (ADR-0062 d.6). Analysis state.
+    bool isClosedOut_(double mass, double rt);
 
     /// A worker's apply step: take analysis_mutex_, finish the scan, write its rows. Returns commands pushed.
     int applyRegularSearch_(RegularSearch& job);

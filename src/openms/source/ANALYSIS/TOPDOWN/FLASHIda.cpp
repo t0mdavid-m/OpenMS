@@ -880,6 +880,11 @@ FLASHIda::FLASHIda(char* arg) :
       }
     }
 
+    // ADR-0061 d.7: a searched MS2 whose FLASHTnT number reaches the threshold closes its species out, keyed on the
+    // command that isolated it. Decided before the row is pushed, which carries the verdict.
+    const bool closed_out = !dropped && !is_quant_scan && parent_ctx.num_stages > 0
+        && closeOutIfIdentified_(ms3_targeting.proteoform_match, parent_ctx.mono_mass, parent_ctx.stages[0].precursor_mz, rt);
+
     // Write MS2 identification row if proteoform was matched.
     // Gate on the actual match (proteoform_match), NOT on ms3_targeting.proteoform_sequence — the
     // latter is only set when found>0 (MS3 targets were selected), so an unambiguous ID that yields
@@ -905,6 +910,7 @@ FLASHIda::FLASHIda(char* arg) :
         ms2_ctx.ms2_window_snr = parent_ctx.window_snr;  // Item 2: SNR travels on the command (was the queue map)
       }
       id_rows.push_back({parent_id_str, 2, 'R', ms2_ctx, ms3_targeting.proteoform_match, precursor_id, ms3_targeting.tic_coverage, ms3_targeting.proteoform_match.score});  // copy by value (ms2_ctx is local)
+      id_rows.back().closed_out = closed_out;
       // ADR-0049: an MS2 row whose match Refine decided carries its record (here and on the exploration MS2
       // rows); MS3 rows never run Refine and keep the sentinels.
       fillRefineColumns(id_rows.back());
@@ -998,10 +1004,18 @@ FLASHIda::FLASHIda(char* arg) :
     results_row.reaction_time       = std::to_string(expl_result.fragmentation.reaction_time);
     results_row.winner_tracking_id  = expl_result.group.winner_tracking_id;  // "" except the group-completing row
 
+    // ADR-0061 d.7: a searched variant closes its species out like any MS2. Its commanded precursor is the group's,
+    // carried on the variant's MS2 context; the row's rt is in minutes (ADR-0051), the bars in seconds.
+    const Exploration::MS2Context& vctx = expl_result.identification.ms2_context;
+    const bool closed_out = !dropped && !expl_result.identification.proteoform_sequence.empty()
+        && closeOutIfIdentified_(expl_result.identification.result, vctx.ms1_precursor_mass, vctx.ms1_precursor_mz,
+                                 results_row.rt * 60.0);
+
     // MS2 identification row (copy by value before expl_result goes out of scope).
     if (!expl_result.identification.proteoform_sequence.empty() && !expl_result.identification.result.fragments.empty())
     {
       id_rows.push_back({parent_id_str, 2, 'E', expl_result.identification.ms2_context, expl_result.identification.result, precursor_id, expl_result.metric.tic_coverage, expl_result.identification.result.score});
+      id_rows.back().closed_out = closed_out;
       fillRefineColumns(id_rows.back());   // ADR-0049: under method refine the variant's own match is a Refine match
     }
     // C: winner-re-matched non-winner identification rows (MS2 'E'), each rendering the winner proteoform;
@@ -1017,6 +1031,79 @@ FLASHIda::FLASHIda(char* arg) :
 
     publishExplorationState_();
     return static_cast<int>(expl_result.commands.size());
+  }
+
+  bool FLASHIda::isClosedOut_(double mass, double rt)
+  {
+    if (closed_out_.empty()) return false;
+    auto it = closed_out_.find(SpectralDeconvolution::getNominalMass(mass));
+    if (it == closed_out_.end()) return false;
+    if (rt - it->second > config_.targeting().rt_window)
+    {
+      closed_out_.erase(it);   // the bar has expired with it
+      return false;
+    }
+    return true;
+  }
+
+  bool FLASHIda::closeOutIfIdentified_(const FragmentAnalysis::ProteoformMatch& match, double commanded_mass,
+                                       double isolation_mz, double rt)
+  {
+    const auto& threshold = config_.identification().threshold;
+    if (!threshold.has_value() || match.search_identification_score < 0.0 || match.search_identification_score < *threshold)
+      return false;
+    if (commanded_mass <= 0.0) return false;
+    // ADR-0061 d.10 (owner 2026-11-08): a species whose inclusion row names charges keeps walking them.
+    if (selection_.hasAuthoredCharges(commanded_mass))
+    {
+      std::cout << "[CLOSE-OUT-REFUSED] mass=" << commanded_mass << " reason=authored_charges" << std::endl;
+      return false;
+    }
+
+    const int nominal = SpectralDeconvolution::getNominalMass(commanded_mass);
+    std::vector<MemoryStamp> stamps;
+    MemoryStamp s;
+    s.value = rt;
+    s.kind = MemoryStamp::Kind::CloseOutMassRt;
+    s.key = nominal;
+    stamps.push_back(s);
+    const int integer_mz = static_cast<int>(std::round(isolation_mz));
+    if (isolation_mz > 0.0)
+    {
+      s.kind = MemoryStamp::Kind::CloseOutMzRt;
+      s.key = integer_mz;
+      stamps.push_back(s);
+    }
+    // d.8: an inferred mass is barred on its mass bar only, and only when it is the same species seen twice.
+    int inferred_nominal = 0;
+    if (match.inferred_precursor_mass > 0.0)
+    {
+      const int n = SpectralDeconvolution::getNominalMass(match.inferred_precursor_mass);
+      if (n != nominal && sameSpeciesMass(commanded_mass, match.inferred_precursor_mass, config_.level(1).tolerance_ppm))
+      {
+        inferred_nominal = n;
+        s.kind = MemoryStamp::Kind::CloseOutMassRt;
+        s.key = n;
+        stamps.push_back(s);
+      }
+    }
+
+    // One queue_mutex_ step: stamps into the inbox, the species' unsent units withdrawn at every CV.
+    const ReplanResult r = queue_.closeOut(nominal, stamps);
+    for (int g : r.dropped_quant_groups) quant_.closeGroup(g);
+    for (int g : r.dropped_sweep_groups) exploration_.dropGroup(g);
+    forgetTracking_(r.dropped_scan_ids);
+
+    auto it = closed_out_.find(nominal);
+    if (it == closed_out_.end()) closed_out_[nominal] = rt;
+    else it->second = std::max(it->second, rt);   // a close-out only extends
+
+    std::cout << "[CLOSE-OUT] nominal=" << nominal << " mz=" << integer_mz << " rt=" << rt
+              << " score=" << match.search_identification_score << " withdrawn=" << r.dropped_scan_ids.size()
+              << " kept=" << r.kept;
+    if (inferred_nominal != 0) std::cout << " inferred_nominal=" << inferred_nominal;
+    std::cout << std::endl;
+    return true;
   }
 
   int FLASHIda::processScan(const double* mzs, const double* ints, int length,
@@ -1179,7 +1266,12 @@ FLASHIda::FLASHIda(char* arg) :
         // search returns, not when the scan did. A trap, MS3, reference-less or empty variant is never
         // matched and is applied inline, exactly as before.
         Exploration::VariantInput variant_in = exploration_.prepareVariant(parent_tracking_id, mzs, ints, length, rt);
-        if (search_pool_ != nullptr && exploration_.variantNeedsSearch(variant_in))
+        // ADR-0062 d.6: a closed-out species' later scans are not searched; the variant is received unscored, as a
+        // dropped one is, so its group still completes.
+        const bool needs_search = search_pool_ != nullptr && exploration_.variantNeedsSearch(variant_in);
+        const bool skip_search = needs_search && isClosedOut_(parent_ctx.mono_mass, rt);
+        if (skip_search) std::cout << "[SEARCH-SKIPPED] id=" << parent_id_str << " reason=closed_out" << std::endl;
+        if (needs_search && !skip_search)
         {
           auto job = std::make_shared<VariantSearch>();
           job->precursor_id = precursor_id;
@@ -1219,11 +1311,12 @@ FLASHIda::FLASHIda(char* arg) :
           return 0;   // the row is written by the apply
         }
         Exploration::FeedResultInfo expl_result =
-            variant_in.known ? exploration_.applyVariant(variant_in, nullptr, false, queue_, &tracker_, precursor_id)
+            variant_in.known ? exploration_.applyVariant(variant_in, nullptr, skip_search, queue_, &tracker_, precursor_id)
                              : Exploration::FeedResultInfo{};
         return_code = finishVariantMS2_(expl_result, exploration_.explorationDeconvMassCount(),
-                                        exploration_.explorationDeconvSpectrum(), precursor_id, parent_id_str, false,
+                                        exploration_.explorationDeconvSpectrum(), precursor_id, parent_id_str, skip_search,
                                         results_row, id_rows);
+        if (skip_search) results_row.search = "closed_out_skip";
       }
       else
       {
@@ -1313,7 +1406,11 @@ FLASHIda::FLASHIda(char* arg) :
         // worker matches with no lock held, then finishes the scan and writes its rows under analysis_mutex_.
         // A Q scan is never matched (ADR-0038), so it never gets here; without an identification section
         // there is no pool and nothing to match.
-        if (search_pool_ != nullptr && config_.identification().enabled() && !is_quant_scan)
+        // ADR-0062 d.6: a closed-out species' later scans are not searched; the scan is finished as a dropped one.
+        const bool skip_search = search_pool_ != nullptr && config_.identification().enabled() && !is_quant_scan
+            && isClosedOut_(parent_ctx.mono_mass, rt);
+        if (skip_search) std::cout << "[SEARCH-SKIPPED] id=" << parent_id_str << " reason=closed_out" << std::endl;
+        if (search_pool_ != nullptr && config_.identification().enabled() && !is_quant_scan && !skip_search)
         {
           auto job = std::make_shared<RegularSearch>();
           job->precursor_id = precursor_id;
@@ -1363,10 +1460,11 @@ FLASHIda::FLASHIda(char* arg) :
           return commands_pushed;   // the row is written by the apply
         }
 
-        return_code = finishRegularMS2_(nullptr, false, deconv_.storedMS2(),
+        return_code = finishRegularMS2_(nullptr, skip_search, deconv_.storedMS2(),
                                         deconv_.hasStoredMS2() ? &deconv_.storedMS2() : nullptr, parent_ctx, precursor_id,
                                         parent_id_str, rt, instrument_scan_number, is_quant_scan, commands_pushed,
                                         child_ids, results_row, id_rows);
+        if (skip_search) results_row.search = "closed_out_skip";
       }
     }
     else if (ms_level == 3)

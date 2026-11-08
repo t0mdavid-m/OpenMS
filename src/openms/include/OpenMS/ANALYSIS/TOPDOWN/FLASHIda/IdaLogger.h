@@ -233,7 +233,8 @@ namespace OpenMS
       // ---- the search pool (ADR-0061 push 4b, ADR-0062) -----------------------------------------
       // APPENDED after energy_source. Integers only: this stream never gets a precision.
       /// "searched": the MS2 went through the search pool (regular MS2 or MS2 exploration variant);
-      /// "dropped_backlog": the backlog dropped its search; "none": everything else (MS1, MS3, Q, inline).
+      /// "dropped_backlog": the backlog dropped its search; "closed_out_skip": its species was closed out
+      /// within rt_window, so it was not searched (ADR-0062 d.6); "none": everything else (MS1, MS3, Q, inline).
       std::string search = "none";
       int64_t search_wait_ms = -1;   ///< submit -> search start, on a searched row; -1 otherwise
       int64_t search_ms      = -1;   ///< duration of the search() call, on a searched row; -1 otherwise
@@ -269,7 +270,7 @@ namespace OpenMS
       int cut = -1;                         ///< RefineCandidates::cut
       int n_levels = -1;                    ///< RefineCandidates::n_levels (levels kept after both exclusions and the cap)
       double precursor_mass_difference = 0; ///< RefineCandidates::precursor_mass_difference
-      /// ADR-0061 push 4b: whether the row's Precursor was closed out (written 0/1; always 0 in 4b).
+      /// ADR-0061 d.7 (push 5): 1 on the MS2 row whose identification closed its species out, else 0.
       /// APPENDED last: the id rows are aggregate-initialised positionally up to flash_extender_score.
       bool closed_out = false;
     };

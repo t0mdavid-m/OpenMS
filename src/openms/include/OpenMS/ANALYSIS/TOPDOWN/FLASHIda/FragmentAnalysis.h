@@ -135,6 +135,11 @@ namespace OpenMS
       /// ADR-0061 push 4c, APPEND-ONLY. The search's raw term: the PrSM's score minus its ExtensionScore
       /// (8 x max(0, RawScore - log10 candidates)), which every method adds to its own score. -1 = none.
       double raw_term = -1;
+
+      /// ADR-0061 push 5, APPEND-ONLY. The FLASHTnT Identification score of the search's PrSM (its score), which a
+      /// close-out reads whatever the method (d.5): equal to identification_score under flashtnt; under refine
+      /// identification_score is the path score + raw_term instead. -1 = not searched.
+      double search_identification_score = -1;
     };
 
     /// Deconvolution scores of a selected MS2 fragment, copied into the stage-1 (fragment)

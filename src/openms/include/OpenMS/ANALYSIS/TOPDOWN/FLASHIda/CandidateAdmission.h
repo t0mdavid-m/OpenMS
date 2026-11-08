@@ -13,6 +13,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <string>
 #include <unordered_map>
@@ -552,5 +553,22 @@ namespace OpenMS
     v.admit  = true;
     v.reason = AdmissionReason::Admitted;
     return v;
+  }
+
+  /// ADR-0061 d.8: are @p commanded and @p inferred the same species seen twice -- 1..3 isotope spacings apart, or
+  /// one a charge harmonic (x2, x3, /2, /3) of the other -- within @p tol_ppm of the larger mass (the MS1 tolerance,
+  /// owner 2026-11-08)? Only then is an inferred precursor mass barred too; an unrelated one is most likely a
+  /// co-isolated species and is not closed out.
+  inline bool sameSpeciesMass(double commanded, double inferred, double tol_ppm)
+  {
+    if (commanded <= 0.0 || inferred <= 0.0) return false;
+    const double tol = tol_ppm * 1e-6 * std::max(commanded, inferred);
+    const double d = std::abs(inferred - commanded);
+    constexpr double kIsotope = 1.00235;   // averagine isotope spacing, Da
+    for (int k = 1; k <= 3; ++k)
+      if (std::abs(d - k * kIsotope) <= tol) return true;
+    for (double r : {2.0, 3.0, 0.5, 1.0 / 3.0})
+      if (std::abs(inferred - r * commanded) <= tol) return true;
+    return false;
   }
 }  // namespace OpenMS

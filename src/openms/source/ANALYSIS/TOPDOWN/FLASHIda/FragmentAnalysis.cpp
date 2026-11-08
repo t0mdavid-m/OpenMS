@@ -974,6 +974,7 @@ namespace
     // term is the search's raw term, which every method adds to its own score (ADR-0061 d.5)
     const double extension = hit.metaValueExists("ExtensionScore") ? static_cast<double>(hit.getMetaValue("ExtensionScore")) : hit.getScore();
     const double raw_term = hit.getScore() - extension;
+    result.search_identification_score = hit.getScore();   // ADR-0061 d.5: the number a close-out reads
     int n = 0;
     if (refine)
     {
