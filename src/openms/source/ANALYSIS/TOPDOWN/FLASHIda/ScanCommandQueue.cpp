@@ -809,6 +809,7 @@ namespace OpenMS
           if (--unit.commands_left == 0) units_.erase(unit_id);
         }
         adjustable_.erase(cmd.scan_id);
+        commitMs3_(cmd.scan_id);   // ADR-0064: a registered MS3 commits its fragment (a miss when the registry is empty)
         return cmd;
       }
     }
@@ -897,6 +898,7 @@ namespace OpenMS
     auto now_ms = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
+    std::vector<int> expired_ms3;   // ADR-0064: registered MS3s among the expired
 
     for (int p = 0; p < 4; ++p)
     {
@@ -912,6 +914,7 @@ namespace OpenMS
                     << " ms_level=" << it->msn_level;
           ms3_cmd_proteoform_.erase(it->scan_id);  // drop any stashed MS3 proteoform (no-op for non-MS3)
           forgetQueued_(it->scan_id);              // never acquired: leaves the plan registry (no-op if unregistered)
+          if (ms3_item_of_.count(it->scan_id) > 0) expired_ms3.push_back(it->scan_id);
           it = queues_[p].erase(it);
         }
         else
@@ -919,6 +922,32 @@ namespace OpenMS
           ++it;
         }
       }
+    }
+
+    // ADR-0064: an expired registered MS3 whose item never went out withdraws the WHOLE item (an exploration group's
+    // other variants too) into the inbox the analysis thread undoes. A committed item's expired variant only leaves
+    // the registry (a committed group is not undone here, as without the registry).
+    for (const int id : expired_ms3)
+    {
+      auto m = ms3_item_of_.find(id);
+      if (m == ms3_item_of_.end()) continue;   // already taken with its item
+      const auto [eid, iid] = m->second;
+      ms3_item_of_.erase(m);
+      auto e = ms3_entries_.find(eid);
+      if (e == ms3_entries_.end()) continue;
+      auto item = e->second.items.find(iid);
+      if (item == e->second.items.end()) continue;
+      if (item->second.committed)
+      {
+        if (--item->second.commands_left <= 0) e->second.items.erase(item);
+        continue;
+      }
+      std::set<int> rest;
+      for (const auto& c : item->second.commands)
+        if (c.scan_id != id) rest.insert(c.scan_id);
+      removeQueuedMs3_(rest);
+      ms3_expired_inbox_.push_back(std::move(item->second));
+      e->second.items.erase(item);
     }
   }
 
@@ -992,6 +1021,166 @@ namespace OpenMS
       }
     }
     for (int id : leaving) units_.erase(id); // an uncommitted unit's stamps go with it: never acquired, never excluded
+  }
+
+  int ScanCommandQueue::findMs3Entry_(const Ms3ProteoformKey& key) const
+  {
+    int best = -1;
+    double best_diff = 0.0;
+    for (const auto& [id, e] : ms3_entries_)   // ascending id: a tie keeps the lowest
+    {
+      if (!sameProteoform(e.key, key, config_.level(1).tolerance_ppm)) continue;
+      const double diff = std::abs(e.key.commanded_mass - key.commanded_mass);
+      if (best < 0 || diff < best_diff)
+      {
+        best = id;
+        best_diff = diff;
+      }
+    }
+    return best;
+  }
+
+  void ScanCommandQueue::removeQueuedMs3_(const std::set<int>& ids)
+  {
+    if (ids.empty()) return;
+    for (int p = 0; p < 4; ++p)
+    {
+      auto it = queues_[p].begin();
+      while (it != queues_[p].end())
+      {
+        if (ids.count(it->scan_id) > 0) it = queues_[p].erase(it);
+        else ++it;
+      }
+    }
+    for (const int id : ids)
+    {
+      ms3_item_of_.erase(id);
+      ms3_cmd_proteoform_.erase(id);
+    }
+  }
+
+  void ScanCommandQueue::commitMs3_(int scan_id)
+  {
+    if (ms3_item_of_.empty()) return;
+    auto m = ms3_item_of_.find(scan_id);
+    if (m == ms3_item_of_.end()) return;
+    const auto [eid, iid] = m->second;
+    ms3_item_of_.erase(m);
+    auto e = ms3_entries_.find(eid);
+    if (e == ms3_entries_.end()) return;
+    auto item = e->second.items.find(iid);
+    if (item == e->second.items.end()) return;
+    Ms3PlanItem& it = item->second;
+    if (!it.committed)
+    {
+      it.committed = true;
+      ++e->second.generation;
+      auto& by_charge = e->second.sent[it.cleavage];
+      for (const auto& [z, intensity] : it.charges)
+      {
+        auto zt = by_charge.find(z);
+        if (zt == by_charge.end()) by_charge[z] = intensity;
+        else zt->second = std::max(zt->second, intensity);
+      }
+      e->second.commit_log.push_back({e->second.generation, it.cleavage});
+      e->second.committed_owner_nominals.insert({it.owner_precursor_id, it.nominal});
+    }
+    if (--it.commands_left <= 0) e->second.items.erase(item);
+  }
+
+  Ms3RegistrySnapshot ScanCommandQueue::ms3Snapshot(const Ms3ProteoformKey& key) const
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    Ms3RegistrySnapshot snap;
+    const int eid = findMs3Entry_(key);
+    if (eid < 0) return snap;
+    const Ms3Entry& e = ms3_entries_.at(eid);
+    snap.found = true;
+    snap.generation = e.generation;
+    snap.sent = e.sent;
+    return snap;
+  }
+
+  Ms3ReplanResult ScanCommandQueue::replaceMs3Plan(const Ms3ProteoformKey& key, std::vector<Ms3PlanItem> items,
+                                                   uint64_t snapshot_generation, int max_targets)
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    Ms3ReplanResult r;
+    int eid = findMs3Entry_(key);
+    if (eid < 0)
+    {
+      eid = ++ms3_entry_counter_;
+      ms3_entries_[eid].key = key;
+    }
+    Ms3Entry& e = ms3_entries_.at(eid);
+    r.entry_id = eid;
+    for (const auto& [g, c] : e.commit_log)
+      if (g > snapshot_generation) r.committed_in_gap.push_back(c);
+
+    // 1. Withdraw the previous plan's items that never went out (queued commands only).
+    std::set<int> out;
+    for (auto it = e.items.begin(); it != e.items.end();)
+    {
+      if (it->second.committed)
+      {
+        ++it;
+        continue;
+      }
+      for (const auto& c : it->second.commands)
+      {
+        out.insert(c.scan_id);
+        r.withdrawn_scan_ids.push_back(c.scan_id);
+      }
+      r.withdrawn.push_back(std::move(it->second));
+      it = e.items.erase(it);
+    }
+    removeQueuedMs3_(out);
+
+    // 2. Insert the new plan, re-checked against what is sent NOW and the per-run cleavage cap.
+    Ms3RegistrySnapshot current;
+    current.found = true;
+    current.generation = e.generation;
+    current.sent = e.sent;
+    std::set<Ms3Cleavage> cleavages;
+    for (const auto& kv : e.sent) cleavages.insert(kv.first);
+    for (auto& item : items)
+    {
+      bool ok = !item.commands.empty();
+      for (const auto& [z, intensity] : item.charges)
+        ok = ok && ms3Admits(current, item.cleavage, z, intensity);
+      if (ok && cleavages.count(item.cleavage) == 0 && static_cast<int>(cleavages.size()) >= max_targets) ok = false;
+      if (!ok)
+      {
+        for (const auto& c : item.commands)
+        {
+          r.reconciled_scan_ids.push_back(c.scan_id);
+          ms3_cmd_proteoform_.erase(c.scan_id);   // buildMS3 stashed it at build time
+        }
+        r.reconciled.push_back(std::move(item));
+        continue;
+      }
+      cleavages.insert(item.cleavage);
+      const int iid = ++ms3_item_counter_;
+      item.committed = false;
+      item.commands_left = static_cast<int>(item.commands.size());
+      for (const auto& c : item.commands)
+      {
+        push_(c);
+        ms3_item_of_[c.scan_id] = {eid, iid};
+        r.inserted_scan_ids.push_back(c.scan_id);
+      }
+      e.items[iid] = std::move(item);
+    }
+    r.committed_owner_nominals = e.committed_owner_nominals;
+    return r;
+  }
+
+  std::vector<Ms3PlanItem> ScanCommandQueue::takeMs3Expired()
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    std::vector<Ms3PlanItem> out;
+    out.swap(ms3_expired_inbox_);
+    return out;
   }
 
   ReplanResult ScanCommandQueue::closeOut(int nominal_mass, const std::vector<MemoryStamp>& stamps)

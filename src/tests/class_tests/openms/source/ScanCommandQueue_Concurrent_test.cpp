@@ -1193,4 +1193,195 @@ START_SECTION(a_re_registered_command_is_aged_from_its_latest_registration)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
+// ===== Per-proteoform MS3 plans (ADR-0064) =========================================================================
+namespace
+{
+  Ms3ProteoformKey pkey(double mass, const std::string& acc = "P1", int start = 0, int end = 104)
+  {
+    Ms3ProteoformKey k;
+    k.accession = acc;
+    k.region_start = start;
+    k.region_end = end;
+    k.commanded_mass = mass;
+    return k;
+  }
+
+  /// One single-command item: an MS3 (priority 1) on cleavage (@p type, @p index) at @p charge, chosen at @p intensity.
+  Ms3PlanItem ms3Item(int scan_id, const std::string& type, int index, int charge, double intensity, int owner = 1)
+  {
+    Ms3PlanItem it;
+    it.cleavage = {type, index};
+    it.charges = {{charge, intensity}};
+    ScanCommand c = ms2(scan_id, charge, 900.0 + index, 1);
+    c.msn_level = 3;
+    it.commands = {c};
+    it.owner_precursor_id = owner;
+    return it;
+  }
+
+  std::set<int> asSet(const std::vector<int>& v) { return std::set<int>(v.begin(), v.end()); }
+}
+
+// The pure rules: one proteoform across selections is the same protein and region at the same commanded mass, within
+// the MS1 tolerance or 1-3 isotope steps / a charge harmonic (sameSpeciesMass); a sent fragment needs 2x.
+START_SECTION(ms3_registry_rules_same_proteoform_and_admits)
+{
+  const double tol = 10.0;
+  TEST_EQUAL(sameProteoform(pkey(12351.39), pkey(12351.40), tol), true)              // within 10 ppm
+  TEST_EQUAL(sameProteoform(pkey(12351.39), pkey(12351.39 + 1.00235), tol), true)    // one isotope step
+  TEST_EQUAL(sameProteoform(pkey(12351.39), pkey(12351.39 * 2.0), tol), true)        // a harmonic
+  TEST_EQUAL(sameProteoform(pkey(12351.39), pkey(12351.39 + 57.02146), tol), false)  // another species
+  TEST_EQUAL(sameProteoform(pkey(12351.39), pkey(12351.39, "P2"), tol), false)       // another protein
+  TEST_EQUAL(sameProteoform(pkey(12351.39), pkey(12351.39, "P1", 1, 104), tol), false) // another region
+
+  Ms3RegistrySnapshot snap;
+  snap.sent[{"b", 50}][8] = 1000.0;
+  TEST_EQUAL(ms3Admits(snap, {"y", 29}, 4, 1.0), true)        // never sent
+  TEST_EQUAL(ms3Admits(snap, {"b", 50}, 8, 1999.0), false)    // same charge, 1.999x
+  TEST_EQUAL(ms3Admits(snap, {"b", 50}, 8, 2000.0), true)     // same charge, 2x
+  TEST_EQUAL(ms3Admits(snap, {"b", 50}, 6, 1500.0), false)    // another charge of a sent cleavage: vs its max
+  TEST_EQUAL(ms3Admits(snap, {"b", 50}, 6, 2000.0), true)
+  snap.sent[{"b", 50}][6] = 3000.0;
+  TEST_EQUAL(ms3Admits(snap, {"b", 50}, 7, 4000.0), false)    // a third charge vs the cleavage's highest (3000)
+  TEST_EQUAL(ms3NewCleavageRoom(snap, 3), 2)
+}
+END_SECTION
+
+// A newer plan replaces the still-unsent items of the same proteoform (matched across a one-isotope mass step) and
+// keeps a committed one; a dequeue commits the item's fragment per charge at its chosen intensity; another
+// proteoform's entry is untouched; unregistered MS3s are never touched.
+START_SECTION(ms3_plan_replaces_unsent_and_commits_on_dequeue)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+
+  ScanCommand loose = ms2(70, 4, 700.0, 1);   // an unregistered MS3-priority command
+  loose.msn_level = 3;
+  q.push(loose);
+
+  Ms3ReplanResult r1 = q.replaceMs3Plan(pkey(12351.39), {ms3Item(71, "b", 50, 8, 1000.0), ms3Item(72, "y", 29, 4, 800.0)}, 0, 3);
+  TEST_EQUAL(asSet(r1.inserted_scan_ids) == std::set<int>({71, 72}), true)
+  Ms3ReplanResult other = q.replaceMs3Plan(pkey(8000.0, "P2"), {ms3Item(80, "b", 10, 2, 100.0)}, 0, 3);
+  TEST_EQUAL(other.entry_id != r1.entry_id, true)
+
+  // The drain sends 70 (unregistered), then 71: b50 z8 commits at 1000.
+  auto d1 = q.dequeue();
+  auto d2 = q.dequeue();
+  ABORT_IF(!d1.has_value() || !d2.has_value())
+  TEST_EQUAL(d1->scan_id, 70)
+  TEST_EQUAL(d2->scan_id, 71)
+  const Ms3RegistrySnapshot snap = q.ms3Snapshot(pkey(12351.39 + 1.00235));   // one isotope up: the same entry
+  TEST_EQUAL(snap.found, true)
+  TEST_EQUAL(snap.sent.size(), 1)
+  TEST_REAL_SIMILAR(snap.sent.at({"b", 50}).at(8), 1000.0)
+
+  // A newer identification: 72 (unsent) is withdrawn, 71 stays committed; its plan holds y29 again and a new b60.
+  Ms3ReplanResult r2 = q.replaceMs3Plan(pkey(12351.40), {ms3Item(73, "y", 29, 4, 900.0), ms3Item(74, "b", 60, 9, 700.0)},
+                                        snap.generation, 3);
+  TEST_EQUAL(r2.entry_id, r1.entry_id)
+  TEST_EQUAL(asSet(r2.withdrawn_scan_ids) == std::set<int>({72}), true)
+  TEST_EQUAL(asSet(r2.inserted_scan_ids) == std::set<int>({73, 74}), true)
+  TEST_EQUAL(r2.committed_in_gap.empty(), true)
+  const std::vector<int> drained = drainIds(q);
+  TEST_EQUAL(std::set<int>(drained.begin(), drained.end()) == std::set<int>({73, 74, 80}), true)   // 72 never goes out
+}
+END_SECTION
+
+// The cleavage cap counts DISTINCT cleavages per proteoform per run (charges of one cleavage count once); a sent
+// fragment below 2x is refused at the swap; a commit made after the planner's snapshot reconciles a stale item and
+// is reported; a refused item's proteoform stash is dropped.
+START_SECTION(ms3_plan_cap_two_x_and_commit_in_gap)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+
+  // b50 at two charges + y29: two cleavages; then b60 makes three; b70 would be a fourth.
+  Ms3ReplanResult r1 = q.replaceMs3Plan(pkey(12351.39), {ms3Item(1, "b", 50, 8, 1000.0), ms3Item(2, "b", 50, 6, 500.0),
+                                                         ms3Item(3, "y", 29, 4, 800.0), ms3Item(4, "b", 60, 9, 700.0),
+                                                         ms3Item(5, "b", 70, 9, 600.0)}, 0, 3);
+  TEST_EQUAL(asSet(r1.inserted_scan_ids) == std::set<int>({1, 2, 3, 4}), true)
+  TEST_EQUAL(asSet(r1.reconciled_scan_ids) == std::set<int>({5}), true)   // the fourth distinct cleavage
+
+  const Ms3RegistrySnapshot before = q.ms3Snapshot(pkey(12351.39));
+  ABORT_IF(!q.dequeue().has_value())   // 1 commits b50 z8 at 1000 AFTER the snapshot
+  Ms3ReplanResult r2 = q.replaceMs3Plan(pkey(12351.39), {ms3Item(6, "b", 50, 8, 1500.0), ms3Item(7, "b", 50, 8, 2500.0)},
+                                        before.generation, 3);
+  TEST_EQUAL(r2.committed_in_gap.size(), 1)
+  TEST_EQUAL(asSet(r2.reconciled_scan_ids) == std::set<int>({6}), true)   // 1.5x of the sent 1000
+  TEST_EQUAL(asSet(r2.inserted_scan_ids) == std::set<int>({7}), true)     // 2.5x: a re-acquisition, not a new cleavage
+  TEST_EQUAL(asSet(r2.withdrawn_scan_ids) == std::set<int>({2, 3, 4}), true)
+  TEST_EQUAL(q.takeMS3Proteoform(6).empty(), true)
+}
+END_SECTION
+
+// An expired command of an item that never went out withdraws the WHOLE item into the inbox the analysis thread
+// undoes; an expired command of a committed item only leaves the registry.
+START_SECTION(ms3_plan_expired_unsent_item_reaches_the_inbox)
+{
+  Config cfg{std::string(minimal_config)};   // scan_timeout 100 ms
+  ScanCommandQueue q(cfg);
+  Ms3PlanItem group = ms3Item(11, "b", 40, 5, 900.0);   // a two-variant exploration group
+  ScanCommand v2 = group.commands[0];
+  v2.scan_id = 12;
+  group.commands.push_back(v2);
+  group.sweep_group_id = 7;
+  q.replaceMs3Plan(pkey(12351.39), {group}, 0, 3);
+  std::this_thread::sleep_for(std::chrono::milliseconds(150));
+  q.cleanupExpired();
+  const std::vector<Ms3PlanItem> expired = q.takeMs3Expired();
+  TEST_EQUAL(expired.size(), 1)
+  ABORT_IF(expired.empty())
+  TEST_EQUAL(expired[0].sweep_group_id, 7)
+  TEST_EQUAL(drainIds(q).empty(), true)
+  TEST_EQUAL(q.ms3Snapshot(pkey(12351.39)).sent.empty(), true)   // nothing was sent
+}
+END_SECTION
+
+// Conservation under a racing drain: every MS3 id a swap was handed ends exactly once as dequeued, withdrawn,
+// reconciled or still queued, and none is dequeued twice.
+START_SECTION(ms3_plan_conservation_under_a_racing_drain)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+  std::atomic<bool> stop{false};
+  std::vector<int> dequeued;
+  std::thread drain([&] {
+    while (!stop.load())
+    {
+      if (auto c = q.dequeue()) dequeued.push_back(c->scan_id);
+      else std::this_thread::yield();
+    }
+  });
+  std::vector<int> built, withdrawn, reconciled;
+  int id = 1000;
+  for (int round = 0; round < 200; ++round)
+  {
+    const Ms3RegistrySnapshot snap = q.ms3Snapshot(pkey(12351.39));
+    std::vector<Ms3PlanItem> items;
+    for (int k = 0; k < 3; ++k)
+    {
+      items.push_back(ms3Item(++id, "b", 10 + (round + k) % 6, 4 + k, 100.0 * (1 + round % 7)));
+      built.push_back(id);
+    }
+    const Ms3ReplanResult r = q.replaceMs3Plan(pkey(12351.39), std::move(items), snap.generation, 3);
+    withdrawn.insert(withdrawn.end(), r.withdrawn_scan_ids.begin(), r.withdrawn_scan_ids.end());
+    reconciled.insert(reconciled.end(), r.reconciled_scan_ids.begin(), r.reconciled_scan_ids.end());
+  }
+  stop = true;
+  drain.join();
+  const std::vector<int> queued = drainIds(q);
+  std::map<int, int> seen;
+  for (const auto& v : {dequeued, withdrawn, reconciled, queued})
+    for (int x : v) ++seen[x];
+  int missing = 0, twice = 0;
+  for (int x : built)
+  {
+    if (seen[x] == 0) ++missing;
+    if (seen[x] > 1) ++twice;
+  }
+  TEST_EQUAL(missing, 0)
+  TEST_EQUAL(twice, 0)
+}
+END_SECTION
+
 END_TEST

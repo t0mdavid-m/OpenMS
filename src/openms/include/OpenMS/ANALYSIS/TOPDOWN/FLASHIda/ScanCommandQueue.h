@@ -38,6 +38,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms2Params.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms3Registry.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PlanUnit.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
@@ -296,6 +297,23 @@ namespace OpenMS
     /// Move out every stamp committed since the last call, in commit order (the analysis thread folds them).
     std::vector<MemoryStamp> takeCommitted();
 
+    // ---- per-proteoform MS3 plans (ADR-0064; empty unless characterization.per_proteoform) -------------------
+    /// The sent fragments of the proteoform @p key matches (sameProteoform at the MS1 tolerance); found = false if
+    /// no entry matches yet.
+    Ms3RegistrySnapshot ms3Snapshot(const Ms3ProteoformKey& key) const;
+
+    /// Swap a proteoform's live MS3 plan in one queue_mutex_ hold, like replacePlan: withdraw every still-unsent
+    /// item of the matching entry (queued commands only), then push @p items in order -- each re-checked with
+    /// ms3Admits and the cap of @p max_targets distinct cleavages against the CURRENT sent fragments, so a commit
+    /// made since @p snapshot_generation reconciles a stale item away. The caller stamps the new ids'
+    /// precursor ids BEFORE the call and undoes the withdrawn and reconciled items after it.
+    Ms3ReplanResult replaceMs3Plan(const Ms3ProteoformKey& key, std::vector<Ms3PlanItem> items,
+                                   uint64_t snapshot_generation, int max_targets);
+
+    /// Move out the registered items whose unsent command expired (cleanupExpired): the analysis thread undoes
+    /// them as it does a withdrawn item.
+    std::vector<Ms3PlanItem> takeMs3Expired();
+
     /// Close a species out (ADR-0061 d.7/d.9, ADR-0062 d.3), in one step under queue_mutex_: append @p stamps to the
     /// committed-stamps inbox (so the next survey's fold arms the bars) and to committed_since_fold_ (so a survey
     /// racing that fold reconciles the species away), and withdraw every still-UNCOMMITTED plan unit of
@@ -486,6 +504,28 @@ namespace OpenMS
     /// Remove the registered, QUEUED command @p scan_id from the registry (not from the deques): its unit loses a
     /// command and is erased when none is left. Caller must hold queue_mutex_.
     void forgetQueued_(int scan_id);
+
+    /// One proteoform's MS3 registry entry (ADR-0064). Never evicted: the cleavage cap is per run.
+    struct Ms3Entry
+    {
+      Ms3ProteoformKey key;                                    ///< the first commanded mass; never drifts
+      std::map<int, Ms3PlanItem> items;                        ///< live: unsent and partly-sent items
+      std::map<Ms3Cleavage, std::map<int, double>> sent;       ///< cleavage -> charge -> highest sent intensity
+      uint64_t generation = 0;                                 ///< commit count
+      std::vector<std::pair<uint64_t, Ms3Cleavage>> commit_log;
+      std::set<std::pair<int, int>> committed_owner_nominals;  ///< (precursor id, nominal) of committed items
+    };
+    std::map<int, Ms3Entry> ms3_entries_;
+    std::unordered_map<int, std::pair<int, int>> ms3_item_of_;   ///< queued MS3 scan id -> (entry, item)
+    std::vector<Ms3PlanItem> ms3_expired_inbox_;
+    int ms3_entry_counter_ = 0;
+    int ms3_item_counter_ = 0;
+    /// The entry @p key matches: the closest anchor mass, then the lowest id; -1 if none (caller holds the lock).
+    int findMs3Entry_(const Ms3ProteoformKey& key) const;
+    /// Remove the queued commands in @p ids from the deques and their registries (caller holds the lock).
+    void removeQueuedMs3_(const std::set<int>& ids);
+    /// The dequeue commit of a registered MS3 (caller holds the lock; a miss for an unregistered command).
+    void commitMs3_(int scan_id);
 
     /// Remove every queued command of the units in @p leaving, then the units (caller holds queue_mutex_). Records
     /// the dropped scan ids in @p r; the caller has already chosen the units and gathered their groups.
