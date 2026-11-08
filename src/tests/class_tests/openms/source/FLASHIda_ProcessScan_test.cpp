@@ -1257,10 +1257,11 @@ namespace
 
   /// The real iodoTMT set: three surveys of a real E. coli iodoTMT run in which YdfZ (z=10 at
   /// m/z 761.51) is the base peak, its CID 28 identification scan 1325, YdfZ as the reference, and quantification at
-  /// @p scan ("ms3" | "both") with identification.threshold @p threshold. @p charact adds characterization fragments;
-  /// @p inclusion (a configs/ file name) switches strict inclusion on.
+  /// @p scan ("ms3" | "both") with identification.threshold @p threshold. @p charact adds characterization fragments.
+  /// Strict inclusion on @p inclusion (a configs/ file name; YdfZ at 7600.99 by default), so every MS2 is YdfZ's own:
+  /// the harness returns the one YdfZ scan for every MS2, and any other species would be "identified" as YdfZ too.
   std::string quantMs3Json(const std::string& dir, const std::string& scan, double threshold, bool charact = false,
-                           const std::string& inclusion = "")
+                           const std::string& inclusion = "inclusion_itmt_ydfz.txt")
   {
     nlohmann::json j = nlohmann::json::parse(buildJsonWithLogDir(dir));
     j["precursor_selection"]["max_precursors"] = 1;

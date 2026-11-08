@@ -1156,6 +1156,7 @@ START_SECTION(push_site_inventory)
     "finishVariantMS2_ | stampAndPush_(c, precursor_id);",                  // exploration MS2 return
     "processScan | stampAndPush_(ident, cons.winner_precursor_id);",        // bought R
     "finishRegularMS2_ | stampAndPush_(c, precursor_id);",                  // MS3 targeting
+    "finishRegularMS2_ | stampAndPush_(c, precursor_id);",                  // quantification MS3 (ADR-0064), permanent
     "processScan | stampAndPush_(c, precursor_id);",                        // exploration MS3 return
     // the bought R, registered adjustable at the quant verdict
     "processScan | queue_.registerAdjustable(ident.scan_id, cons.q_covered_charges, cons.winner_survey_id,",
