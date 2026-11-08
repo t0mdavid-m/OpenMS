@@ -560,12 +560,12 @@ struct LearnedScoringModel
     double value = 0;
     bool missing_left = true;
   };
-  std::vector<std::pair<String, double>> choice;
-  std::vector<String> conf_features;
+  std::vector<std::pair<std::string, double>> choice;
+  std::vector<std::string> conf_features;
   double conf_baseline = 0;
   std::vector<std::vector<Node>> trees;
 
-  static std::shared_ptr<const LearnedScoringModel> load(const String& file)
+  static std::shared_ptr<const LearnedScoringModel> load(const std::string& file)
   {
     std::ifstream in(file);
     if (! in) throw Exception::FileNotFound(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, file);
@@ -651,10 +651,10 @@ void FLASHTnTAlgorithm::updateMembers_()
   protein_model_fdr_ = param_.getValue("protein_ranking").toString() == "model";
   // scoring_model: 'default' is the model shipped in share/OpenMS/TOPDOWN (trained on denatured HCD and ETD lysates; not with -native, which
   // keeps the previous scoring), 'none' or empty switches it off, anything else is a model file
-  String scoring_file = param_.getValue("scoring_model").toString();
+  std::string scoring_file = param_.getValue("scoring_model").toString();
   if (scoring_file == "default")
   {
-    scoring_file = param_.getValue("native").toString() == "true" ? String("") : String(File::find("TOPDOWN/FLASHTnT_scoring_model.txt"));
+    scoring_file = param_.getValue("native").toString() == "true" ? std::string("") : std::string(File::find("TOPDOWN/FLASHTnT_scoring_model.txt"));
   }
   if (scoring_file == "none") scoring_file = "";
   scoring_model_ = scoring_file.empty() ? nullptr : LearnedScoringModel::load(scoring_file);
@@ -4209,19 +4209,19 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     {
       if (hit_class[i] < 0) continue;
       const auto& hit = proteoform_hits_[i];
-      if (hit.metaValueExists("DecoyPrecursor") && ! hit.getAccession().hasPrefix("DECOY")) continue;
+      if (hit.metaValueExists("DecoyPrecursor") && ! StringUtils::hasPrefix(hit.getAccession(), "DECOY")) continue;
       auto [it, fresh] = best_of_scan.try_emplace((int)hit.getMetaValue(tntKey("Scan")), i);
       if (! fresh && hit.getScore() > proteoform_hits_[it->second].getScore()) it->second = i;
     }
-    std::map<String, double> best_confidence; // target proteins
+    std::map<std::string, double> best_confidence; // target proteins
     for (const auto& [scan, i] : best_of_scan)
     {
       const auto& hit = proteoform_hits_[i];
-      if (hit.getAccession().hasPrefix("DECOY")) continue;
+      if (StringUtils::hasPrefix(hit.getAccession(), "DECOY")) continue;
       auto [it, fresh] = best_confidence.try_emplace(hit.getAccession(), hit.getScore());
       if (! fresh) it->second = std::max(it->second, hit.getScore());
     }
-    std::vector<std::pair<double, String>> ranked_proteins; // -confidence, accession
+    std::vector<std::pair<double, std::string>> ranked_proteins; // -confidence, accession
     for (const auto& [acc, c] : best_confidence) ranked_proteins.emplace_back(-c, acc);
     std::sort(ranked_proteins.begin(), ranked_proteins.end());
     const Size n = ranked_proteins.size();
@@ -4235,7 +4235,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       k = j;
     }
     for (Size k = n; k-- > 1;) fdr[k - 1] = std::min(fdr[k - 1], fdr[k]);
-    std::map<String, double> protein_q;
+    std::map<std::string, double> protein_q;
     Size passing = 0;
     for (Size k = 0; k < n; k++)
     {
@@ -4266,11 +4266,11 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     {
       if (hit_class[i] < 0) continue;
       const auto& hit = proteoform_hits_[i];
-      if (hit.metaValueExists("DecoyPrecursor") && ! hit.getAccession().hasPrefix("DECOY")) continue;
+      if (hit.metaValueExists("DecoyPrecursor") && ! StringUtils::hasPrefix(hit.getAccession(), "DECOY")) continue;
       auto [it, fresh] = best_of_scan.try_emplace((int)hit.getMetaValue(tntKey("Scan")), i);
       if (! fresh && hit.getScore() > proteoform_hits_[it->second].getScore()) it->second = i;
     }
-    std::map<String, std::array<double, 2>> top_two;
+    std::map<std::string, std::array<double, 2>> top_two;
     for (const auto& [scan, i] : best_of_scan)
     {
       const auto& hit = proteoform_hits_[i];
@@ -4280,15 +4280,15 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       if (evidence > t[0]) { t[1] = t[0]; t[0] = evidence; }
       else if (evidence > t[1]) t[1] = evidence;
     }
-    std::vector<std::pair<double, String>> ranked_proteins; // -score, accession
+    std::vector<std::pair<double, std::string>> ranked_proteins; // -score, accession
     for (const auto& [acc, t] : top_two) ranked_proteins.emplace_back(-(t[0] + (t[1] > ninf ? t[1] : 0.0)), acc);
     std::sort(ranked_proteins.begin(), ranked_proteins.end());
     const double protein_decoy_weight = 1.0 / std::max(decoy_factor_, 1e-9);
     std::vector<RankedItem<double>> items;
     items.reserve(ranked_proteins.size());
-    for (const auto& [key, acc] : ranked_proteins) items.push_back({key, acc.hasPrefix("DECOY"), protein_decoy_weight});
+    for (const auto& [key, acc] : ranked_proteins) items.push_back({key, StringUtils::hasPrefix(acc, "DECOY"), protein_decoy_weight});
     const auto protein_qvalues = targetDecoyQvalues(items);
-    std::map<String, double> protein_q;
+    std::map<std::string, double> protein_q;
     Size targets = 0, decoy_count = 0, passing = 0;
     for (Size k = 0; k < ranked_proteins.size(); k++)
     {
@@ -5139,7 +5139,7 @@ constexpr double scoring_common_shifts[] = {15.994915, 31.98983,   42.010565, 14
                                             15.010899, 47.984744, 79.956815,  72.021129,  86.000394, 162.052824, 203.079373, 304.20536};
 
 // fragment-evidence features of a proteoform in a deconvolved spectrum (masses ascending, intensities aligned); empty if a residue is unknown
-std::map<String, double> scoringEvidence(const String& seq, const std::vector<FLASHAnnotatorAlgorithm::Modification>& mods, bool known_n, bool known_c,
+std::map<std::string, double> scoringEvidence(const std::string& seq, const std::vector<FLASHAnnotatorAlgorithm::Modification>& mods, bool known_n, bool known_c,
                                          const std::vector<double>& masses, const std::vector<double>& intensities, const std::vector<double>& n_offsets,
                                          const std::vector<double>& c_offsets)
 {
@@ -5228,9 +5228,9 @@ std::map<String, double> scoringEvidence(const String& seq, const std::vector<FL
 }
 
 // sub_like (a shift equal to replacing one residue of its window by another amino acid, 0.02 Da) and wlen (the longest shift window)
-std::pair<double, double> scoringShiftShape(const String& seq, const std::vector<FLASHAnnotatorAlgorithm::Modification>& mods)
+std::pair<double, double> scoringShiftShape(const std::string& seq, const std::vector<FLASHAnnotatorAlgorithm::Modification>& mods)
 {
-  static const String residues = "GASPVTCLNDQKEMHFRYW";
+  static const std::string residues = "GASPVTCLNDQKEMHFRYW";
   double sub = 0, wlen = 0;
   for (const auto& mod : mods)
   {
@@ -5240,7 +5240,7 @@ std::pair<double, double> scoringShiftShape(const String& seq, const std::vector
     for (int i = s; i <= e && i < (int)seq.size() && sub == 0; i++)
     {
       const char r = seq[i] == 'I' ? 'L' : seq[i];
-      if (residues.find(r) == String::npos) continue;
+      if (residues.find(r) == std::string::npos) continue;
       for (char a : residues)
       {
         const double d = scoringResidueMass(a) - scoringResidueMass(r);
@@ -5277,9 +5277,9 @@ void FLASHTnTAlgorithm::applyLearnedScoring_(std::vector<ProteinHit>& hits, cons
 
   // per hit: its features, its choice score, and a key that makes duplicate candidates count once (as the offline features did)
   const Size n = hits.size();
-  std::vector<std::map<String, double>> features(n);
+  std::vector<std::map<std::string, double>> features(n);
   std::vector<double> choice(n, 0.0);
-  std::vector<String> keys(n);
+  std::vector<std::string> keys(n);
 #pragma omp parallel for schedule(dynamic)
   for (int64_t i = 0; i < (int64_t)n; i++)
   {
@@ -5298,14 +5298,14 @@ void FLASHTnTAlgorithm::applyLearnedScoring_(std::vector<ProteinHit>& hits, cons
     f["ladder_t"] = ! hit.metaValueExists("PrecursorLadder") && hit.metaValueExists("TerminalLadder") ? 1 : 0;
     double shift_abs = 0;
     bool common = ! prsm.modifications.empty();
-    String mods;
+    std::string mods;
     for (const auto& m : prsm.modifications)
     {
       shift_abs += std::fabs(m.mass);
       double best = std::numeric_limits<double>::max();
       for (double c : scoring_common_shifts) best = std::min(best, std::fabs(c - m.mass));
       common = common && best <= 0.05;
-      mods += String(m.mass) + "@" + String(m.start) + "-" + String(m.end) + ";";
+      mods += StringUtils::toStr(m.mass) + "@" + StringUtils::toStr(m.start) + "-" + StringUtils::toStr(m.end) + ";";
     }
     f["shift_abs"] = std::log1p(shift_abs);
     f["common_shift"] = common ? 1 : 0;
@@ -5334,8 +5334,8 @@ void FLASHTnTAlgorithm::applyLearnedScoring_(std::vector<ProteinHit>& hits, cons
       const auto it = f.find(name);
       choice[i] += w * (it == f.end() ? 0.0 : it->second);
     }
-    keys[i] = hit.getAccession() + "|" + String((int)hit.getMetaValue("StartPosition", 0)) + "|" + String((int)hit.getMetaValue("EndPosition", 0)) + "|"
-              + String((double)hit.getMetaValue(tntKey("Mass"), -1.0)) + "|" + mods;
+    keys[i] = hit.getAccession() + "|" + StringUtils::toStr((int)hit.getMetaValue("StartPosition", 0)) + "|" + StringUtils::toStr((int)hit.getMetaValue("EndPosition", 0)) + "|"
+              + StringUtils::toStr((double)hit.getMetaValue(tntKey("Mass"), -1.0)) + "|" + mods;
   }
 
   if (const char* trace_file = std::getenv("FLASH_TRACE_SCORING")) // diagnostics: every candidate's features and choice score
@@ -5356,7 +5356,7 @@ void FLASHTnTAlgorithm::applyLearnedScoring_(std::vector<ProteinHit>& hits, cons
   for (const auto& [scan, idx] : by_scan)
   {
     std::vector<Size> unique;
-    std::set<String> seen;
+    std::set<std::string> seen;
     for (Size i : idx)
       if (seen.insert(keys[i]).second) unique.push_back(i);
     Size best = unique.front();
@@ -5410,8 +5410,8 @@ void FLASHTnTAlgorithm::traceCandidates_(const std::vector<ProteinHit>& hits, co
     FLASHAnnotatorAlgorithm::PrSM prsm;
     double precursor = -1;
     toRawPrSM_(hit, prsm, precursor);
-    String mods;
-    for (const auto& m : prsm.modifications) mods += String(m.mass) + "@" + String(m.start) + "-" + String(m.end) + ";";
+    std::string mods;
+    for (const auto& m : prsm.modifications) mods += StringUtils::toStr(m.mass) + "@" + StringUtils::toStr(m.start) + "-" + StringUtils::toStr(m.end) + ";";
     const char* source = hit.metaValueExists("PrecursorLadder") ? "precursor_ladder" : hit.metaValueExists("TerminalLadder") ? "terminal_ladder" : "tag";
     out << (int)hit.getMetaValue(tntKey("Scan")) << "\t" << hit.getAccession() << "\t" << (int)hit.getMetaValue("StartPosition", 0) << "\t"
         << (int)hit.getMetaValue("EndPosition", 0) << "\t" << (prsm.known_n_term ? 1 : 0) << (prsm.known_c_term ? 1 : 0) << "\t" << prsm.sequence << "\t" << mods << "\t"
