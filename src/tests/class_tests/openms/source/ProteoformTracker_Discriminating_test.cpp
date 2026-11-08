@@ -976,5 +976,114 @@ START_SECTION(narrowing_ignores_bare_fragments_under_refine)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
+// ADR-0064 D1. A governed plan refuses a record before it dispatches it. records[0] (b4 of the best path) was sent at
+//     intensity 1 and is seen at 0 now, so the 2x rule refuses it; the round's three slots go to records 1..3, and
+//     records[0] is neither dispatched nor stamped -- the round can still plan it.
+//
+// FAILS UNDER: the gate applied after the record is marked (records[0].dispatched true), or a refused record still
+// taking a slot (records[3] not dispatched).
+/////////////////////////////////////////////////////////////
+START_SECTION(governed_refused_record_is_not_dispatched)
+{
+  const int pid = 61;
+  Config cfg{trackerConfig("discriminating", "refine", 3)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedAndFinalize(cfg, tracker, pid, 661, twoTotals());
+  const ProteoformModel* m = tracker.getModel(pid);
+  ABORT_IF(m == nullptr || !m->refine.has_value() || m->refine->records.size() < 4)
+  const DiscriminatingRecord& r0 = m->refine->records[0];
+  ABORT_IF(!r0.target.ion_a)
+  TEST_EQUAL(label(r0.target.ion_a), "b4")
+
+  Ms3RegistrySnapshot snap;
+  snap.found = true;
+  snap.sent[Ms3Cleavage{std::string(1, r0.target.ion_a->type), r0.target.ion_a->index}][1] = 1.0;   // the fixture is charge 1
+  Ms3PlanGate gate;   // no spectrum: the fixture carries no per-charge signal, so no SNR test here
+  gate.snapshot = &snap;
+  gate.max_targets = 100;
+  const std::vector<Ms3Target> plan = tracker.planNextScans(pid, &gate);
+  TEST_EQUAL(plan.size(), 3)
+  ABORT_IF(plan.size() != 3)
+  for (size_t i = 0; i < 3; ++i) TEST_REAL_SIMILAR(plan[i].frag_mass, m->refine->records[i + 1].target.mass)
+  TEST_EQUAL(m->refine->records[0].dispatched, false)
+  TEST_EQUAL(m->dispatched_nominal_masses.count(SpectralDeconvolution::getNominalMass(r0.target.mass)), 0)
+  TEST_EQUAL(m->refine->records[3].dispatched, true)
+  TEST_EQUAL(countDispatched(*m), 3)
+  TEST_EQUAL(m->refine->decided, false)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// ADR-0064 D2. withdrawMs3 un-dispatches a withdrawn record and reports the round complete once every record STILL
+//     dispatched has returned (ISSUE 5: the caller decides, it does not re-dispatch). Three records go out; 0 and 1
+//     return; withdrawing 2 completes the round, and its nominal is given back. With 1 still out, the same withdrawal
+//     completes nothing; with a committed sibling of 2, record 2 stays dispatched.
+//
+// FAILS UNDER: a withdrawal that leaves the record dispatched (the round would wait for a scan that never comes), one
+// that never re-runs the completion test, or one that ignores the committed sibling.
+/////////////////////////////////////////////////////////////
+START_SECTION(withdrawal_undispatches_and_completes_the_round)
+{
+  auto itemOf = [](int pid, double mass) {
+    Ms3PlanItem item;
+    item.owner_precursor_id = pid;
+    item.fragment_mass = mass;
+    item.nominal = SpectralDeconvolution::getNominalMass(mass);
+    return item;
+  };
+
+  // --- 0 and 1 returned: withdrawing 2 completes the round ---------------------------------------------------------
+  {
+    const int pid = 62;
+    Config cfg{trackerConfig("discriminating", "refine", 3)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    feedAndFinalize(cfg, tracker, pid, 662, twoTotals());
+    TEST_EQUAL(tracker.planNextScans(pid).size(), 3)
+    const ProteoformModel* m = tracker.getModel(pid);
+    ABORT_IF(m == nullptr || !m->refine.has_value())
+    const double m0 = m->refine->records[0].target.mass, m1 = m->refine->records[1].target.mass, m2 = m->refine->records[2].target.mass;
+    const DeconvolvedSpectrum empty = ms3Of({});
+    TEST_EQUAL(tracker.recordDiscriminatingScan(pid, m0, empty, LOOSE, TIGHT), false)
+    TEST_EQUAL(tracker.recordDiscriminatingScan(pid, m1, empty, LOOSE, TIGHT), false)
+
+    TEST_EQUAL(tracker.withdrawMs3(pid, {itemOf(pid, m2)}, {}) == ProteoformTracker::Ms3Withdrawal::RoundComplete, true)
+    TEST_EQUAL(m->refine->records[2].dispatched, false)
+    TEST_EQUAL(m->refine->records[2].returned, false)   // not marked returned-empty
+    TEST_EQUAL(m->dispatched_nominal_masses.count(SpectralDeconvolution::getNominalMass(m2)), 0)
+    TEST_EQUAL(countDispatched(*m), 2)
+    TEST_EQUAL(m->refine->decided, false)   // withdrawMs3 reports; the caller decides
+    tracker.decideRefine(pid);
+    TEST_EQUAL(m->refine->decided, true)
+  }
+
+  // --- 1 still out: the same withdrawal completes nothing ------------------------------------------------------------
+  {
+    const int pid = 63;
+    Config cfg{trackerConfig("discriminating", "refine", 3)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    feedAndFinalize(cfg, tracker, pid, 663, twoTotals());
+    TEST_EQUAL(tracker.planNextScans(pid).size(), 3)
+    const ProteoformModel* m = tracker.getModel(pid);
+    ABORT_IF(m == nullptr || !m->refine.has_value())
+    const double m0 = m->refine->records[0].target.mass, m2 = m->refine->records[2].target.mass;
+    TEST_EQUAL(tracker.recordDiscriminatingScan(pid, m0, ms3Of({}), LOOSE, TIGHT), false)
+    TEST_EQUAL(tracker.withdrawMs3(pid, {itemOf(pid, m2)}, {}) == ProteoformTracker::Ms3Withdrawal::Nothing, true)
+    TEST_EQUAL(m->refine->records[2].dispatched, false)
+    TEST_EQUAL(m->refine->records[1].dispatched, true)
+
+    // A committed sibling of record 1 went out: withdrawing record 1's unsent item leaves it dispatched and stamped.
+    const double m1 = m->refine->records[1].target.mass;
+    const int n1 = SpectralDeconvolution::getNominalMass(m1);
+    TEST_EQUAL(tracker.withdrawMs3(pid, {itemOf(pid, m1)}, {{pid, n1}}) == ProteoformTracker::Ms3Withdrawal::Nothing, true)
+    TEST_EQUAL(m->refine->records[1].dispatched, true)
+    TEST_EQUAL(m->dispatched_nominal_masses.count(n1), 1)
+  }
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////
 END_TEST

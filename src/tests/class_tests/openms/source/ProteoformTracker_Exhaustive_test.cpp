@@ -1219,4 +1219,100 @@ START_SECTION(other_objectives_still_refuse_an_unidentified_precursor)
 }
 END_SECTION
 
+/////////////////////////////////////////////////////////////
+// 16. A governed plan (ADR-0064) refuses before it stamps. The gate's charge floor of 4 refuses the charge-2 and
+//     charge-3 masses; a cap of 2 new cleavages then skips one of the three it admits. Neither a refused nor a capped
+//     mass enters the monotone dispatch memory, so the next plan (ungated) still reaches all four.
+//
+// FAILS UNDER: the gate applied after the stamp (the refused nominals would be in dispatched_nominal_masses and the
+// ungated plan would return fewer than 4), or a capped mass stamped on the way past.
+/////////////////////////////////////////////////////////////
+START_SECTION(governed_refused_and_capped_species_are_not_stamped)
+{
+  const int precursor_id = 63;
+  Config cfg{trackerConfig("exhaustive", 10, 0.0, 0)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  const std::vector<MassCharge> charged{
+    {MASS_U1, 2}, {MASS_B6, 2}, {MASS_U2, 3}, {MASS_Y6, 3},
+    {MASS_U3, 4}, {MASS_U4, 5}, {MASS_U5, 6}};
+  feedWinnerScan(tracker, precursor_id, 631, charged, TWO_FRAGS, "HCD");
+
+  Ms3PlanGate gate;            // no snapshot (nothing sent), no spectrum (no SNR test: the fixture has no signal)
+  gate.charge_floor = 4;
+  gate.max_targets = 2;
+  const std::vector<Ms3Target> gated = tracker.planNextScans(precursor_id, &gate);
+  TEST_EQUAL(static_cast<int>(gated.size()), 2)   // U3, U4, U5 admitted; the cap keeps two
+  for (const Ms3Target& t : gated) TEST_EQUAL(std::abs(t.frag_charge) >= 4, true)
+
+  const ProteoformModel* mdl = tracker.getModel(precursor_id);
+  TEST_TRUE(mdl != nullptr)
+  ABORT_IF(mdl == nullptr)
+  TEST_EQUAL(static_cast<int>(mdl->dispatched_nominal_masses.size()), 2)   // only what was planned
+  TEST_EQUAL(dispatched(*mdl, MASS_U1), false)   // refused: charge 2
+  TEST_EQUAL(dispatched(*mdl, MASS_U2), false)   // refused: charge 3
+  TEST_EQUAL(dispatched(*mdl, MASS_B6), false)
+  TEST_EQUAL(dispatched(*mdl, MASS_Y6), false)
+  int capped = 0;   // exactly one of the three admitted masses was skipped by the cap
+  for (double m : {MASS_U3, MASS_U4, MASS_U5}) capped += dispatched(*mdl, m) ? 0 : 1;
+  TEST_EQUAL(capped, 1)
+
+  const std::vector<Ms3Target> after = tracker.planNextScans(precursor_id);   // ungated: the rest is still reachable
+  TEST_EQUAL(static_cast<int>(after.size()), 5)
+  TEST_TRUE(targetAtMass(after, MASS_U1) != nullptr)
+  TEST_TRUE(targetAtMass(after, MASS_B6) != nullptr)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// 17. withdrawMs3 gives a withdrawn exhaustive MS3's nominal back -- unless a committed sibling of the same owner and
+//     nominal went out (separate mode: another charge of the mass). A given-back mass is planned again.
+//
+// FAILS UNDER: no un-stamp (dispatched-never-returned would bar the mass forever: the replan would not return it), or
+// an un-stamp that ignores the committed sibling.
+/////////////////////////////////////////////////////////////
+START_SECTION(withdraw_unstamps_except_with_a_committed_sibling)
+{
+  const int precursor_id = 64;
+  Config cfg{trackerConfig("exhaustive", 3, 0.0, 0)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedWinnerScan(tracker, precursor_id, 641, SEVEN_MASSES, TWO_FRAGS, "HCD");
+
+  const std::vector<Ms3Target> first = tracker.planNextScans(precursor_id);
+  TEST_EQUAL(static_cast<int>(first.size()), 3)
+  ABORT_IF(first.size() != 3)
+  const ProteoformModel* mdl = tracker.getModel(precursor_id);
+  ABORT_IF(mdl == nullptr)
+  TEST_EQUAL(static_cast<int>(mdl->dispatched_nominal_masses.size()), 3)
+
+  auto itemOf = [&](const Ms3Target& t) {
+    Ms3PlanItem item;
+    item.cleavage = ProteoformTracker::ms3CleavageOf(t);
+    item.owner_precursor_id = precursor_id;
+    item.fragment_mass = t.frag_mass;
+    item.nominal = SpectralDeconvolution::getNominalMass(t.frag_mass);
+    return item;
+  };
+  const int n0 = SpectralDeconvolution::getNominalMass(first[0].frag_mass);
+  const int n1 = SpectralDeconvolution::getNominalMass(first[1].frag_mass);
+
+  // first[0]: no sibling went out -> un-stamped. first[1]: a committed sibling -> kept.
+  TEST_EQUAL(tracker.withdrawMs3(precursor_id, {itemOf(first[0])}, {}) == ProteoformTracker::Ms3Withdrawal::Nothing, true)
+  TEST_EQUAL(tracker.withdrawMs3(precursor_id, {itemOf(first[1])}, {{precursor_id, n1}}) == ProteoformTracker::Ms3Withdrawal::Nothing,
+             true)
+  TEST_EQUAL(mdl->dispatched_nominal_masses.count(n0), 0)
+  TEST_EQUAL(mdl->dispatched_nominal_masses.count(n1), 1)
+  TEST_EQUAL(static_cast<int>(mdl->dispatched_nominal_masses.size()), 2)
+  // Another owner's committed sibling is not this one's: the key is (precursor id, nominal).
+  tracker.withdrawMs3(precursor_id, {itemOf(first[2])}, {{precursor_id + 1, SpectralDeconvolution::getNominalMass(first[2].frag_mass)}});
+  TEST_EQUAL(mdl->dispatched_nominal_masses.count(SpectralDeconvolution::getNominalMass(first[2].frag_mass)), 0)
+
+  // The given-back masses are planned again; the kept one is not.
+  const std::vector<Ms3Target> again = tracker.planNextScans(precursor_id);
+  TEST_TRUE(targetAtMass(again, first[0].frag_mass) != nullptr)
+  TEST_TRUE(targetAtMass(again, first[1].frag_mass) == nullptr)
+}
+END_SECTION
+
 END_TEST

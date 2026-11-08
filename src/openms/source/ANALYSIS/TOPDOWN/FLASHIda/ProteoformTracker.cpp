@@ -212,6 +212,80 @@ namespace OpenMS
       return std::abs(mass - observed) <= std::max(mass, observed) * tol_ppm * 1e-6;
     }
 
+    // ADR-0064: the cleavage of a raw winner-scan mass labelled (ion_type, ion_index): the ion when it has one, else
+    // ("u", the nominal mass the dispatch memory stamps). The one rule ms3CleavageOf exposes to the executor.
+    inline Ms3Cleavage rawMassCleavage(const std::string& ion_type, int ion_index, int nominal)
+    {
+      if (ion_index > 0 && !ion_type.empty() && ion_type != kUnassignedIonType) return {ion_type, ion_index};
+      return {std::string(kUnassignedIonType), nominal};
+    }
+
+    // ADR-0064: the per-charge test of a governed plan. Isolatable (an m/z and a charge, the charge at or above the
+    // floor -- the two dispatch-time skips Exploration applies, moved here so they no longer burn a slot), a window SNR
+    // above the gate's over the dispatching MS2 in the window buildMS3 will command (max(iso_width, 2.0) Th, signal =
+    // the charge's intensity, which buildMS3 carries as precursor_intensity_s1), and ms3Admits at the charge's
+    // intensity -- the quantity the plan ranks by.
+    inline bool gateAdmitsCharge(const Ms3PlanGate& gate, const Ms3Cleavage& cleavage, double mz, int charge, double iso_width,
+                                 double intensity, double signal)
+    {
+      const int z = std::abs(charge);
+      if (mz <= 0.0 || z <= 0) return false;
+      if (gate.charge_floor > 0 && z < gate.charge_floor) return false;
+      if (gate.spectrum != nullptr)
+      {
+        const double half = std::max(iso_width, 2.0) / 2.0;
+        if (!(FragmentAnalysis::windowSnr(*gate.spectrum, mz - half, mz + half, signal) > gate.snr_min)) return false;
+      }
+      if (gate.snapshot != nullptr && !ms3Admits(*gate.snapshot, cleavage, z, intensity)) return false;
+      return true;
+    }
+
+    // ADR-0064: a raw winner-scan mass's admitted charges, strongest first: the representative charge and the rest of
+    // its envelope, each put through gateAdmitsCharge. A stable sort, so a tie keeps the representative first.
+    inline std::vector<ChargeRecord> gatedRawCharges(const Ms3PlanGate& gate, const PeakRecord& pr, const Ms3Cleavage& cleavage)
+    {
+      std::vector<ChargeRecord> cands;
+      ChargeRecord rep;
+      rep.charge = pr.charge;
+      rep.mz = pr.mz;
+      rep.iso_width = pr.iso_width;
+      rep.intensity = pr.intensity;
+      rep.stage1_scores = pr.stage1_scores;
+      cands.push_back(rep);
+      for (const ChargeRecord& cr : pr.by_charge)
+        if (cr.charge != pr.charge) cands.push_back(cr);
+      std::stable_sort(cands.begin(), cands.end(), [](const ChargeRecord& a, const ChargeRecord& b) { return a.intensity > b.intensity; });
+      std::vector<ChargeRecord> admitted;
+      for (const ChargeRecord& cr : cands)
+        if (gateAdmitsCharge(gate, cleavage, cr.mz, cr.charge, cr.iso_width, cr.intensity, cr.stage1_scores.precursor_intensity))
+          admitted.push_back(cr);
+      return admitted;
+    }
+
+    // ADR-0064: the per-run cleavage cap of a governed plan. A cleavage the proteoform already sent is a re-acquisition
+    // and never takes room; a new one takes one of max_targets - |sent| slots the first time it is planned.
+    struct CleavageRoom
+    {
+      const Ms3RegistrySnapshot* snap = nullptr;
+      int room = 0;
+      std::set<Ms3Cleavage> taken;
+
+      explicit CleavageRoom(const Ms3PlanGate& gate) : snap(gate.snapshot)
+      {
+        room = (snap != nullptr) ? ms3NewCleavageRoom(*snap, gate.max_targets) : std::max(0, gate.max_targets);
+      }
+
+      bool admit(const Ms3Cleavage& c)
+      {
+        if (snap != nullptr && snap->sent.count(c) > 0) return true;
+        if (taken.count(c) > 0) return true;
+        if (room <= 0) return false;
+        --room;
+        taken.insert(c);
+        return true;
+      }
+    };
+
   } // anonymous namespace
 
   // ---------------------------------------------------------------------------
@@ -581,7 +655,7 @@ namespace OpenMS
     return out;
   }
 
-  std::vector<Ms3Target> ProteoformTracker::planNextScans(int precursor_id)
+  std::vector<Ms3Target> ProteoformTracker::planNextScans(int precursor_id, const Ms3PlanGate* gate)
   {
     // "This run fired no MS3" resolves to one of TEN causes below (seven return sites; the last one
     // splits four ways by objective). Every one of them used to return an empty plan silently,
@@ -617,7 +691,7 @@ namespace OpenMS
     // The fork sits HERE deliberately: after every context/budget guard, so those report through the SAME
     // reason strings in every mode, and before the objective-keyed pool build below, which exhaustive
     // replaces wholesale (ADR-0023). An unidentified model without a winner scan reports no_winner_scan.
-    if (obj == CharacterizationObjective::Exhaustive) return planExhaustive_(m, precursor_id, budget);
+    if (obj == CharacterizationObjective::Exhaustive) return planExhaustive_(m, precursor_id, budget, gate);
 
     // Discriminating (ADR-0049): until the round's decision fires, the targets are the masses that tell Refine's two best
     // paths apart. Once it has fired (or with no candidate record), the decided model's windows are localized exactly as
@@ -626,7 +700,7 @@ namespace OpenMS
     {
       if (m.refine && !m.refine->decided)
       {
-        std::vector<Ms3Target> plan = planDiscriminating_(m, precursor_id, budget);
+        std::vector<Ms3Target> plan = planDiscriminating_(m, precursor_id, budget, gate);
         // Still undecided: the round's plan (possibly empty while dispatched records await their return). Decided here
         // means planDiscriminating_ found the round could never complete through MS3 and fell through: plan the same
         // model as ambiguity in this same call rather than leave the precursor with no MS3 of any kind.
@@ -654,8 +728,35 @@ namespace OpenMS
     // ambiguous range and its interior is every bond, so without this test it wins under both
     // ambiguity and coverage. Applied where the pools are BUILT, not inside add_target: add_target's
     // `false` means "budget full" to its callers, which `break` on it. Exhaustive does not come here.
-    auto eligible = [L](const MappedFragment& f) {
-      return f.best_ms2.has_value() && f.ion_index < L;
+    //
+    // A governed plan (ADR-0064) adds the gate's per-charge test here too: a fragment with no admitted charge never
+    // enters a pool, so the next one takes its slot in the same intensity order. Its admitted charges, strongest
+    // first, are computed once per fragment (chargesOf) and anchor and notch the emitted target below.
+    std::map<FragmentKey, std::vector<const FragmentObservation*>> gated_charges;
+    auto chargesOf = [&](const MappedFragment& f) -> const std::vector<const FragmentObservation*>& {
+      const FragmentKey key{f.ion_type, f.ion_index};
+      auto cached = gated_charges.find(key);
+      if (cached != gated_charges.end()) return cached->second;
+      // best_ms2 first, then the other charges in charge order; a stable intensity sort keeps that order on a tie.
+      std::vector<const FragmentObservation*> cands;
+      if (f.best_ms2.has_value()) cands.push_back(&(*f.best_ms2));
+      std::vector<const FragmentObservation*> others;
+      for (const auto& kv : f.ms2_by_charge)
+        if (!f.best_ms2.has_value() || kv.first != f.best_ms2->frag_charge) others.push_back(&kv.second);
+      std::sort(others.begin(), others.end(),
+                [](const FragmentObservation* a, const FragmentObservation* b) { return a->frag_charge < b->frag_charge; });
+      cands.insert(cands.end(), others.begin(), others.end());
+      std::stable_sort(cands.begin(), cands.end(),
+                       [](const FragmentObservation* a, const FragmentObservation* b) { return a->intensity > b->intensity; });
+      std::vector<const FragmentObservation*> admitted;
+      for (const FragmentObservation* o : cands)
+        if (gate != nullptr
+            && gateAdmitsCharge(*gate, key, o->frag_mz, o->frag_charge, o->iso_width, o->intensity, o->stage1_scores.precursor_intensity))
+          admitted.push_back(o);
+      return gated_charges.emplace(key, std::move(admitted)).first->second;
+    };
+    auto eligible = [L, gate, &chargesOf](const MappedFragment& f) {
+      return f.best_ms2.has_value() && f.ion_index < L && (gate == nullptr || !chargesOf(f).empty());
     };
     // Bonds an MS3 re-feed of this parent could witness: prefix [1..k] -> bonds 1..k-1; suffix
     // [c..L] -> bonds c..L-1. Empty for a one-residue ion (b1, y1), whose MS3 cleaves nothing.
@@ -666,10 +767,15 @@ namespace OpenMS
       return a->best_ms2->intensity > b->best_ms2->intensity;  // strongest first
     };
 
+    // A governed plan's cleavage cap (ADR-0064): a cleavage the proteoform never sent takes a slot of
+    // max_targets - |sent|; once they are used a new one is SKIPPED -- `true`, not "budget full", so the callers go on
+    // to the next candidate (a re-acquisition of a sent cleavage still fits).
+    CleavageRoom room(gate != nullptr ? *gate : Ms3PlanGate{});
     auto add_target = [&](const MappedFragment* f) -> bool {
       if (f == nullptr || !f->best_ms2.has_value()) return false;
       const FragmentKey key{f->ion_type, f->ion_index};
       if (chosen.count(key)) return false;
+      if (gate != nullptr && !room.admit(key)) return true;
       chosen.insert(key);
       targets.push_back(f);
       return static_cast<int>(targets.size()) < budget;  // false once the budget is full
@@ -828,31 +934,53 @@ namespace OpenMS
       if (fragments_selected >= budget) break;
       const size_t emitted_before_fragment = out.size();
 
+      // A governed plan (ADR-0064) anchors on the strongest ADMITTED charge and notches from the admitted charges
+      // only; ungoverned, the anchor is best_ms2 and the candidates are every charge the fragment was seen at.
+      const std::vector<const FragmentObservation*>* gated = (gate != nullptr) ? &chargesOf(*f) : nullptr;
+      if (gated != nullptr && gated->empty()) continue;   // unreachable: such a fragment never enters a pool
+      const FragmentObservation* anchor = (gated != nullptr) ? gated->front() : &(*f->best_ms2);
+
       // The acquisition charge set, chosen ONCE for both on-modes: anchor (best_ms2, i.e. the most
       // intense charge) plus the SNR-positive rest, most intense first, capped at a 10-plex.
       // Separate and Multiplexed then acquire exactly this set and differ only in how many scans it
       // takes -- N versus 1. Deriving both from one selectNotches call is what makes that identity
       // structural instead of a comment: they cannot drift into gating or ranking differently.
       std::vector<NotchCandidate> extra_charges;
-      if (charge_mode != ChargeAcquisitionMode::Single && !f->ms2_by_charge.empty())
+      const bool have_charges = (gated != nullptr) ? !gated->empty() : !f->ms2_by_charge.empty();
+      if (charge_mode != ChargeAcquisitionMode::Single && have_charges)
       {
         std::vector<NotchCandidate> cands;
-        cands.reserve(f->ms2_by_charge.size());
-        for (const auto& kv : f->ms2_by_charge)
-          cands.push_back({kv.second.frag_charge, kv.second.frag_mz, kv.second.iso_width,
-                           kv.second.stage1_scores.charge_snr, kv.second.intensity});
-        extra_charges = selectNotches(cands, f->best_ms2->frag_charge, snr_threshold,
+        if (gated != nullptr)
+        {
+          cands.reserve(gated->size());
+          for (const FragmentObservation* o : *gated)
+            cands.push_back({o->frag_charge, o->frag_mz, o->iso_width, o->stage1_scores.charge_snr, o->intensity});
+        }
+        else
+        {
+          cands.reserve(f->ms2_by_charge.size());
+          for (const auto& kv : f->ms2_by_charge)
+            cands.push_back({kv.second.frag_charge, kv.second.frag_mz, kv.second.iso_width,
+                             kv.second.stage1_scores.charge_snr, kv.second.intensity});
+        }
+        extra_charges = selectNotches(cands, anchor->frag_charge, snr_threshold,
                                       MAX_NOTCHES_PER_STAGE, ChargeSelection::Intensity,  // MS3 keeps intensity (ADR-0059)
                                       "MS3 " + f->ion_type + std::to_string(f->ion_index));
       }
 
       // Build the per-charge observation list to emit for this fragment.
       std::vector<const FragmentObservation*> obs_list;
-      obs_list.push_back(&(*f->best_ms2));   // the anchor, in every mode
+      obs_list.push_back(anchor);   // the anchor, in every mode
       if (charge_mode == ChargeAcquisitionMode::Separate)
       {
         for (const NotchCandidate& n : extra_charges)
         {
+          if (gated != nullptr)
+          {
+            for (const FragmentObservation* o : *gated)
+              if (o->frag_charge == n.charge) { obs_list.push_back(o); break; }
+            continue;
+          }
           auto zit = f->ms2_by_charge.find(n.charge);
           if (zit != f->ms2_by_charge.end()) obs_list.push_back(&zit->second);
         }
@@ -898,7 +1026,8 @@ namespace OpenMS
     return out;
   }
 
-  std::vector<Ms3Target> ProteoformTracker::planExhaustive_(ProteoformModel& m, int precursor_id, int budget)
+  std::vector<Ms3Target> ProteoformTracker::planExhaustive_(ProteoformModel& m, int precursor_id, int budget,
+                                                           const Ms3PlanGate* gate)
   {
     // Same marker and the same zero-target vocabulary as planNextScans' guards, so one grep still
     // yields every MS3 planning decision in every mode.
@@ -919,38 +1048,7 @@ namespace OpenMS
     const int charge_floor = config_.level(2).min_charge;
     const double tol_ppm = config_.level(2).tolerance_ppm;
 
-    // --- 1) The pool: this ONE scan's deconvolved masses, mapped or not ----------------------------
-    struct PoolEntry
-    {
-      const PeakRecord* peak = nullptr;
-      int nominal = 0;
-    };
-    std::vector<PoolEntry> pool;
-    pool.reserve(m.winner_peaks.size());
-    for (const PeakRecord& pr : m.winner_peaks)
-    {
-      // ORDER IS LOAD-BEARING: every filter runs HERE, and the dispatch memory is stamped only in the
-      // emit loop below. See exhaustivePoolAdmits for what a premature stamp costs (ADR-0023 D-d).
-      if (!exhaustivePoolAdmits(pr, min_target_mass, charge_floor)) continue;
-      const int nominal = SpectralDeconvolution::getNominalMass(pr.mono_mass);
-      if (m.dispatched_nominal_masses.count(nominal) > 0) continue;   // already fragmented this species
-      pool.push_back(PoolEntry{&pr, nominal});
-    }
-    if (pool.empty()) return no_plan("pool_exhausted");
-
-    // Decision 4: intensity, descending, no tiebreak -- the same rule as every other target-ranking
-    // site, for ADR-0003's reason (more fragment ion means more MS3 precursor). Mapped and unassigned
-    // masses rank on the identical number, so the two halves interleave rather than segregating.
-    //
-    // stable_sort, not sort: PeakGroup::getChargeIntensity() is 0 for any group that never went through
-    // a scoring pass, so an all-ties pool is a real state (every hand-built fixture is one), and an
-    // unstable sort would make WHICH masses survive a budget truncation implementation-defined.
-    std::stable_sort(pool.begin(), pool.end(),
-                     [](const PoolEntry& a, const PoolEntry& b) {
-                       return a.peak->intensity > b.peak->intensity;
-                     });
-
-    // --- 2) The mapped/unassigned label ------------------------------------------------------------
+    // --- 0) The mapped/unassigned label (read by the emit, and by the pool under a governed plan) ---
     // IN-TOLERANCE ONLY, and deliberately unlike mapScanOntoModel_, which falls back to the closest
     // peak OVERALL so that "a matched fragment is never dropped for lack of a peak". That is the right
     // rule for its question (does this KNOWN FRAGMENT have intensity here?) and the wrong rule for this
@@ -998,6 +1096,49 @@ namespace OpenMS
       return {best->ion_type, best->ion_index};
     };
 
+    // --- 1) The pool: this ONE scan's deconvolved masses, mapped or not ----------------------------
+    // A governed plan (ADR-0064) also needs each mass's cleavage at the pool (its label, above): the gate's
+    // per-charge test runs HERE, with every other filter, so a refused mass is never stamped.
+    struct PoolEntry
+    {
+      const PeakRecord* peak = nullptr;
+      int nominal = 0;
+      std::vector<ChargeRecord> charges;   ///< governed: the admitted charges, strongest first
+      Ms3Cleavage cleavage;                ///< governed: what the mass acquires
+    };
+    std::vector<PoolEntry> pool;
+    pool.reserve(m.winner_peaks.size());
+    for (const PeakRecord& pr : m.winner_peaks)
+    {
+      // ORDER IS LOAD-BEARING: every filter runs HERE, and the dispatch memory is stamped only in the
+      // emit loop below. See exhaustivePoolAdmits for what a premature stamp costs (ADR-0023 D-d).
+      if (!exhaustivePoolAdmits(pr, min_target_mass, charge_floor)) continue;
+      const int nominal = SpectralDeconvolution::getNominalMass(pr.mono_mass);
+      if (m.dispatched_nominal_masses.count(nominal) > 0) continue;   // already fragmented this species
+      PoolEntry entry{&pr, nominal};
+      if (gate != nullptr)
+      {
+        const std::pair<std::string, int> label = labelFor(pr);
+        entry.cleavage = rawMassCleavage(label.first, label.second, nominal);
+        entry.charges = gatedRawCharges(*gate, pr, entry.cleavage);
+        if (entry.charges.empty()) continue;   // no admitted charge: not a target, not stamped
+      }
+      pool.push_back(std::move(entry));
+    }
+    if (pool.empty()) return no_plan("pool_exhausted");
+
+    // Decision 4: intensity, descending, no tiebreak -- the same rule as every other target-ranking
+    // site, for ADR-0003's reason (more fragment ion means more MS3 precursor). Mapped and unassigned
+    // masses rank on the identical number, so the two halves interleave rather than segregating.
+    //
+    // stable_sort, not sort: PeakGroup::getChargeIntensity() is 0 for any group that never went through
+    // a scoring pass, so an all-ties pool is a real state (every hand-built fixture is one), and an
+    // unstable sort would make WHICH masses survive a budget truncation implementation-defined.
+    std::stable_sort(pool.begin(), pool.end(),
+                     [](const PoolEntry& a, const PoolEntry& b) {
+                       return a.peak->intensity > b.peak->intensity;
+                     });
+
     // --- 3) Emit, budget-bounded -------------------------------------------------------------------
     // THE BUDGET COUNTS SPECIES, not emitted targets, exactly as it counts fragments on the mapped
     // path: separate and multiplexed acquire one species' whole charge envelope for ONE slot and differ
@@ -1005,13 +1146,16 @@ namespace OpenMS
     // avoid -- max_targets: 3 spent entirely on the first mass that happened to resolve at 3 charges.
     std::vector<Ms3Target> out;
     int species_selected = 0;
+    CleavageRoom room(gate != nullptr ? *gate : Ms3PlanGate{});   // a governed plan's cleavage cap (ADR-0064)
     for (const PoolEntry& e : pool)
     {
       if (species_selected >= budget) break;
+      // Capped (ADR-0064): a new cleavage with no room left is skipped -- not emitted, not stamped.
+      if (gate != nullptr && !room.admit(e.cleavage)) continue;
       const PeakRecord& pr = *e.peak;
       const std::pair<std::string, int> label = labelFor(pr);
 
-      emitRawMassTarget_(m, pr, label.first, label.second, "exhaustive", out);
+      emitRawMassTarget_(m, pr, label.first, label.second, "exhaustive", out, gate != nullptr ? &e.charges : nullptr);
 
       // Stamped only now: after every filter, and after the mass has actually become a target. The set
       // is monotone and dispatched-but-never-returned counts as done, so a stamp made any earlier is a
@@ -1032,22 +1176,29 @@ namespace OpenMS
   }
 
   void ProteoformTracker::emitRawMassTarget_(const ProteoformModel& m, const PeakRecord& pr, const std::string& ion_type,
-                                             int ion_index, const char* mode_name, std::vector<Ms3Target>& out) const
+                                             int ion_index, const char* mode_name, std::vector<Ms3Target>& out,
+                                             const std::vector<ChargeRecord>* charges) const
   {
     const ChargeAcquisitionMode charge_mode = config_.characterization().fragment_charges;
     const double snr_threshold = config_.targeting().snr_threshold;
+
+    // A governed plan (ADR-0064) hands the mass's admitted charges, strongest first: the first anchors and the notches
+    // come from these only. Otherwise the representative charge anchors and the whole envelope is the candidate set.
+    const bool gated = (charges != nullptr && !charges->empty());
+    const std::vector<ChargeRecord>& envelope = gated ? *charges : pr.by_charge;
+    const int anchor_charge = gated ? charges->front().charge : pr.charge;
 
     // The acquisition charge set, chosen ONCE for both on-modes from the peak's own envelope: anchor
     // plus the SNR-positive rest, most intense first, capped at a 10-plex. One selectNotches call for
     // both is what keeps "they differ only in scan count" structural rather than aspirational.
     std::vector<NotchCandidate> extra_charges;
-    if (charge_mode != ChargeAcquisitionMode::Single && !pr.by_charge.empty())
+    if (charge_mode != ChargeAcquisitionMode::Single && !envelope.empty())
     {
       std::vector<NotchCandidate> cands;
-      cands.reserve(pr.by_charge.size());
-      for (const ChargeRecord& cr : pr.by_charge)
+      cands.reserve(envelope.size());
+      for (const ChargeRecord& cr : envelope)
         cands.push_back({cr.charge, cr.mz, cr.iso_width, cr.stage1_scores.charge_snr, cr.intensity});
-      extra_charges = selectNotches(cands, pr.charge, snr_threshold, MAX_NOTCHES_PER_STAGE,
+      extra_charges = selectNotches(cands, anchor_charge, snr_threshold, MAX_NOTCHES_PER_STAGE,
                                     ChargeSelection::Intensity,  // MS3 keeps intensity (ADR-0059)
                                     std::string("MS3 ") + mode_name + " m=" + std::to_string(pr.mono_mass));
     }
@@ -1075,18 +1226,22 @@ namespace OpenMS
       out.push_back(std::move(t));
     };
 
-    emitTarget(pr.mz, pr.charge, pr.iso_width, pr.stage1_scores);
+    if (gated)
+      emitTarget(charges->front().mz, charges->front().charge, charges->front().iso_width, charges->front().stage1_scores);
+    else
+      emitTarget(pr.mz, pr.charge, pr.iso_width, pr.stage1_scores);
     if (charge_mode == ChargeAcquisitionMode::Separate)
     {
       for (const NotchCandidate& n : extra_charges)
       {
-        for (const ChargeRecord& cr : pr.by_charge)
+        for (const ChargeRecord& cr : envelope)
           if (cr.charge == n.charge) { emitTarget(cr.mz, cr.charge, cr.iso_width, cr.stage1_scores); break; }
       }
     }
   }
 
-  std::vector<Ms3Target> ProteoformTracker::planDiscriminating_(ProteoformModel& m, int precursor_id, int budget)
+  std::vector<Ms3Target> ProteoformTracker::planDiscriminating_(ProteoformModel& m, int precursor_id, int budget,
+                                                               const Ms3PlanGate* gate)
   {
     // The same marker and zero-target vocabulary as the other planners.
     auto no_plan = [precursor_id](const char* reason) -> std::vector<Ms3Target> {
@@ -1120,11 +1275,14 @@ namespace OpenMS
     // The isolatability/charge-floor test is planExhaustive_'s (exhaustivePoolAdmits, no mass floor: min_target_mass is
     // exhaustive's knob) and for its reason: a mass Exploration drops downstream must not be stamped into the monotone
     // dispatch memory first (ADR-0023 D-d). A record with no winner peak (peak_index -1) has nothing to isolate.
+    // A governed plan (ADR-0064) applies its per-charge test here too, so a refused record is never dispatched.
     const int charge_floor = config_.level(2).min_charge;
     struct PoolEntry
     {
       DiscriminatingRecord* rec = nullptr;
       int nominal = 0;
+      std::vector<ChargeRecord> charges;   ///< governed: the admitted charges, strongest first
+      Ms3Cleavage cleavage;                ///< governed: what the mass acquires (the best path's ion, else 'u')
     };
     std::vector<PoolEntry> pool;
     for (DiscriminatingRecord& rec : st.records)
@@ -1135,7 +1293,16 @@ namespace OpenMS
       if (!exhaustivePoolAdmits(pr, 0.0, charge_floor)) continue;
       const int nominal = SpectralDeconvolution::getNominalMass(pr.mono_mass);
       if (m.dispatched_nominal_masses.count(nominal) > 0) continue;
-      pool.push_back(PoolEntry{&rec, nominal});
+      PoolEntry entry{&rec, nominal};
+      if (gate != nullptr)
+      {
+        const std::optional<Refine::Path::Ion>& ion_a = rec.target.ion_a;
+        entry.cleavage = rawMassCleavage(ion_a ? std::string(1, ion_a->type) : std::string(kUnassignedIonType),
+                                         ion_a ? ion_a->index : 0, nominal);
+        entry.charges = gatedRawCharges(*gate, pr, entry.cleavage);
+        if (entry.charges.empty()) continue;   // no admitted charge: not dispatched, not stamped
+      }
+      pool.push_back(std::move(entry));
     }
     if (pool.empty()) return dead_end("pool_exhausted");
 
@@ -1146,10 +1313,13 @@ namespace OpenMS
     int species_selected = 0;
     std::ostringstream masses;
     masses << std::fixed << std::setprecision(4);
+    CleavageRoom room(gate != nullptr ? *gate : Ms3PlanGate{});   // a governed plan's cleavage cap (ADR-0064)
     for (const PoolEntry& e : pool)
     {
       if (species_selected >= budget) break;
       if (m.dispatched_nominal_masses.count(e.nominal) > 0) continue; // a second record of a species stamped above
+      // Capped (ADR-0064): a new cleavage with no room left is skipped -- not dispatched, not stamped.
+      if (gate != nullptr && !room.admit(e.cleavage)) continue;
       DiscriminatingRecord& rec = *e.rec;
       const PeakRecord& pr = m.winner_peaks[rec.peak_index];
       // Labelled with the winner path's ion only. A mass only the second path explains goes out unassigned ('u'/0, as
@@ -1160,7 +1330,7 @@ namespace OpenMS
       const std::string ion_type = ion ? std::string(1, ion->type) : std::string(kUnassignedIonType);
       const int ion_index = ion ? ion->index : 0;
 
-      emitRawMassTarget_(m, pr, ion_type, ion_index, "discriminating", out);
+      emitRawMassTarget_(m, pr, ion_type, ion_index, "discriminating", out, gate != nullptr ? &e.charges : nullptr);
 
       rec.dispatched = true;
       m.dispatched_nominal_masses.insert(e.nominal);
@@ -1336,6 +1506,64 @@ namespace OpenMS
     ++m.update_index;
     emitPooledIDRow(m, "MS3-DECIDE", ScanCommandQueue::encode(m.winner_scan_id));
     return flipped;
+  }
+
+  ProteoformTracker::Ms3Withdrawal ProteoformTracker::withdrawMs3(int precursor_id, const std::vector<Ms3PlanItem>& items,
+                                                                   const std::set<std::pair<int, int>>& committed_owner_nominals)
+  {
+    auto it = models_.find(precursor_id);
+    if (it == models_.end()) return Ms3Withdrawal::Nothing;
+    ProteoformModel& m = it->second;
+    // Only an UNDECIDED round's records are given back: a decided round's records are frozen (recordDiscriminatingScan
+    // skips them), and a decided model's plan is ambiguity's, which dispatched no record.
+    RefineState* st = (m.refine && !m.refine->decided) ? &*m.refine : nullptr;
+    const double tol_ppm = config_.level(2).tolerance_ppm;
+    bool record_changed = false;
+    for (const Ms3PlanItem& item : items)
+    {
+      // A committed sibling (another charge of the same mass, under separate) went out: the mass stays dispatched and
+      // stamped, so its return still counts and it is never planned twice.
+      if (item.nominal > 0 && committed_owner_nominals.count({precursor_id, item.nominal}) > 0) continue;
+      if (st != nullptr && item.fragment_mass > 0.0)
+      {
+        // The record of this mass, found as recordDiscriminatingScan finds it: the nearest within the level-2 tolerance.
+        DiscriminatingRecord* rec = nullptr;
+        double best = std::numeric_limits<double>::max();
+        for (DiscriminatingRecord& r : st->records)
+        {
+          const double diff = std::abs(r.target.mass - item.fragment_mass);
+          if (withinPpm(r.target.mass, item.fragment_mass, tol_ppm) && diff < best)
+          {
+            best = diff;
+            rec = &r;
+          }
+        }
+        // Not marked returned-empty: decideRefine's any_annotatable reads `dispatched`, and the record may be planned again.
+        if (rec != nullptr && rec->dispatched)
+        {
+          rec->dispatched = false;
+          record_changed = true;
+        }
+      }
+      if (item.nominal > 0) m.dispatched_nominal_masses.erase(item.nominal);
+    }
+    if (st == nullptr || !record_changed) return Ms3Withdrawal::Nothing;
+
+    // The completion test recordDiscriminatingScan applies: complete when every record still dispatched has returned.
+    // Nothing dispatched any more leaves the round undecided -- and unblocked: its next plan dispatches again.
+    bool any_dispatched = false, all_returned = true;
+    for (const DiscriminatingRecord& r : st->records)
+    {
+      if (!r.dispatched) continue;
+      any_dispatched = true;
+      all_returned = all_returned && r.returned;
+    }
+    return (any_dispatched && all_returned) ? Ms3Withdrawal::RoundComplete : Ms3Withdrawal::Nothing;
+  }
+
+  Ms3Cleavage ProteoformTracker::ms3CleavageOf(const Ms3Target& target)
+  {
+    return rawMassCleavage(target.ion_type, target.ion_index, SpectralDeconvolution::getNominalMass(target.frag_mass));
   }
 
   const FragmentAnalysis::ProteoformMatch* ProteoformTracker::getRematchedNonWinnerMatch(int precursor_id, int scan_id) const

@@ -53,12 +53,15 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 #include <OpenMS/SYSTEM/File.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 using namespace OpenMS;
@@ -149,6 +152,131 @@ namespace
     std::string fld;
     while (std::getline(ls, fld, '\t')) fields.push_back(fld);
     return fields;
+  }
+
+  // ---- ADR-0064: the per-proteoform plan gate (Ms3PlanGate) ---------------------------------------------------
+  //
+  // A hand-built PeakGroup has getChargeIntensity() == 0, so every observation below has intensity 0 and a window
+  // SNR of 0 (FragmentAnalysis::windowSnr returns 0 for no signal). The sections that need a charge ADMITTED pass no
+  // spectrum (no SNR test) or snr_min -1; the SNR section passes a spectrum and moves only snr_min. The 2x rule is
+  // driven through the snapshot: a sent intensity of 0 admits a re-acquisition at 0, a sent intensity of 1 refuses it.
+
+  /// The tracker config with characterization's objective and budget as parameters (no log folder: nothing is read).
+  std::string gateConfig(const std::string& mode, int max_targets)
+  {
+    return std::string(R"JSON({
+    "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 1, "max_charge": 50, "min_mass": 100, "max_mass": 50000, "tol": [10, 10, 10] },
+    "precursor_selection": { "rt_window": 180, "targeting": "none", "consider_all_charges": false, "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 3 },
+    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+    "faims": { "cv_values": [], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 100, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
+      "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25, "resolution": 120000 }
+    },
+    "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
+    "files": { "target_logs": [], "inclusion_list": "" },
+    "identification": { "reference": { "sequence": "PEPTIDEK" }, "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 },
+      "characterization": { "mode": ")JSON") + mode + "\", \"max_targets\": " + std::to_string(max_targets) + " } } }";
+  }
+
+  const double PROTON_MASS = 1.00728;
+  const double ISOTOPE_STEP = 1.00235;
+
+  /// A fragment PeakGroup seen at every charge in @p charges with TWO isotopes each, so PeakRecord::by_charge holds a
+  /// real (non-zero-width) record per charge and ms2_by_charge carries all of them. The representative charge is the
+  /// lowest (getMaxIntensityAbsCharge with no intensity).
+  PeakGroup makeEnvelope(double mono_mass, const std::vector<int>& charges)
+  {
+    const int zmin = *std::min_element(charges.begin(), charges.end());
+    const int zmax = *std::max_element(charges.begin(), charges.end());
+    PeakGroup pg(zmin, zmax, true);
+    pg.setMonoisotopicMass(mono_mass);
+    for (int z : charges)
+    {
+      for (int iso = 0; iso < 2; ++iso)
+      {
+        FLASHHelperClasses::LogMzPeak lp;
+        lp.mz = (mono_mass + iso * ISOTOPE_STEP) / z + PROTON_MASS;
+        lp.abs_charge = z;
+        lp.isotopeIndex = iso;
+        lp.intensity = 1000.0f;
+        pg.push_back(lp);
+      }
+    }
+    return pg;
+  }
+
+  struct GateFrag
+  {
+    std::string ion_type;
+    int ion_index;
+    double mass;
+    std::vector<int> charges;   ///< one entry: a single-peak group (no envelope); more: makeEnvelope
+  };
+
+  /// Feed ONE winner MS2 scan carrying @p frags (the winner match claims each, pooled verbatim) and finalize. With
+  /// @p ambiguous the match carries one modification on residues 4..5, which b5, b6 and y6 contain and nothing brackets.
+  void feedGateWinner(ProteoformTracker& tracker, int precursor_id, const std::vector<GateFrag>& frags, bool ambiguous = false)
+  {
+    Ms2Params p;
+    p.collision_energy = 29.0;
+    p.activation_type = "HCD";
+    DeconvolvedSpectrum d(301);
+    FragmentAnalysis::ProteoformMatch m;
+    m.score = 1.0;
+    m.identification_score = 1.0;
+    m.region_start = -1;
+    m.region_end = -1;
+    m.matched_protein = "synthetic";
+    m.proteoform_sequence = WINNER_SEQ;
+    for (const GateFrag& g : frags)
+    {
+      if (g.charges.size() == 1) d.push_back(makeSyntheticPeakGroup(g.mass / g.charges[0] + PROTON_MASS, g.mass, g.charges[0]));
+      else d.push_back(makeEnvelope(g.mass, g.charges));
+      FragmentAnalysis::ProteoformMatch::FragmentMatch fm;
+      fm.ion_type = g.ion_type;
+      fm.ion_index = g.ion_index;
+      fm.observed_mass = g.mass;
+      m.fragments.push_back(fm);
+    }
+    if (ambiguous)
+    {
+      FragmentAnalysis::PTMSite site;
+      site.start_position = 4;
+      site.end_position = 5;
+      site.position = 4;
+      site.mass_shift = 42.0106;
+      m.ptm_sites.push_back(site);
+    }
+    tracker.feedScan(precursor_id, 2, p, 301, d, m, 1.0, makeMs2Ctx());
+    tracker.finalizeMS2(precursor_id);
+  }
+
+  // Four fragments of PEPTIDEK (L = 8), each with a bond inside it, at charge 2; b5, b6 and y6 contain residues 4..5.
+  const std::vector<GateFrag> FOUR_FRAGS{{"b", 3, 330.0, {2}}, {"b", 5, 550.0, {2}}, {"b", 6, 700.0, {2}}, {"y", 6, 900.0, {2}}};
+
+  /// A gate that admits every isolatable charge: nothing sent, no SNR test, no charge floor, room for 100 cleavages.
+  Ms3PlanGate openGate()
+  {
+    Ms3PlanGate g;
+    g.max_targets = 100;
+    return g;
+  }
+
+  using TargetKey = std::tuple<std::string, int, int, double>;
+  std::multiset<TargetKey> keysOf(const std::vector<Ms3Target>& plan)
+  {
+    std::multiset<TargetKey> out;
+    for (const Ms3Target& t : plan) out.insert(TargetKey{t.ion_type, t.ion_index, t.frag_charge, t.frag_mz});
+    return out;
+  }
+
+  bool planHas(const std::vector<Ms3Target>& plan, const std::string& ion_type, int ion_index)
+  {
+    for (const Ms3Target& t : plan)
+      if (t.ion_type == ion_type && t.ion_index == ion_index) return true;
+    return false;
   }
 }
 
@@ -358,6 +486,176 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   const double cov2 = std::stod(rows[2][CI_COV]);
   TEST_TRUE(cov1 >= cov0)
   TEST_TRUE(cov2 >= cov1)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// ADR-0064 G1. A null gate is today's plan, and a gate that admits everything changes nothing, under each of the
+// three mapped objectives.
+//
+// FAILS UNDER: a gate path that re-orders, re-anchors or re-notches an admitted fragment (the anchor must stay best_ms2
+// when best_ms2 is admitted), or one that drops a fragment it should admit.
+/////////////////////////////////////////////////////////////
+START_SECTION(gate_null_and_open_equal_today)
+{
+  const std::vector<GateFrag> two_amb{{"b", 6, 700.0, {2}}, {"y", 6, 900.0, {2}}};
+  for (const std::string mode : {"ambiguity", "coverage", "fragments"})
+  {
+    Config cfg{gateConfig(mode, 10)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    if (mode == "ambiguity") feedGateWinner(tracker, 41, two_amb, /*ambiguous=*/true);
+    else feedGateWinner(tracker, 41, FOUR_FRAGS);
+
+    const std::vector<Ms3Target> today = tracker.planNextScans(41);
+    const std::vector<Ms3Target> null_gate = tracker.planNextScans(41, nullptr);
+    const Ms3PlanGate open = openGate();
+    const std::vector<Ms3Target> open_gate = tracker.planNextScans(41, &open);
+    TEST_EQUAL(today.empty(), false)   // non-vacuity: there is a plan to compare
+    TEST_EQUAL(today.size(), (mode == "ambiguity") ? 2u : 4u)
+    TEST_EQUAL(keysOf(null_gate) == keysOf(today), true)
+    TEST_EQUAL(keysOf(open_gate) == keysOf(today), true)
+  }
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// ADR-0064 G2. A refused fragment hands its slot to the next candidate in the same order -- under fragments, and
+// through the ambiguity round-robin. The refusal is the 2x rule: the fragment the ungated plan takes was sent at
+// intensity 1, and it is seen at 0 now.
+//
+// FAILS UNDER: a refusal applied after the budget is spent (the plan would be empty), or a refused fragment still
+// taking the slot.
+/////////////////////////////////////////////////////////////
+START_SECTION(gate_refused_strongest_hands_its_slot_on)
+{
+  const std::vector<GateFrag> two_amb{{"b", 6, 700.0, {2}}, {"y", 6, 900.0, {2}}};
+  for (const std::string mode : {"fragments", "ambiguity"})
+  {
+    Config cfg{gateConfig(mode, 1)};   // budget 1: only the first fragment fits
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    if (mode == "ambiguity") feedGateWinner(tracker, 42, two_amb, /*ambiguous=*/true);
+    else feedGateWinner(tracker, 42, FOUR_FRAGS);
+
+    const std::vector<Ms3Target> today = tracker.planNextScans(42);
+    TEST_EQUAL(today.size(), 1)
+    ABORT_IF(today.size() != 1)
+
+    Ms3RegistrySnapshot snap;
+    snap.found = true;
+    snap.sent[Ms3Cleavage{today[0].ion_type, today[0].ion_index}][today[0].frag_charge] = 1.0;
+    Ms3PlanGate gate = openGate();
+    gate.snapshot = &snap;
+    const std::vector<Ms3Target> gated = tracker.planNextScans(42, &gate);
+    TEST_EQUAL(gated.size(), 1)   // the slot is still filled ...
+    ABORT_IF(gated.size() != 1)
+    TEST_EQUAL(gated[0].ion_type == today[0].ion_type && gated[0].ion_index == today[0].ion_index, false)   // ... by the next
+  }
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// ADR-0064 G3. A charge whose window SNR is not above snr_min is refused. Every fixture charge here carries no
+// signal (window SNR 0): with the dispatching spectrum and the default snr_min 1 no fragment enters a pool; with the
+// same spectrum and snr_min -1 every fragment does, so the threshold is what refused them.
+//
+// FAILS UNDER: no SNR test in the gate (the first plan is not empty), or a test that ignores snr_min.
+/////////////////////////////////////////////////////////////
+START_SECTION(gate_window_snr_at_or_below_one_is_refused)
+{
+  Config cfg{gateConfig("fragments", 10)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedGateWinner(tracker, 43, FOUR_FRAGS);
+
+  // The dispatching MS2: one raw peak under every fragment's isolation window.
+  MSSpectrum ms2;
+  for (const GateFrag& g : FOUR_FRAGS)
+  {
+    Peak1D pk;
+    pk.setMZ(g.mass / g.charges[0] + PROTON_MASS);
+    pk.setIntensity(5000.0f);
+    ms2.push_back(pk);
+  }
+  ms2.sortByPosition();
+
+  Ms3PlanGate gate = openGate();
+  gate.spectrum = &ms2;
+  TEST_EQUAL(tracker.planNextScans(43, &gate).size(), 0)   // SNR 0 <= 1: all refused
+  gate.snr_min = -1.0;
+  TEST_EQUAL(tracker.planNextScans(43, &gate).size(), 4)   // the same spectrum, a threshold below 0: all admitted
+  TEST_EQUAL(tracker.planNextScans(43).size(), 4)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// ADR-0064 G4. Single mode, the strongest charge refused: the next admitted charge of the same fragment stands in
+// (ISSUE 2). b6 is seen at 2+ (the representative) and 3+; a charge floor of 3 refuses 2+, a floor of 4 both.
+//
+// FAILS UNDER: an anchor that stays best_ms2 whatever the gate says (the gated target would be 2+), or a fallback
+// that ignores the floor (the floor-4 plan would not be empty).
+/////////////////////////////////////////////////////////////
+START_SECTION(gate_single_mode_charge_fallback)
+{
+  Config cfg{gateConfig("fragments", 10)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedGateWinner(tracker, 44, {{"b", 6, 700.0, {2, 3}}});
+
+  const std::vector<Ms3Target> today = tracker.planNextScans(44);
+  TEST_EQUAL(today.size(), 1)
+  ABORT_IF(today.size() != 1)
+  TEST_EQUAL(today[0].frag_charge, 2)
+
+  Ms3PlanGate gate = openGate();
+  gate.charge_floor = 3;
+  const std::vector<Ms3Target> fallback = tracker.planNextScans(44, &gate);
+  TEST_EQUAL(fallback.size(), 1)
+  ABORT_IF(fallback.size() != 1)
+  TEST_EQUAL(fallback[0].ion_type, std::string("b"))
+  TEST_EQUAL(fallback[0].ion_index, 6)
+  TEST_EQUAL(fallback[0].frag_charge, 3)
+  // The 3+ window: the centre of the two 3+ isotopes, not the 2+ one.
+  TEST_REAL_SIMILAR(fallback[0].frag_mz, (700.0 + 0.5 * ISOTOPE_STEP) / 3.0 + PROTON_MASS)
+  TEST_EQUAL(fallback[0].notches.empty(), true)   // single mode never notches
+
+  gate.charge_floor = 4;
+  TEST_EQUAL(tracker.planNextScans(44, &gate).size(), 0)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// ADR-0064 G5. The cleavage cap counts SENT cleavages, not re-acquisitions: with b6 sent and max_targets 2 the
+// proteoform has room for one new cleavage, and b6's re-acquisition (sent at 0, seen at 0: admitted) takes none of it.
+// With b6 and y6 sent and max_targets 2 there is no room: only the two re-acquisitions are planned.
+//
+// FAILS UNDER: a re-acquisition that consumes room (the first plan holds 1 target), a cap that counts planned targets
+// instead of sent cleavages, or a capped fragment returning "budget full" (the callers would stop at the first one).
+/////////////////////////////////////////////////////////////
+START_SECTION(gate_cap_counts_sent_cleavages_not_reacquisitions)
+{
+  Config cfg{gateConfig("fragments", 10)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedGateWinner(tracker, 45, FOUR_FRAGS);
+  TEST_EQUAL(tracker.planNextScans(45).size(), 4)
+
+  Ms3RegistrySnapshot snap;
+  snap.found = true;
+  snap.sent[Ms3Cleavage{"b", 6}][2] = 0.0;
+  Ms3PlanGate gate = openGate();
+  gate.snapshot = &snap;
+  gate.max_targets = 2;
+  const std::vector<Ms3Target> one_new = tracker.planNextScans(45, &gate);
+  TEST_EQUAL(one_new.size(), 2)
+  TEST_EQUAL(planHas(one_new, "b", 6), true)
+
+  snap.sent[Ms3Cleavage{"y", 6}][2] = 0.0;
+  const std::vector<Ms3Target> none_new = tracker.planNextScans(45, &gate);
+  TEST_EQUAL(none_new.size(), 2)
+  TEST_EQUAL(planHas(none_new, "b", 6), true)
+  TEST_EQUAL(planHas(none_new, "y", 6), true)
 }
 END_SECTION
 
