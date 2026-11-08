@@ -1500,8 +1500,8 @@ namespace OpenMS
             "no identification scan, so no identification could ever buy a quantification MS3 (ADR-0064).");
     }
     if (quant_.enabled && quant_.scan == QuantScan::Ms2 && (quant_.ms3_targets != 1 || quant_.has_ms3_quant_scan))
-      std::cout << "[CONFIG-WARN] quantification.ms3_targets / ms_settings.ms3_quant are set but quantification.scan "
-                   "is \"ms2\", which reads neither (ADR-0064).\n";
+      EventLine(EventLevel::Warn) << "[CONFIG-WARN] quantification.ms3_targets / ms_settings.ms3_quant are set but "
+                                     "quantification.scan is \"ms2\", which reads neither (ADR-0064).";
 
     if (quant_.enabled)
     {

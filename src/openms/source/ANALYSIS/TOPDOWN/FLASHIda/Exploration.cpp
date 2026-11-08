@@ -1223,7 +1223,7 @@ namespace OpenMS
     if (!has_cysteine)
     {
       out.outcome = "no_cysteine";
-      std::cout << "[QUANT-MS3] precursor_id=" << precursor_id << " targets=0 reason=no_cysteine" << std::endl;
+      EventLine() << "[QUANT-MS3] precursor_id=" << precursor_id << " targets=0 reason=no_cysteine";
       return out;
     }
     const MS3FragmentMatcher::ProteoformContext proto_ctx = tracker.buildWinnerProteoformContext(precursor_id);
@@ -1248,10 +1248,12 @@ namespace OpenMS
       out.commands.push_back(cmd);
     }
     out.outcome = out.commands.empty() ? "no_labelled_fragment" : "bought";
-    std::cout << "[QUANT-MS3] precursor_id=" << precursor_id << " targets=" << out.commands.size()
-              << " labelled=" << candidates.size() << " eligible=" << eligible << " budget=" << n;
-    if (out.commands.empty()) std::cout << " reason=no_labelled_fragment";
-    std::cout << std::endl;
+    {
+      EventLine ev;
+      ev << "[QUANT-MS3] precursor_id=" << precursor_id << " targets=" << out.commands.size()
+         << " labelled=" << candidates.size() << " eligible=" << eligible << " budget=" << n;
+      if (out.commands.empty()) ev << " reason=no_labelled_fragment";
+    }
     return out;
   }
 
