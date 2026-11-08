@@ -530,6 +530,57 @@ namespace OpenMS
     m.pending.clear();
   }
 
+  std::vector<Ms3Target> ProteoformTracker::labelledFragments(int precursor_id, char residue, bool* has_residue) const
+  {
+    if (has_residue != nullptr) *has_residue = false;
+    auto it = models_.find(precursor_id);
+    if (it == models_.end()) return {};
+    const ProteoformModel& m = it->second;
+    const int P = static_cast<int>(m.proteoform_sequence.size());
+    if (P <= 0) return {};
+    const int ws = (m.region_start < 0) ? 0 : m.region_start;
+    const int we = (m.region_end < 0) ? P : std::min(m.region_end, P);
+    const int L = we - ws;
+    if (L <= 0) return {};
+    if (has_residue != nullptr)
+      *has_residue = m.proteoform_sequence.find(residue, ws) < static_cast<size_t>(we);
+
+    std::vector<const MappedFragment*> pool;
+    for (const auto& [key, f] : m.fragments)
+    {
+      // The full-length rule every targeting pool applies (ADR-0052), for any ion type (ADR-0064 D-C).
+      if (!f.best_ms2.has_value() || f.ion_index >= L) continue;
+      if (f.best_ms2->frag_mz <= 0.0 || f.best_ms2->frag_charge == 0) continue;   // no backing peak to isolate
+      const int a = ws + f.cover_start - 1, n = f.cover_end - f.cover_start + 1;   // cover is 1-based, region frame
+      if (a < 0 || n <= 0 || a + n > P) continue;
+      if (m.proteoform_sequence.find(residue, a) >= static_cast<size_t>(a + n)) continue;
+      pool.push_back(&f);
+    }
+    // Most intense first; the key breaks ties so the order never depends on the hash map's.
+    std::sort(pool.begin(), pool.end(), [](const MappedFragment* x, const MappedFragment* y) {
+      if (x->best_ms2->intensity != y->best_ms2->intensity) return x->best_ms2->intensity > y->best_ms2->intensity;
+      if (x->ion_type != y->ion_type) return x->ion_type < y->ion_type;
+      return x->ion_index < y->ion_index;
+    });
+    std::vector<Ms3Target> out;
+    out.reserve(pool.size());
+    for (const MappedFragment* f : pool)
+    {
+      const FragmentObservation& o = *f->best_ms2;
+      Ms3Target t;
+      t.ion_type = f->ion_type;
+      t.ion_index = f->ion_index;
+      t.frag_mz = o.frag_mz;
+      t.frag_charge = o.frag_charge;
+      t.frag_mass = o.observed_mass;
+      t.iso_width = o.iso_width;
+      t.stage0_params = o.params;
+      t.stage1_scores = o.stage1_scores;
+      out.push_back(std::move(t));
+    }
+    return out;
+  }
+
   std::vector<Ms3Target> ProteoformTracker::planNextScans(int precursor_id)
   {
     // "This run fired no MS3" resolves to one of TEN causes below (seven return sites; the last one

@@ -1178,17 +1178,7 @@ namespace OpenMS
       // planNextScans below returns zero targets without one: no MS3 at all, silently.
       // An unidentified model is re-pointed at every new dispatch scan; dispatched_nominal_masses survives
       // finalize, so a species already fragmented for this Precursor is never re-targeted.
-      const ProteoformModel* existing = tracker->getModel(precursor_id);
-      if (existing == nullptr || existing->proteoform_sequence.empty())
-      {
-        Ms2Params p;
-        p.collision_energy = ms_ctx->stages[0].collision_energy;
-        p.activation_type  = std::string(ms_ctx->stages[0].activation_type);
-        p.reaction_time    = ms_ctx->stages[0].reaction_time;
-        tracker->feedScan(precursor_id, /*ms_level=*/2, p, ms_ctx->scan_id, result, frag_result,
-                          frag_result.score, *ms_ctx);
-        tracker->finalizeMS2(precursor_id, identified ? std::nullopt : std::optional<int>(ms_ctx->scan_id));
-      }
+      ensureModel_(precursor_id, result, frag_result, identified, *ms_ctx, *tracker);
     }
 
     // The acquiring tail -- planNextScans over the finalized model, the per-target MS3 builds and the
@@ -1199,6 +1189,70 @@ namespace OpenMS
     nlr.commands = std::move(dispatched.commands);
     nlr.ms3_contexts = std::move(dispatched.ms3_contexts);
     return nlr;
+  }
+
+  void Exploration::ensureModel_(int precursor_id, const DeconvolvedSpectrum& result,
+                                 const FragmentAnalysis::ProteoformMatch& frag_result, bool identified,
+                                 const ScanCommand& ms_ctx, ProteoformTracker& tracker)
+  {
+    const ProteoformModel* existing = tracker.getModel(precursor_id);
+    if (existing == nullptr || existing->proteoform_sequence.empty())
+    {
+      Ms2Params p;
+      p.collision_energy = ms_ctx.stages[0].collision_energy;
+      p.activation_type  = std::string(ms_ctx.stages[0].activation_type);
+      p.reaction_time    = ms_ctx.stages[0].reaction_time;
+      tracker.feedScan(precursor_id, /*ms_level=*/2, p, ms_ctx.scan_id, result, frag_result,
+                       frag_result.score, ms_ctx);
+      tracker.finalizeMS2(precursor_id, identified ? std::nullopt : std::optional<int>(ms_ctx.scan_id));
+    }
+  }
+
+  Exploration::QuantDispatch Exploration::dispatchQuant(int precursor_id, const FragmentAnalysis::ProteoformMatch& frag_result,
+                                                        const DeconvolvedSpectrum& result, double faims_cv, ScanCommandQueue& queue,
+                                                        const ScanCommand& ms_ctx, ProteoformTracker& tracker,
+                                                        const ScanConfig& quant_scan, int n)
+  {
+    QuantDispatch out;
+    const bool identified = !frag_result.proteoform_sequence.empty() && !frag_result.fragments.empty();
+    if (!identified || ms_ctx.num_stages <= 0 || n <= 0) return out;
+    ensureModel_(precursor_id, result, frag_result, identified, ms_ctx, tracker);
+
+    bool has_cysteine = false;
+    const std::vector<Ms3Target> candidates = tracker.labelledFragments(precursor_id, 'C', &has_cysteine);
+    if (!has_cysteine)
+    {
+      out.outcome = "no_cysteine";
+      std::cout << "[QUANT-MS3] precursor_id=" << precursor_id << " targets=0 reason=no_cysteine" << std::endl;
+      return out;
+    }
+    const MS3FragmentMatcher::ProteoformContext proto_ctx = tracker.buildWinnerProteoformContext(precursor_id);
+    const MSSpectrum& source = result.getOriginalSpectrum();
+    int eligible = 0;
+    for (const Ms3Target& t : candidates)
+    {
+      if (static_cast<int>(out.commands.size()) >= n) break;
+      // Window SNR > 1 (ADR-0064 d.4, fixed): the fragment's own signal outweighs the rest of the window it would be
+      // isolated in, read on this MS2 with buildMS3's floored width -- the formula the characterization MS3 logs.
+      const double width = std::max(t.iso_width, 2.0);
+      const double snr = FragmentAnalysis::windowSnr(source, t.frag_mz - width / 2.0, t.frag_mz + width / 2.0,
+                                                     t.stage1_scores.precursor_intensity);
+      if (!(snr > 1.0)) continue;
+      ++eligible;
+      const char ion_type = t.ion_type.empty() ? '\0' : t.ion_type[0];
+      // Stage 0 is the identification scan's own isolation and activation (ADR-0003): no per-ion override.
+      ScanCommand cmd = queue.buildMS3(ms_ctx, quant_scan, t.frag_mz, std::abs(t.frag_charge), t.iso_width, ms_ctx.scan_id,
+                                       ion_type, t.ion_index, 1, t.stage1_scores, nullptr, proto_ctx, nullptr, 'Q');
+      cmd.faims_cv = faims_cv;
+      cmd.window_snr = snr;
+      out.commands.push_back(cmd);
+    }
+    out.outcome = out.commands.empty() ? "no_labelled_fragment" : "bought";
+    std::cout << "[QUANT-MS3] precursor_id=" << precursor_id << " targets=" << out.commands.size()
+              << " labelled=" << candidates.size() << " eligible=" << eligible << " budget=" << n;
+    if (out.commands.empty()) std::cout << " reason=no_labelled_fragment";
+    std::cout << std::endl;
+    return out;
   }
 
   Exploration::NextLevelResult Exploration::dispatchFromModel(int precursor_id, const DeconvolvedSpectrum& result,

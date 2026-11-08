@@ -58,7 +58,7 @@ namespace OpenMS
     Agc,                 ///< 'A' the flux prescan; discarded on return, never deconvolved
     Monitor,             ///< 'M' observed and never acted upon (ADR-0042)
     Identification,      ///< 'R' the MS2/MS3 acquired to sequence a proteoform
-    Quantification,      ///< 'Q' the MS2 acquired to measure reporter ions (ADR-0038)
+    Quantification,      ///< 'Q' the scan acquired to measure reporter ions: the MS2 screen (ADR-0038), or the MS3 on a labelled fragment (ADR-0064)
     ExplorationVariant,  ///< 'E' one point of a CE/reaction-time sweep
     _Count
   };

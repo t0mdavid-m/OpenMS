@@ -470,6 +470,14 @@ namespace OpenMS
     bool closeOutIfIdentified_(const FragmentAnalysis::ProteoformMatch& match, double commanded_mass,
                                double isolation_mz, double rt, int precursor_id);
 
+    /// Whether @p match reaches identification.threshold for a commanded precursor of @p commanded_mass: the score half
+    /// of closeOutIfIdentified_, with no side effect (ADR-0064 buys its quantification MS3 on the same call).
+    bool reachesThreshold_(const FragmentAnalysis::ProteoformMatch& match, double commanded_mass) const;
+
+    /// ADR-0064: whether the species of @p mass is closed out within rt_window of @p rt by ANY Precursor, the closing
+    /// one included -- so a species is quantified at MS3 once per close-out, not once per closing scan.
+    bool speciesClosedOut_(double mass, double rt) const;
+
     /// Whether a scan of @p mass belonging to @p precursor_id is skipped (ADR-0062 d.6): its species was closed out
     /// within rt_window of @p rt by ANOTHER Precursor. Analysis state.
     bool isClosedOut_(double mass, double rt, int precursor_id);

@@ -296,12 +296,19 @@ FLASHIda::FLASHIda(char* arg) :
       for (const std::string& a : ms2_cfg.activations) ion_sets.insert(FragmentAnalysis::getIonTypesForFragmentationMethod(a));
       if (const auto ov = ms2_cfg.overrides.find("activation"); ov != ms2_cfg.overrides.end())
         ion_sets.insert(FragmentAnalysis::getIonTypesForFragmentationMethod(ov->second));
+      // The identification scan a quantification screen buys is held on quant_, not on the roster, so its activation
+      // needs its own database (owner 2026-11-08, ADR-0064): an ETD 'R' bought by a 'Q' would otherwise find none.
+      if (config_.quantification().screensAtMs2() && config_.quantification().has_identification_scan)
+        ion_sets.insert(FragmentAnalysis::getIonTypesForFragmentationMethod(config_.quantification().identification_scan.activation));
       for (const std::vector<std::string>& ions : ion_sets)
       {
         const auto prepare_start = std::chrono::steady_clock::now();
         Param params = ProteomeSearch::parametersFor(ident.flashtnt);
         params.setValue("ion_type", ions);
-        auto proteome = std::make_unique<ProteomeSearch>(reference, params);
+        // ADR-0064 d.3: a run that reads reporters at MS3 searches every cysteine as iodoTMT-labelled (fixed, per entry).
+        const std::optional<FixedLabel> label = config_.quantification().readsAtMs3()
+            ? std::optional<FixedLabel>(kIodoTmt6plexOnCys) : std::nullopt;
+        auto proteome = std::make_unique<ProteomeSearch>(reference, params, label);
         if (proteome->reference().empty())
           throw std::invalid_argument("Config: identification.reference has no target entry; nothing could be identified (ADR-0061).");
         const auto prepare_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - prepare_start).count();
@@ -501,8 +508,8 @@ FLASHIda::FLASHIda(char* arg) :
       // With quantification on, Config puts the quantification scan in the roster's PRIMARY
       // slot and holds ms_settings.ms2 back as the scan a differential verdict buys, so
       // scans[0] is the 'Q' (ADR-0038). Everything else on the roster is an ordinary 'R'.
-      const bool quant_owns_primary =
-          config_.quantification().enabled && config_.quantification().has_quant_scan;
+      const bool quant_owns_primary =   // ADR-0064: scan ms3 has no screen; ms_settings.ms2 is primary
+          config_.quantification().screensAtMs2() && config_.quantification().has_quant_scan;
       for (int i = 0; i < n; i++)
       {
         // One precursor_id per MS1-selected precursor; all of its MS2 scan-config commands share it.
@@ -873,6 +880,7 @@ FLASHIda::FLASHIda(char* arg) :
     // MS3 both belong to the 'R' identification scan, which is the one chosen to fragment
     // informatively -- and which this Q scan may be about to buy.
     Exploration::NextLevelResult ms3_targeting;
+    std::string quant_ms3_outcome = "none";   // ADR-0064: identification.tsv quant_ms3
     if (config_.identification().enabled() && !is_quant_scan && !dropped)
     {
       // initiateNextLevel stamps each command's parent with the MS2 id (parent_ctx.scan_id) at creation.
@@ -895,6 +903,25 @@ FLASHIda::FLASHIda(char* arg) :
                     << " scan=" << instrument_scan_number;
         ms3_targeting = exploration_.initiateNextLevel(2, match_spec, parent_ctx.faims_cv, queue_, &parent_ctx,
                                                        &tracker_, precursor_id);
+      }
+      // ADR-0064: an identification that closes out its species buys its quantification MS3s, pushed BEFORE the
+      // characterization MS3s so they go first within MS3 priority (d.6). Decided on the close-out's own predicate,
+      // read before the close-out below records the species: once per close-out, never again by its later scans.
+      // Never entered in ms2_context_cache_: a quantification MS3 is read for reporters, never annotated.
+      if (config_.quantification().readsAtMs3() && parent_ctx.num_stages > 0
+          && reachesThreshold_(ms3_targeting.proteoform_match, parent_ctx.mono_mass)
+          && !selection_.hasAuthoredCharges(parent_ctx.mono_mass) && !speciesClosedOut_(parent_ctx.mono_mass, rt))
+      {
+        Exploration::QuantDispatch quant_ms3 = exploration_.dispatchQuant(
+            precursor_id, ms3_targeting.proteoform_match, match_spec, parent_ctx.faims_cv, queue_, parent_ctx, tracker_,
+            config_.quantification().ms3_quant_scan, config_.quantification().ms3_targets);
+        for (auto& c : quant_ms3.commands)
+        {
+          stampAndPush_(c, precursor_id);
+          child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
+          commands_pushed++;
+        }
+        quant_ms3_outcome = quant_ms3.outcome;
       }
       for (auto& c : ms3_targeting.commands)
       {
@@ -948,6 +975,7 @@ FLASHIda::FLASHIda(char* arg) :
       }
       id_rows.push_back({parent_id_str, 2, 'R', ms2_ctx, ms3_targeting.proteoform_match, precursor_id, ms3_targeting.tic_coverage, ms3_targeting.proteoform_match.score});  // copy by value (ms2_ctx is local)
       id_rows.back().closed_out = closed_out;
+      id_rows.back().quant_ms3 = quant_ms3_outcome;
       // ADR-0049: an MS2 row whose match Refine decided carries its record (here and on the exploration MS2
       // rows); MS3 rows never run Refine and keep the sentinels.
       fillRefineColumns(id_rows.back());
@@ -1085,13 +1113,24 @@ FLASHIda::FLASHIda(char* arg) :
     return it->second.closing_precursor_ids.count(precursor_id) == 0;   // the closing Precursor finishes its own work
   }
 
-  bool FLASHIda::closeOutIfIdentified_(const FragmentAnalysis::ProteoformMatch& match, double commanded_mass,
-                                       double isolation_mz, double rt, int precursor_id)
+  bool FLASHIda::reachesThreshold_(const FragmentAnalysis::ProteoformMatch& match, double commanded_mass) const
   {
     const auto& threshold = config_.identification().threshold;
     if (!threshold.has_value() || match.search_identification_score < 0.0 || match.search_identification_score < *threshold)
       return false;
-    if (commanded_mass <= 0.0) return false;
+    return commanded_mass > 0.0;
+  }
+
+  bool FLASHIda::speciesClosedOut_(double mass, double rt) const
+  {
+    auto it = closed_out_.find(SpectralDeconvolution::getNominalMass(mass));
+    return it != closed_out_.end() && rt - it->second.rt <= config_.targeting().rt_window;
+  }
+
+  bool FLASHIda::closeOutIfIdentified_(const FragmentAnalysis::ProteoformMatch& match, double commanded_mass,
+                                       double isolation_mz, double rt, int precursor_id)
+  {
+    if (!reachesThreshold_(match, commanded_mass)) return false;
     // ADR-0061 d.10 (owner 2026-11-08): a species whose inclusion row names charges keeps walking them.
     if (selection_.hasAuthoredCharges(commanded_mass))
     {
@@ -1375,7 +1414,7 @@ FLASHIda::FLASHIda(char* arg) :
         // Gated on the scan's own mark, not on "is not a follow-up". Only a 'Q' is measured, so the
         // identification scan it buys -- an ordinary 'R' -- is never re-screened and depth stays one
         // without the marker having to distinguish a follow-up from a primary.
-        if (is_quant_scan && config_.quantification().enabled)
+        if (is_quant_scan && config_.quantification().screensAtMs2())
         {
           const auto q = quant_.measure(mzs, ints, length, rt, 2, "ms2_quant");
 
@@ -1736,6 +1775,21 @@ FLASHIda::FLASHIda(char* arg) :
         // which would measure the intact precursor and sit flat across stage-1 energies. A dense Orbitrap
         // MS3 run therefore yields the first MS3 share dataset an MS3 k2 can be fitted on.
         results_row.precursor_share    = regularRowShare(parent_ctx, mzs, ints, length);
+
+        // ADR-0064: a quantification MS3 is read for its reporters, one verdict per scan: no group, buys nothing. It was
+        // never cached for annotation, so the identification block above left it alone.
+        if (is_quant_scan && config_.quantification().readsAtMs3())
+        {
+          // Level 2 on purpose (owner 2026-11-08): measure() builds a one-spectrum experiment, and at level 3 OpenMS's
+          // IsobaricChannelExtractor looks for the MS3's parent MS2 in it and throws. The level only steers that walk,
+          // as the fabricated HCD precursor steers its activation filter; the reading is the reporters either way.
+          const auto q = quant_.measure(mzs, ints, length, rt, 2, "ms3_quant");
+          results_row.quant_verdict = Quantification::verdictName(q.verdict);
+          results_row.quant_fold_change = q.fold_change;
+          results_row.quant_p_value = q.p_value;
+          results_row.quant_channels = q.channels;
+          results_row.quant_condition_means = {q.condition_means[0], q.condition_means[1]};
+        }
 
         return_code = refine_pushed;
       }

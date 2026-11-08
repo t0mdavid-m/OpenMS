@@ -514,7 +514,7 @@ namespace OpenMS
                                           const FragmentAnalysis::FragmentScores& frag_scores,
                                           const Ms2Params* stage0_params,
                                           const MS3FragmentMatcher::ProteoformContext& proto_ctx,
-                                          const std::vector<NotchCandidate>* stage1_notches)
+                                          const std::vector<NotchCandidate>* stage1_notches, char marker)
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
     ScanCommand cmd{};
@@ -627,14 +627,14 @@ namespace OpenMS
     if (ion_type != '\0' && frag_index > 0)
     {
       std::string mass_tok = formatMassToken(frag_mass_kda, frag_charge, ion_type, frag_index);
-      std::snprintf(cmd.scan_description, 16, "%sR%s@%d%c%d",
-                    id_str.c_str(), mass_tok.c_str(), frag_charge, ion_type, frag_index);
+      std::snprintf(cmd.scan_description, 16, "%s%c%s@%d%c%d",
+                    id_str.c_str(), marker, mass_tok.c_str(), frag_charge, ion_type, frag_index);
     }
     else
     {
       std::string mass_tok = formatMassToken(frag_mass_kda, frag_charge, '\0', 0);
-      std::snprintf(cmd.scan_description, 16, "%sR%s@%d",
-                    id_str.c_str(), mass_tok.c_str(), frag_charge);
+      std::snprintf(cmd.scan_description, 16, "%s%c%s@%d",
+                    id_str.c_str(), marker, mass_tok.c_str(), frag_charge);
     }
 
     EventLine() << "[TRACK-CREATE] id=" << id_str

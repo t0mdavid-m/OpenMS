@@ -413,6 +413,23 @@ namespace OpenMS
                                       const ScanConfig& next_scan_config, int charge_floor, int next_level,
                                       const std::string& proteoform_sequence);
 
+    /// ADR-0064: what one identification bought at MS3 for quantification.
+    struct QuantDispatch
+    {
+      std::vector<ScanCommand> commands;   ///< the quantification MS3s, most intense labelled fragment first
+      std::string outcome = "none";        ///< bought | no_cysteine | no_labelled_fragment (identification.tsv quant_ms3)
+    };
+
+    /// ADR-0064: the quantification MS3s an identification that closes out its species buys. Seeds the tracker model
+    /// from @p frag_result when none exists yet (as the MS3 dispatch does, so it needs no characterization block),
+    /// takes the model's labelled fragments (ProteoformTracker::labelledFragments, 'C'), keeps those whose window SNR
+    /// in this MS2 (@p result's raw spectrum, the width the command will carry) is above 1, and builds up to @p n
+    /// two-stage MS3s marked 'Q': stage 0 the MS2's own isolation and activation, stage 1 the fragment with
+    /// @p quant_scan's parameters, priority 1. Nothing is pushed.
+    QuantDispatch dispatchQuant(int precursor_id, const FragmentAnalysis::ProteoformMatch& frag_result,
+                                const DeconvolvedSpectrum& result, double faims_cv, ScanCommandQueue& queue,
+                                const ScanCommand& ms_ctx, ProteoformTracker& tracker, const ScanConfig& quant_scan, int n);
+
     /// Number of currently active exploration groups
     int activeGroupCount() const;
 
@@ -450,6 +467,11 @@ namespace OpenMS
     }
 
   private:
+    /// The one-shot baseline feed of the precursor's tracker model from an identified MS2 (feedScan + finalizeMS2),
+    /// when no model with a sequence exists yet. Shared by the MS3 dispatch and the quantification MS3 (ADR-0064).
+    void ensureModel_(int precursor_id, const DeconvolvedSpectrum& result, const FragmentAnalysis::ProteoformMatch& frag_result,
+                      bool identified, const ScanCommand& ms_ctx, ProteoformTracker& tracker);
+
     /// Internal deconvolution engine for exploration-variant MS2 spectra. Was public; now reached
     /// only via the accessors above plus Exploration's own internals.
     std::unique_ptr<Deconvolution> exploration_deconv_;

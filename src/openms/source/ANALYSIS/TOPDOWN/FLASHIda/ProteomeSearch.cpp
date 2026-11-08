@@ -76,7 +76,8 @@ namespace OpenMS
     return p;
   }
 
-  ProteomeSearch::ProteomeSearch(std::vector<FASTAFile::FASTAEntry> reference, const Param& tnt_params) : params_(tnt_params)
+  ProteomeSearch::ProteomeSearch(std::vector<FASTAFile::FASTAEntry> reference, const Param& tnt_params,
+                                 const std::optional<FixedLabel>& label) : params_(tnt_params)
   {
     reference_.reserve(reference.size());
     for (auto& entry : reference)
@@ -90,7 +91,31 @@ namespace OpenMS
     }
     FLASHTnTAlgorithm builder;
     builder.setParameters(params_);
-    prepared_ = builder.prepareDatabase(reference_);
+    if (!label.has_value())
+    {
+      prepared_ = builder.prepareDatabase(reference_);
+      return;
+    }
+    // ADR-0064 d.3: the label as a fixed mass on every residue of its kind, per entry -- FLASHTnT's PEFF path, fed in
+    // memory. fromFASTA gives one entry per protein over its whole length (position == residue index); refresh()
+    // recomputes the fixed-mass tables prepareDatabase reads. No decoys (dropped above) and no subset enumeration.
+    db_ = std::make_unique<ProteoformDatabase>(ProteoformDatabase::fromFASTA(reference_));
+    for (auto& entry : db_->entries)
+    {
+      const String& seq = db_->proteins[entry.protein].sequence;
+      for (int pos = 0; pos < static_cast<int>(seq.size()); ++pos)
+      {
+        if (seq[pos] != label->residue) continue;
+        ProteoformDatabase::FixedModification fm;
+        fm.position = pos;
+        fm.mass = label->mass;
+        fm.accession = label->accession;
+        fm.name = label->name;
+        entry.fixed.push_back(fm);
+      }
+    }
+    db_->refresh();
+    prepared_ = builder.prepareDatabase(reference_, db_.get());
   }
 
   ProteomeSearch::Worker::Worker(const ProteomeSearch& search) : search_(search)

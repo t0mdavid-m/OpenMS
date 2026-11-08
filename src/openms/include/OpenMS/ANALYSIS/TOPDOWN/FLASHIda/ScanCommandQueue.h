@@ -156,7 +156,10 @@ namespace OpenMS
                          /// (Ms3Target::notches) because this builder receives only scalars and cannot
                          /// see the model's per-charge observations. May be truncated: stage-0's
                          /// inherited notches are written first and share the same slot budget.
-                         const std::vector<NotchCandidate>* stage1_notches = nullptr);
+                         const std::vector<NotchCandidate>* stage1_notches = nullptr,
+                         /// ADR-0064: the role marker of scan_description[3] -- 'R' for a characterization MS3, 'Q' for a
+                         /// quantification MS3 (ScanRole.h)
+                         char marker = 'R');
 
     /// Create an MS1 survey scan command from current config
     ScanCommand makeMS1() const;

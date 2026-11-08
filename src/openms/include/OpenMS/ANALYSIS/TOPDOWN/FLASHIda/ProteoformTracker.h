@@ -342,6 +342,12 @@ namespace OpenMS
     /// masses rather than the mapped-fragment table (ADR-0023).
     std::vector<Ms3Target> planNextScans(int precursor_id);
 
+    /// ADR-0064: the labelled fragments of the model for @p precursor_id -- every mapped fragment, of any ion type, with
+    /// a best-MS2 observation, shorter than the region (never the full-length ion: it is the precursor) and spanning at
+    /// least one @p residue -- as single-charge Ms3Targets from best_ms2, most intense first. Empty with no identified
+    /// model. @p has_residue (optional) receives whether the model's region contains @p residue at all.
+    std::vector<Ms3Target> labelledFragments(int precursor_id, char residue, bool* has_residue = nullptr) const;
+
     /// MS3 return under refine: pool pieces for the record whose mass matches @p fragment_mass; returns true when the
     /// round is complete (every dispatched record returned) and the decision has not fired yet.
     bool recordDiscriminatingScan(int precursor_id, double fragment_mass, const DeconvolvedSpectrum& ms3,
