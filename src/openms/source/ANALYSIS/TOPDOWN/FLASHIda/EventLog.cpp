@@ -156,7 +156,7 @@ namespace OpenMS
     }
   }
 
-  void EventLog::emit(EventLevel level, const std::string& line)
+  void EventLog::record(EventLevel level, const std::string& line)
   {
     State& s = state();
     const std::string stamp = clock();

@@ -88,7 +88,7 @@ namespace OpenMS
     static constexpr size_t kPendingCap = 1000;
 
     /// An event: `line` is "[TAG] key=value …". File and sinks; the console too when level is Warn or Error.
-    static void emit(EventLevel level, const std::string& line);
+    static void record(EventLevel level, const std::string& line);
 
     /// An operator line: console, file (as "[OP-<KIND>] text") and sinks.
     static void say(OperatorKind kind, const std::string& text);
@@ -129,7 +129,7 @@ namespace OpenMS
     EventLine& operator=(const EventLine&) = delete;
     ~EventLine()
     {
-      try { EventLog::emit(level_, os_.str()); }
+      try { EventLog::record(level_, os_.str()); }
       catch (...) {}   // a log line is never worth terminating the acquisition for
     }
     template<typename T> EventLine& operator<<(const T& value)
