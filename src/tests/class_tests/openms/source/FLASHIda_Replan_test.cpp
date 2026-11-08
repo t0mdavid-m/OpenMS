@@ -704,14 +704,38 @@ namespace
   struct TwoIdDrive
   {
     bool ok = false;                  ///< two MS2s of one survey were dequeued and fed
-    std::string out;                  ///< stdout of the two MS2 feeds
+    std::string out;                  ///< stdout of the two MS2 feeds (and of @p between)
     std::vector<ScanCommand> ms3;     ///< the MS3s the drain handed out after them
     std::vector<int> ms3_pids;        ///< each drained MS3's precursor id
+    int pid_first = 0;                ///< the first MS2's precursor id
     int pid_second = 0;               ///< the second MS2's precursor id
     size_t cache_before = 0, cache_after_ms2 = 0, cache_after_ms3 = 0;
+    int groups_after_ms2 = 0;         ///< active exploration groups after both feeds
+    int groups_end = -1;              ///< ... after every drained MS3 returned
+    bool exploration_active_end = true;
+    std::set<int> created_ms3;        ///< every MS3 id the two feeds built ([TRACK-CREATE] ... ms_level=3)
+    std::map<int, int> pid_end;       ///< precursorIdFor of each created MS3 id at the end of the drive
   };
 
-  TwoIdDrive driveTwoIdentifications(const std::string& cfg, const std::vector<ScanData>& ms1, const ScanData& ms2)
+  /// The MS3 ids built in @p out: every `[TRACK-CREATE] id=XXX ms_level=3` line.
+  std::set<int> createdMs3Ids(const std::string& out, const ScanCommandQueue& q)
+  {
+    std::set<int> ids;
+    std::istringstream in(out);
+    std::string line;
+    const std::string head = "[TRACK-CREATE] id=";
+    while (std::getline(in, line))
+    {
+      if (line.rfind(head, 0) != 0 || line.size() < head.size() + 3 + 11) continue;
+      if (line.compare(head.size() + 3, 11, " ms_level=3") != 0) continue;
+      ids.insert(q.decode(line.substr(head.size(), 3)));
+    }
+    return ids;
+  }
+
+  /// @p between runs after the first MS2 was fed and before the second is (its output is part of `out`).
+  TwoIdDrive driveTwoIdentifications(const std::string& cfg, const std::vector<ScanData>& ms1, const ScanData& ms2,
+                                     const std::function<void(FLASHIda&)>& between = {})
   {
     TwoIdDrive d;
     captureCout([&] {
@@ -742,13 +766,18 @@ namespace
       d.out = captureCout([&] {
         for (int k = 0; k < 2; ++k)
         {
+          if (k == 1 && between) between(ida);
           ida.processScan(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt, 2, ms2s[k].scan_description, 0.0,
                           instrumentScanNumberOf(ms2));
           ida.waitForSearchIdle();
         }
       });
+      FLASHIdaTestAccess::onBeforeMs3Replan(ida, {});
       d.cache_after_ms2 = FLASHIdaTestAccess::ms2ContextCacheSize(ida);
+      d.groups_after_ms2 = FLASHIdaTestAccess::explorationActiveGroupCount(ida);
+      d.pid_first = FLASHIdaTestAccess::precursorIdFor(ida, ms2s[0].scan_id);
       d.pid_second = FLASHIdaTestAccess::precursorIdFor(ida, ms2s[1].scan_id);
+      d.created_ms3 = createdMs3Ids(d.out, FLASHIdaTestAccess::queue(ida));
 
       for (int it = 0; it < 400; ++it)
       {
@@ -766,9 +795,35 @@ namespace
         ida.waitForSearchIdle();
       }
       d.cache_after_ms3 = FLASHIdaTestAccess::ms2ContextCacheSize(ida);
+      d.groups_end = FLASHIdaTestAccess::explorationActiveGroupCount(ida);
+      d.exploration_active_end = FLASHIdaTestAccess::explorationActive(ida);
+      for (int id : d.created_ms3) d.pid_end[id] = FLASHIdaTestAccess::precursorIdFor(ida, id);
       d.ok = true;
     });
     return d;
+  }
+
+  /// Dequeue the next workload command (skipping AGC and empty descriptions), at most @p tries pulls.
+  ScanCommand nextWorkload(FLASHIda& ida, int tries = 50)
+  {
+    for (int i = 0; i < tries; ++i)
+    {
+      ScanCommand c{};
+      if (ida.getNextScanCommand(c) != 1) break;
+      if (c.is_agc || c.scan_description[0] == '\0') continue;
+      return c;
+    }
+    return ScanCommand{};
+  }
+
+  /// The C++ twin of test-data/configs/method_refine_cytc.json on the separate-charges cytC drive: identification
+  /// method refine, objective discriminating, budget 3.
+  std::string refineDiscriminatingConfig(const std::string& log_dir)
+  {
+    nlohmann::json j = nlohmann::json::parse(perProteoformConfig(log_dir, true, /*separate=*/true));
+    j["identification"]["method"] = "refine";
+    j["identification"]["characterization"]["mode"] = "discriminating";
+    return j.dump();
   }
 } // namespace
 
@@ -1400,6 +1455,119 @@ START_SECTION(per_proteoform_ms2_context_cache_returns_to_baseline)
   TEST_EQUAL(lines[1].withdrawn > 0, true)                                  // non-vacuity: there were contexts to drop
   TEST_EQUAL(static_cast<int>(on.cache_after_ms2), static_cast<int>(on.cache_before) + lines[1].inserted)   // the live plan's only
   TEST_EQUAL(on.cache_after_ms3, on.cache_before)                           // baseline
+}
+END_SECTION
+
+// A commit in the gap between a governed plan and its swap: inside the onBeforeMs3Replan seam of the SECOND
+// identification the drain sends one of the first plan's MS3s. The second plan was made against the snapshot before
+// that commit, so its item for the same fragment at the same intensity (below 2x) is reconciled at the swap, and
+// [MS3-REPLAN] reports the commit. The withdrawn and reconciled ids lose their precursor ids.
+START_SECTION(per_proteoform_commit_in_the_gap_is_reconciled)
+{
+  const auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  const auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  ScanCommand gap{};
+  int seam_calls = 0;
+  const TwoIdDrive on = driveTwoIdentifications(perProteoformConfig(freshLogDir("pp_gap_on"), true, true), ms1, ms2[0],
+                                                [&](FLASHIda& ida) {
+                                                  FLASHIdaTestAccess::onBeforeMs3Replan(ida, [&gap, &seam_calls, &ida] {
+                                                    if (seam_calls++ > 0) return;
+                                                    gap = nextWorkload(ida);   // the drain thread's view: no analysis lock
+                                                  });
+                                                });
+  ABORT_IF(!on.ok)
+  TEST_EQUAL(seam_calls, 1)
+  TEST_EQUAL(gap.msn_level, 3)   // the first plan's MS3 went out in the gap
+  const std::vector<Ms3ReplanLine> lines = ms3ReplanLines(on.out);
+  TEST_EQUAL(lines.size(), 2)
+  ABORT_IF(lines.size() != 2)
+  TEST_EQUAL(lines[1].committed_in_gap, 1)
+  TEST_EQUAL(lines[1].reconciled >= 1, true)                  // the stale item for the fragment just sent
+  TEST_EQUAL(lines[1].withdrawn, lines[0].inserted - 1)       // every first-plan item but the one that went out
+  // precursorIdFor returns to baseline (0, unknown) for every built MS3 that never went out.
+  std::set<int> out_ids{gap.scan_id};
+  for (const ScanCommand& c : on.ms3) out_ids.insert(c.scan_id);
+  int gone = 0;
+  for (const auto& [id, pid] : on.pid_end)
+  {
+    if (out_ids.count(id) > 0) continue;
+    ++gone;
+    TEST_EQUAL(pid, 0)
+  }
+  TEST_EQUAL(gone, lines[1].withdrawn + lines[1].reconciled)   // non-vacuity: they are exactly the withdrawn + reconciled
+}
+END_SECTION
+
+// A withdrawn exploration group is dropped: with an MS3 CE sweep each governed item is one group, and the second
+// identification's swap forgets the first plan's groups (none of their variants was received). Once the live plan's
+// variants have all returned, no group is left and the drain's exploration flag clears -- a group that was not
+// dropped would keep it set for the rest of the run.
+START_SECTION(per_proteoform_withdrawn_group_is_dropped_and_exploration_clears)
+{
+  const auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  const auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  nlohmann::json j = nlohmann::json::parse(perProteoformConfig(freshLogDir("pp_groups_on"), true, true));
+  j["identification"]["characterization"]["exploration"] = {{"metric", "fragment_count"}, {"ce_min", 15.0}, {"ce_max", 35.0},
+                                                            {"ce_step", 5.0}};
+  const std::string cfg = j.dump();
+  const TwoIdDrive on = driveTwoIdentifications(cfg, ms1, ms2[0]);
+  ABORT_IF(!on.ok)
+  const std::vector<Ms3ReplanLine> lines = ms3ReplanLines(on.out);
+  TEST_EQUAL(lines.size(), 2)
+  ABORT_IF(lines.size() != 2)
+  TEST_EQUAL(lines[1].withdrawn > 0, true)   // the first plan's variants
+  int drops = 0;
+  {
+    std::istringstream in(on.out);
+    std::string line;
+    while (std::getline(in, line)) drops += (line.rfind("[EXPL-DROP] group=", 0) == 0) ? 1 : 0;
+  }
+  TEST_EQUAL(drops > 0, true)
+  TEST_EQUAL(on.out.find("[MS3-REPLAN-INVARIANT]") == std::string::npos, true)
+  TEST_EQUAL(on.groups_after_ms2 > 0, true)                        // the live plan's groups only ...
+  TEST_EQUAL(on.groups_after_ms2 * lines[1].withdrawn, drops * lines[1].inserted)   // ... (one group per item, equal sweeps)
+  TEST_EQUAL(static_cast<int>(on.ms3.size()), lines[1].inserted)
+  TEST_EQUAL(on.groups_end, 0)
+  TEST_EQUAL(on.exploration_active_end, false)
+}
+END_SECTION
+
+// A discriminating round withdrawn by a second model decides and does not hang. The first Precursor's round
+// dispatches its records; one of its MS3s goes out and returns; then a second Precursor of the same proteoform
+// identifies, and its plan withdraws the first round's still-unsent MS3s. Every record still dispatched has returned,
+// so the first round is decided at once (not re-dispatched) instead of waiting for scans that will never come.
+START_SECTION(per_proteoform_withdrawn_discriminating_round_decides)
+{
+  const auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  const auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  ScanCommand sent{};
+  const TwoIdDrive on = driveTwoIdentifications(refineDiscriminatingConfig(freshLogDir("pp_refine_on")), ms1, ms2[0],
+                                                [&](FLASHIda& ida) {
+                                                  sent = nextWorkload(ida);
+                                                  if (sent.msn_level != 3) return;
+                                                  ida.processScan(ms2[0].mzs.data(), ms2[0].ints.data(), (int)ms2[0].mzs.size(),
+                                                                  ms2[0].rt, 3, sent.scan_description, 0.0,
+                                                                  instrumentScanNumberOf(ms2[0]));
+                                                  ida.waitForSearchIdle();
+                                                });
+  ABORT_IF(!on.ok)
+  TEST_EQUAL(sent.msn_level, 3)   // the first round's MS3 went out and returned
+  const std::vector<Ms3ReplanLine> lines = ms3ReplanLines(on.out);
+  TEST_EQUAL(lines.size(), 2)
+  ABORT_IF(lines.size() != 2)
+  TEST_EQUAL(lines[0].owner, on.pid_first)
+  TEST_EQUAL(lines[1].withdrawn > 0, true)   // non-vacuity: the first round had unsent MS3s to withdraw
+  const std::string p1 = "precursor_id=" + std::to_string(on.pid_first) + " ";
+  const bool decided = on.out.find("[MS3-DECIDE] " + p1) != std::string::npos
+                       || on.out.find("[DISCRIMINATING] " + p1 + "decided=") != std::string::npos;
+  TEST_EQUAL(decided, true)
+  // Decided, not re-dispatched (ISSUE 5): a re-dispatch would have swapped in a third governed plan.
 }
 END_SECTION
 
