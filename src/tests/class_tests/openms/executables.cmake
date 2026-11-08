@@ -470,6 +470,7 @@ set(analysis_executables_list
   ConfigSchemaParity_test
   FLASHIda_Logging_test
   FLASHIda_LoggingFields_test
+  FLASHIda_ConsoleView_test
   MS3FragmentMatcher_test
   MS3FragmentMatcher_identification_test
   FragmentAnalysis_test

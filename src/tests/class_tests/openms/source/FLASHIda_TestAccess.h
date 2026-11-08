@@ -37,6 +37,8 @@ namespace OpenMS
   struct FLASHIdaTestAccess
   {
     static ScanCommandQueue& queue(FLASHIda& f) { return f.queue_; }
+    /// ADR-0065 push 2: the operator view's board, as the render thread would draw it.
+    static BoardSnapshot board(const FLASHIda& f) { return f.boardSnapshot_(); }
     static void push(FLASHIda& f, ScanCommand cmd) { f.queue_.push(cmd); }
     static size_t queueSize(const FLASHIda& f, int priority) { return f.queue_.queueSize(priority); }
     /// Number of pending (MS3 scan_id -> parent MS2 context) entries. An MS3 that returns on the
