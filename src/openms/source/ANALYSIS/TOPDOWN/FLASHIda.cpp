@@ -841,12 +841,19 @@ FLASHIda::FLASHIda(char* arg) :
     // 1. Every new id carries its precursor id BEFORE the swap pushes it: the drain may dequeue it at once, and dequeue
     //    acquires the queue_mutex_ the swap releases (stampAndPush_'s rule). A reconciled id is forgotten below.
     std::map<int, std::pair<int, int>> owner_nominal_of;   // scan id -> (owner, nominal), for the sibling rule below
+    std::map<int, std::string> activation_of;               // scan id -> "<activation> <CE>", for the operator line
     for (const Ms3PlanItem& item : gov.items)
     {
       for (const ScanCommand& c : item.commands)
       {
         setPrecursorForTracking_(c.scan_id, precursor_id);
         owner_nominal_of[c.scan_id] = {item.owner_precursor_id, item.nominal};
+        if (c.num_stages >= 2)
+        {
+          std::ostringstream act;
+          act << c.stages[1].activation_type << ' ' << c.stages[1].collision_energy;
+          activation_of[c.scan_id] = act.str();
+        }
       }
     }
     // 2. The test seam between the plan and the swap.
@@ -877,16 +884,31 @@ FLASHIda::FLASHIda(char* arg) :
     undoMs3Items_(r.reconciled, kept);
     for (int id : r.inserted_scan_ids) child_ids.push_back(ScanCommandQueue::encode(id));
 
-    // 5. stdout only (ISSUE 8): no log column, no ida.log line.
+    // 5. An event (ADR-0065), no log column, no ida.log line (ISSUE 8).
+    EventLine() << std::fixed << std::setprecision(4) << "[MS3-REPLAN] key="
+                << (gov.key.accession.empty() ? std::string("-") : gov.key.accession) << ':' << gov.key.region_start << '-'
+                << gov.key.region_end << '@' << gov.key.commanded_mass << " entry=" << r.entry_id << " owner=" << precursor_id
+                << " withdrawn=" << r.withdrawn_scan_ids.size() << " inserted=" << r.inserted_scan_ids.size()
+                << " reconciled=" << r.reconciled_scan_ids.size() << " committed_in_gap=" << r.committed_in_gap.size();
+
+    // 6. The operator's line for this MS3 batch (ADR-0065), from what the swap actually queued: a batch the swap
+    //    withdrew or refused whole shows none, and the console never names a scan that will not be acquired.
+    if (!r.inserted_scan_ids.empty())
     {
-      std::ostringstream line;
-      line << std::fixed << std::setprecision(4);
-      line << "[MS3-REPLAN] key=" << (gov.key.accession.empty() ? std::string("-") : gov.key.accession) << ':'
-           << gov.key.region_start << '-' << gov.key.region_end << '@' << gov.key.commanded_mass << " entry=" << r.entry_id
-           << " owner=" << precursor_id << " withdrawn=" << r.withdrawn_scan_ids.size()
-           << " inserted=" << r.inserted_scan_ids.size() << " reconciled=" << r.reconciled_scan_ids.size()
-           << " committed_in_gap=" << r.committed_in_gap.size();
-      std::cout << line.str() << std::endl;
+      std::vector<std::string> ions;
+      for (const auto& [id, ctx] : gov.contexts)
+      {
+        if (inserted.count(id) == 0) continue;
+        const std::string ion = std::string(1, ctx.fragment_ion_type) + std::to_string(ctx.fragment_ion_index);
+        if (std::find(ions.begin(), ions.end(), ion) == ions.end()) ions.push_back(ion);
+      }
+      std::ostringstream op;
+      op << '#' << ScanCommandQueue::encode(gov.ms2_scan_id) << "  " << ions.size() << " targets ";
+      for (const std::string& ion : ions) op << ' ' << ion;
+      const auto act = activation_of.find(r.inserted_scan_ids.front());
+      if (act != activation_of.end()) op << "  " << act->second;
+      op << "  (" << r.inserted_scan_ids.size() << " scans)";
+      EventLog::say(OperatorKind::Ms3, op.str());
     }
     return static_cast<int>(r.inserted_scan_ids.size());
   }
@@ -907,8 +929,9 @@ FLASHIda::FLASHIda(char* arg) :
     {
       if (item.sweep_group_id <= 0) continue;
       if (!exploration_.dropGroup(item.sweep_group_id))
-        std::cout << "[MS3-REPLAN-INVARIANT] group=" << item.sweep_group_id << " owner=" << item.owner_precursor_id
-                  << " not dropped (unknown, or a variant was received)" << std::endl;
+        EventLine(EventLevel::Warn) << "[MS3-REPLAN-INVARIANT] group=" << item.sweep_group_id
+                                    << " owner=" << item.owner_precursor_id
+                                    << " not dropped (unknown, or a variant was received)";
     }
     // A dropped group must not leave exploration_active_ set: it would suppress the cycle-time MS1.
     publishExplorationState_();

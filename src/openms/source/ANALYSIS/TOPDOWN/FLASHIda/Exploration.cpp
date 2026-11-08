@@ -1298,6 +1298,7 @@ namespace OpenMS
         gov->key.region_start = (model->region_start < 0) ? 0 : model->region_start;   // normalised as planNextScans does
         gov->key.region_end = (model->region_end < 0) ? P : model->region_end;
         gov->key.commanded_mass = ms_ctx->mono_mass;                                    // the commanded precursor mass
+        gov->ms2_scan_id = ms_ctx->scan_id;
         snap = queue.ms3Snapshot(gov->key);
         gov->snapshot_generation = snap.generation;
         gate.snapshot = &snap;

@@ -179,6 +179,7 @@ namespace OpenMS
       std::vector<Ms3PlanItem> items;                    ///< one per command (fixed CE, separate) or per sweep group
       uint64_t snapshot_generation = 0;                  ///< the registry generation the plan was made against
       std::vector<std::pair<int, MS2Context>> contexts;  ///< (scan id, its parent-MS2 context) for every item command
+      int ms2_scan_id = 0;                               ///< the dispatching MS2: the operator line's '#' (ADR-0065)
     };
 
     /// Result of initiateNextLevel: commands plus fragment matching metadata
