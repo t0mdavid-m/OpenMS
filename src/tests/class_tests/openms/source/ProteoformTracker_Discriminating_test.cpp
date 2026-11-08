@@ -1039,11 +1039,13 @@ START_SECTION(governed_all_records_refused_falls_through_to_ambiguity)
   Ms3PlanGate gate;
   gate.charge_floor = 2;
   gate.max_targets = 100;
-  std::ostringstream captured;
-  std::streambuf* const real_cout = std::cout.rdbuf(captured.rdbuf());
-  const std::vector<Ms3Target> plan = tracker.planNextScans(pid, &gate);
-  std::cout.rdbuf(real_cout);
-  const std::string log = captured.str();
+  std::string log;
+  std::vector<Ms3Target> plan;
+  {
+    EventCapture cap;   // ADR-0065: the engine's events, not std::cout
+    plan = tracker.planNextScans(pid, &gate);
+    log = cap.str();
+  }
   std::cout << log;
   TEST_TRUE(log.find("[DISCRIMINATING] precursor_id=64 decided=fallthrough reason=pool_exhausted") != std::string::npos)
   TEST_TRUE(log.find("[MS3-PLAN] precursor_id=64 targets=0 reason=no_containing_fragment") != std::string::npos)
