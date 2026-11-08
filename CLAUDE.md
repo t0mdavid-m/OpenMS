@@ -62,6 +62,10 @@ departure from the plan goes back to the owner. Ambiguous cases count as source 
   `queue_mutex_` and hands stamps to the next survey's fold. A committed species is never dropped.
   `wouldBar` must mirror `admitCandidate` (a drift-guard test pins them). Depth-1 harnesses never
   re-plan; `FLASHIda_Replan_test` forces the race through a seam.
+- **With `characterization.per_proteoform` on, a proteoform's MS3s are one live plan** (ADR-0066). A
+  governed MS3 is pushed only by `pushGovernedMs3_` through `replaceMs3Plan`; never `stampAndPush_` a
+  governed command. `dequeue_` commits it under `queue_mutex_`; what a withdrawn, reconciled or expired
+  item took is given back by `undoMs3Items_`, outside the queue lock. Off, the registry stays empty.
 - **An MS2's MS3s are pushed by a search worker's apply**, not by `processScan` (ADR-0062): the
   "MS3 targeting" and "exploration MS2 return" push sites live in `finishRegularMS2_` and
   `finishVariantMS2_`. The pool exists only with an `identification` section, and `~FLASHIda` stops

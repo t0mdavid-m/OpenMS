@@ -145,7 +145,9 @@ destroyed. Waiting jobs are discarded; a running one finishes, its apply include
 
 `FLASHIda.cpp` is the **sole enqueuer**, and since ADR-0060 its sites come in three kinds, pinned as a
 table by `FLASHIda_Replan_test::push_site_inventory` (a new or moved site fails it until the table says
-what the site is): a survey's MS2s enter through **one** `queue_.replacePlan(` in `runSurveyMS1_`; five
+what the site is): a survey's MS2s enter through **one** `queue_.replacePlan(` in `runSurveyMS1_`; with
+`characterization.per_proteoform` on, a governed MS3 plan enters through **one** `queue_.replaceMs3Plan(` in
+`pushGovernedMs3_` (ADR-0066, below; the `stampAndPush_` MS3 sites are then its off branch); five
 **permanent** sites go through `stampAndPush_` (`FLASHIda.h`, the one `queue_.push` that stamps a
 precursor id first: refine re-dispatch, exploration MS2 return, the bought `R`, MS3 targeting,
 exploration MS3 return; the tag follow-up `C` went with ADR-0061; since ADR-0062 "MS3 targeting" sits in
@@ -206,6 +208,78 @@ runSurveyMS1_ (analysis thread, analysis_mutex_)          getNextScanCommand (ev
   survey, and no committed config sets `cycle_time`, so outside FAIMS cycling the goldens cannot see this.
   `FLASHIda_Replan_test` drives stale surveys directly and forces the race through the private
   `beforeReplan_` seam (`FLASHIdaTestAccess::onBeforeReplan`), which commits in the gap every round.
+
+### A proteoform's MS3s are one live plan (ADR-0066)
+
+With `identification.characterization.per_proteoform` on (default off), each proteoform has one live MS3 plan: a
+newer identification replaces its unsent MS3s, a sent MS3 commits its fragment, a sent fragment is acquired again
+only at 2× its sent intensity, and a proteoform gets at most `max_targets` distinct cleavages per run.
+
+```
+dispatchFromModel (analysis thread, analysis_mutex_)            getNextScanCommand (event thread, no analysis lock)
+  identified model + key on: key = accession, region, ms_ctx->mono_mass   dequeue_ -- commitMs3_ (queue_mutex_)
+  snap = queue_.ms3Snapshot(key)                                            sent[cleavage][z] = max(intensity)
+  planNextScans(pid, &gate) -> NextLevelResult::governed (items)       cleanupExpired -- expired uncommitted item
+pushGovernedMs3_                                                            --> ms3_expired_inbox_
+  setPrecursorForTracking_ every new id; beforeMs3Replan_ (test seam)
+  replaceMs3Plan(key, items, gen, max_targets)  -- one queue_mutex_ hold
+  then, OUTSIDE the lock: forgetTracking_, ms2_context_cache_, undoMs3Items_, [MS3-REPLAN], operator line
+```
+
+- **Where it lives.** `FLASHIda/Ms3Registry.h` is header-only and pure, like `PlanUnit.h`: `Ms3ProteoformKey`
+  (accession, region with −1 normalised to 0/P, commanded mass), `sameProteoform` (same accession and region;
+  masses within the MS1 tolerance or `sameSpeciesMass`), `Ms3PlanItem` (one fixed-CE command, one MS3 exploration
+  group, or one (fragment, charge) under `separate`), `ms3Admits` (the 2× rule), `ms3NewCleavageRoom`,
+  `Ms3ReplanResult`, `Ms3Expired`. The registry is in `ScanCommandQueue` (`ms3_entries_`, `ms3_item_of_`,
+  `ms3_expired_inbox_`), the gate in `ProteoformTracker` (`Ms3PlanGate`, `gateAdmitsCharge`, `CleavageRoom`,
+  `withdrawMs3`), the governed branch in `Exploration::dispatchFromModel` (`GovernedMs3`), the swap and the undo in
+  `FLASHIda` (`pushGovernedMs3_`, `undoMs3Items_`, `undoExpiredMs3_`).
+- **The lock is `queue_mutex_`.** `ms3Snapshot`, `replaceMs3Plan`, `takeMs3Expired`, the commit and the expiry all
+  run under it; the undo runs on the analysis thread after the swap, outside it. The lock order stays analysis →
+  queue, and the drain takes no new lock (ADR-0025).
+- **The gate, at planning.** Per charge: m/z > 0 and |z| ≥ the charge floor (the two skips `dispatchFromModel`
+  applied after planning, moved in so they no longer burn a slot), a window SNR > 1 over the dispatching MS2 in
+  `buildMS3`'s window (`max(iso_width, 2.0)` Th, so it equals the later `window_snr`), and `ms3Admits`. A fragment
+  with no admitted charge never enters a pool; the anchor is the strongest admitted charge and the notches come
+  from the admitted charges. The cap: a cleavage never sent takes one of `max_targets − |sent|` slots, and once they
+  are used a new cleavage is **skipped** (`add_target` returns `true`, so callers do not `break`); a re-acquisition
+  takes none. `planExhaustive_` and `planDiscriminating_` apply both before any stamp (ADR-0023 D-d). A null gate is
+  byte-identical to the ungated plan.
+- **The commit at dequeue.** `dequeue_` calls `commitMs3_` after the plan-unit block. An item's first dequeued
+  command commits it: `committed`, `++generation`, `sent[cleavage][z] = max` for every charge it acquires (anchor +
+  stage-1 notches), a commit-log entry and its (owner, nominal). A committed item is never withdrawn; an MS3
+  exploration group commits at its first variant and runs to completion.
+- **The swap.** `replaceMs3Plan` matches the entry (closest anchor mass, then lowest id; created if none), withdraws
+  every uncommitted item (queued commands only), then inserts the new items in plan order, each re-checked with
+  `ms3Admits` and the cap against `sent` **now**; a refused item is reconciled and its `ms3_cmd_proteoform_` stash
+  erased. It reports withdrawn, reconciled and inserted ids, `committed_in_gap` (commit-log entries after the
+  snapshot's generation) and the entry's committed (owner, nominal) pairs. An empty governed plan still swaps, so it
+  withdraws. A slot refused at the swap is not refilled until the next identification.
+- **The undo.** `undoMs3Items_` groups items by owner and calls `tracker_.withdrawMs3`: the nominal leaves
+  `dispatched_nominal_masses`, and an undecided discriminating round's record (nearest within the level-2
+  tolerance) is un-dispatched, not marked returned-empty. An item keeps both when a sibling of the same owner and
+  nominal is committed or was inserted by the same swap. `RoundComplete` (records still dispatched, all returned)
+  makes the caller run `decideRefine`: decided, not re-dispatched. Every withdrawn sweep group is dropped
+  (`exploration_.dropGroup`; a failure is an `[MS3-REPLAN-INVARIANT]` Warn event), then `publishExplorationState_`.
+- **The expiry inbox.** `cleanupExpired` moves an expired registered, uncommitted item (its other variants taken off
+  the queue) into `ms3_expired_inbox_`; a committed item's expired variant only leaves the registry.
+  `undoExpiredMs3_` runs at the top of `processScan`, `applyRegularSearch_` and `applyVariantSearch_`, before
+  planning, and undoes the items with their entries' committed nominals as of the take (`Ms3Expired`).
+- **Inert with the key off.** No governed branch runs, the registry stays empty, `commitMs3_` returns on the empty
+  map, and `undoExpiredMs3_` returns at once. The `cleanupExpired` leak of an expired MS3's MS2 context (and a
+  stranded round or group) is unchanged with the key off.
+- **Events, not columns.** `[MS3-REPLAN] key= entry= owner= withdrawn= inserted= reconciled= committed_in_gap=` is an
+  Info event (ADR-0065); `[MS3-DISPATCH] commands=` counts what was planned, before the swap. The governed batch's
+  operator MS3 line is written at the swap from the inserted ids (ions, the first command's activation and CE, the
+  scan count); a batch withdrawn or refused whole has none. `commands_pushed`/`child_ids` count inserted ids only.
+- ⚠️ **Ungoverned with the key on**: an unidentified exhaustive model (no key, ADR-0055) and the production MS3 of
+  a committed MS3 exploration group, both through `stampAndPush_`.
+- ⚠️ **Not covered**: `cancelByScanIds` (the stop path) and `closeOut` leave the MS3 registry alone; entries are
+  never evicted (the cap is per run); a refine flip that changes the region makes a new key, and the old entry's
+  queued MS3s are not withdrawn.
+- ⚠️ **Depth-1 drives drain an MS3 (priority 1) before the next MS2**, so the goldens see the gate, the 2× rule and
+  the cap. `FLASHIda_Replan_test` forces the gap commit through `beforeMs3Replan_`
+  (`FLASHIdaTestAccess::onBeforeMs3Replan`).
 
 ## `processScan` — five admission gates
 
