@@ -693,7 +693,7 @@ namespace
       },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
       "files": { "target_logs": [], "inclusion_list": "" },
-      "identification": {"reference": {"sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"}, "flashtnt": {"min_length": 3, "max_length": 8}}
+      "identification": {"reference": {"sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"}, "flashtnt": {"min_length": 3, "max_length": 8, "max_blind_mod_count": 2, "max_mod_mass": 700}}
     })";
   }
 
@@ -721,7 +721,9 @@ namespace
         },
         "flashtnt": {
           "min_length": 3,
-          "max_length": 8
+          "max_length": 8,
+          "max_blind_mod_count": 2,
+          "max_mod_mass": 700
         },
         "characterization": {
           "mode": "ambiguity",
@@ -755,7 +757,7 @@ namespace
       },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
       "files": { "target_logs": [], "inclusion_list": "" },
-      "identification": {"reference": {"sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"}, "flashtnt": {"min_length": 3, "max_length": 8}, "characterization": {"mode": "ambiguity", "max_targets": 3}}
+      "identification": {"reference": {"sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"}, "flashtnt": {"min_length": 3, "max_length": 8, "max_blind_mod_count": 2, "max_mod_mass": 700}, "characterization": {"mode": "ambiguity", "max_targets": 3}}
     })";
   }
 
@@ -819,7 +821,7 @@ namespace
       },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
       "files": { "target_logs": [], "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc_z17.txt" },
-      "identification": {"reference": {"sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"}, "flashtnt": {"min_length": 3, "max_length": 8}}
+      "identification": {"reference": {"sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"}, "flashtnt": {"min_length": 3, "max_length": 8, "max_blind_mod_count": 2, "max_mod_mass": 700}}
     })";
   }
 
