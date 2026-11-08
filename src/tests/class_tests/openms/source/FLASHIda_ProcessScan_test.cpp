@@ -1198,6 +1198,56 @@ namespace
 
 }
 
+// ===== Real-time close-out (ADR-0061 d.7-d.10, ADR-0062 d.3/d.6, push 5) =========================================
+namespace
+{
+  /// Strict-inclusion cytC (one target, so every MS2 is cytC) with acquisition unable to arm a bar
+  /// (tqscore_threshold 1.0: arms_bars is strict >, and a qscore never exceeds 1), an identifying reference (heme
+  /// needs max_mod_mass >= 616), and @p threshold when given -- so a close-out is the only thing that can bar cytC.
+  std::string closeOutCytcJson(const std::string& dir, std::optional<double> threshold,
+                               const std::string& inclusion = "inclusion_cytc.txt", bool separate = false)
+  {
+    nlohmann::json j = nlohmann::json::parse(buildJsonWithLogDir(dir));
+    j["deconvolution"]["tqscore_threshold"] = 1.0;
+    j["precursor_selection"]["targeting"] = "inclusion";
+    j["precursor_selection"]["strict_inclusion"] = true;
+    if (separate) j["precursor_selection"]["precursor_charges"] = "separate";
+    j["files"]["inclusion_list"] = "../../FlashIDA/test-data/configs/" + inclusion;
+    j["identification"] = {
+      {"reference", {{"sequence", "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"}}},
+      {"flashtnt", {{"max_blind_mod_count", 2}, {"max_mod_mass", 700}}}};
+    if (threshold) j["identification"]["threshold"] = *threshold;
+    return j.dump();
+  }
+
+  struct CloseOutRun
+  {
+    int ms2_cytc = 0;          ///< MS2 commands at cytC's nominal mass
+    int closed_out_rows = 0;   ///< identification.tsv MS2 rows with closed_out 1
+    int skipped = 0;           ///< scan_results MS2 rows with search closed_out_skip
+    int searched = 0;          ///< scan_results MS2 rows with search searched
+  };
+
+  CloseOutRun readCloseOut(const std::string& dir)
+  {
+    CloseOutRun r;
+    auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
+    for (const auto& row : cmds.rows)
+      if (cell(cmds, row, "ms_level") == "2" && (int)(toD(cell(cmds, row, "mono_mass")) + 0.5) == 12351) ++r.ms2_cytc;
+    auto idf = TSVFile::parse(dir + "/identification.tsv");
+    for (const auto& row : idf.rows)
+      if (cell(idf, row, "ms_level") == "2" && cell(idf, row, "closed_out") == "1") ++r.closed_out_rows;
+    auto res = TSVFile::parse(dir + "/scan_results.tsv");
+    for (const auto& row : res.rows)
+    {
+      if (cell(res, row, "ms_level") != "2") continue;
+      if (cell(res, row, "search") == "closed_out_skip") ++r.skipped;
+      if (cell(res, row, "search") == "searched") ++r.searched;
+    }
+    return r;
+  }
+}
+
 START_TEST(FLASHIda_ProcessScan, "$Id$")
 
 /////////////////////////////////////////////////////////////
@@ -3616,56 +3666,6 @@ START_SECTION(search_dispose_with_searches_in_flight)
   TEST_EQUAL(done.wait_for(std::chrono::seconds(120)) == std::future_status::ready, true)
 }
 END_SECTION
-
-// ===== Real-time close-out (ADR-0061 d.7-d.10, ADR-0062 d.3/d.6, push 5) =========================================
-namespace
-{
-  /// Strict-inclusion cytC (one target, so every MS2 is cytC) with acquisition unable to arm a bar
-  /// (tqscore_threshold 1.0: arms_bars is strict >, and a qscore never exceeds 1), an identifying reference (heme
-  /// needs max_mod_mass >= 616), and @p threshold when given -- so a close-out is the only thing that can bar cytC.
-  std::string closeOutCytcJson(const std::string& dir, std::optional<double> threshold,
-                               const std::string& inclusion = "inclusion_cytc.txt", bool separate = false)
-  {
-    nlohmann::json j = nlohmann::json::parse(buildJsonWithLogDir(dir));
-    j["deconvolution"]["tqscore_threshold"] = 1.0;
-    j["precursor_selection"]["targeting"] = "inclusion";
-    j["precursor_selection"]["strict_inclusion"] = true;
-    if (separate) j["precursor_selection"]["precursor_charges"] = "separate";
-    j["files"]["inclusion_list"] = "../../FlashIDA/test-data/configs/" + inclusion;
-    j["identification"] = {
-      {"reference", {{"sequence", "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"}}},
-      {"flashtnt", {{"max_blind_mod_count", 2}, {"max_mod_mass", 700}}}};
-    if (threshold) j["identification"]["threshold"] = *threshold;
-    return j.dump();
-  }
-
-  struct CloseOutRun
-  {
-    int ms2_cytc = 0;          ///< MS2 commands at cytC's nominal mass
-    int closed_out_rows = 0;   ///< identification.tsv MS2 rows with closed_out 1
-    int skipped = 0;           ///< scan_results MS2 rows with search closed_out_skip
-    int searched = 0;          ///< scan_results MS2 rows with search searched
-  };
-
-  CloseOutRun readCloseOut(const std::string& dir)
-  {
-    CloseOutRun r;
-    auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
-    for (const auto& row : cmds.rows)
-      if (cell(cmds, row, "ms_level") == "2" && (int)(toD(cell(cmds, row, "mono_mass")) + 0.5) == 12351) ++r.ms2_cytc;
-    auto idf = TSVFile::parse(dir + "/identification.tsv");
-    for (const auto& row : idf.rows)
-      if (cell(idf, row, "ms_level") == "2" && cell(idf, row, "closed_out") == "1") ++r.closed_out_rows;
-    auto res = TSVFile::parse(dir + "/scan_results.tsv");
-    for (const auto& row : res.rows)
-    {
-      if (cell(res, row, "ms_level") != "2") continue;
-      if (cell(res, row, "search") == "closed_out_skip") ++r.skipped;
-      if (cell(res, row, "search") == "searched") ++r.searched;
-    }
-    return r;
-  }
-}
 
 // ADR-0061 d.7: an identification at the threshold arms cytC's bars at the identifying MS2, for rt_window. With
 // acquisition unable to arm a bar, cytC is acquired again and again without a threshold, and exactly once with one
