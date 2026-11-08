@@ -20,7 +20,7 @@
 #include <utility>
 #include <vector>
 
-/// Per-proteoform MS3 re-planning (ADR-0064): the plain data and the pure rules the queue's registry and the
+/// Per-proteoform MS3 re-planning (ADR-0066): the plain data and the pure rules the queue's registry and the
 /// tracker's plan gate share. Header-only and free of `Config`, in the shape of `PlanUnit.h`.
 ///
 /// With identification.characterization.per_proteoform on, a proteoform has ONE live MS3 plan: a newer

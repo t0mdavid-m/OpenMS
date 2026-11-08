@@ -389,7 +389,7 @@ namespace OpenMS
     int refineRoundClose_(int precursor_id, const ScanCommand& parent_ctx, std::vector<std::string>& child_ids,
                           IdaLogger::ScanRowDescriptor& results_row);
 
-    // ===== Per-proteoform MS3 re-planning (ADR-0064, characterization.per_proteoform) ===========================
+    // ===== Per-proteoform MS3 re-planning (ADR-0066, characterization.per_proteoform) ===========================
 
     /// Swap in a governed MS3 plan (Exploration::GovernedMs3) for @p precursor_id, the one site that calls
     /// queue_.replaceMs3Plan: stamp every new id's precursor id first (the drain may dequeue it at once), run the
@@ -399,7 +399,7 @@ namespace OpenMS
     /// inserted.
     int pushGovernedMs3_(Exploration::GovernedMs3& gov, int precursor_id, std::vector<std::string>& child_ids);
 
-    /// Give back what unsent governed MS3 items took at plan time (ADR-0064): per owner, tracker_.withdrawMs3 (a
+    /// Give back what unsent governed MS3 items took at plan time (ADR-0066): per owner, tracker_.withdrawMs3 (a
     /// discriminating round it completes is decided, not re-dispatched); every sweep group is dropped (an
     /// `[MS3-REPLAN-INVARIANT]` line if one cannot be), then the exploration state is republished.
     /// @p committed_owner_nominals: (precursor id, nominal) of items that went out or stay queued -- their siblings

@@ -727,12 +727,12 @@ namespace OpenMS
       // consults it, because no other objective targets a raw deconvolved mass.
       characterization_.min_target_mass = charact.value("min_target_mass", 0.0);
       characterization_.fragment_charges = parseChargeMode(charact, "fragment_charges", "identification.characterization");
-      // ADR-0064: per-proteoform MS3 re-planning. Absent or null = false; anything but a boolean is refused.
+      // ADR-0066: per-proteoform MS3 re-planning. Absent or null = false; anything but a boolean is refused.
       if (charact.contains("per_proteoform") && !charact["per_proteoform"].is_null())
       {
         if (!charact["per_proteoform"].is_boolean())
           throw std::invalid_argument("Config: identification.characterization.per_proteoform must be true or false; got "
-                                      + charact["per_proteoform"].dump() + " (ADR-0064).");
+                                      + charact["per_proteoform"].dump() + " (ADR-0066).");
         characterization_.per_proteoform = charact["per_proteoform"].get<bool>();
       }
     }

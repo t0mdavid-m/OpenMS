@@ -935,7 +935,7 @@ namespace OpenMS
           if (next_nlr.commands[i].msn_level >= 3)
             info.ms2_context_cache.emplace_back(next_nlr.commands[i].scan_id, next_nlr.ms3_contexts[i]);
         }
-        // ADR-0064: a governed dispatch returns its plan instead of commands; the caller swaps it in.
+        // ADR-0066: a governed dispatch returns its plan instead of commands; the caller swaps it in.
         info.governed = std::move(next_nlr.governed);
       }
       // overrides empty && msn_level >= 3 && a READING metric (FragmentCount): an MS3 exploration group
@@ -1190,7 +1190,7 @@ namespace OpenMS
                                                    next_scan_config, charge_floor, next_level, nlr.proteoform_sequence);
     nlr.commands = std::move(dispatched.commands);
     nlr.ms3_contexts = std::move(dispatched.ms3_contexts);
-    nlr.governed = std::move(dispatched.governed);   // ADR-0064: engaged only when per_proteoform governs the dispatch
+    nlr.governed = std::move(dispatched.governed);   // ADR-0066: engaged only when per_proteoform governs the dispatch
     return nlr;
   }
 
@@ -1283,7 +1283,7 @@ namespace OpenMS
       MS3FragmentMatcher::ProteoformContext win_ctx = tracker->buildWinnerProteoformContext(precursor_id);
       if (win_ctx.region_start >= 0) proto_ctx = win_ctx;
 
-      // ADR-0064: characterization.per_proteoform governs the dispatch of an IDENTIFIED model (an unidentified exhaustive
+      // ADR-0066: characterization.per_proteoform governs the dispatch of an IDENTIFIED model (an unidentified exhaustive
       // model has no proteoform key and stays ungoverned). The plan is made against the proteoform's registry snapshot
       // through the tracker's gate, and comes back as items for the caller's replaceMs3Plan instead of commands.
       // Ungoverned, everything below runs exactly as before.

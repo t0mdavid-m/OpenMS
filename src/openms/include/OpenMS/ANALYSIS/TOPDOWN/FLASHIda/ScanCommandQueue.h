@@ -297,7 +297,7 @@ namespace OpenMS
     /// Move out every stamp committed since the last call, in commit order (the analysis thread folds them).
     std::vector<MemoryStamp> takeCommitted();
 
-    // ---- per-proteoform MS3 plans (ADR-0064; empty unless characterization.per_proteoform) -------------------
+    // ---- per-proteoform MS3 plans (ADR-0066; empty unless characterization.per_proteoform) -------------------
     /// The sent fragments of the proteoform @p key matches (sameProteoform at the MS1 tolerance); found = false if
     /// no entry matches yet.
     Ms3RegistrySnapshot ms3Snapshot(const Ms3ProteoformKey& key) const;
@@ -505,7 +505,7 @@ namespace OpenMS
     /// command and is erased when none is left. Caller must hold queue_mutex_.
     void forgetQueued_(int scan_id);
 
-    /// One proteoform's MS3 registry entry (ADR-0064). Never evicted: the cleavage cap is per run.
+    /// One proteoform's MS3 registry entry (ADR-0066). Never evicted: the cleavage cap is per run.
     struct Ms3Entry
     {
       Ms3ProteoformKey key;                                    ///< the first commanded mass; never drifts

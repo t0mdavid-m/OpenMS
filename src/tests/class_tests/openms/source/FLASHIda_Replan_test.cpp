@@ -22,7 +22,7 @@
 #include "FLASHIda_TestAccess.h"
 #include "FLASHIda_TestHelpers.h"  // ground-truth harness: ScanData/loadTsvScans/runInterleaved, TSVFile
 
-#include <nlohmann/json.hpp>   // the per-proteoform configs (ADR-0064) edit the parsed document
+#include <nlohmann/json.hpp>   // the per-proteoform configs (ADR-0066) edit the parsed document
 
 #include <algorithm>
 #include <atomic>
@@ -628,7 +628,7 @@ namespace
     return sites;
   }
 
-  // ---- Per-proteoform MS3 re-planning (ADR-0064) -----------------------------------------------------------------
+  // ---- Per-proteoform MS3 re-planning (ADR-0066) -----------------------------------------------------------------
 
   /// The cytC fragments-objective recipe (ms3_fragments_cytc's): inclusion-pinned cytC, one species per survey, MS3
   /// budget 3, tqscore 0. @p per_proteoform: absent (nullopt) or the authored value. @p separate: a survey's cytC unit
@@ -1350,7 +1350,7 @@ START_SECTION(push_site_inventory)
   const std::multiset<std::string> expected = {
     // the survey's plan, in one call
     "runSurveyMS1_ | const ReplanResult replan = queue_.replacePlan(faims_cv, std::move(units), adjust, replace_remainder_of);",
-    // ADR-0064: a proteoform's governed MS3 plan, in one call (per_proteoform on; the stampAndPush_ rows below are the off branch)
+    // ADR-0066: a proteoform's governed MS3 plan, in one call (per_proteoform on; the stampAndPush_ rows below are the off branch)
     "pushGovernedMs3_ | const Ms3ReplanResult r = queue_.replaceMs3Plan(gov.key, std::move(gov.items), gov.snapshot_generation, max_targets);",
     // the five permanent sites
     "refineRoundClose_ | stampAndPush_(c, precursor_id);",                  // refine re-dispatch
@@ -1377,7 +1377,7 @@ START_SECTION(push_site_inventory)
 }
 END_SECTION
 
-// ---- Per-proteoform MS3 re-planning (ADR-0064) -------------------------------------------------------------------
+// ---- Per-proteoform MS3 re-planning (ADR-0066) -------------------------------------------------------------------
 
 // With identification.characterization.per_proteoform false the engine is the engine without the key: the same cytC
 // fragments drive dequeues the same commands, field for field, and nothing is governed.

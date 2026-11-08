@@ -709,7 +709,7 @@ START_SECTION(threshold_absent_never_closes_out_and_authored_round_trips)
 }
 END_SECTION
 
-// ADR-0064: identification.characterization.per_proteoform. Absent or null = false (every committed config); true
+// ADR-0066: identification.characterization.per_proteoform. Absent or null = false (every committed config); true
 // and false parse; a non-boolean is refused with a message naming the key.
 START_SECTION(per_proteoform_absent_is_off_and_only_a_boolean_parses)
 {

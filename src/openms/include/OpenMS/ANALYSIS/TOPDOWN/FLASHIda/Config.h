@@ -573,7 +573,7 @@ namespace OpenMS
     /// precursor selection is one simultaneous waveform rather than N sequential fills.
     ChargeAcquisitionMode fragment_charges = ChargeAcquisitionMode::Single;
 
-    /// characterization.per_proteoform (ADR-0064). Off: every identification plans its own MS3s, as before. On: a
+    /// characterization.per_proteoform (ADR-0066). Off: every identification plans its own MS3s, as before. On: a
     /// proteoform (accession + region + commanded mass) has ONE live MS3 plan -- a newer identification replaces its
     /// unsent MS3s, a sent MS3 commits its fragment, a sent fragment is re-acquired only at >= 2x its sent intensity,
     /// at most max_targets distinct cleavages per proteoform per run, and only window SNR > 1 candidates.

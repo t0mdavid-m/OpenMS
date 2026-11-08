@@ -976,7 +976,7 @@ START_SECTION(narrowing_ignores_bare_fragments_under_refine)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
-// ADR-0064 D1. A governed plan refuses a record before it dispatches it. records[0] (b4 of the best path) was sent at
+// ADR-0066 D1. A governed plan refuses a record before it dispatches it. records[0] (b4 of the best path) was sent at
 //     intensity 1 and is seen at 0 now, so the 2x rule refuses it; the round's three slots go to records 1..3, and
 //     records[0] is neither dispatched nor stamped -- the round can still plan it.
 //
@@ -1015,7 +1015,7 @@ START_SECTION(governed_refused_record_is_not_dispatched)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
-// ADR-0064 D1b. Every record refused by the gate: the round can never complete through MS3, so the planner decides
+// ADR-0066 D1b. Every record refused by the gate: the round can never complete through MS3, so the planner decides
 //     (pool_exhausted, candidate 0 stands) and runs the ambiguity branch in the same call, as section 7a's charge floor
 //     does from the config. The gate here is a charge floor of 2 over charge-1 records. The ambiguity plan of that call
 //     is empty on this fixture -- its containing fragments (b6..b11) are the very ions the a-only records are labelled
@@ -1063,7 +1063,7 @@ START_SECTION(governed_all_records_refused_falls_through_to_ambiguity)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
-// ADR-0064 D1c. Nothing dispatched leaves the round undecided and unblocked. (a) A cap with no room skips every record
+// ADR-0066 D1c. Nothing dispatched leaves the round undecided and unblocked. (a) A cap with no room skips every record
 //     (not stamped, not dispatched) without deciding; the next, ungated plan dispatches the round as usual. (b) A round
 //     whose every dispatched MS3 is withdrawn before it went out is back where it started: nothing completes, nothing
 //     is decided, and the next plan dispatches the same records again.
@@ -1124,7 +1124,7 @@ START_SECTION(governed_nothing_dispatched_leaves_the_round_undecided_and_unblock
 END_SECTION
 
 /////////////////////////////////////////////////////////////
-// ADR-0064 D2. withdrawMs3 un-dispatches a withdrawn record and reports the round complete once every record STILL
+// ADR-0066 D2. withdrawMs3 un-dispatches a withdrawn record and reports the round complete once every record STILL
 //     dispatched has returned (ISSUE 5: the caller decides, it does not re-dispatch). Three records go out; 0 and 1
 //     return; withdrawing 2 completes the round, and its nominal is given back. With 1 still out, the same withdrawal
 //     completes nothing; with a committed sibling of 2, record 2 stays dispatched.

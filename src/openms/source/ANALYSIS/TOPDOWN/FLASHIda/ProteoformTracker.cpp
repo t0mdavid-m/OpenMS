@@ -212,7 +212,7 @@ namespace OpenMS
       return std::abs(mass - observed) <= std::max(mass, observed) * tol_ppm * 1e-6;
     }
 
-    // ADR-0064: the cleavage of a raw winner-scan mass labelled (ion_type, ion_index): the ion when it has one, else
+    // ADR-0066: the cleavage of a raw winner-scan mass labelled (ion_type, ion_index): the ion when it has one, else
     // ("u", the nominal mass the dispatch memory stamps). The one rule ms3CleavageOf exposes to the executor.
     inline Ms3Cleavage rawMassCleavage(const std::string& ion_type, int ion_index, int nominal)
     {
@@ -220,7 +220,7 @@ namespace OpenMS
       return {std::string(kUnassignedIonType), nominal};
     }
 
-    // ADR-0064: the per-charge test of a governed plan. Isolatable (an m/z and a charge, the charge at or above the
+    // ADR-0066: the per-charge test of a governed plan. Isolatable (an m/z and a charge, the charge at or above the
     // floor -- the two dispatch-time skips Exploration applies, moved here so they no longer burn a slot), a window SNR
     // above the gate's over the dispatching MS2 in the window buildMS3 will command (max(iso_width, 2.0) Th, signal =
     // the charge's intensity, which buildMS3 carries as precursor_intensity_s1), and ms3Admits at the charge's
@@ -240,7 +240,7 @@ namespace OpenMS
       return true;
     }
 
-    // ADR-0064: a raw winner-scan mass's admitted charges, strongest first: the representative charge and the rest of
+    // ADR-0066: a raw winner-scan mass's admitted charges, strongest first: the representative charge and the rest of
     // its envelope, each put through gateAdmitsCharge. A stable sort, so a tie keeps the representative first.
     inline std::vector<ChargeRecord> gatedRawCharges(const Ms3PlanGate& gate, const PeakRecord& pr, const Ms3Cleavage& cleavage)
     {
@@ -262,7 +262,7 @@ namespace OpenMS
       return admitted;
     }
 
-    // ADR-0064: the per-run cleavage cap of a governed plan. A cleavage the proteoform already sent is a re-acquisition
+    // ADR-0066: the per-run cleavage cap of a governed plan. A cleavage the proteoform already sent is a re-acquisition
     // and never takes room; a new one takes one of max_targets - |sent| slots the first time it is planned.
     struct CleavageRoom
     {
@@ -729,7 +729,7 @@ namespace OpenMS
     // ambiguity and coverage. Applied where the pools are BUILT, not inside add_target: add_target's
     // `false` means "budget full" to its callers, which `break` on it. Exhaustive does not come here.
     //
-    // A governed plan (ADR-0064) adds the gate's per-charge test here too: a fragment with no admitted charge never
+    // A governed plan (ADR-0066) adds the gate's per-charge test here too: a fragment with no admitted charge never
     // enters a pool, so the next one takes its slot in the same intensity order. Its admitted charges, strongest
     // first, are computed once per fragment (chargesOf) and anchor and notch the emitted target below.
     std::map<FragmentKey, std::vector<const FragmentObservation*>> gated_charges;
@@ -767,7 +767,7 @@ namespace OpenMS
       return a->best_ms2->intensity > b->best_ms2->intensity;  // strongest first
     };
 
-    // A governed plan's cleavage cap (ADR-0064): a cleavage the proteoform never sent takes a slot of
+    // A governed plan's cleavage cap (ADR-0066): a cleavage the proteoform never sent takes a slot of
     // max_targets - |sent|; once they are used a new one is SKIPPED -- `true`, not "budget full", so the callers go on
     // to the next candidate (a re-acquisition of a sent cleavage still fits).
     CleavageRoom room(gate != nullptr ? *gate : Ms3PlanGate{});
@@ -934,7 +934,7 @@ namespace OpenMS
       if (fragments_selected >= budget) break;
       const size_t emitted_before_fragment = out.size();
 
-      // A governed plan (ADR-0064) anchors on the strongest ADMITTED charge and notches from the admitted charges
+      // A governed plan (ADR-0066) anchors on the strongest ADMITTED charge and notches from the admitted charges
       // only; ungoverned, the anchor is best_ms2 and the candidates are every charge the fragment was seen at.
       const std::vector<const FragmentObservation*>* gated = (gate != nullptr) ? &chargesOf(*f) : nullptr;
       if (gated != nullptr && gated->empty()) continue;   // unreachable: such a fragment never enters a pool
@@ -1097,7 +1097,7 @@ namespace OpenMS
     };
 
     // --- 1) The pool: this ONE scan's deconvolved masses, mapped or not ----------------------------
-    // A governed plan (ADR-0064) also needs each mass's cleavage at the pool (its label, above): the gate's
+    // A governed plan (ADR-0066) also needs each mass's cleavage at the pool (its label, above): the gate's
     // per-charge test runs HERE, with every other filter, so a refused mass is never stamped.
     struct PoolEntry
     {
@@ -1146,11 +1146,11 @@ namespace OpenMS
     // avoid -- max_targets: 3 spent entirely on the first mass that happened to resolve at 3 charges.
     std::vector<Ms3Target> out;
     int species_selected = 0;
-    CleavageRoom room(gate != nullptr ? *gate : Ms3PlanGate{});   // a governed plan's cleavage cap (ADR-0064)
+    CleavageRoom room(gate != nullptr ? *gate : Ms3PlanGate{});   // a governed plan's cleavage cap (ADR-0066)
     for (const PoolEntry& e : pool)
     {
       if (species_selected >= budget) break;
-      // Capped (ADR-0064): a new cleavage with no room left is skipped -- not emitted, not stamped.
+      // Capped (ADR-0066): a new cleavage with no room left is skipped -- not emitted, not stamped.
       if (gate != nullptr && !room.admit(e.cleavage)) continue;
       const PeakRecord& pr = *e.peak;
       const std::pair<std::string, int> label = labelFor(pr);
@@ -1182,7 +1182,7 @@ namespace OpenMS
     const ChargeAcquisitionMode charge_mode = config_.characterization().fragment_charges;
     const double snr_threshold = config_.targeting().snr_threshold;
 
-    // A governed plan (ADR-0064) hands the mass's admitted charges, strongest first: the first anchors and the notches
+    // A governed plan (ADR-0066) hands the mass's admitted charges, strongest first: the first anchors and the notches
     // come from these only. Otherwise the representative charge anchors and the whole envelope is the candidate set.
     const bool gated = (charges != nullptr && !charges->empty());
     const std::vector<ChargeRecord>& envelope = gated ? *charges : pr.by_charge;
@@ -1275,7 +1275,7 @@ namespace OpenMS
     // The isolatability/charge-floor test is planExhaustive_'s (exhaustivePoolAdmits, no mass floor: min_target_mass is
     // exhaustive's knob) and for its reason: a mass Exploration drops downstream must not be stamped into the monotone
     // dispatch memory first (ADR-0023 D-d). A record with no winner peak (peak_index -1) has nothing to isolate.
-    // A governed plan (ADR-0064) applies its per-charge test here too, so a refused record is never dispatched.
+    // A governed plan (ADR-0066) applies its per-charge test here too, so a refused record is never dispatched.
     const int charge_floor = config_.level(2).min_charge;
     struct PoolEntry
     {
@@ -1313,12 +1313,12 @@ namespace OpenMS
     int species_selected = 0;
     std::ostringstream masses;
     masses << std::fixed << std::setprecision(4);
-    CleavageRoom room(gate != nullptr ? *gate : Ms3PlanGate{});   // a governed plan's cleavage cap (ADR-0064)
+    CleavageRoom room(gate != nullptr ? *gate : Ms3PlanGate{});   // a governed plan's cleavage cap (ADR-0066)
     for (const PoolEntry& e : pool)
     {
       if (species_selected >= budget) break;
       if (m.dispatched_nominal_masses.count(e.nominal) > 0) continue; // a second record of a species stamped above
-      // Capped (ADR-0064): a new cleavage with no room left is skipped -- not dispatched, not stamped.
+      // Capped (ADR-0066): a new cleavage with no room left is skipped -- not dispatched, not stamped.
       if (gate != nullptr && !room.admit(e.cleavage)) continue;
       DiscriminatingRecord& rec = *e.rec;
       const PeakRecord& pr = m.winner_peaks[rec.peak_index];

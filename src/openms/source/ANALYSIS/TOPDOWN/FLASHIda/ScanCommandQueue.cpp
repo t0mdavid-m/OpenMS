@@ -809,7 +809,7 @@ namespace OpenMS
           if (--unit.commands_left == 0) units_.erase(unit_id);
         }
         adjustable_.erase(cmd.scan_id);
-        commitMs3_(cmd.scan_id);   // ADR-0064: a registered MS3 commits its fragment (a miss when the registry is empty)
+        commitMs3_(cmd.scan_id);   // ADR-0066: a registered MS3 commits its fragment (a miss when the registry is empty)
         return cmd;
       }
     }
@@ -898,7 +898,7 @@ namespace OpenMS
     auto now_ms = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
-    std::vector<int> expired_ms3;   // ADR-0064: registered MS3s among the expired
+    std::vector<int> expired_ms3;   // ADR-0066: registered MS3s among the expired
 
     for (int p = 0; p < 4; ++p)
     {
@@ -924,7 +924,7 @@ namespace OpenMS
       }
     }
 
-    // ADR-0064: an expired registered MS3 whose item never went out withdraws the WHOLE item (an exploration group's
+    // ADR-0066: an expired registered MS3 whose item never went out withdraws the WHOLE item (an exploration group's
     // other variants too) into the inbox the analysis thread undoes. A committed item's expired variant only leaves
     // the registry (a committed group is not undone here, as without the registry).
     for (const int id : expired_ms3)

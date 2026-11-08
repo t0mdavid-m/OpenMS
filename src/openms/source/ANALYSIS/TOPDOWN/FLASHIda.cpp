@@ -829,7 +829,7 @@ FLASHIda::FLASHIda(char* arg) :
         ms2_context_cache_[next.commands[ci].scan_id] = next.ms3_contexts[ci];
       }
     }
-    // ADR-0064: a governed re-dispatch is swapped in as the proteoform's live plan (its contexts cached there).
+    // ADR-0066: a governed re-dispatch is swapped in as the proteoform's live plan (its contexts cached there).
     if (next.governed) pushed += pushGovernedMs3_(*next.governed, precursor_id, child_ids);
     results_row.commands_pushed = pushed;
     results_row.child_ids       = child_ids;
@@ -943,7 +943,7 @@ FLASHIda::FLASHIda(char* arg) :
   int FLASHIda::applyRegularSearch_(RegularSearch& job)
   {
     std::lock_guard<std::mutex> lock(analysis_mutex_);
-    undoExpiredMs3_();   // ADR-0064: before planning, give back what expired governed MS3s took
+    undoExpiredMs3_();   // ADR-0066: before planning, give back what expired governed MS3s took
     std::vector<IdaLogger::IdRowDescriptor> id_rows;
     const int pushed = finishRegularMS2_(&job.result, false, job.spectrum, job.has_spectrum ? &job.spectrum : nullptr,
                                          job.parent_ctx, job.precursor_id, job.parent_id_str, job.rt,
@@ -960,7 +960,7 @@ FLASHIda::FLASHIda(char* arg) :
   int FLASHIda::applyVariantSearch_(VariantSearch& job)
   {
     std::lock_guard<std::mutex> lock(analysis_mutex_);
-    undoExpiredMs3_();   // ADR-0064: before planning, give back what expired governed MS3s took
+    undoExpiredMs3_();   // ADR-0066: before planning, give back what expired governed MS3s took
     Exploration::FeedResultInfo expl_result =
         exploration_.applyVariant(job.input, &job.match, false, queue_, &tracker_, job.precursor_id);
     std::vector<IdaLogger::IdRowDescriptor> id_rows;
@@ -1051,7 +1051,7 @@ FLASHIda::FLASHIda(char* arg) :
           ms2_context_cache_[ms3_targeting.commands[ci].scan_id] = ms3_targeting.ms3_contexts[ci];
         }
       }
-      // ADR-0064: a governed MS3 plan is swapped in as the proteoform's live plan (its contexts cached there).
+      // ADR-0066: a governed MS3 plan is swapped in as the proteoform's live plan (its contexts cached there).
       if (ms3_targeting.governed) commands_pushed += pushGovernedMs3_(*ms3_targeting.governed, precursor_id, child_ids);
     }
 
@@ -1154,7 +1154,7 @@ FLASHIda::FLASHIda(char* arg) :
     // returns on the regular MS3 path. Empty unless the group cascaded to MS3.
     for (const auto& [ms3_scan_id, parent_ms2_context] : expl_result.ms2_context_cache)
       ms2_context_cache_[ms3_scan_id] = parent_ms2_context;
-    // ADR-0064: the group's governed next-level plan, swapped in; its inserted ids join the group's children.
+    // ADR-0066: the group's governed next-level plan, swapped in; its inserted ids join the group's children.
     int governed_pushed = 0;
     if (expl_result.governed) governed_pushed = pushGovernedMs3_(*expl_result.governed, precursor_id, expl_result.child_ids);
 
@@ -1318,7 +1318,7 @@ FLASHIda::FLASHIda(char* arg) :
     std::lock_guard<std::mutex> lock(analysis_mutex_);
     EventLog::setRt(rt);   // ADR-0065: the events.log prefix carries the last retention time seen
     board_.setRt(rt);
-    undoExpiredMs3_();   // ADR-0064: before planning, give back what expired governed MS3s took
+    undoExpiredMs3_();   // ADR-0066: before planning, give back what expired governed MS3s took
 
     // Tracking ID extraction (perspective: scan processed is parent of potential children)
     std::string parent_desc_str = scan_description ? std::string(scan_description) : "";
@@ -1694,7 +1694,7 @@ FLASHIda::FLASHIda(char* arg) :
         {
           stampAndPush_(c, precursor_id);
         }
-        // ADR-0064: a governed plan, swapped in (an MS3 group's completion makes none today; kept with the other sites).
+        // ADR-0066: a governed plan, swapped in (an MS3 group's completion makes none today; kept with the other sites).
         int governed_pushed = 0;
         if (expl_result.governed) governed_pushed = pushGovernedMs3_(*expl_result.governed, precursor_id, expl_result.child_ids);
         // Seed the parent-MS2 context of the production MS3 a completed MS3 group re-acquires (overrides

@@ -1220,7 +1220,7 @@ START_SECTION(other_objectives_still_refuse_an_unidentified_precursor)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
-// 16. A governed plan (ADR-0064) refuses before it stamps. The gate's charge floor of 4 refuses the charge-2 and
+// 16. A governed plan (ADR-0066) refuses before it stamps. The gate's charge floor of 4 refuses the charge-2 and
 //     charge-3 masses; a cap of 2 new cleavages then skips one of the three it admits. Neither a refused nor a capped
 //     mass enters the monotone dispatch memory, so the next plan (ungated) still reaches all four.
 //

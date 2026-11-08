@@ -154,7 +154,7 @@ namespace
     return fields;
   }
 
-  // ---- ADR-0064: the per-proteoform plan gate (Ms3PlanGate) ---------------------------------------------------
+  // ---- ADR-0066: the per-proteoform plan gate (Ms3PlanGate) ---------------------------------------------------
   //
   // A hand-built PeakGroup has getChargeIntensity() == 0, so every observation below has intensity 0 and a window
   // SNR of 0 (FragmentAnalysis::windowSnr returns 0 for no signal). The sections that need a charge ADMITTED pass no
@@ -493,7 +493,7 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
-// ADR-0064 G1. A null gate is today's plan, and a gate that admits everything changes nothing, under each of the
+// ADR-0066 G1. A null gate is today's plan, and a gate that admits everything changes nothing, under each of the
 // three mapped objectives.
 //
 // FAILS UNDER: a gate path that re-orders, re-anchors or re-notches an admitted fragment (the anchor must stay best_ms2
@@ -523,7 +523,7 @@ START_SECTION(gate_null_and_open_equal_today)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
-// ADR-0064 G2. A refused fragment hands its slot to the next candidate in the same order -- under fragments, and
+// ADR-0066 G2. A refused fragment hands its slot to the next candidate in the same order -- under fragments, and
 // through the ambiguity round-robin. The refusal is the 2x rule: the fragment the ungated plan takes was sent at
 // intensity 1, and it is seen at 0 now.
 //
@@ -559,7 +559,7 @@ START_SECTION(gate_refused_strongest_hands_its_slot_on)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
-// ADR-0064 G3. A charge whose window SNR is not above snr_min is refused. Every fixture charge here carries no
+// ADR-0066 G3. A charge whose window SNR is not above snr_min is refused. Every fixture charge here carries no
 // signal (window SNR 0): with the dispatching spectrum and the default snr_min 1 no fragment enters a pool; with the
 // same spectrum and snr_min -1 every fragment does, so the threshold is what refused them.
 //
@@ -593,7 +593,7 @@ START_SECTION(gate_window_snr_at_or_below_one_is_refused)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
-// ADR-0064 G4. Single mode, the strongest charge refused: the next admitted charge of the same fragment stands in
+// ADR-0066 G4. Single mode, the strongest charge refused: the next admitted charge of the same fragment stands in
 // (ISSUE 2). b6 is seen at 2+ (the representative) and 3+; a charge floor of 3 refuses 2+, a floor of 4 both.
 //
 // FAILS UNDER: an anchor that stays best_ms2 whatever the gate says (the gated target would be 2+), or a fallback
@@ -629,7 +629,7 @@ START_SECTION(gate_single_mode_charge_fallback)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
-// ADR-0064 G4b. Separate mode drops only the refused charges: b6 seen at 2+, 3+ and 4+ is three targets ungated; a
+// ADR-0066 G4b. Separate mode drops only the refused charges: b6 seen at 2+, 3+ and 4+ is three targets ungated; a
 // charge floor of 3 refuses 2+ alone, so the governed plan is the 3+ and 4+ targets of the same fragment.
 //
 // FAILS UNDER: a gate that drops the whole fragment when its representative charge is refused, or one that still
@@ -661,7 +661,7 @@ START_SECTION(gate_separate_drops_only_refused_charges)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
-// ADR-0064 G4c. Multiplexed: the anchor and the notches come from the admitted charges only. Ungated, b6 is one target
+// ADR-0066 G4c. Multiplexed: the anchor and the notches come from the admitted charges only. Ungated, b6 is one target
 // anchored at 2+ with 3+ and 4+ as notches; with 2+ refused the target is anchored at 3+ and notches 4+ alone.
 //
 // FAILS UNDER: notches drawn from the fragment's full envelope (2+ would come back as a notch), or an anchor that stays
@@ -696,7 +696,7 @@ START_SECTION(gate_multiplexed_anchor_and_notches_are_admitted_charges)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
-// ADR-0064 G5. The cleavage cap counts SENT cleavages, not re-acquisitions: with b6 sent and max_targets 2 the
+// ADR-0066 G5. The cleavage cap counts SENT cleavages, not re-acquisitions: with b6 sent and max_targets 2 the
 // proteoform has room for one new cleavage, and b6's re-acquisition (sent at 0, seen at 0: admitted) takes none of it.
 // With b6 and y6 sent and max_targets 2 there is no room: only the two re-acquisitions are planned.
 //

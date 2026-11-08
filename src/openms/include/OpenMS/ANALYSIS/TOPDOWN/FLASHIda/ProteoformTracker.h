@@ -289,7 +289,7 @@ namespace OpenMS
     std::vector<double> combinedMs2FrameMasses() const;
   };
 
-  /// What a governed MS3 plan is admitted against (ADR-0064, identification.characterization.per_proteoform): the
+  /// What a governed MS3 plan is admitted against (ADR-0066, identification.characterization.per_proteoform): the
   /// proteoform's sent fragments, the dispatching MS2's spectrum and the per-run cleavage cap. planNextScans applies it
   /// per charge where the pools are built -- an isolatable charge (m/z > 0, |z| >= charge_floor), a window SNR above
   /// snr_min over the dispatching MS2 in the window buildMS3 commands (max(iso_width, 2.0) Th, so the planning number
@@ -358,7 +358,7 @@ namespace OpenMS
     /// Exhaustive forks to planExhaustive_ instead: its pool is the winner MS2 scan's raw deconvolved
     /// masses rather than the mapped-fragment table (ADR-0023).
     ///
-    /// @p gate (ADR-0064): a governed plan. Each pool keeps only the fragments with an admitted charge, the strongest
+    /// @p gate (ADR-0066): a governed plan. Each pool keeps only the fragments with an admitted charge, the strongest
     /// admitted charge anchors a target and the notches come from the admitted charges only; a cleavage the proteoform
     /// never sent takes one of gate->max_targets - |sent| slots, and once they are used a new cleavage is skipped (its
     /// slot passes to the next candidate). A skipped or refused exhaustive / discriminating mass is not stamped and its
@@ -373,7 +373,7 @@ namespace OpenMS
     };
 
     /// Give back what @p items -- unsent MS3s of @p precursor_id's governed plans, withdrawn, reconciled away or
-    /// expired (ADR-0064) -- took at plan time: an exhaustive / discriminating nominal leaves dispatched_nominal_masses,
+    /// expired (ADR-0066) -- took at plan time: an exhaustive / discriminating nominal leaves dispatched_nominal_masses,
     /// and an undecided discriminating round's record (the nearest within the level-2 tolerance of the item's
     /// fragment_mass, as recordDiscriminatingScan finds it) is no longer dispatched, so either can be planned again.
     /// An item whose (precursor_id, nominal) is in @p committed_owner_nominals keeps both: a sibling of it went out.
@@ -381,7 +381,7 @@ namespace OpenMS
     Ms3Withdrawal withdrawMs3(int precursor_id, const std::vector<Ms3PlanItem>& items,
                               const std::set<std::pair<int, int>>& committed_owner_nominals);
 
-    /// The cleavage an MS3 target acquires (ADR-0064), the key of the registry's sent fragments and of the cleavage
+    /// The cleavage an MS3 target acquires (ADR-0066), the key of the registry's sent fragments and of the cleavage
     /// cap: (ion type, ion index), or ("u", its nominal mass) for an unassigned raw mass (exhaustive 'u', a
     /// discriminating mass with no ion of the best path).
     static Ms3Cleavage ms3CleavageOf(const Ms3Target& target);
@@ -513,7 +513,7 @@ namespace OpenMS
      * emitted targets -- characterization.fragment_charges may fan one species out into several
      * scans (ADR-0016).
      *
-     * @p gate: planNextScans' (ADR-0064), applied per charge at the pool and as the cleavage cap at the emit.
+     * @p gate: planNextScans' (ADR-0066), applied per charge at the pool and as the cleavage cap at the emit.
      */
     std::vector<Ms3Target> planExhaustive_(ProteoformModel& m, int precursor_id, int budget, const Ms3PlanGate* gate);
 
@@ -530,7 +530,7 @@ namespace OpenMS
     /// labelled (@p ion_type, @p ion_index), with characterization.fragment_charges' handling (single: one target;
     /// separate: one per SNR-positive charge; multiplexed: one target carrying the rest as notches) and stage[0] =
     /// m.winner_params. Appends to @p out. @p mode_name only labels selectNotches' diagnostics.
-    /// @p charges (a governed plan, ADR-0064): the mass's admitted charges, strongest first -- the first anchors and the
+    /// @p charges (a governed plan, ADR-0066): the mass's admitted charges, strongest first -- the first anchors and the
     /// notches come from these only. nullptr: the peak's representative charge and its whole envelope, as before.
     void emitRawMassTarget_(const ProteoformModel& m, const PeakRecord& pr, const std::string& ion_type, int ion_index,
                             const char* mode_name, std::vector<Ms3Target>& out,

@@ -172,7 +172,7 @@ namespace
   }
 }
 
-// ===== Per-proteoform MS3 plans (ADR-0064) =========================================================================
+// ===== Per-proteoform MS3 plans (ADR-0066) =========================================================================
 namespace
 {
   Ms3ProteoformKey pkey(double mass, const std::string& acc = "P1", int start = 0, int end = 104)

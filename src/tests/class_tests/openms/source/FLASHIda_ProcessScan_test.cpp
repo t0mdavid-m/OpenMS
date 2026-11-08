@@ -3962,7 +3962,7 @@ START_SECTION(authored_charge_species_buys_no_quant_ms3)
 }
 END_SECTION
 
-// ===== Per-proteoform MS3 re-planning (ADR-0064) end to end ======================================================
+// ===== Per-proteoform MS3 re-planning (ADR-0066) end to end ======================================================
 //
 // The ms3_fragments_cytc recipe (inclusion-pinned cytC, objective fragments, budget 3) driven through runInterleaved
 // with characterization.per_proteoform off and on. The drive feeds the one MS2 fixture for every MS2 command, so every
