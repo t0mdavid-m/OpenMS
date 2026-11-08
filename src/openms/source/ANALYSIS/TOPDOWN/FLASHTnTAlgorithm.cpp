@@ -521,7 +521,7 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      {"advanced"});
   defaults_.setMinFloat("undetermined_decoy_weight", 1.0);
   defaults_.setValue("undetermined_pseudo_decoys", 0.0,
-                     "PrSM and proteoform q-values of the class \"undetermined, both termini\": the decoy count starts at this value, so that its "
+                     "PrSM q-values of the class \"undetermined, both termini\": the decoy count starts at this value, so that its "
                      "best PrSMs of a run do not pass at q-value 0 above the run's first decoy (where the development runs' shuffled entrapment "
                      "held its excess errors). 0: off.",
                      {"advanced"});
@@ -2896,15 +2896,15 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         std::stable_sort(order.begin(), order.end(), [&](Size l, Size r) { return cluster_score[l] > cluster_score[r]; });
         std::vector<RankedItem<double>> ranked;
         ranked.reserve(order.size());
-        // the both-termini proteoforms with the class's decoy weight, and the group holding them with its pseudo-count (as their PrSMs above)
-        bool group_both_termini = false;
+        // the both-termini proteoforms with the class's decoy weight (as their PrSMs above). Not its pseudo-count: a group passes nothing at 1%
+        // below 99 targets above its first decoy, and the class shares its group with the precursor-ladder class in most runs (held-out seed
+        // 2: 42 -> 0 proteoforms of "undetermined, both termini + precursor ladder" in a CRC lysate run, 864 fewer proteoforms in all)
         for (Size k : order)
         {
           const bool bt = cluster_class[k] == pf_class_both_termini;
-          group_both_termini |= bt;
           ranked.push_back({-cluster_score[k], decoys[clusters[k][0]], decoy_weights[clusters[k][0]] * (bt ? undetermined_decoy_weight_ : 1.0)});
         }
-        const double group_pseudo = group_both_termini ? undetermined_pseudo_decoys_ : 0.0;
+        const double group_pseudo = 0.0;
         const auto proteoform_qvalues = targetDecoyQvalues(ranked, group_pseudo);
         // Decoy precursors model wrong MS1 masses, which only a proteoform whose mass came from MS1 can have: they count against those, and a
         // proteoform without a mass or with a mass from fragment pairs takes its q-value from the same ranking without them (identical when
