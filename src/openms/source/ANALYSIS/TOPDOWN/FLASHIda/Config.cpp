@@ -364,6 +364,10 @@ namespace OpenMS
         "(root)");
     rejectUnknownKeys(config.value("global", json::object()),
         {"method_name", "method_description", "duration"}, "global");
+    {
+      const json global = config.value("global", json::object());
+      if (global.contains("duration") && global["duration"].is_number()) global_.duration = global["duration"].get<double>();
+    }
 
     // --- deconvolution section ---
     auto deconv = config.value("deconvolution", json::object());

@@ -57,6 +57,7 @@ namespace OpenMS
       int next_handle = 1;
       std::ostream* console = &std::cout;
       double rt_seconds = std::nan("");
+      bool ansi = false;   // the console takes SGR colour (the operator view is running)
     };
 
     State& state()
@@ -136,10 +137,23 @@ namespace OpenMS
       for (const auto& kv : s.sinks) kv.second(line);
     }
 
+    /// The KIND column's colour when the console takes SGR (ADR-0065 push 2).
+    const char* colourOf(const char* name)
+    {
+      const std::string n(name);
+      if (n == "ID") return "\x1b[32m";
+      if (n == "MS3") return "\x1b[36m";
+      if (n == "MS1") return "\x1b[2m";
+      if (n == "WARN") return "\x1b[33m";
+      if (n == "ERROR") return "\x1b[31m";
+      return "";
+    }
+
     void console_(State& s, const std::string& stamp, const char* name, const std::string& text)
     {
       if (s.console == nullptr) return;
-      const std::string out = stamp + "  " + column(name) + text + "\n";
+      const char* colour = s.ansi ? colourOf(name) : "";
+      const std::string out = stamp + "  " + colour + column(name) + (*colour ? "\x1b[0m" : "") + text + "\n";
       s.console->write(out.data(), static_cast<std::streamsize>(out.size()));
       s.console->flush();
     }
@@ -172,6 +186,39 @@ namespace OpenMS
     std::lock_guard<std::mutex> lock(s.mutex);
     record_(s, stamp, EventLevel::Info, std::string(operatorTag(kind)) + " " + text);
     console_(s, stamp, kindName(kind), text);
+  }
+
+  void EventLog::summary(const std::vector<std::string>& lines)
+  {
+    State& s = state();
+    const std::string stamp = clock();
+    std::lock_guard<std::mutex> lock(s.mutex);
+    for (const std::string& l : lines)
+    {
+      record_(s, stamp, EventLevel::Info, "[OP-SUMMARY] " + l);
+      if (s.console != nullptr)
+      {
+        const std::string out = l + "\n";
+        s.console->write(out.data(), static_cast<std::streamsize>(out.size()));
+      }
+    }
+    if (s.console != nullptr) s.console->flush();
+  }
+
+  void EventLog::paint(const std::string& raw)
+  {
+    State& s = state();
+    std::lock_guard<std::mutex> lock(s.mutex);
+    if (s.console == nullptr) return;
+    s.console->write(raw.data(), static_cast<std::streamsize>(raw.size()));
+    s.console->flush();
+  }
+
+  void EventLog::setAnsi(bool ansi)
+  {
+    State& s = state();
+    std::lock_guard<std::mutex> lock(s.mutex);
+    s.ansi = ansi;
   }
 
   void EventLog::setRt(double rt_seconds)

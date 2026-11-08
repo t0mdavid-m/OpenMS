@@ -40,6 +40,7 @@
 #include <ostream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace OpenMS
 {
@@ -92,6 +93,17 @@ namespace OpenMS
 
     /// An operator line: console, file (as "[OP-<KIND>] text") and sinks.
     static void say(OperatorKind kind, const std::string& text);
+
+    /// The run summary (ADR-0065 push 2): each line to the console as it is, and to the file and the sinks as
+    /// "[OP-SUMMARY] <line>".
+    static void summary(const std::vector<std::string>& lines);
+
+    /// Raw bytes to the console under the same lock as every line (the operator view's redraw: escape sequences
+    /// included). Not recorded in the file or the sinks.
+    static void paint(const std::string& raw);
+
+    /// Colour the console's KIND column (the operator view sets it while it runs on a VT console).
+    static void setAnsi(bool ansi);
 
     /// The last retention time seen, in seconds (the engine's unit); the file prefix prints it in minutes.
     static void setRt(double rt_seconds);

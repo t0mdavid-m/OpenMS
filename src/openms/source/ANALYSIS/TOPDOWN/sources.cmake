@@ -11,6 +11,7 @@ set(sources_list
         FLASHExtenderAlgorithm.cpp
         FLASHIda.cpp
         FLASHIda/Config.cpp
+        FLASHIda/ConsoleView.cpp
         FLASHIda/Deconvolution.cpp
         FLASHIda/Exploration.cpp
         FLASHIda/EventLog.cpp
@@ -20,6 +21,7 @@ set(sources_list
         FLASHIda/FragmentAnalysis.cpp
         FLASHIda/IdaLogger.cpp
         FLASHIda/MS3FragmentMatcher.cpp
+        FLASHIda/PrecursorBoard.cpp
         FLASHIda/PrecursorSelection.cpp
         FLASHIda/ProteoformTracker.cpp
         FLASHIda/ProteomeSearch.cpp

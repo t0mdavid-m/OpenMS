@@ -12,6 +12,7 @@ set(sources_list_h
         FLASHExtenderAlgorithm.h
         FLASHIda.h
         FLASHIda/Config.h
+        FLASHIda/ConsoleView.h
         FLASHIda/Deconvolution.h
         FLASHIda/Exploration.h
         FLASHIda/EventLog.h
@@ -23,6 +24,7 @@ set(sources_list_h
         FLASHIda/IdaLogger.h
         FLASHIda/LogCell.h
         FLASHIda/MS3FragmentMatcher.h
+        FLASHIda/PrecursorBoard.h
         FLASHIda/PrecursorSelection.h
         FLASHIda/ProteomeSearch.h
         FLASHIda/Quantification.h

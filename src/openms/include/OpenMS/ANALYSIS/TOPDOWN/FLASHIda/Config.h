@@ -708,6 +708,13 @@ namespace OpenMS
     std::string log_dir;
   };
 
+  /// global.* the engine reads: the method's duration (minutes), for the operator view's identification timeline
+  /// (ADR-0065 push 2). 0 = not given; the timeline then spans the retention time so far.
+  struct OPENMS_DLLAPI GlobalConfig
+  {
+    double duration = 0.0;
+  };
+
   /**
    * @brief Owns all configuration parsing and storage for FLASHIda.
    *
@@ -743,6 +750,7 @@ namespace OpenMS
     const TargetingConfig& targeting() const { return targeting_; }
     const QuantConfig& quantification() const { return quant_; }
     const RuntimeConfig& runtime() const { return runtime_; }
+    const GlobalConfig& global() const { return global_; }
     const CharacterizationConfig& characterization() const { return characterization_; }
     const IdentificationConfig& identification() const { return identification_; }
 
@@ -800,6 +808,7 @@ namespace OpenMS
     CharacterizationConfig characterization_;
     QuantConfig quant_;
     RuntimeConfig runtime_;
+    GlobalConfig global_;
     bool exploration_enabled_ = false;
 
     /// Names listed in precursor_selection.additional_scans, kept only so the unreferenced-block
