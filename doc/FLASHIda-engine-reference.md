@@ -262,7 +262,7 @@ winner (`initiateNextLevel` inside `applyVariant`) still runs under the lock.
   neither (ADR-0025). A worker never holds the pool mutex while it runs a search or an apply, so the
   hierarchy `analysis_mutex_` → { `queue_mutex_`, `precursor_map_mutex_`, the `IdaLogger` stream mutexes,
   the `SearchPool` mutex } stays acyclic.
-- **Engine output goes through `EventLog`** (ADR-0064, `FLASHIda/EventLog.h`): process-wide, one mutex, one
+- **Engine output goes through `EventLog`** (ADR-0065, `FLASHIda/EventLog.h`): process-wide, one mutex, one
   whole line per call. `EventLine() << …` composes an event and emits it at scope exit; `EventLog::say` writes an
   operator line (console + file). `IdaLogger` opens `events.log` with the run folder and closes it in its destructor;
   lines before that (Config's warnings) are kept, at most 1,000, and written first. Hazard: two engines alive at once
@@ -799,7 +799,7 @@ gate #1; that scan carries all of the sweep's evidence. `scan_commands.tsv` has 
 
 `planNextScans` emits `[MS3-PLAN] … reason=…` naming which of its zero-target causes fired
 (`all_mods_localized` is the common, *correct* one: ambiguity mode with everything already localized).
-an event — like every engine marker it is in the run folder's `events.log` (ADR-0064), not on the console.
+an event — like every engine marker it is in the run folder's `events.log` (ADR-0065), not on the console.
 
 ## Config (`FLASHIda/Config.cpp`)
 

@@ -1090,7 +1090,7 @@ auto quantCfg = [](const std::string& body, const std::string& precursor_extra =
                  MS2_QUANT);
 };
 
-// Loads `json` and returns every event Config emitted (ADR-0064: its event log, no longer stdout), so a
+// Loads `json` and returns every event Config emitted (ADR-0065: its event log, no longer stdout), so a
 // [CONFIG-WARN] is ASSERTED rather than inferred from "it loaded". The sink goes with the scope, throw or not.
 auto loadAndCapture = [](const std::string& json) {
   EventCapture cap;

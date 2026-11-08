@@ -125,7 +125,7 @@ namespace
   }
 }
 
-// ADR-0064 event-log helpers (before START_TEST: a namespace cannot open inside it).
+// ADR-0065 event-log helpers (before START_TEST: a namespace cannot open inside it).
 namespace
 {
   /// "HH:MM:SS.mmm" at the start of @p line.
@@ -175,7 +175,7 @@ START_SECTION(deconvolveMS1_writes_nothing_to_stdout)
     }
   }
 
-  // ADR-0064: nothing on stdout, and nothing in the event log either (the masses are in ida.log and scan_results).
+  // ADR-0065: nothing on stdout, and nothing in the event log either (the masses are in ida.log and scan_results).
   EventCapture events;
   std::ostringstream captured;
   std::streambuf* const real_cout = std::cout.rdbuf(captured.rdbuf());
@@ -1495,7 +1495,7 @@ START_SECTION(scan_commands_parse_reads_raw_quote_ids_of_an_older_file)
 END_SECTION
 
 // ---------------------------------------------------------------------------------------------------------------
-// ADR-0064: the event log. The engine's lines go through EventLog -- whole, one call each -- to events.log and the
+// ADR-0065: the event log. The engine's lines go through EventLog -- whole, one call each -- to events.log and the
 // sinks; only operator lines and warnings reach the console; nothing reaches std::cout directly.
 // ---------------------------------------------------------------------------------------------------------------
 

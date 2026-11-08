@@ -69,7 +69,7 @@ namespace OpenMS
     // this constructor never creates a directory, so a folder that does not exist leaves every
     // stream closed and every writer a no-op.
     const std::string dir = rt_cfg.log_dir.empty() ? std::string{} : rt_cfg.log_dir + "/";
-    // ADR-0064: the event log opens with the run folder, and the lines Config emitted while it parsed are written
+    // ADR-0065: the event log opens with the run folder, and the lines Config emitted while it parsed are written
     // first. No folder: those lines are discarded (an open file another engine owns is left alone).
     EventLog::openFile(dir.empty() ? std::string{} : dir + kEventLogName);
     owns_event_log_ = !dir.empty();

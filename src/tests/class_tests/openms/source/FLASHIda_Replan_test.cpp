@@ -114,7 +114,7 @@ namespace
 })JSON";
   }
 
-  /// Run @p fn with the engine's events captured (ADR-0064); returns what it emitted.
+  /// Run @p fn with the engine's events captured (ADR-0065); returns what it emitted.
   template <typename Fn>
   std::string captureCout(Fn fn)
   {

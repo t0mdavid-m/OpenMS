@@ -205,7 +205,7 @@ namespace OpenMS
       return out;
     }
 
-    /// ADR-0064: the operator's ID line for one searched MS2, from the values its identification row and close-out use.
+    /// ADR-0065: the operator's ID line for one searched MS2, from the values its identification row and close-out use.
     void sayIdentification(const std::string& id, const FragmentAnalysis::ProteoformMatch& m, double commanded_mass,
                            bool closed_out, const std::optional<double>& threshold, double rt_window_s)
     {
@@ -651,7 +651,7 @@ FLASHIda::FLASHIda(char* arg) :
     EventLine() << "[REPLAN] cv=" << faims_cv << " survey=" << ScanCommandQueue::encode(parent_tracking_id) << " kept=" << replan.kept
               << " dropped=" << replan.dropped_scan_ids.size() << " added=" << replan.added << " adjusted=" << replan.adjusted;
     {
-      // ADR-0064: the operator's line for this decision survey, from the counts the [REPLAN] event logs.
+      // ADR-0065: the operator's line for this decision survey, from the counts the [REPLAN] event logs.
       std::ostringstream op;
       op << '#' << ScanCommandQueue::encode(parent_tracking_id);
       if (faims_.isEnabled()) op << "  cv " << faims_cv;
@@ -1152,7 +1152,7 @@ FLASHIda::FLASHIda(char* arg) :
                              double faims_cv, int instrument_scan_number)
   {
     std::lock_guard<std::mutex> lock(analysis_mutex_);
-    EventLog::setRt(rt);   // ADR-0064: the events.log prefix carries the last retention time seen
+    EventLog::setRt(rt);   // ADR-0065: the events.log prefix carries the last retention time seen
 
     // Tracking ID extraction (perspective: scan processed is parent of potential children)
     std::string parent_desc_str = scan_description ? std::string(scan_description) : "";

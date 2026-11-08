@@ -43,7 +43,7 @@
 
 namespace OpenMS
 {
-  /// Severity of an engine event. Warn and Error also reach the console (ADR-0064 d.1).
+  /// Severity of an engine event. Warn and Error also reach the console (ADR-0065 d.1).
   enum class EventLevel
   {
     Info,
@@ -61,7 +61,7 @@ namespace OpenMS
   };
 
   /**
-   * @brief The engine's one writer of text output (ADR-0064): the event log and the operator lines.
+   * @brief The engine's one writer of text output (ADR-0065): the event log and the operator lines.
    *
    * Process-wide, as std::cout was before it: the emitters live in Config, ScanCommandQueue, Exploration,
    * ProteoformTracker, FragmentAnalysis, MS3FragmentMatcher, PrecursorSelection, SearchPool and FLASHIda, and many

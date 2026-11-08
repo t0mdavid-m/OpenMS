@@ -309,7 +309,7 @@ namespace
     return out;
   }
 
-  // planNextScans with its events captured (ADR-0064): the [MS3-PLAN] line names the reason for a zero-target plan.
+  // planNextScans with its events captured (ADR-0065): the [MS3-PLAN] line names the reason for a zero-target plan.
   std::vector<Ms3Target> planCapturing(ProteoformTracker& tracker, int precursor_id, std::string& out)
   {
     EventCapture cap;

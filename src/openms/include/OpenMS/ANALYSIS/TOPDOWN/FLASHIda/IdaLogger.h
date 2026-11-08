@@ -116,14 +116,14 @@ namespace OpenMS
     static constexpr const char* kScanResultsName = "scan_results.tsv";
     static constexpr const char* kIdentificationName = "identification.tsv";
     static constexpr const char* kPooledIdentificationName = "pooled_identification.tsv";
-    /// The event log (ADR-0064), beside the five streams but not one of them: no golden compares it.
+    /// The event log (ADR-0065), beside the five streams but not one of them: no golden compares it.
     static constexpr const char* kEventLogName = "events.log";
 
     /// Construct from Config: open the five streams (append) under runtime().log_dir and write
     /// the four TSV headers. Opens nothing when log_dir is empty.
     explicit IdaLogger(const Config& config);
 
-    /// Closes events.log if this logger opened it (ADR-0064).
+    /// Closes events.log if this logger opened it (ADR-0065).
     ~IdaLogger();
 
     /// copy constructor (deleted: ofstreams are non-copyable)

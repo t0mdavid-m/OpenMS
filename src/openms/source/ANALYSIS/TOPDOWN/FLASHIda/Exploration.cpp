@@ -1369,7 +1369,7 @@ namespace OpenMS
                 << " commands=" << nlr.commands.size();
       if (dispatched_targets > 0 && !nlr.commands.empty())
       {
-        // ADR-0064: the operator's line for this MS3 batch, from the commands [MS3-DISPATCH] counts.
+        // ADR-0065: the operator's line for this MS3 batch, from the commands [MS3-DISPATCH] counts.
         std::ostringstream op;
         op << '#' << ScanCommandQueue::encode(ms_ctx->scan_id) << "  " << dispatched_targets << " targets ";
         std::vector<std::string> ions;

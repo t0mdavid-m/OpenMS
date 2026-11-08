@@ -718,7 +718,7 @@ namespace
                 return a.intensity > b.intensity;
               });
 
-    // ADR-0064: one summary event per matched PrSM, replacing the per-ion dump.
+    // ADR-0065: one summary event per matched PrSM, replacing the per-ion dump.
     EventLine() << "[MATCH] region=" << (start_pos >= 0 ? start_pos + 1 : 1) << "-"
                 << (end_pos >= 0 ? end_pos : static_cast<int>(protein_sequence.size())) << " protein_length=" << protein_sequence.size()
                 << " ptm_sites=" << mod_masses.size() << " fragments=" << matches.size() << " masses=" << stored_ms2.size();
@@ -1212,7 +1212,7 @@ namespace
       if (!any_output) break;  // No more secondary ions available
     }
 
-    // ADR-0064: one summary event per call, replacing the per-site bracket dump.
+    // ADR-0065: one summary event per call, replacing the per-site bracket dump.
     EventLine() << "[AMBIGUITY-IONS] fragments=" << match_count << " ptm_sites=" << result.ptm_sites.size()
                 << " bracketed_sites=" << ptm_brackets.size() << " primary=" << primary_output
                 << " secondary=" << (output_idx - primary_output) << " output=" << output_idx;
@@ -1312,7 +1312,7 @@ namespace
       select_prefix = !select_prefix;  // Alternate between prefix and suffix
     }
 
-    // ADR-0064: one summary event per call, replacing the per-ion dump.
+    // ADR-0065: one summary event per call, replacing the per-ion dump.
     {
       EventLine ev;
       ev << "[TERMINAL-IONS] prefix=" << prefix_ions.size() << " suffix=" << suffix_ions.size() << " output=" << output_idx

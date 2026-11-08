@@ -1,4 +1,4 @@
-// FLASHIda test helper: capture the engine's event lines (ADR-0064).
+// FLASHIda test helper: capture the engine's event lines (ADR-0065).
 //
 // The engine no longer prints to std::cout; its events go to EventLog's sinks. EventCapture is one sink for the
 // lifetime of the object: str() is every line emitted meanwhile, one per '\n', as the line was emitted (no

@@ -746,7 +746,7 @@ namespace OpenMS
       }
     }
 
-    // ADR-0064: one summary event per MS3 scoring, replacing the per-variant and per-ion dump.
+    // ADR-0065: one summary event per MS3 scoring, replacing the per-variant and per-ion dump.
     {
       EventLine ev;
       ev << "[MS3-SCORE] precursor=" << fragment_ion_type << fragment_ion_index << " residues=" << prot_start_1based << "-"

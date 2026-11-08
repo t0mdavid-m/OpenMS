@@ -370,7 +370,7 @@ namespace
     config = std::make_unique<Config>(cfg);
     deconv = std::make_unique<Deconvolution>(*config, config->toleranceList());
     ps = std::make_unique<PrecursorSelection>(*config, *deconv);
-    EventCapture cap;   // ADR-0064: the [CHARGE-SET] lines are events, no longer stdout
+    EventCapture cap;   // ADR-0065: the [CHARGE-SET] lines are events, no longer stdout
     const int n = FLASHIdaTestAccess::selectFrom(*ps, splitEnvelope(), kSplitRt);
     log = cap.str();
     return n;
