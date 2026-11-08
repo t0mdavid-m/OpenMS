@@ -49,6 +49,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -292,6 +293,13 @@ namespace OpenMS
     /// Move out every stamp committed since the last call, in commit order (the analysis thread folds them).
     std::vector<MemoryStamp> takeCommitted();
 
+    /// Close a species out (ADR-0061 d.7/d.9, ADR-0062 d.3), in one step under queue_mutex_: append @p stamps to the
+    /// committed-stamps inbox (so the next survey's fold arms the bars) and to committed_since_fold_ (so a survey
+    /// racing that fold reconciles the species away), and withdraw every still-UNCOMMITTED plan unit of
+    /// @p nominal_mass at EVERY CV. A committed unit (a scan already sent, a started sweep) is kept, as are children
+    /// that are not plan units (MS3s, follow-ups, a bought R). The caller closes / drops the returned groups after.
+    ReplanResult closeOut(int nominal_mass, const std::vector<MemoryStamp>& stamps);
+
     /// Take (find + erase) the decision info written for @p scan_id; nullopt for commands no survey decided.
     std::optional<DecisionInfo> takeDecisionInfo(int scan_id);
 
@@ -475,6 +483,10 @@ namespace OpenMS
     /// Remove the registered, QUEUED command @p scan_id from the registry (not from the deques): its unit loses a
     /// command and is erased when none is left. Caller must hold queue_mutex_.
     void forgetQueued_(int scan_id);
+
+    /// Remove every queued command of the units in @p leaving, then the units (caller holds queue_mutex_). Records
+    /// the dropped scan ids in @p r; the caller has already chosen the units and gathered their groups.
+    void dropUnits_(const std::set<int>& leaving, ReplanResult& r);
 
     /// buildMS2's stage-0 anchor geometry: the centre of @p pg's measured m/z range at @p charge, that range
     /// widened by @p margin on each side, and the charge. Shared with reisolate.

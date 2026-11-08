@@ -971,6 +971,58 @@ namespace OpenMS
     }
   } // namespace
 
+  void ScanCommandQueue::dropUnits_(const std::set<int>& leaving, ReplanResult& r)
+  {
+    if (leaving.empty()) return;
+    for (int p = 0; p < 4; ++p)
+    {
+      auto it = queues_[p].begin();
+      while (it != queues_[p].end())
+      {
+        auto u = unit_of_.find(it->scan_id);
+        if (u != unit_of_.end() && leaving.count(u->second) > 0)
+        {
+          r.dropped_scan_ids.push_back(it->scan_id);
+          decision_info_.erase(it->scan_id);
+          ms3_cmd_proteoform_.erase(it->scan_id);
+          unit_of_.erase(u);
+          it = queues_[p].erase(it);
+        }
+        else
+        {
+          ++it;
+        }
+      }
+    }
+    for (int id : leaving) units_.erase(id); // an uncommitted unit's stamps go with it: never acquired, never excluded
+  }
+
+  ReplanResult ScanCommandQueue::closeOut(int nominal_mass, const std::vector<MemoryStamp>& stamps)
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    ReplanResult r;
+    for (const auto& s : stamps)
+    {
+      inbox_.push_back(s);
+      committed_since_fold_.push_back(s);
+    }
+    std::set<int> leaving;
+    for (const auto& [id, u] : units_)
+    {
+      if (u.nominal_mass != nominal_mass) continue;   // every CV: the species is closed out wherever it waits
+      if (u.committed)
+      {
+        ++r.kept;
+        continue;
+      }
+      leaving.insert(id);
+      r.dropped_quant_groups.insert(r.dropped_quant_groups.end(), u.quant_group_ids.begin(), u.quant_group_ids.end());
+      r.dropped_sweep_groups.insert(r.dropped_sweep_groups.end(), u.sweep_group_ids.begin(), u.sweep_group_ids.end());
+    }
+    dropUnits_(leaving, r);
+    return r;
+  }
+
   ReplanResult ScanCommandQueue::replacePlan(double cv, std::vector<PlanUnit> units, const std::vector<AdjustRequest>& adjust,
                                              const std::vector<int>& replace_remainder_of)
   {
@@ -1002,30 +1054,7 @@ namespace OpenMS
         ++r.kept;
       }
     }
-    if (!leaving.empty())
-    {
-      for (int p = 0; p < 4; ++p)
-      {
-        auto it = queues_[p].begin();
-        while (it != queues_[p].end())
-        {
-          auto u = unit_of_.find(it->scan_id);
-          if (u != unit_of_.end() && leaving.count(u->second) > 0)
-          {
-            r.dropped_scan_ids.push_back(it->scan_id);
-            decision_info_.erase(it->scan_id);
-            ms3_cmd_proteoform_.erase(it->scan_id);
-            unit_of_.erase(u);
-            it = queues_[p].erase(it);
-          }
-          else
-          {
-            ++it;
-          }
-        }
-      }
-      for (int id : leaving) units_.erase(id); // an uncommitted unit's stamps go with it: never acquired, never excluded
-    }
+    dropUnits_(leaving, r);
 
     // 2. Insert the new plan. A unit whose species committed since the last fold would have been refused had the
     //    survey seen that commit; it is reconciled away instead. A unit arriving committed is a remainder: it
