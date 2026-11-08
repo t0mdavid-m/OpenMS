@@ -310,9 +310,9 @@ namespace OpenMS
     Ms3ReplanResult replaceMs3Plan(const Ms3ProteoformKey& key, std::vector<Ms3PlanItem> items,
                                    uint64_t snapshot_generation, int max_targets);
 
-    /// Move out the registered items whose unsent command expired (cleanupExpired): the analysis thread undoes
-    /// them as it does a withdrawn item.
-    std::vector<Ms3PlanItem> takeMs3Expired();
+    /// Move out the registered items whose unsent command expired (cleanupExpired), with the committed (precursor
+    /// id, nominal) pairs of their entries as of this call: the analysis thread undoes them as it does a withdrawn item.
+    Ms3Expired takeMs3Expired();
 
     /// Close a species out (ADR-0061 d.7/d.9, ADR-0062 d.3), in one step under queue_mutex_: append @p stamps to the
     /// committed-stamps inbox (so the next survey's fold arms the bars) and to committed_since_fold_ (so a survey
@@ -518,6 +518,7 @@ namespace OpenMS
     std::map<int, Ms3Entry> ms3_entries_;
     std::unordered_map<int, std::pair<int, int>> ms3_item_of_;   ///< queued MS3 scan id -> (entry, item)
     std::vector<Ms3PlanItem> ms3_expired_inbox_;
+    std::set<int> ms3_expired_entries_;   ///< the entries the inbox's items came from (their committed nominals at take)
     int ms3_entry_counter_ = 0;
     int ms3_item_counter_ = 0;
     /// The entry @p key matches: the closest anchor mass, then the lowest id; -1 if none (caller holds the lock).

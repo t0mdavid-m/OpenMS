@@ -111,4 +111,13 @@ namespace OpenMS
     std::vector<Ms3Cleavage> committed_in_gap;
     std::set<std::pair<int, int>> committed_owner_nominals;   ///< (precursor id, nominal) of committed items
   };
+
+  /// What takeMs3Expired hands the analysis thread: the registered items whose unsent command expired, and -- taken
+  /// in the same queue_mutex_ hold -- the committed (precursor id, nominal) pairs of the entries they came from, so the
+  /// undo keeps the stamp of a mass whose sibling went out (as a withdrawal does).
+  struct Ms3Expired
+  {
+    std::vector<Ms3PlanItem> items;
+    std::set<std::pair<int, int>> committed_owner_nominals;
+  };
 } // namespace OpenMS

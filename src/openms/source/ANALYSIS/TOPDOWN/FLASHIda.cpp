@@ -917,14 +917,14 @@ FLASHIda::FLASHIda(char* arg) :
   void FLASHIda::undoExpiredMs3_()
   {
     if (!config_.characterization().per_proteoform) return;   // the inbox is only ever filled by governed items
-    const std::vector<Ms3PlanItem> expired = queue_.takeMs3Expired();
-    if (expired.empty()) return;
+    const Ms3Expired expired = queue_.takeMs3Expired();
+    if (expired.items.empty()) return;
     std::vector<int> ids;
-    for (const Ms3PlanItem& item : expired)
+    for (const Ms3PlanItem& item : expired.items)
       for (const ScanCommand& c : item.commands) ids.push_back(c.scan_id);
     forgetTracking_(ids);
     for (int id : ids) ms2_context_cache_.erase(id);
-    undoMs3Items_(expired, {});
+    undoMs3Items_(expired.items, expired.committed_owner_nominals);
   }
 
   int FLASHIda::waitForSearchIdle()

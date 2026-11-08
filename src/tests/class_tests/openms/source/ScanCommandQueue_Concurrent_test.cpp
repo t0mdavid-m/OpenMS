@@ -1328,12 +1328,39 @@ START_SECTION(ms3_plan_expired_unsent_item_reaches_the_inbox)
   q.replaceMs3Plan(pkey(12351.39), {group}, 0, 3);
   std::this_thread::sleep_for(std::chrono::milliseconds(150));
   q.cleanupExpired();
-  const std::vector<Ms3PlanItem> expired = q.takeMs3Expired();
-  TEST_EQUAL(expired.size(), 1)
-  ABORT_IF(expired.empty())
-  TEST_EQUAL(expired[0].sweep_group_id, 7)
+  const Ms3Expired expired = q.takeMs3Expired();
+  TEST_EQUAL(expired.items.size(), 1)
+  ABORT_IF(expired.items.empty())
+  TEST_EQUAL(expired.items[0].sweep_group_id, 7)
+  TEST_EQUAL(expired.committed_owner_nominals.empty(), true)       // nothing of the entry was committed
   TEST_EQUAL(drainIds(q).empty(), true)
   TEST_EQUAL(q.ms3Snapshot(pkey(12351.39)).sent.empty(), true)   // nothing was sent
+  TEST_EQUAL(q.takeMs3Expired().items.empty(), true)               // taken once
+}
+END_SECTION
+
+// An expired unsent item arrives with its entry's committed (owner, nominal) pairs, so its undo keeps the stamp of a
+// mass whose sibling (another charge, separate mode) went out -- including a sibling sent after the expiry.
+START_SECTION(ms3_plan_expired_item_carries_its_entry_committed_nominals)
+{
+  Config cfg{std::string(minimal_config)};   // scan_timeout 100 ms
+  ScanCommandQueue q(cfg);
+  Ms3PlanItem z5 = ms3Item(21, "u", 3456, 5, 900.0, /*owner=*/4);
+  z5.nominal = 3456;
+  Ms3PlanItem z6 = ms3Item(22, "u", 3456, 6, 800.0, /*owner=*/4);
+  z6.nominal = 3456;
+  q.replaceMs3Plan(pkey(12351.39), {z5, z6}, 0, 3);
+  std::this_thread::sleep_for(std::chrono::milliseconds(60));
+  auto first = q.dequeue();                   // z5 (priority 1) goes out first and commits (4, 3456)
+  ABORT_IF(!first.has_value())
+  TEST_EQUAL(first->scan_id, 21)
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  q.cleanupExpired();                         // z6 never went out: its item reaches the inbox
+  const Ms3Expired expired = q.takeMs3Expired();
+  TEST_EQUAL(expired.items.size(), 1)
+  ABORT_IF(expired.items.empty())
+  TEST_EQUAL(expired.items[0].commands.front().scan_id, 22)
+  TEST_EQUAL(expired.committed_owner_nominals.count({4, 3456}), 1)
 }
 END_SECTION
 

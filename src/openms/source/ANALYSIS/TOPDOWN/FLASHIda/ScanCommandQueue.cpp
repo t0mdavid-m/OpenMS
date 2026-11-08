@@ -947,6 +947,7 @@ namespace OpenMS
         if (c.scan_id != id) rest.insert(c.scan_id);
       removeQueuedMs3_(rest);
       ms3_expired_inbox_.push_back(std::move(item->second));
+      ms3_expired_entries_.insert(eid);
       e->second.items.erase(item);
     }
   }
@@ -1175,11 +1176,19 @@ namespace OpenMS
     return r;
   }
 
-  std::vector<Ms3PlanItem> ScanCommandQueue::takeMs3Expired()
+  Ms3Expired ScanCommandQueue::takeMs3Expired()
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
-    std::vector<Ms3PlanItem> out;
-    out.swap(ms3_expired_inbox_);
+    Ms3Expired out;
+    out.items.swap(ms3_expired_inbox_);
+    // The entries' committed nominals NOW, not at expiry: a sibling that went out since still keeps the stamp.
+    for (const int eid : ms3_expired_entries_)
+    {
+      const auto e = ms3_entries_.find(eid);
+      if (e != ms3_entries_.end())
+        out.committed_owner_nominals.insert(e->second.committed_owner_nominals.begin(), e->second.committed_owner_nominals.end());
+    }
+    ms3_expired_entries_.clear();
     return out;
   }
 

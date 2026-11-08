@@ -406,8 +406,9 @@ namespace OpenMS
     /// keep the stamp. Caller holds analysis_mutex_.
     void undoMs3Items_(const std::vector<Ms3PlanItem>& items, const std::set<std::pair<int, int>>& committed_owner_nominals);
 
-    /// Take the queue's expired governed items (cleanupExpired's inbox) and undo them: their ids are forgotten, their
-    /// MS2 contexts dropped. A no-op with characterization.per_proteoform off. Caller holds analysis_mutex_.
+    /// Take the queue's expired governed items (cleanupExpired's inbox) and undo them with their entries' committed
+    /// nominals (a committed sibling keeps the stamp): their ids are forgotten, their MS2 contexts dropped. A no-op with
+    /// characterization.per_proteoform off. Caller holds analysis_mutex_.
     void undoExpiredMs3_();
 
     /// Test seam between a governed MS3 plan and its swap (replaceMs3Plan), so a test can commit an MS3 in exactly
