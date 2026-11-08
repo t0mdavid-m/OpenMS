@@ -36,6 +36,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/KineticModel.h>   // precursorShare on the regular MSn rows (ADR-0048)
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/CandidateAdmission.h>   // sameSpeciesMass (ADR-0061 d.8)
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Refine.h>          // RefineCandidates for the identification refine columns (ADR-0049)
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanRole.h>
