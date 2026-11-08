@@ -267,6 +267,13 @@ winner (`initiateNextLevel` inside `applyVariant`) still runs under the lock.
   operator line (console + file). `IdaLogger` opens `events.log` with the run folder and closes it in its destructor;
   lines before that (Config's warnings) are kept, at most 1,000, and written first. Hazard: two engines alive at once
   share the one file; the second `openFile` replaces the first.
+- **A quantification MS3 is bought on the apply** (ADR-0064): under `quantification.scan` `ms3`/`both`, an MS2 whose
+  identification passes `reachesThreshold_` (and is neither charge-named nor already closed out) gets
+  `Exploration::dispatchQuant` before its characterization MS3s are pushed: `ProteoformTracker::labelledFragments`
+  ('C', any ion type, not full length), window SNR > 1 on the MS2, the most intense `ms3_targets`, `buildMS3` with
+  `ms_settings.ms3_quant` and marker `'Q'`. It returns on the regular MS3 branch, is read by
+  `Quantification::measure(..., 2, "ms3_quant")` (level 2: the extractor walks a one-spectrum experiment), and is never cached for annotation. The search fixes iodoTMT6plex on
+  every C (`ProteomeSearch`'s `FixedLabel`, FLASHTnT's per-entry fixed masses through `ProteoformDatabase::refresh()`).
 - **A close-out runs on the apply** (ADR-0061 push 5, `closeOutIfIdentified_`): an MS2 whose
   `search_identification_score` reaches `identification.threshold` arms `CloseOutMassRt`/`CloseOutMzRt` (max-applied)
   through `ScanCommandQueue::closeOut`, which also withdraws the species' uncommitted units at every CV under
