@@ -140,7 +140,7 @@ private `monitor_deconv_` (ADR-0042). **Do not merge the monitor engine into `de
   Refine (ADR-0049). `Refine` is pure static functions; `RefineSettings.h` exists to break an include
   cycle. The tracker owns the discriminating round; the MS3 return closes it; `Config::validate`
   refuses `refine`/`discriminating` under `flashtnt` and `discriminating` with level-3 exploration.
-  Markers are stdout only.
+  Markers are events (`events.log`, ADR-0064).
 - **A sweep is exactly its grid** (index arithmetic, top edge appended) and every pre-scan carries
   its **precursor share** (ADR-0048). The reaction-time floor (0.03 ms) still applies to swept ETD.
 - **`kinetic_model`**: no variant wins; the follow-up is the fitted modeled maximum at every level

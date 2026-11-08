@@ -223,14 +223,14 @@ itself minted and dispatched its id.
 
 A sixth early return follows the gates: MS1 with `config_.level(1).selection == None` returns 0
 before selection. None of these paths reaches the TSV writers, so an un-commanded scan produces no
-log row — but gates 3–5 do leave a stdout trace.
+log row — but gates 3–5 do leave an `events.log` trace.
 
 **Gate 3 also refuses a result that arrived too late** (FDmerge `96f8ab3732`). Only an answer
 (`resolvePending`) or an exploration abort (`cancelByScanIds`) empties `pending_scan_map_`, so a scan the
 host or instrument dropped, or one an MS1-only replay never feeds, used to stay for the life of the engine.
 Every registration is now numbered (`registerPending_`, called from `dequeue_` ahead of ADR-0060's commit
 block). Every `IN_FLIGHT_SWEEP_EVERY` (1024) registrations, entries more than `MAX_IN_FLIGHT` (10 000)
-registrations old are dropped with a `[TRACK-LOST] id=…` stdout line. A result arriving after that is
+registrations old are dropped with a `[TRACK-LOST] id=…` event. A result arriving after that is
 `not_found`. The age is counted in commands **sent**, never in time, so an instrument pause cannot age an
 entry. It is deliberately not tied to `scheduling.scan_timeout`, which only drops **queued** commands
 (`cleanupExpired`).
@@ -239,7 +239,7 @@ entry. It is deliberately not tied to `scheduling.scan_timeout`, which only drop
 minutes, and it is the only production caller; the C++ tests call `processScan` directly with
 seconds. Everything behind it decides in seconds — `rt_window`, the expiry of acquisition memory,
 inclusion rows, target logs. The two log streams that record it (`scan_results` `rt`,
-`ida.log` `RT`) write `rt / 60`, because their readers read minutes; the stdout markers
+`ida.log` `RT`) write `rt / 60`, because their readers read minutes; the event markers
 (`[TRACK-RESOLVE] rt=`, `[CHARGE-SET] rt=`) print seconds.
 
 ### A matched MS2 is searched beside the analysis thread (ADR-0062)
@@ -262,6 +262,11 @@ winner (`initiateNextLevel` inside `applyVariant`) still runs under the lock.
   neither (ADR-0025). A worker never holds the pool mutex while it runs a search or an apply, so the
   hierarchy `analysis_mutex_` → { `queue_mutex_`, `precursor_map_mutex_`, the `IdaLogger` stream mutexes,
   the `SearchPool` mutex } stays acyclic.
+- **Engine output goes through `EventLog`** (ADR-0064, `FLASHIda/EventLog.h`): process-wide, one mutex, one
+  whole line per call. `EventLine() << …` composes an event and emits it at scope exit; `EventLog::say` writes an
+  operator line (console + file). `IdaLogger` opens `events.log` with the run folder and closes it in its destructor;
+  lines before that (Config's warnings) are kept, at most 1,000, and written first. Hazard: two engines alive at once
+  share the one file; the second `openFile` replaces the first.
 - **A close-out runs on the apply** (ADR-0061 push 5, `closeOutIfIdentified_`): an MS2 whose
   `search_identification_score` reaches `identification.threshold` arms `CloseOutMassRt`/`CloseOutMzRt` (max-applied)
   through `ScanCommandQueue::closeOut`, which also withdraws the species' uncommitted units at every CV under
@@ -584,7 +589,7 @@ went out as `ETD;HCD`. What ETD changes is the targets' **ion type** (c/z), and 
   sub-ions are predicted: `calibrateAndScore` (the regular MS3 return and the `fragment_count`
   re-score both go through it) and `Refine::pieceTest`'s per-side `predict`. A gated MS3 is acquired
   and logged and matches nothing, so the existing `if` skips the identification row, `feedScan` and
-  `foldMs3`; the regular return prints `[MS3-UNANNOTATED] precursor_id= ion= scan=` (stdout only,
+  `foldMs3`; the regular return prints `[MS3-UNANNOTATED] precursor_id= ion= scan=` (an event,
   frame-having classes only — `'u'`/`'\0'` stay silent).
 
 `decideRefine` keeps path a **without a recount** when no dispatched record has a b/y side
@@ -656,7 +661,7 @@ unchanged.
 - **`Config::validate` throws three ways**: a `refine` block under `flashtnt`; `discriminating` under
   `flashtnt`; and `discriminating` with level-3 exploration enabled — an exploration MS3 returns on the
   exploration branch, never reaches `recordDiscriminatingScan`, and the round could never complete.
-- **Markers, stdout only** (none in `ida.log`, ADR-0032): `[REFINE]` (one attribution line naming the
+- **Markers, events only** (`events.log`; none in `ida.log`, ADR-0032): `[REFINE]` (one attribution line naming the
   precursor and scan, because `[LEVELS]`/`[CANDIDATES]` print `scan=0` — the stored MS2 carries no
   scan number), `[LEVELS]`, `[CANDIDATES]` (one per total), `[DISCRIMINATING]`, `[MS3-DECIDE]`,
   `[MS3-REDISPATCH]`.
@@ -794,7 +799,7 @@ gate #1; that scan carries all of the sweep's evidence. `scan_commands.tsv` has 
 
 `planNextScans` emits `[MS3-PLAN] … reason=…` naming which of its zero-target causes fired
 (`all_mods_localized` is the common, *correct* one: ambiguity mode with everything already localized).
-stdout only — like every engine marker, it is discarded during instrument acquisition.
+an event — like every engine marker it is in the run folder's `events.log` (ADR-0064), not on the console.
 
 ## Config (`FLASHIda/Config.cpp`)
 
