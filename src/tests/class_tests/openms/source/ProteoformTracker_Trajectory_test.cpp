@@ -162,8 +162,9 @@ namespace
   // driven through the snapshot: a sent intensity of 0 admits a re-acquisition at 0, a sent intensity of 1 refuses it.
 
   /// The tracker config with characterization's objective and budget as parameters (no log folder: nothing is read).
-  std::string gateConfig(const std::string& mode, int max_targets)
+  std::string gateConfig(const std::string& mode, int max_targets, const std::string& fragment_charges = "")
   {
+    const std::string charges = fragment_charges.empty() ? std::string() : ", \"fragment_charges\": \"" + fragment_charges + "\"";
     return std::string(R"JSON({
     "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 1, "max_charge": 50, "min_mass": 100, "max_mass": 50000, "tol": [10, 10, 10] },
     "precursor_selection": { "rt_window": 180, "targeting": "none", "consider_all_charges": false, "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 3 },
@@ -177,7 +178,7 @@ namespace
     "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
     "files": { "target_logs": [], "inclusion_list": "" },
     "identification": { "reference": { "sequence": "PEPTIDEK" }, "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 },
-      "characterization": { "mode": ")JSON") + mode + "\", \"max_targets\": " + std::to_string(max_targets) + " } } }";
+      "characterization": { "mode": ")JSON") + mode + "\", \"max_targets\": " + std::to_string(max_targets) + charges + " } } }";
   }
 
   const double PROTON_MASS = 1.00728;
@@ -185,7 +186,8 @@ namespace
 
   /// A fragment PeakGroup seen at every charge in @p charges with TWO isotopes each, so PeakRecord::by_charge holds a
   /// real (non-zero-width) record per charge and ms2_by_charge carries all of them. The representative charge is the
-  /// lowest (getMaxIntensityAbsCharge with no intensity).
+  /// lowest (getMaxIntensityAbsCharge with no intensity). Each charge carries a charge SNR of 5, above the notch
+  /// selection's snr_threshold, so separate and multiplexed see every charge.
   PeakGroup makeEnvelope(double mono_mass, const std::vector<int>& charges)
   {
     const int zmin = *std::min_element(charges.begin(), charges.end());
@@ -194,6 +196,7 @@ namespace
     pg.setMonoisotopicMass(mono_mass);
     for (int z : charges)
     {
+      pg.setChargeSNR(z, 5.0f);
       for (int iso = 0; iso < 2; ++iso)
       {
         FLASHHelperClasses::LogMzPeak lp;
@@ -622,6 +625,73 @@ START_SECTION(gate_single_mode_charge_fallback)
 
   gate.charge_floor = 4;
   TEST_EQUAL(tracker.planNextScans(44, &gate).size(), 0)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// ADR-0064 G4b. Separate mode drops only the refused charges: b6 seen at 2+, 3+ and 4+ is three targets ungated; a
+// charge floor of 3 refuses 2+ alone, so the governed plan is the 3+ and 4+ targets of the same fragment.
+//
+// FAILS UNDER: a gate that drops the whole fragment when its representative charge is refused, or one that still
+// emits the refused charge from the fragment's full envelope.
+/////////////////////////////////////////////////////////////
+START_SECTION(gate_separate_drops_only_refused_charges)
+{
+  Config cfg{gateConfig("fragments", 10, "separate")};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedGateWinner(tracker, 46, {{"b", 6, 700.0, {2, 3, 4}}});
+
+  auto chargesOf = [](const std::vector<Ms3Target>& plan) {
+    std::set<int> z;
+    for (const Ms3Target& t : plan)
+      if (t.ion_type == "b" && t.ion_index == 6) z.insert(t.frag_charge);
+    return z;
+  };
+  const std::vector<Ms3Target> today = tracker.planNextScans(46);
+  TEST_EQUAL(today.size(), 3)
+  TEST_EQUAL(chargesOf(today) == std::set<int>({2, 3, 4}), true)   // non-vacuity: every charge is a target
+
+  Ms3PlanGate gate = openGate();
+  gate.charge_floor = 3;
+  const std::vector<Ms3Target> gated = tracker.planNextScans(46, &gate);
+  TEST_EQUAL(gated.size(), 2)
+  TEST_EQUAL(chargesOf(gated) == std::set<int>({3, 4}), true)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// ADR-0064 G4c. Multiplexed: the anchor and the notches come from the admitted charges only. Ungated, b6 is one target
+// anchored at 2+ with 3+ and 4+ as notches; with 2+ refused the target is anchored at 3+ and notches 4+ alone.
+//
+// FAILS UNDER: notches drawn from the fragment's full envelope (2+ would come back as a notch), or an anchor that stays
+// the refused representative charge.
+/////////////////////////////////////////////////////////////
+START_SECTION(gate_multiplexed_anchor_and_notches_are_admitted_charges)
+{
+  Config cfg{gateConfig("fragments", 10, "multiplexed")};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedGateWinner(tracker, 47, {{"b", 6, 700.0, {2, 3, 4}}});
+
+  auto notchCharges = [](const Ms3Target& t) {
+    std::set<int> z;
+    for (const NotchCandidate& n : t.notches) z.insert(n.charge);
+    return z;
+  };
+  const std::vector<Ms3Target> today = tracker.planNextScans(47);
+  TEST_EQUAL(today.size(), 1)
+  ABORT_IF(today.size() != 1)
+  TEST_EQUAL(today[0].frag_charge, 2)
+  TEST_EQUAL(notchCharges(today[0]) == std::set<int>({3, 4}), true)   // non-vacuity: the envelope is notched
+
+  Ms3PlanGate gate = openGate();
+  gate.charge_floor = 3;
+  const std::vector<Ms3Target> gated = tracker.planNextScans(47, &gate);
+  TEST_EQUAL(gated.size(), 1)
+  ABORT_IF(gated.size() != 1)
+  TEST_EQUAL(gated[0].frag_charge, 3)
+  TEST_EQUAL(notchCharges(gated[0]) == std::set<int>({4}), true)
 }
 END_SECTION
 
