@@ -262,6 +262,12 @@ winner (`initiateNextLevel` inside `applyVariant`) still runs under the lock.
   neither (ADR-0025). A worker never holds the pool mutex while it runs a search or an apply, so the
   hierarchy `analysis_mutex_` → { `queue_mutex_`, `precursor_map_mutex_`, the `IdaLogger` stream mutexes,
   the `SearchPool` mutex } stays acyclic.
+- **A close-out runs on the apply** (ADR-0061 push 5, `closeOutIfIdentified_`): an MS2 whose
+  `search_identification_score` reaches `identification.threshold` arms `CloseOutMassRt`/`CloseOutMzRt` (max-applied)
+  through `ScanCommandQueue::closeOut`, which also withdraws the species' uncommitted units at every CV under
+  `queue_mutex_` (the lock order holds: `analysis_mutex_` → `queue_mutex_`). `closed_out_` then skips another
+  Precursor's later scan of the species inside `rt_window` (`closed_out_skip`, finished as a dropped search); the
+  closing Precursor's own scans are still searched. A charge-named inclusion species is never closed out.
 - **A sweep completes when its searches return**, not its scans. **Rows of searched MS2s are written in
   completion order** in production.
 - **A bounded backlog drops the oldest** (d.5): 4 waiting jobs per worker (`kSearchBacklogPerThread`,
