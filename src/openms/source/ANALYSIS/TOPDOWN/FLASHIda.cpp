@@ -883,7 +883,8 @@ FLASHIda::FLASHIda(char* arg) :
     // ADR-0061 d.7: a searched MS2 whose FLASHTnT number reaches the threshold closes its species out, keyed on the
     // command that isolated it. Decided before the row is pushed, which carries the verdict.
     const bool closed_out = !dropped && !is_quant_scan && parent_ctx.num_stages > 0
-        && closeOutIfIdentified_(ms3_targeting.proteoform_match, parent_ctx.mono_mass, parent_ctx.stages[0].precursor_mz, rt);
+        && closeOutIfIdentified_(ms3_targeting.proteoform_match, parent_ctx.mono_mass, parent_ctx.stages[0].precursor_mz, rt,
+                                 precursor_id);
 
     // Write MS2 identification row if proteoform was matched.
     // Gate on the actual match (proteoform_match), NOT on ms3_targeting.proteoform_sequence — the
@@ -1009,7 +1010,7 @@ FLASHIda::FLASHIda(char* arg) :
     const Exploration::MS2Context& vctx = expl_result.identification.ms2_context;
     const bool closed_out = !dropped && !expl_result.identification.proteoform_sequence.empty()
         && closeOutIfIdentified_(expl_result.identification.result, vctx.ms1_precursor_mass, vctx.ms1_precursor_mz,
-                                 results_row.rt * 60.0);
+                                 results_row.rt * 60.0, precursor_id);
 
     // MS2 identification row (copy by value before expl_result goes out of scope).
     if (!expl_result.identification.proteoform_sequence.empty() && !expl_result.identification.result.fragments.empty())
@@ -1033,21 +1034,21 @@ FLASHIda::FLASHIda(char* arg) :
     return static_cast<int>(expl_result.commands.size());
   }
 
-  bool FLASHIda::isClosedOut_(double mass, double rt)
+  bool FLASHIda::isClosedOut_(double mass, double rt, int precursor_id)
   {
     if (closed_out_.empty()) return false;
     auto it = closed_out_.find(SpectralDeconvolution::getNominalMass(mass));
     if (it == closed_out_.end()) return false;
-    if (rt - it->second > config_.targeting().rt_window)
+    if (rt - it->second.rt > config_.targeting().rt_window)
     {
       closed_out_.erase(it);   // the bar has expired with it
       return false;
     }
-    return true;
+    return it->second.closing_precursor_ids.count(precursor_id) == 0;   // the closing Precursor finishes its own work
   }
 
   bool FLASHIda::closeOutIfIdentified_(const FragmentAnalysis::ProteoformMatch& match, double commanded_mass,
-                                       double isolation_mz, double rt)
+                                       double isolation_mz, double rt, int precursor_id)
   {
     const auto& threshold = config_.identification().threshold;
     if (!threshold.has_value() || match.search_identification_score < 0.0 || match.search_identification_score < *threshold)
@@ -1094,9 +1095,9 @@ FLASHIda::FLASHIda(char* arg) :
     for (int g : r.dropped_sweep_groups) exploration_.dropGroup(g);
     forgetTracking_(r.dropped_scan_ids);
 
-    auto it = closed_out_.find(nominal);
-    if (it == closed_out_.end()) closed_out_[nominal] = rt;
-    else it->second = std::max(it->second, rt);   // a close-out only extends
+    ClosedOut& co = closed_out_[nominal];
+    co.rt = co.closing_precursor_ids.empty() ? rt : std::max(co.rt, rt);   // a close-out only extends
+    co.closing_precursor_ids.insert(precursor_id);
 
     std::cout << "[CLOSE-OUT] nominal=" << nominal << " mz=" << integer_mz << " rt=" << rt
               << " score=" << match.search_identification_score << " withdrawn=" << r.dropped_scan_ids.size()
@@ -1269,7 +1270,7 @@ FLASHIda::FLASHIda(char* arg) :
         // ADR-0062 d.6: a closed-out species' later scans are not searched; the variant is received unscored, as a
         // dropped one is, so its group still completes.
         const bool needs_search = search_pool_ != nullptr && exploration_.variantNeedsSearch(variant_in);
-        const bool skip_search = needs_search && isClosedOut_(parent_ctx.mono_mass, rt);
+        const bool skip_search = needs_search && isClosedOut_(parent_ctx.mono_mass, rt, precursor_id);
         if (skip_search) std::cout << "[SEARCH-SKIPPED] id=" << parent_id_str << " reason=closed_out" << std::endl;
         if (needs_search && !skip_search)
         {
@@ -1408,7 +1409,7 @@ FLASHIda::FLASHIda(char* arg) :
         // there is no pool and nothing to match.
         // ADR-0062 d.6: a closed-out species' later scans are not searched; the scan is finished as a dropped one.
         const bool skip_search = search_pool_ != nullptr && config_.identification().enabled() && !is_quant_scan
-            && isClosedOut_(parent_ctx.mono_mass, rt);
+            && isClosedOut_(parent_ctx.mono_mass, rt, precursor_id);
         if (skip_search) std::cout << "[SEARCH-SKIPPED] id=" << parent_id_str << " reason=closed_out" << std::endl;
         if (search_pool_ != nullptr && config_.identification().enabled() && !is_quant_scan && !skip_search)
         {

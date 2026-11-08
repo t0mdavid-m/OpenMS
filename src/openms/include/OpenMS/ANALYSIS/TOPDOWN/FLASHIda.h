@@ -59,6 +59,7 @@
 #include <functional>
 #include <iomanip>
 #include <map>
+#include <set>
 #include <memory>
 #include <mutex>
 
@@ -235,10 +236,18 @@ namespace OpenMS
     /// this toolchain (MSVC ships no thread sanitizer).
     std::unordered_map<int, int> precursor_id_by_tracking_;
 
-    /// ADR-0061 d.7 / ADR-0062 d.6: nominal mass -> RT (seconds) of the latest close-out of that species. Analysis
-    /// state (read and written under analysis_mutex_): a later scan of a species closed out within rt_window is not
-    /// searched (scan_results search = closed_out_skip). Expired entries are erased as they are read.
-    std::unordered_map<int, double> closed_out_;
+    /// ADR-0061 d.7 / ADR-0062 d.6: one closed-out species -- the RT (seconds) of its latest close-out and the
+    /// precursor ids whose MS2 closed it out. Analysis state (read and written under analysis_mutex_).
+    struct ClosedOut
+    {
+      double rt = 0.0;
+      std::set<int> closing_precursor_ids;
+    };
+    /// nominal mass -> its close-out. A later scan of the species within rt_window is not searched (scan_results
+    /// search = closed_out_skip) -- except the closing Precursors' own scans (owner 2026-11-08: their sweep variants,
+    /// follow-up and bought R are still searched, so characterization still gets its winner, ADR-0061 d.9).
+    /// Expired entries are erased as they are read.
+    std::unordered_map<int, ClosedOut> closed_out_;
 
     /// Leaf lock for precursor_id_by_tracking_.
     ///
@@ -459,10 +468,11 @@ namespace OpenMS
     /// withdraw the species' wholly unsent plan units at every CV, and record it for the skip. A species whose
     /// inclusion row names charges is never closed out. Caller holds analysis_mutex_. True when it closed out.
     bool closeOutIfIdentified_(const FragmentAnalysis::ProteoformMatch& match, double commanded_mass,
-                               double isolation_mz, double rt);
+                               double isolation_mz, double rt, int precursor_id);
 
-    /// Whether the species of @p mass was closed out within rt_window of @p rt (ADR-0062 d.6). Analysis state.
-    bool isClosedOut_(double mass, double rt);
+    /// Whether a scan of @p mass belonging to @p precursor_id is skipped (ADR-0062 d.6): its species was closed out
+    /// within rt_window of @p rt by ANOTHER Precursor. Analysis state.
+    bool isClosedOut_(double mass, double rt, int precursor_id);
 
     /// A worker's apply step: take analysis_mutex_, finish the scan, write its rows. Returns commands pushed.
     int applyRegularSearch_(RegularSearch& job);
