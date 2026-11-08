@@ -521,6 +521,17 @@ namespace OpenMS
     Incomplete
   };
 
+  /// Where a labelled run reads its reporters (ADR-0064). Ms2 is ADR-0038: the 'Q' MS2 screens and buys the
+  /// identification scan. Ms3: no screen; the identification scan fires on every selected precursor, and an
+  /// identification that closes out a cysteine proteoform buys a quantification MS3 on one labelled fragment.
+  /// Both: the Ms2 chain unchanged, and the bought 'R' also buys the quantification MS3.
+  enum class QuantScan
+  {
+    Ms2,  ///< THE DEFAULT, ADR-0038-0057 unchanged
+    Ms3,
+    Both
+  };
+
   /// How a quantification group's usable members are combined per channel (ADR-0056 decision 5).
   enum class QuantAggregate
   {
@@ -587,6 +598,15 @@ namespace OpenMS
     };
 
     bool enabled = false;
+    /// ADR-0064. Where the reporters are read; see QuantScan. Read only when enabled.
+    QuantScan scan = QuantScan::Ms2;
+    /// ADR-0064. How many quantification MS3s one identification buys (the most intense eligible labelled
+    /// fragments). Read only under scan ms3 / both.
+    int ms3_targets = 1;
+    /// Enabled and screening at MS2 ('Q' rostered, verdict buys 'R'): scan ms2 or both.
+    bool screensAtMs2() const { return enabled && scan != QuantScan::Ms3; }
+    /// Enabled and reading reporters at MS3 on a labelled fragment: scan ms3 or both.
+    bool readsAtMs3() const { return enabled && scan != QuantScan::Ms2; }
     /// One of the seven isobaric methods OpenMS ships, spelled as
     /// TopDownIsobaricQuantification's own valid strings. `"none"` is deliberately NOT among them:
     /// `enabled` is the switch, so `enabled: true, labelling: "none"` is unwritable.
@@ -666,6 +686,10 @@ namespace OpenMS
     /// quant config with no ms2 builds the bought scan from defaults, which is latent while only a
     /// Differential verdict reaches it and fires on every precursor under `identify: "all"`.
     bool has_identification_scan = false;
+    /// ADR-0064. `ms_settings.ms3_quant`: stage 1 of the quantification MS3 (copied unconditionally, as above).
+    ScanConfig ms3_quant_scan;
+    /// Whether `ms_settings.ms3_quant` was authored.
+    bool has_ms3_quant_scan = false;
   };
 
   /// Where IdaLogger writes its five streams.

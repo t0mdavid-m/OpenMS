@@ -750,7 +750,8 @@ namespace OpenMS
          "identify", "enriched_in",  // ADR-0039
          "test", "p_value_threshold", "empty_condition", "scan_normalize", "aggregate",
          "min_usable_scans",  // ADR-0056
-         "channel_normalization"},  // ADR-0057
+         "channel_normalization",  // ADR-0057
+         "scan", "ms3_targets"},  // ADR-0064
         "quantification");
     quant_.enabled = quant.value("enabled", false);
     quant_.labelling = quant.value("labelling", std::string("tmt6plex"));
@@ -759,6 +760,25 @@ namespace OpenMS
     quant_.p_value_threshold = quant.value("p_value_threshold", 0.05);
     quant_.scan_normalize = quant.value("scan_normalize", true);
     quant_.min_usable_scans = quant.value("min_usable_scans", 1);
+    // ADR-0064. Null-tolerant like every string below (ToCppJson emits nulls).
+    if (quant.contains("ms3_targets") && !quant["ms3_targets"].is_null())
+    {
+      if (!quant["ms3_targets"].is_number_integer() || quant["ms3_targets"].get<int>() < 1)
+        throw std::invalid_argument("Config: quantification.ms3_targets must be an integer >= 1: how many "
+                                    "quantification MS3s one identification buys (ADR-0064).");
+      quant_.ms3_targets = quant["ms3_targets"].get<int>();
+    }
+    {
+      const std::string sc = nullableString(quant, "scan", "ms2");
+      if (sc == "ms2")       quant_.scan = QuantScan::Ms2;
+      else if (sc == "ms3")  quant_.scan = QuantScan::Ms3;
+      else if (sc == "both") quant_.scan = QuantScan::Both;
+      else
+        throw std::invalid_argument(
+            "Config: quantification.scan must be one of \"ms2\", \"ms3\", \"both\"; got \"" + sc
+            + "\". It says where the reporters are read: the MS2 screen, an MS3 on a labelled fragment that "
+              "a live identification buys, or both (ADR-0064).");
+    }
 
     // ADR-0056. Three string enums, hard-rejected rather than defaulted for identify's reason below:
     // a typo must not silently select a different statistic.
@@ -993,7 +1013,7 @@ namespace OpenMS
     // ms2_quant is a bare slot beside ms1/ms2/ms3, not a name reference (ADR-0038) -- the same
     // shape characterization already uses, where the decision section holds no scan config and
     // ms_settings.ms3 supplies the parameters with no key pointing at it.
-    rejectUnknownKeys(ms_settings, {"ms1", "ms2", "ms2_quant", "ms3", "additional_ms2"}, "ms_settings");
+    rejectUnknownKeys(ms_settings, {"ms1", "ms2", "ms2_quant", "ms3", "ms3_quant", "additional_ms2"}, "ms_settings");
 
     if (ms_settings.contains("ms2") && ms_settings["ms2"].is_array())
       throw std::invalid_argument(
@@ -1044,6 +1064,12 @@ namespace OpenMS
     }
     if (ms_settings.contains("ms3") && ms_settings["ms3"].is_object())
       levels_[3].scans.push_back(parseNamedScan(ms_settings["ms3"], "ms_settings.ms3"));
+    // ADR-0064: stage 1 of the quantification MS3, a bare slot like ms2_quant; copied unconditionally.
+    if (ms_settings.contains("ms3_quant") && ms_settings["ms3_quant"].is_object())
+    {
+      quant_.ms3_quant_scan = parseNamedScan(ms_settings["ms3_quant"], "ms_settings.ms3_quant");
+      quant_.has_ms3_quant_scan = true;
+    }
 
     // additional_ms2: user-authored KEYS, so they cannot be allowlisted -- validated as identifiers
     // instead. The VALUES go through the normal 17-key scan allowlist.
@@ -1092,7 +1118,8 @@ namespace OpenMS
     if (has_quant_scan)  quant_.quantification_scan = quant_scan;
     if (has_primary_ms2) quant_.identification_scan = primary_ms2;
 
-    if (quant_.enabled && has_quant_scan)
+    // ADR-0064: under scan ms3 there is no screen, so ms_settings.ms2 keeps the primary slot.
+    if (quant_.screensAtMs2() && has_quant_scan)
     {
       levels_[2].scans.push_back(quant_scan);
     }
@@ -1433,9 +1460,54 @@ namespace OpenMS
     // which a misconfigured screen is discovered.
     if (quant_.enabled)
     {
+      // ADR-0064. Reading at MS3 needs the live identification that buys it, the label it targets, and stage 1.
+      if (quant_.readsAtMs3())
+      {
+        const char* sc = quant_.scan == QuantScan::Ms3 ? "ms3" : "both";
+        if (!identification_.enabled() || !identification_.threshold.has_value())
+          throw std::invalid_argument(
+              std::string("Config: quantification.scan is \"") + sc + "\" but identification.threshold is not set. "
+              "A quantification MS3 is bought by the identification that closes a cysteine proteoform out, so it needs "
+              "identification with a reference and a threshold (ADR-0064).");
+        if (!quant_.has_ms3_quant_scan)
+          throw std::invalid_argument(
+              std::string("Config: quantification.scan is \"") + sc + "\" but ms_settings.ms3_quant is not set. "
+              "ms3_quant is stage 1 of the quantification MS3: the activation that releases the reporters from the "
+              "labelled fragment, and the scan that reads them (ADR-0064).");
+        if (quant_.labelling != "tmt6plex")
+          throw std::invalid_argument(
+              std::string("Config: quantification.scan is \"") + sc + "\" but quantification.labelling is \""
+              + quant_.labelling + "\". The quantification MS3 targets iodoTMT on cysteine, a 6-plex reagent: labelling "
+              "must be \"tmt6plex\" (ADR-0064).");
+        if (identification_.method == AnnotationMethod::Refine)
+          throw std::invalid_argument(
+              std::string("Config: quantification.scan is \"") + sc + "\" but identification.method is \"refine\". "
+              "The iodoTMT label reaches only the FLASHTnT search (as a fixed mass on every cysteine); Refine's ladder "
+              "never sees it. Use identification.method \"flashtnt\" (ADR-0064).");
+      }
+      if (quant_.scan == QuantScan::Ms3)
+      {
+        // Non-default is the only authored-ness visible here: the C# side emits every key with its default.
+        if (quant_.identify != QuantIdentify::Differential || quant_.enriched_in >= 0)
+          throw std::invalid_argument(
+              "Config: quantification.identify / enriched_in are set but quantification.scan is \"ms3\". With no MS2 "
+              "screen nothing is bought by a verdict: the identification scan fires on every selected precursor and "
+              "the identification buys the quantification MS3 (ADR-0064). Use scan \"both\" to keep the screen.");
+      }
+      if (quant_.scan == QuantScan::Both && quant_.identify == QuantIdentify::None)
+        throw std::invalid_argument(
+            "Config: quantification.scan is \"both\" but quantification.identify is \"none\": the screen would buy "
+            "no identification scan, so no identification could ever buy a quantification MS3 (ADR-0064).");
+    }
+    if (quant_.enabled && quant_.scan == QuantScan::Ms2 && (quant_.ms3_targets != 1 || quant_.has_ms3_quant_scan))
+      std::cout << "[CONFIG-WARN] quantification.ms3_targets / ms_settings.ms3_quant are set but quantification.scan "
+                   "is \"ms2\", which reads neither (ADR-0064).\n";
+
+    if (quant_.enabled)
+    {
       // 1. No quantification scan => nothing is rostered, ms_settings.ms2 stays unconditional, and
-      //    the run is plain DDA that silently quantifies nothing.
-      if (!quant_.has_quant_scan)
+      //    the run is plain DDA that silently quantifies nothing. ADR-0064: scan ms3 has no screen to roster.
+      if (quant_.screensAtMs2() && !quant_.has_quant_scan)
         throw std::invalid_argument(
             "Config: quantification.enabled is true but ms_settings.ms2_quant is not set. "
             "ms2_quant is the quantification scan -- the one rostered per precursor and actually "
