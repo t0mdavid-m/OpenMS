@@ -474,7 +474,7 @@ namespace OpenMS
       const auto& ident = config["identification"];
       if (!ident.is_object())
         throw std::invalid_argument("Config: identification must be an object.");
-      rejectUnknownKeys(ident, {"reference", "method", "flashtnt", "refine", "search_threads", "characterization"},
+      rejectUnknownKeys(ident, {"reference", "method", "flashtnt", "refine", "search_threads", "threshold", "characterization"},
                         "identification");
 
       // An identification that searches nothing would be an inert block: refused rather than carried.
@@ -596,6 +596,19 @@ namespace OpenMS
       {
         const int cores = static_cast<int>(std::thread::hardware_concurrency());
         identification_.search_threads = std::max(1, cores - 2);
+      }
+
+      // ADR-0061 d.6/d.7: the close-out threshold. Absent = identify and log, never close out. An authored value is a
+      // finite number > 0: a threshold at or below zero would close out every species the search proposes at all.
+      if (ident.contains("threshold") && !ident["threshold"].is_null())
+      {
+        const auto& th = ident["threshold"];
+        if (!th.is_number() || !std::isfinite(th.get<double>()) || th.get<double>() <= 0.0)
+          throw std::invalid_argument(
+              "Config: identification.threshold must be a finite number > 0 (the Identification score that closes a "
+              "species out, on FLASHTnT's scale); got " + th.dump() + ". Delete the key to identify without closing out "
+              "(ADR-0061).");
+        identification_.threshold = th.get<double>();
       }
 
       if (ident.contains("characterization") && !ident["characterization"].is_null())

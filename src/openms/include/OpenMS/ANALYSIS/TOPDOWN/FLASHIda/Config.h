@@ -41,6 +41,7 @@
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -424,6 +425,11 @@ namespace OpenMS
     /// beside the analysis thread. Unauthored: the core count minus two (the acquisition PC also runs
     /// the instrument software), at least 1. Authored: an integer >= 1.
     int search_threads = 1;
+
+    /// identification.threshold (ADR-0061 d.6/d.7) -- the Identification score, on FLASHTnT's scale whatever the
+    /// method, at which an MS2 closes its species out of acquisition. Absent (nullopt): identify and log, never
+    /// close out. Authored: a finite number > 0, calibrated offline (real time carries no FDR).
+    std::optional<double> threshold;
 
     /// Whether MS2s are matched at all.
     bool enabled() const { return !sequence.empty() || !fasta.empty(); }
