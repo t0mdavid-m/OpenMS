@@ -172,6 +172,35 @@ namespace
   }
 }
 
+// ===== Per-proteoform MS3 plans (ADR-0064) =========================================================================
+namespace
+{
+  Ms3ProteoformKey pkey(double mass, const std::string& acc = "P1", int start = 0, int end = 104)
+  {
+    Ms3ProteoformKey k;
+    k.accession = acc;
+    k.region_start = start;
+    k.region_end = end;
+    k.commanded_mass = mass;
+    return k;
+  }
+
+  /// One single-command item: an MS3 (priority 1) on cleavage (@p type, @p index) at @p charge, chosen at @p intensity.
+  Ms3PlanItem ms3Item(int scan_id, const std::string& type, int index, int charge, double intensity, int owner = 1)
+  {
+    Ms3PlanItem it;
+    it.cleavage = {type, index};
+    it.charges = {{charge, intensity}};
+    ScanCommand c = ms2(scan_id, charge, 900.0 + index, 1);
+    c.msn_level = 3;
+    it.commands = {c};
+    it.owner_precursor_id = owner;
+    return it;
+  }
+
+  std::set<int> asSet(const std::vector<int>& v) { return std::set<int>(v.begin(), v.end()); }
+}
+
 START_TEST(ScanCommandQueue_Concurrent, "$Id$")
 
 /////////////////////////////////////////////////////////////
@@ -1193,35 +1222,6 @@ START_SECTION(a_re_registered_command_is_aged_from_its_latest_registration)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
-// ===== Per-proteoform MS3 plans (ADR-0064) =========================================================================
-namespace
-{
-  Ms3ProteoformKey pkey(double mass, const std::string& acc = "P1", int start = 0, int end = 104)
-  {
-    Ms3ProteoformKey k;
-    k.accession = acc;
-    k.region_start = start;
-    k.region_end = end;
-    k.commanded_mass = mass;
-    return k;
-  }
-
-  /// One single-command item: an MS3 (priority 1) on cleavage (@p type, @p index) at @p charge, chosen at @p intensity.
-  Ms3PlanItem ms3Item(int scan_id, const std::string& type, int index, int charge, double intensity, int owner = 1)
-  {
-    Ms3PlanItem it;
-    it.cleavage = {type, index};
-    it.charges = {{charge, intensity}};
-    ScanCommand c = ms2(scan_id, charge, 900.0 + index, 1);
-    c.msn_level = 3;
-    it.commands = {c};
-    it.owner_precursor_id = owner;
-    return it;
-  }
-
-  std::set<int> asSet(const std::vector<int>& v) { return std::set<int>(v.begin(), v.end()); }
-}
-
 // The pure rules: one proteoform across selections is the same protein and region at the same commanded mass, within
 // the MS1 tolerance or 1-3 isotope steps / a charge harmonic (sameSpeciesMass); a sent fragment needs 2x.
 START_SECTION(ms3_registry_rules_same_proteoform_and_admits)
