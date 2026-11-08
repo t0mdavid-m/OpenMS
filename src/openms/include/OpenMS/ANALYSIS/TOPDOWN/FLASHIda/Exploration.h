@@ -170,6 +170,17 @@ namespace OpenMS
       int variant_index;
     };
 
+    /// A governed MS3 plan (ADR-0064, characterization.per_proteoform): the proteoform's new live plan, which the caller
+    /// swaps in through ScanCommandQueue::replaceMs3Plan instead of pushing commands. Its commands are NOT in the
+    /// result's `commands`.
+    struct GovernedMs3
+    {
+      Ms3ProteoformKey key;                              ///< accession + normalised region + the commanded mass
+      std::vector<Ms3PlanItem> items;                    ///< one per command (fixed CE, separate) or per sweep group
+      uint64_t snapshot_generation = 0;                  ///< the registry generation the plan was made against
+      std::vector<std::pair<int, MS2Context>> contexts;  ///< (scan id, its parent-MS2 context) for every item command
+    };
+
     /// Result of initiateNextLevel: commands plus fragment matching metadata
     struct NextLevelResult
     {
@@ -180,6 +191,9 @@ namespace OpenMS
       float tic_coverage = 0.0f;
       int fragment_count = 0;
       FragmentAnalysis::ProteoformMatch proteoform_match;  ///< Full fragment detail for identification
+      /// ADR-0064: the governed MS3 plan, when characterization.per_proteoform governs this dispatch (an identified
+      /// model and an MS2 context). Engaged even when it holds no item: the empty plan still replaces the unsent one.
+      std::optional<GovernedMs3> governed;
     };
 
     /// Result of feedResult: commands plus exploration per-variant metadata
@@ -270,6 +284,9 @@ namespace OpenMS
       /// Named for the CONTENT (an MS2 context), not the consumer level, matching the engine member it
       /// feeds. It was `ms3_context_cache`, which read as "a cache of MS3 contexts".
       std::vector<std::pair<int, MS2Context>> ms2_context_cache;
+      /// ADR-0064: the governed MS3 plan an MS2 group's next-level dispatch made (the sweep-winner cascade forwards
+      /// NextLevelResult::governed). Its commands are in neither `commands` nor `child_ids`: the caller swaps it in.
+      std::optional<GovernedMs3> governed;
     };
 
     /// The MEASURING half of initiateNextLevel (ADR-0062): the match and the report it shapes, computed
@@ -407,6 +424,9 @@ namespace OpenMS
     /// Only commands and ms3_contexts of the result are filled; proteoform_sequence is the value stamped
     /// onto every MS2Context. Called by initiateNextLevel and by the refine MS3 return path, which
     /// re-dispatches after a decision.
+    /// Governed (ADR-0064: characterization.per_proteoform, an identified model, @p ms_ctx): the plan is made against
+    /// the proteoform's registry snapshot through the tracker's Ms3PlanGate and returned in `governed` -- items, their
+    /// contexts, the key and the snapshot generation -- with `commands` and `ms3_contexts` left empty.
     NextLevelResult dispatchFromModel(int precursor_id, const DeconvolvedSpectrum& result, double faims_cv,
                                       ScanCommandQueue& queue, const ScanCommand* ms_ctx, ProteoformTracker* tracker,
                                       MS3FragmentMatcher::ProteoformContext proto_ctx,

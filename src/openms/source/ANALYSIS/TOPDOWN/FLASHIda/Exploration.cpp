@@ -935,6 +935,8 @@ namespace OpenMS
           if (next_nlr.commands[i].msn_level >= 3)
             info.ms2_context_cache.emplace_back(next_nlr.commands[i].scan_id, next_nlr.ms3_contexts[i]);
         }
+        // ADR-0064: a governed dispatch returns its plan instead of commands; the caller swaps it in.
+        info.governed = std::move(next_nlr.governed);
       }
       // overrides empty && msn_level >= 3 && a READING metric (FragmentCount): an MS3 exploration group
       // with no production scan. Since ADR-0020 this is the ONLY way to reach here at MS3 -- a measuring
@@ -1188,6 +1190,7 @@ namespace OpenMS
                                                    next_scan_config, charge_floor, next_level, nlr.proteoform_sequence);
     nlr.commands = std::move(dispatched.commands);
     nlr.ms3_contexts = std::move(dispatched.ms3_contexts);
+    nlr.governed = std::move(dispatched.governed);   // ADR-0064: engaged only when per_proteoform governs the dispatch
     return nlr;
   }
 
@@ -1280,7 +1283,52 @@ namespace OpenMS
       MS3FragmentMatcher::ProteoformContext win_ctx = tracker->buildWinnerProteoformContext(precursor_id);
       if (win_ctx.region_start >= 0) proto_ctx = win_ctx;
 
-      auto targets = tracker->planNextScans(precursor_id);
+      // ADR-0064: characterization.per_proteoform governs the dispatch of an IDENTIFIED model (an unidentified exhaustive
+      // model has no proteoform key and stays ungoverned). The plan is made against the proteoform's registry snapshot
+      // through the tracker's gate, and comes back as items for the caller's replaceMs3Plan instead of commands.
+      // Ungoverned, everything below runs exactly as before.
+      std::optional<GovernedMs3> gov;
+      Ms3RegistrySnapshot snap;
+      Ms3PlanGate gate;
+      if (config_.characterization().per_proteoform && !model->proteoform_sequence.empty())
+      {
+        gov.emplace();
+        const int P = static_cast<int>(model->proteoform_sequence.size());
+        gov->key.accession = model->matched_protein;
+        gov->key.region_start = (model->region_start < 0) ? 0 : model->region_start;   // normalised as planNextScans does
+        gov->key.region_end = (model->region_end < 0) ? P : model->region_end;
+        gov->key.commanded_mass = ms_ctx->mono_mass;                                    // the commanded precursor mass
+        snap = queue.ms3Snapshot(gov->key);
+        gov->snapshot_generation = snap.generation;
+        gate.snapshot = &snap;
+        gate.spectrum = &result.getOriginalSpectrum();   // the window SNR below is computed over the same spectrum
+        gate.charge_floor = charge_floor;
+        gate.max_targets = config_.characterization().max_targets;
+      }
+
+      auto targets = tracker->planNextScans(precursor_id, gov ? &gate : nullptr);
+
+      // A raw-mass plan (exhaustive, or a discriminating round still undecided after planning) stamped each target's
+      // nominal mass; its items carry it so a withdrawal can give it back. A mapped plan stamps nothing.
+      const CharacterizationObjective objective = config_.characterization().objective;
+      const bool raw_mass_plan = objective == CharacterizationObjective::Exhaustive
+                                 || (objective == CharacterizationObjective::Discriminating && model->refine.has_value()
+                                     && !model->refine->decided);
+      // One governed item: what the target acquires (cleavage, the anchor and stage-1 notch charges at their MS2
+      // intensities), who planned it, and the stamp it set. @p cmds: one command, or one sweep group's variants.
+      auto makeItem = [&](const Ms3Target& target, int frag_charge, const std::vector<ScanCommand>& cmds) {
+        Ms3PlanItem item;
+        item.cleavage = ProteoformTracker::ms3CleavageOf(target);
+        item.charges.emplace_back(frag_charge, cmds.front().precursor_intensity_s1);
+        for (const NotchCandidate& n : target.notches) item.charges.emplace_back(std::abs(n.charge), n.intensity);
+        item.commands = cmds;
+        item.owner_precursor_id = precursor_id;
+        item.fragment_mass = target.frag_mass;
+        item.nominal = raw_mass_plan ? SpectralDeconvolution::getNominalMass(target.frag_mass) : 0;
+        const auto v = variant_tracking_map_.find(cmds.front().scan_id);
+        if (v != variant_tracking_map_.end()) item.sweep_group_id = v->second.group_id;
+        return item;
+      };
 
       // Already bounded: planNextScans stops adding once targets.size() == config_.level(2).max_targets,
       // which is the same value num_targets was read from above (this_cfg == level 2). The two skips below
@@ -1327,7 +1375,12 @@ namespace OpenMS
           auto sub_cmds = initiate(next_level, frag_pg, frag_charge, queue, &result.getOriginalSpectrum(), ms_ctx,
                                    ion_type, target.ion_index, proto_ctx, target.stage1_scores, &target.stage0_params,
                                    &target.notches);
-          nlr.commands.insert(nlr.commands.end(), sub_cmds.begin(), sub_cmds.end());
+          if (gov)
+          {
+            if (!sub_cmds.empty()) gov->items.push_back(makeItem(target, frag_charge, sub_cmds));   // one group, one item
+          }
+          else
+            nlr.commands.insert(nlr.commands.end(), sub_cmds.begin(), sub_cmds.end());
           variants_per_target = static_cast<int>(sub_cmds.size());
 
           for (size_t sci = 0; sci < sub_cmds.size(); ++sci)
@@ -1357,7 +1410,10 @@ namespace OpenMS
               mc.ms3_charge_intensity = sub.precursor_intensity_s1;
               mc.ms3_window_snr = sub.window_snr;
             }
-            nlr.ms3_contexts.push_back(mc);
+            if (gov)
+              gov->contexts.emplace_back(sub_cmds[sci].scan_id, mc);
+            else
+              nlr.ms3_contexts.push_back(mc);
           }
         }
         else
@@ -1383,7 +1439,10 @@ namespace OpenMS
           EventLine() << "[TRACK-CREATE] id=" << id_str
                     << " ms_level=" << next_level << " type=next_level";
 
-          nlr.commands.push_back(cmd);
+          if (gov)
+            gov->items.push_back(makeItem(target, frag_charge, {cmd}));   // one command, one item (separate: per charge)
+          else
+            nlr.commands.push_back(cmd);
           variants_per_target = 1;  // no CE sweep at this level: one command per target
 
           MS2Context mc;
@@ -1410,7 +1469,10 @@ namespace OpenMS
             mc.ms3_charge_intensity = cmd.precursor_intensity_s1;
             mc.ms3_window_snr = cmd.window_snr;
           }
-          nlr.ms3_contexts.push_back(mc);
+          if (gov)
+            gov->contexts.emplace_back(cmd.scan_id, mc);
+          else
+            nlr.ms3_contexts.push_back(mc);
         }
       }
 
@@ -1419,10 +1481,13 @@ namespace OpenMS
       // target fans out into one command per variant -- so a budget of 20 can be ~100 scans.
       // Emitted even at zero targets, so a grep for [MS3-DISPATCH] pairs with every [MS3-PLAN]
       // line. stdout only, like every engine marker.
+      size_t dispatched_commands = nlr.commands.size();
+      if (gov)
+        for (const Ms3PlanItem& item : gov->items) dispatched_commands += item.commands.size();
       EventLine() << "[MS3-DISPATCH] precursor_id=" << precursor_id
                 << " targets=" << dispatched_targets
                 << " variants=" << variants_per_target
-                << " commands=" << nlr.commands.size();
+                << " commands=" << dispatched_commands;
       if (dispatched_targets > 0 && !nlr.commands.empty())
       {
         // ADR-0065: the operator's line for this MS3 batch, from the commands [MS3-DISPATCH] counts.
@@ -1441,6 +1506,7 @@ namespace OpenMS
         EventLog::say(OperatorKind::Ms3, op.str());
       }
 
+      nlr.governed = std::move(gov);
       return nlr;
     }
 
