@@ -1015,6 +1015,115 @@ START_SECTION(governed_refused_record_is_not_dispatched)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
+// ADR-0064 D1b. Every record refused by the gate: the round can never complete through MS3, so the planner decides
+//     (pool_exhausted, candidate 0 stands) and runs the ambiguity branch in the same call, as section 7a's charge floor
+//     does from the config. The gate here is a charge floor of 2 over charge-1 records. The ambiguity plan of that call
+//     is empty on this fixture -- its containing fragments (b6..b11) are the very ions the a-only records are labelled
+//     with, also charge 1, so the same gate refuses them -- and says so (no_containing_fragment, an ambiguity reason).
+//
+// FAILS UNDER: a refused record that still enters the pool (dispatched, no fall-through), or a fall-through that does
+// not plan ambiguity in the same call.
+/////////////////////////////////////////////////////////////
+START_SECTION(governed_all_records_refused_falls_through_to_ambiguity)
+{
+  const int pid = 64;
+  Config cfg{trackerConfig("discriminating", "refine", 3)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedAndFinalize(cfg, tracker, pid, 664, ambiguousBest());
+  const ProteoformModel* m = tracker.getModel(pid);
+  ABORT_IF(m == nullptr || !m->refine.has_value() || m->refine->records.empty())
+  ABORT_IF(m->modifications.empty())
+  TEST_TRUE(m->modifications[0].candidate_start < m->modifications[0].candidate_end)   // ambiguity has a window
+
+  Ms3PlanGate gate;
+  gate.charge_floor = 2;
+  gate.max_targets = 100;
+  std::ostringstream captured;
+  std::streambuf* const real_cout = std::cout.rdbuf(captured.rdbuf());
+  const std::vector<Ms3Target> plan = tracker.planNextScans(pid, &gate);
+  std::cout.rdbuf(real_cout);
+  const std::string log = captured.str();
+  std::cout << log;
+  TEST_TRUE(log.find("[DISCRIMINATING] precursor_id=64 decided=fallthrough reason=pool_exhausted") != std::string::npos)
+  TEST_TRUE(log.find("[MS3-PLAN] precursor_id=64 targets=0 reason=no_containing_fragment") != std::string::npos)
+  TEST_EQUAL(plan.size(), 0)
+  TEST_EQUAL(m->refine->decided, true)
+  TEST_EQUAL(m->refine->winner_candidate, 0)
+  TEST_EQUAL(countDispatched(*m), 0)
+  TEST_EQUAL(m->dispatched_nominal_masses.empty(), true)
+
+  // Non-vacuity: ungated, the same round dispatches.
+  Config cfg2{trackerConfig("discriminating", "refine", 3)};
+  IdaLogger logger2(cfg2);
+  ProteoformTracker tracker2(cfg2, logger2);
+  feedAndFinalize(cfg2, tracker2, pid, 664, ambiguousBest());
+  TEST_EQUAL(tracker2.planNextScans(pid).size(), 3)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// ADR-0064 D1c. Nothing dispatched leaves the round undecided and unblocked. (a) A cap with no room skips every record
+//     (not stamped, not dispatched) without deciding; the next, ungated plan dispatches the round as usual. (b) A round
+//     whose every dispatched MS3 is withdrawn before it went out is back where it started: nothing completes, nothing
+//     is decided, and the next plan dispatches the same records again.
+//
+// FAILS UNDER: a capped record treated as dispatched (the round would wait forever), a withdrawal that decides an empty
+// round, or a withdrawal that leaves the records stamped (the replan would skip them).
+/////////////////////////////////////////////////////////////
+START_SECTION(governed_nothing_dispatched_leaves_the_round_undecided_and_unblocked)
+{
+  // --- (a) capped ------------------------------------------------------------------------------------------------------
+  {
+    const int pid = 65;
+    Config cfg{trackerConfig("discriminating", "refine", 3)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    feedAndFinalize(cfg, tracker, pid, 665, twoTotals());
+    const ProteoformModel* m = tracker.getModel(pid);
+    ABORT_IF(m == nullptr || !m->refine.has_value())
+    Ms3PlanGate gate;   // nothing sent and no room: every record is a new cleavage
+    gate.max_targets = 0;
+    TEST_EQUAL(tracker.planNextScans(pid, &gate).size(), 0)
+    TEST_EQUAL(m->refine->decided, false)
+    TEST_EQUAL(countDispatched(*m), 0)
+    TEST_EQUAL(m->dispatched_nominal_masses.empty(), true)
+    TEST_EQUAL(tracker.planNextScans(pid).size(), 3)   // unblocked
+    TEST_EQUAL(countDispatched(*m), 3)
+  }
+
+  // --- (b) every dispatched MS3 withdrawn ------------------------------------------------------------------------------
+  {
+    const int pid = 66;
+    Config cfg{trackerConfig("discriminating", "refine", 3)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    feedAndFinalize(cfg, tracker, pid, 666, twoTotals());
+    const std::vector<Ms3Target> first = tracker.planNextScans(pid);
+    TEST_EQUAL(first.size(), 3)
+    const ProteoformModel* m = tracker.getModel(pid);
+    ABORT_IF(m == nullptr || !m->refine.has_value() || first.size() != 3)
+    std::vector<Ms3PlanItem> items;
+    for (const Ms3Target& t : first)
+    {
+      Ms3PlanItem item;
+      item.owner_precursor_id = pid;
+      item.fragment_mass = t.frag_mass;
+      item.nominal = SpectralDeconvolution::getNominalMass(t.frag_mass);
+      items.push_back(item);
+    }
+    TEST_EQUAL(tracker.withdrawMs3(pid, items, {}) == ProteoformTracker::Ms3Withdrawal::Nothing, true)
+    TEST_EQUAL(m->refine->decided, false)
+    TEST_EQUAL(countDispatched(*m), 0)
+    TEST_EQUAL(m->dispatched_nominal_masses.empty(), true)
+    const std::vector<Ms3Target> again = tracker.planNextScans(pid);   // unblocked: the same records go out again
+    TEST_EQUAL(again.size(), 3)
+    for (size_t i = 0; i < again.size() && i < first.size(); ++i) TEST_REAL_SIMILAR(again[i].frag_mass, first[i].frag_mass)
+  }
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
 // ADR-0064 D2. withdrawMs3 un-dispatches a withdrawn record and reports the round complete once every record STILL
 //     dispatched has returned (ISSUE 5: the caller decides, it does not re-dispatch). Three records go out; 0 and 1
 //     return; withdrawing 2 completes the round, and its nominal is given back. With 1 still out, the same withdrawal
