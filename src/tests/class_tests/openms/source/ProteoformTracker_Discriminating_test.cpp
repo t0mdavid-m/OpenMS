@@ -56,6 +56,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include "FLASHIda_EventCapture.h"
 
 using namespace OpenMS;
 
@@ -308,23 +309,12 @@ namespace
     return out;
   }
 
-  // planNextScans with its stdout captured: the [MS3-PLAN] line names the reason for a zero-target plan.
+  // planNextScans with its events captured (ADR-0064): the [MS3-PLAN] line names the reason for a zero-target plan.
   std::vector<Ms3Target> planCapturing(ProteoformTracker& tracker, int precursor_id, std::string& out)
   {
-    std::ostringstream captured;
-    std::streambuf* const real_cout = std::cout.rdbuf(captured.rdbuf());
-    std::vector<Ms3Target> plan;
-    try
-    {
-      plan = tracker.planNextScans(precursor_id);
-    }
-    catch (...)
-    {
-      std::cout.rdbuf(real_cout);
-      throw;
-    }
-    std::cout.rdbuf(real_cout);
-    out = captured.str();
+    EventCapture cap;
+    std::vector<Ms3Target> plan = tracker.planNextScans(precursor_id);
+    out = cap.str();
     std::cout << out; // keep the marker visible in the test log
     return plan;
   }
@@ -539,11 +529,13 @@ START_SECTION(no_annotatable_pieces_keeps_path_a_without_recount)
   }
   TEST_EQUAL(complete, true)
 
-  std::ostringstream captured;
-  std::streambuf* const real_cout = std::cout.rdbuf(captured.rdbuf());
-  const bool flipped = tracker.decideRefine(pid);
-  std::cout.rdbuf(real_cout);
-  const std::string decided_log = captured.str();
+  std::string decided_log;
+  bool flipped = false;
+  {
+    EventCapture cap;
+    flipped = tracker.decideRefine(pid);
+    decided_log = cap.str();
+  }
   std::cout << decided_log;
   TEST_EQUAL(flipped, false)
   TEST_TRUE(decided_log.find("[DISCRIMINATING] precursor_id=44 decided=kept reason=no_annotatable_pieces") != std::string::npos)

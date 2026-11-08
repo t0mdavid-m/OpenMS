@@ -12,6 +12,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandJoin.h>
 
+#include <cctype>
 #include <cmath>     // std::abs on the parsed float masses
 #include <iomanip>   // fixed4 in scan_commands_mono_mass_is_written_at_four_decimals
 #include <fstream>
@@ -27,6 +28,8 @@
 #include <utility>   // std::pair
 
 #include "FLASHIda_TestHelpers.h"
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
 #include "FLASHIda_TestAccess.h"  // the target-log loader's maps (PrecursorSelection is a friend)
 
 using namespace OpenMS;
@@ -122,6 +125,27 @@ namespace
   }
 }
 
+// ADR-0064 event-log helpers (before START_TEST: a namespace cannot open inside it).
+namespace
+{
+  /// "HH:MM:SS.mmm" at the start of @p line.
+  bool startsWithClock(const std::string& line)
+  {
+    if (line.size() < 12) return false;
+    for (int i : {0, 1, 3, 4, 6, 7, 9, 10, 11})
+      if (!std::isdigit(static_cast<unsigned char>(line[i]))) return false;
+    return line[2] == ':' && line[5] == ':' && line[8] == '.';
+  }
+
+  std::vector<std::string> linesOf(const std::string& text)
+  {
+    std::vector<std::string> out;
+    std::istringstream in(text);
+    for (std::string l; std::getline(in, l);) out.push_back(l);
+    return out;
+  }
+}
+
 START_TEST(FLASHIda_Logging, "$Id$")
 
 /////////////////////////////////////////////////////////////
@@ -151,6 +175,8 @@ START_SECTION(deconvolveMS1_writes_nothing_to_stdout)
     }
   }
 
+  // ADR-0064: nothing on stdout, and nothing in the event log either (the masses are in ida.log and scan_results).
+  EventCapture events;
   std::ostringstream captured;
   std::streambuf* const real_cout = std::cout.rdbuf(captured.rdbuf());
   try
@@ -164,6 +190,7 @@ START_SECTION(deconvolveMS1_writes_nothing_to_stdout)
   }
   std::cout.rdbuf(real_cout);
   TEST_EQUAL(captured.str(), std::string())
+  TEST_EQUAL(events.str(), std::string())
 }
 END_SECTION
 
@@ -1464,6 +1491,159 @@ START_SECTION(scan_commands_parse_reads_raw_quote_ids_of_an_older_file)
   auto located = ScanCommandJoin::join({scanOf(32, 1, "\"!!S"), scanOf(37, 2, "\"!\"R5.30533k@10", {531.790649})}, rows);
   ABORT_IF(located.count(37) == 0)
   TEST_EQUAL(located[37].parent_scan_number, 32)
+}
+END_SECTION
+
+// ---------------------------------------------------------------------------------------------------------------
+// ADR-0064: the event log. The engine's lines go through EventLog -- whole, one call each -- to events.log and the
+// sinks; only operator lines and warnings reach the console; nothing reaches std::cout directly.
+// ---------------------------------------------------------------------------------------------------------------
+
+// 8 threads x 500 events, each built from several << pieces: every line arrives whole and once.
+// FAILS UNDER: a line composed or written in pieces (the torn std::cout lines this replaces).
+START_SECTION(event_lines_are_whole_under_concurrency)
+{
+  const std::string pad(64, 'x');
+  EventCapture cap;
+  {
+    std::vector<std::thread> threads;
+    for (int t = 0; t < 8; ++t)
+      threads.emplace_back([t, &pad] {
+        for (int j = 0; j < 500; ++j) EventLine() << "[T] thread=" << t << " n=" << j << " pad=" << pad;
+      });
+    for (auto& th : threads) th.join();
+  }
+  const auto lines = linesOf(cap.str());
+  TEST_EQUAL(lines.size(), 4000)
+  std::set<std::string> distinct;
+  int malformed = 0;
+  for (const auto& l : lines)
+  {
+    int t = -1, j = -1;
+    char tail[80] = {0};
+    const bool parsed = std::sscanf(l.c_str(), "[T] thread=%d n=%d pad=%79s", &t, &j, tail) == 3;
+    if (!parsed || t < 0 || t > 7 || j < 0 || j > 499 || std::string(tail) != pad
+        || l != "[T] thread=" + std::to_string(t) + " n=" + std::to_string(j) + " pad=" + pad)
+      ++malformed;
+    distinct.insert(l);
+  }
+  TEST_EQUAL(malformed, 0)
+  TEST_EQUAL(distinct.size(), 4000)
+}
+END_SECTION
+
+// A line emitted before any engine opened a file (Config warns while it parses) is written first when events.log
+// opens, with "rt -"; a line after a survey carries that survey's retention time in minutes.
+// FAILS UNDER: losing the pre-open lines, or a prefix that drops the time, the rt or the level.
+START_SECTION(event_file_prefix_and_pre_open_buffer)
+{
+  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  ABORT_IF(ms1_scans.empty())
+  const std::string dir = freshLogDir("event_log_prefix");
+
+  EventLog::closeFile();   // no file open, no retention time: the next line is pending, with "rt -"
+  EventLog::openFile("");  // drop what earlier sections left pending, so the next line is the first written
+  EventLine(EventLevel::Warn) << "[CONFIG-WARN] pending before the run folder opened";
+  {
+    std::string json = buildJsonWithLogDir(dir);
+    FLASHIda ida(const_cast<char*>(json.c_str()));
+    runFullCycle(&ida, ms1_scans, {});
+  }
+
+  std::ifstream in(dir + "/" + IdaLogger::kEventLogName);
+  TEST_EQUAL(in.good(), true)
+  std::stringstream ss;
+  ss << in.rdbuf();
+  const auto lines = linesOf(ss.str());
+  ABORT_IF(lines.empty())
+  TEST_EQUAL(startsWithClock(lines[0]), true)
+  TEST_EQUAL(lines[0].substr(12), std::string("  rt -  WARN   [CONFIG-WARN] pending before the run folder opened"))
+
+  std::set<std::string> survey_rts;
+  for (const auto& scan : ms1_scans)
+  {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "  rt %.2f  INFO   ", scan.rt / 60.0);
+    survey_rts.insert(buf);
+  }
+  int replan_lines = 0, replan_with_survey_rt = 0;
+  for (const auto& l : lines)
+  {
+    const size_t at = l.find("[REPLAN] ");
+    if (at == std::string::npos) continue;
+    ++replan_lines;
+    if (startsWithClock(l) && survey_rts.count(l.substr(12, at - 12)) > 0) ++replan_with_survey_rt;
+  }
+  TEST_EQUAL(replan_lines > 0, true)
+  TEST_EQUAL(replan_with_survey_rt, replan_lines)
+}
+END_SECTION
+
+// Info events go to the file and the sinks only; operator lines and warnings also reach the console, as
+// "HH:MM:SS.mmm  KIND   text". In the sinks an operator line carries its [OP-<KIND>] tag.
+// FAILS UNDER: an Info event on the console, or an operator line missing from the file's record.
+START_SECTION(operator_lines_reach_the_console_and_events_do_not)
+{
+  std::ostringstream console;
+  EventCapture cap;
+  EventLog::setConsole(&console);
+  EventLine() << "[T] a";
+  EventLog::say(OperatorKind::Id, "#1 x");
+  EventLine(EventLevel::Warn) << "[T-WARN] w";
+  EventLog::setConsole(&std::cout);
+
+  const auto shown = linesOf(console.str());
+  TEST_EQUAL(shown.size(), 2)
+  ABORT_IF(shown.size() != 2)
+  TEST_EQUAL(startsWithClock(shown[0]) && startsWithClock(shown[1]), true)
+  TEST_EQUAL(shown[0].substr(12), std::string("  ID     #1 x"))
+  TEST_EQUAL(shown[1].substr(12), std::string("  WARN   [T-WARN] w"))
+  TEST_EQUAL(cap.str(), std::string("[T] a\n[OP-ID] #1 x\n[T-WARN] w\n"))
+}
+END_SECTION
+
+// The drift guard: a full cytC MS1 -> MS2 -> MS3 drive writes nothing to std::cout or std::cerr itself (the console
+// is EventLog's, and silenced here), while its events -- tracking, re-planning, matching, the operator lines -- all
+// arrive in the event log.
+// FAILS UNDER: any engine site printing to std::cout/std::cerr again.
+START_SECTION(the_engine_writes_nothing_to_stdout)
+{
+  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+  const std::string dir = freshLogDir("event_log_no_stdout");
+
+  EventCapture cap;
+  std::ostringstream out, err;
+  EventLog::setConsole(nullptr);
+  std::streambuf* const real_cout = std::cout.rdbuf(out.rdbuf());
+  std::streambuf* const real_cerr = std::cerr.rdbuf(err.rdbuf());
+  try
+  {
+    std::string json = buildJsonWithLogDir(dir, true);
+    FLASHIda ida(const_cast<char*>(json.c_str()));
+    runFullCycle(&ida, ms1_scans, ms2_scans);
+  }
+  catch (...)
+  {
+    std::cout.rdbuf(real_cout);
+    std::cerr.rdbuf(real_cerr);
+    EventLog::setConsole(&std::cout);
+    throw;
+  }
+  std::cout.rdbuf(real_cout);
+  std::cerr.rdbuf(real_cerr);
+  EventLog::setConsole(&std::cout);
+
+  TEST_EQUAL(out.str(), std::string())
+  TEST_EQUAL(err.str(), std::string())
+  const std::string events = cap.str();
+  TEST_EQUAL(events.find("[TRACK-CREATE] ") != std::string::npos, true)
+  TEST_EQUAL(events.find("[REPLAN] ") != std::string::npos, true)
+  TEST_EQUAL(events.find("[MATCH] ") != std::string::npos || events.find("[LEVELS] ") != std::string::npos, true)
+  TEST_EQUAL(events.find("[OP-MS1] ") != std::string::npos, true)
+  TEST_EQUAL(events.find("[OP-ID] ") != std::string::npos, true)
+  std::cout << events;   // keep the run's events visible in the test log
 }
 END_SECTION
 

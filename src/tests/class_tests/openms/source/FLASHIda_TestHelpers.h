@@ -25,6 +25,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>                 // splitEnvelope
 #include <OpenMS/SYSTEM/File.h>  // freshLogDir: makeDir / removeDirRecursively
 #include "FLASHIda_TestAccess.h"  // FLASHIdaTestAccess::explorationActive (private-state access)
+#include "FLASHIda_EventCapture.h"
 
 #include <cctype>
 #include <chrono>

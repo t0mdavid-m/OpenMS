@@ -114,23 +114,13 @@ namespace
 })JSON";
   }
 
-  /// Run @p fn with std::cout captured; returns what it printed.
+  /// Run @p fn with the engine's events captured (ADR-0064); returns what it emitted.
   template <typename Fn>
   std::string captureCout(Fn fn)
   {
-    std::ostringstream captured;
-    std::streambuf* const real_cout = std::cout.rdbuf(captured.rdbuf());
-    try
-    {
-      fn();
-    }
-    catch (...)
-    {
-      std::cout.rdbuf(real_cout);
-      throw;
-    }
-    std::cout.rdbuf(real_cout);
-    return captured.str();
+    EventCapture cap;
+    fn();
+    return cap.str();
   }
 
   /// One survey's plan as the run shows it: the `[REPLAN]` line's counts, and the nominal masses of the
@@ -505,29 +495,6 @@ namespace
     return s;
   }
 
-  /// A streambuf that appends under a mutex, for capturing std::cout while a drain thread and the analysis thread
-  /// both print.
-  struct LockedStringBuf : std::streambuf
-  {
-    std::mutex m;
-    std::string s;
-    int_type overflow(int_type c) override
-    {
-      if (c != traits_type::eof())
-      {
-        std::lock_guard<std::mutex> lk(m);
-        s.push_back(static_cast<char>(c));
-      }
-      return c;
-    }
-    std::streamsize xsputn(const char* p, std::streamsize n) override
-    {
-      std::lock_guard<std::mutex> lk(m);
-      s.append(p, static_cast<size_t>(n));
-      return n;
-    }
-  };
-
   /// One race: survey A plans, a drain thread starts dequeuing @p drain_delay into survey B's processing and keeps
   /// dequeuing every @p drain_period, and the seam dequeues one more command between B's plan and its swap. Until the
   /// seam has run the drain thread takes at most |A's plan| - 1 commands (none when @p drain_before_seam is false),
@@ -547,8 +514,7 @@ namespace
                std::chrono::microseconds drain_period, bool drain_before_seam)
   {
     RaceRun r;
-    LockedStringBuf buf;
-    std::streambuf* const real_cout = std::cout.rdbuf(&buf);
+    EventCapture cap;
     {
       FLASHIda ida(const_cast<char*>(cfg.c_str()));
       ScanCommandQueue& q = FLASHIdaTestAccess::queue(ida);
@@ -605,8 +571,7 @@ namespace
       r.units_left = FLASHIdaTestAccess::planUnitCount(q);
       r.queued_left = FLASHIdaTestAccess::queuedCommands(q).size();
     }
-    std::cout.rdbuf(real_cout);
-    r.out = buf.s;
+    r.out = cap.str();
     return r;
   }
 

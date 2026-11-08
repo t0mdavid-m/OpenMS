@@ -370,13 +370,9 @@ namespace
     config = std::make_unique<Config>(cfg);
     deconv = std::make_unique<Deconvolution>(*config, config->toleranceList());
     ps = std::make_unique<PrecursorSelection>(*config, *deconv);
-    std::ostringstream captured;
-    std::streambuf* const real_cout = std::cout.rdbuf(captured.rdbuf());
-    int n = 0;
-    try { n = FLASHIdaTestAccess::selectFrom(*ps, splitEnvelope(), kSplitRt); }
-    catch (...) { std::cout.rdbuf(real_cout); throw; }
-    std::cout.rdbuf(real_cout);
-    log = captured.str();
+    EventCapture cap;   // ADR-0064: the [CHARGE-SET] lines are events, no longer stdout
+    const int n = FLASHIdaTestAccess::selectFrom(*ps, splitEnvelope(), kSplitRt);
+    log = cap.str();
     return n;
   }
 

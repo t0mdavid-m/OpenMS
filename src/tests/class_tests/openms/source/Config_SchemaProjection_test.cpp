@@ -15,6 +15,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include "FLASHIda_EventCapture.h"
 
 using namespace OpenMS;
 
@@ -1089,15 +1090,12 @@ auto quantCfg = [](const std::string& body, const std::string& precursor_extra =
                  MS2_QUANT);
 };
 
-// Loads `json` and returns everything Config printed to stdout, so a [CONFIG-WARN] is ASSERTED
-// rather than inferred from "it loaded". Restores cout even when the load throws.
+// Loads `json` and returns every event Config emitted (ADR-0064: its event log, no longer stdout), so a
+// [CONFIG-WARN] is ASSERTED rather than inferred from "it loaded". The sink goes with the scope, throw or not.
 auto loadAndCapture = [](const std::string& json) {
-  std::ostringstream buf;
-  std::streambuf* old = std::cout.rdbuf(buf.rdbuf());
-  try { Config c(json); }
-  catch (...) { std::cout.rdbuf(old); throw; }
-  std::cout.rdbuf(old);
-  return buf.str();
+  EventCapture cap;
+  { Config c(json); }
+  return cap.str();
 };
 
 START_SECTION(quantification_test_parses_and_rejects)

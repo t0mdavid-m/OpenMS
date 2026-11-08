@@ -24,6 +24,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include "FLASHIda_EventCapture.h"
 
 using namespace OpenMS;
 
@@ -808,11 +809,9 @@ START_SECTION(cancelled_member_leaves_registry)
   ScanCommand child = ms2(93, 13, 951.0, 0);
   const std::string parent = ScanCommandQueue::encode(91);
   std::copy(parent.begin(), parent.end(), child.parent_scan_id);
-  std::ostringstream captured;
-  std::streambuf* const real_cout = std::cout.rdbuf(captured.rdbuf());
+  EventCapture cap;
   q.push(child);
-  std::cout.rdbuf(real_cout);
-  TEST_EQUAL(captured.str().find("[REPLAN-INVARIANT]") == std::string::npos, true)
+  TEST_EQUAL(cap.str().find("[REPLAN-INVARIANT]") == std::string::npos, true)
 }
 END_SECTION
 
