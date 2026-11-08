@@ -1314,6 +1314,58 @@ START_SECTION(ms3_plan_cap_two_x_and_commit_in_gap)
 }
 END_SECTION
 
+// A partly-sent exploration group is committed, so it is never withdrawn: one variant of the two-variant group goes
+// out, and a newer plan withdraws the proteoform's other (unsent) item but not the group's remaining variant.
+START_SECTION(ms3_plan_partly_sent_group_is_kept)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+  Ms3PlanItem group = ms3Item(31, "b", 40, 5, 900.0);   // a two-variant exploration group
+  ScanCommand v2 = group.commands[0];
+  v2.scan_id = 32;
+  group.commands.push_back(v2);
+  group.sweep_group_id = 9;
+  q.replaceMs3Plan(pkey(12351.39), {group, ms3Item(33, "y", 29, 4, 800.0)}, 0, 3);
+
+  auto first = q.dequeue();   // the group's first variant: the group commits
+  ABORT_IF(!first.has_value())
+  TEST_EQUAL(first->scan_id, 31)
+  const Ms3RegistrySnapshot snap = q.ms3Snapshot(pkey(12351.39));
+  TEST_REAL_SIMILAR(snap.sent.at({"b", 40}).at(5), 900.0)
+
+  const Ms3ReplanResult r = q.replaceMs3Plan(pkey(12351.39), {ms3Item(34, "b", 60, 9, 700.0)}, snap.generation, 3);
+  TEST_EQUAL(asSet(r.withdrawn_scan_ids) == std::set<int>({33}), true)   // not 32: its group went out
+  TEST_EQUAL(r.withdrawn.size(), 1)
+  ABORT_IF(r.withdrawn.empty())
+  TEST_EQUAL(r.withdrawn[0].sweep_group_id, 0)
+  const std::vector<int> drained = drainIds(q);
+  TEST_EQUAL(std::set<int>(drained.begin(), drained.end()) == std::set<int>({32, 34}), true)
+}
+END_SECTION
+
+// A multiplexed item commits every charge it carries -- the anchor and its stage-1 notches -- at its own MS2 intensity.
+START_SECTION(ms3_plan_multiplexed_item_commits_every_charge)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+  Ms3PlanItem mux = ms3Item(41, "b", 50, 8, 1000.0);
+  mux.charges.push_back({6, 500.0});   // two notches
+  mux.charges.push_back({7, 300.0});
+  q.replaceMs3Plan(pkey(12351.39), {mux}, 0, 3);
+  ABORT_IF(!q.dequeue().has_value())
+  const Ms3RegistrySnapshot snap = q.ms3Snapshot(pkey(12351.39));
+  TEST_EQUAL(snap.sent.size(), 1)   // one cleavage ...
+  ABORT_IF(snap.sent.count({"b", 50}) == 0)
+  const std::map<int, double>& by_charge = snap.sent.at({"b", 50});
+  TEST_EQUAL(by_charge.size(), 3)   // ... at three charges
+  TEST_REAL_SIMILAR(by_charge.at(8), 1000.0)
+  TEST_REAL_SIMILAR(by_charge.at(6), 500.0)
+  TEST_REAL_SIMILAR(by_charge.at(7), 300.0)
+  TEST_EQUAL(ms3Admits(snap, {"b", 50}, 6, 999.0), false)   // each charge is held to 2x its own
+  TEST_EQUAL(ms3Admits(snap, {"b", 50}, 6, 1000.0), true)
+}
+END_SECTION
+
 // An expired command of an item that never went out withdraws the WHOLE item into the inbox the analysis thread
 // undoes; an expired command of a committed item only leaves the registry.
 START_SECTION(ms3_plan_expired_unsent_item_reaches_the_inbox)
