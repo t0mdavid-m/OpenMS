@@ -1521,7 +1521,8 @@ namespace
 
   std::vector<FragmentAnalysis::PTMSite> FragmentAnalysis::narrowFragmentPTMSites(
       const std::vector<PTMSite>& wide_sites, int L,
-      const std::vector<ProteoformMatch::FragmentMatch>& fragments)
+      const std::vector<ProteoformMatch::FragmentMatch>& fragments,
+      int prefix_offset, int suffix_offset)
   {
     // Per-scan MS3 identification-LEAF localizer (identification.tsv `proteoform` column ONLY). The pooled path
     // (ProteoformTracker::narrowModifications_ Pass B) is a SEPARATE code path -- untouched, byte-identical.
@@ -1561,7 +1562,7 @@ namespace
         if (fm.equiv_type.empty() || fm.equiv_index <= 0) continue;   // bracket over the EQUIV (projected) ion
         if (is_prefix_ion(fm.equiv_type))                             // prefix-equiv covers residues [1, equiv_index]
         {
-          const int cover_end = fm.equiv_index;
+          const int cover_end = fm.equiv_index - prefix_offset;       // full-protein -> render frame
           if (cover_end <= 0 || cover_end >= L) continue;             // covers all / none -> constrains nothing
           bool includes;
           if (mod_hi <= cover_end)      includes = true;              // fully covers the a-priori range -> includer
@@ -1574,7 +1575,7 @@ namespace
         }
         else                                                          // suffix-equiv (y-precursor) covers [cover_start, L]
         {
-          const int cover_start = L - fm.equiv_index + 1;             // render-frame suffix coverage
+          const int cover_start = L - (fm.equiv_index - suffix_offset) + 1;   // full-protein -> render-frame suffix coverage
           if (cover_start <= 1 || cover_start > L) continue;          // covers all / none -> constrains nothing
           bool includes;                                              // nterm_loss NOT applied on suffix (subframe-1 != abs-0)
           if (mod_lo >= cover_start)      includes = true;            // fully covers -> includer

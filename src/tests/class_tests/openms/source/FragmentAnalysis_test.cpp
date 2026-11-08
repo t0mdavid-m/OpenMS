@@ -904,7 +904,7 @@ START_SECTION(narrowFragmentPTMSites)
   // includes +615 (hi 22). yields -89 (1-13), +615 (14-22), rendered over the 80-residue b80 prefix.
   auto sitesA = FragmentAnalysis::narrowFragmentPTMSites(
       wideAB, 80, { mkEq("yb", 67, "b", 13, true, true), mkEq("b", 22, "b", 22, false, true),
-                    mkEq("b", 26, "b", 26, false, true), mkEq("b", 28, "b", 28, false, true) });
+                    mkEq("b", 26, "b", 26, false, true), mkEq("b", 28, "b", 28, false, true) }, 0, 0);
   std::string pfA = FragmentAnalysis::toProForma(CYTC105.substr(0, 80), sitesA);
   TEST_STRING_EQUAL(pfA, EXP_AMP)
 
@@ -914,7 +914,7 @@ START_SECTION(narrowFragmentPTMSites)
   auto sitesB = FragmentAnalysis::narrowFragmentPTMSites(
       wideAB, 70, { mkEq("yb", 69, "b", 1, true, true), mkEq("b", 26, "b", 26, false, true),
                     mkEq("b", 34, "b", 34, false, true), mkEq("b", 44, "b", 44, false, true),
-                    mkEq("b", 48, "b", 48, false, true), mkEq("b", 61, "b", 61, false, true) });
+                    mkEq("b", 48, "b", 48, false, true), mkEq("b", 61, "b", 61, false, true) }, 0, 0);
   std::string pfB = FragmentAnalysis::toProForma(CYTC105.substr(0, 70), sitesB);
   TEST_STRING_EQUAL(pfB, EXP_APOS)
   // ISSUE(old raw-frame narrower): the flipped b1 (raw yb69) was read as a suffix over [2..70] -> -89 dragged
@@ -926,7 +926,7 @@ START_SECTION(narrowFragmentPTMSites)
   // keeping the heme in the His-region.
   auto sitesC = FragmentAnalysis::narrowFragmentPTMSites(
       { PTM{20, 15, 26, 615.2498} }, 80,
-      { mkEq("b", 15, "b", 15, false, false), mkEq("yb", 58, "b", 22, true, false) });
+      { mkEq("b", 15, "b", 15, false, false), mkEq("yb", 58, "b", 22, true, false) }, 0, 0);
   TEST_EQUAL((int)sitesC.size(), 1)
   TEST_EQUAL(sitesC[0].start_position, 16)
   TEST_EQUAL(sitesC[0].end_position, 22)   // ISSUE(no-invert): a non-inverted flipped b22 would EXCLUDE -> lo 23 -> wrong region
@@ -935,7 +935,7 @@ START_SECTION(narrowFragmentPTMSites)
   // Drop the separating b13: nothing splits -89 from +615 this scan, so they MERGE into one summed shift.
   auto sitesD = FragmentAnalysis::narrowFragmentPTMSites(
       wideAB, 80, { mkEq("b", 22, "b", 22, false, true), mkEq("b", 26, "b", 26, false, true),
-                    mkEq("b", 28, "b", 28, false, true) });
+                    mkEq("b", 28, "b", 28, false, true) }, 0, 0);
   TEST_EQUAL((int)sitesD.size(), 1)
   TEST_EQUAL(sitesD[0].start_position, 1)
   TEST_EQUAL(sitesD[0].end_position, 22)
@@ -952,22 +952,48 @@ START_SECTION(narrowFragmentPTMSites)
   // mod range is used to CLASSIFY, never as an output bound), so a SINGLE suffix ion bounds one side and leaves
   // the other at the seed edge: y21 includer -> lower bound 60, upper stays L=80 -> [60,80]; y20 excluder ->
   // upper bound 60, lower stays 1 -> [1,60]; the two together bound both sides -> localized [60,60].
-  auto sitesF1 = FragmentAnalysis::narrowFragmentPTMSites({ PTM{60, 50, 70, 42.0106} }, 80, { mkEq("y", 21, "y", 21, false, true) });
+  auto sitesF1 = FragmentAnalysis::narrowFragmentPTMSites({ PTM{60, 50, 70, 42.0106} }, 80, { mkEq("y", 21, "y", 21, false, true) }, 0, 0);
   TEST_EQUAL(sitesF1[0].start_position, 60)
   TEST_EQUAL(sitesF1[0].end_position, 80)    // single includer bounds only the lower side; upper stays seed L
-  auto sitesF2 = FragmentAnalysis::narrowFragmentPTMSites({ PTM{60, 50, 70, 42.0106} }, 80, { mkEq("y", 20, "y", 20, false, false) });
+  auto sitesF2 = FragmentAnalysis::narrowFragmentPTMSites({ PTM{60, 50, 70, 42.0106} }, 80, { mkEq("y", 20, "y", 20, false, false) }, 0, 0);
   TEST_EQUAL(sitesF2[0].start_position, 1)   // single excluder bounds only the upper side; lower stays seed 1
   TEST_EQUAL(sitesF2[0].end_position, 60)
-  auto sitesF3 = FragmentAnalysis::narrowFragmentPTMSites({ PTM{60, 50, 70, 42.0106} }, 80, { mkEq("y", 21, "y", 21, false, true), mkEq("y", 20, "y", 20, false, false) });
+  auto sitesF3 = FragmentAnalysis::narrowFragmentPTMSites({ PTM{60, 50, 70, 42.0106} }, 80, { mkEq("y", 21, "y", 21, false, true), mkEq("y", 20, "y", 20, false, false) }, 0, 0);
   TEST_EQUAL(sitesF3[0].start_position, 60)
   TEST_EQUAL(sitesF3[0].end_position, 60)
 
+  // ---- Case G: PREFIX OFFSET (the proteoform starts past residue 1) --------------------------------
+  // computeEquivalentIon writes equiv indices in the FULL-PROTEIN frame (prefix `region_start + i`); the
+  // brackets live in the fragment's render frame. With the Met removed (region_start 1) every equiv index is
+  // one higher than its render index, and prefix_offset 1 must give back Case A's render-frame sites exactly.
+  // ISSUE(offset ignored): reading the full-protein index as a render index shifts every bracket edge one
+  // residue toward the C-terminus (seen on the ms3_cytc leaf under the 4c proteome search).
+  auto sitesG = FragmentAnalysis::narrowFragmentPTMSites(
+      wideAB, 80, { mkEq("yb", 67, "b", 14, true, true), mkEq("b", 22, "b", 23, false, true),
+                    mkEq("b", 26, "b", 27, false, true), mkEq("b", 28, "b", 29, false, true) }, 1, 0);
+  TEST_EQUAL((int)sitesG.size(), (int)sitesA.size())
+  for (size_t k = 0; k < sitesG.size() && k < sitesA.size(); ++k)
+  {
+    TEST_EQUAL(sitesG[k].start_position, sitesA[k].start_position)
+    TEST_EQUAL(sitesG[k].end_position, sitesA[k].end_position)
+  }
+  TEST_STRING_EQUAL(FragmentAnalysis::toProForma(CYTC105.substr(1, 80), sitesG),
+                    FragmentAnalysis::toProForma(CYTC105.substr(1, 80), sitesA))
+
+  // ---- Case H: SUFFIX OFFSET (the proteoform ends before the protein does) ---------------------------
+  // Suffix equiv indices are full-protein too (`P - region_end + i`). Case F3's pair with region_end 5 short
+  // of P: suffix_offset 5 must give back F3's localized [60,60].
+  auto sitesH = FragmentAnalysis::narrowFragmentPTMSites({ PTM{60, 50, 70, 42.0106} }, 80,
+      { mkEq("y", 21, "y", 26, false, true), mkEq("y", 20, "y", 25, false, false) }, 0, 5);
+  TEST_EQUAL(sitesH[0].start_position, 60)
+  TEST_EQUAL(sitesH[0].end_position, 60)
+
   // ---- No-op guards ---------------------------------------------------------------------------------
   PTM heme_np{20, 15, 26, 615.2498};
-  auto rL1 = FragmentAnalysis::narrowFragmentPTMSites({ heme_np }, 1, { mkEq("b", 1, "b", 1, false, true) });
+  auto rL1 = FragmentAnalysis::narrowFragmentPTMSites({ heme_np }, 1, { mkEq("b", 1, "b", 1, false, true) }, 0, 0);
   TEST_EQUAL(rL1[0].start_position, 15)      // L<=1: input returned untouched
   TEST_EQUAL(rL1[0].end_position, 26)
-  auto rEmpty = FragmentAnalysis::narrowFragmentPTMSites({ heme_np }, 80, {});
+  auto rEmpty = FragmentAnalysis::narrowFragmentPTMSites({ heme_np }, 80, {}, 0, 0);
   TEST_EQUAL(rEmpty[0].start_position, 1)     // no fragment evidence -> maximal ambiguity over [1,L]
   TEST_EQUAL(rEmpty[0].end_position, 80)
 
@@ -978,7 +1004,7 @@ START_SECTION(narrowFragmentPTMSites)
   ctxNterm.region_start = 0; ctxNterm.region_end = -1;
   ctxNterm.ptm_sites = { PTM{4, 1, 8, -89.0302} };
   bool pooled_b1 = MS3FragmentMatcher::coveredAmbiguousInEquivFrame(ctxNterm, "b", 1, 70, /*sub_includes_ptm=*/true, /*is_flip=*/true) != 0.0;
-  auto leafB1 = FragmentAnalysis::narrowFragmentPTMSites({ PTM{4, 1, 8, -89.0302} }, 70, { mkEq("yb", 69, "b", 1, true, true) });
+  auto leafB1 = FragmentAnalysis::narrowFragmentPTMSites({ PTM{4, 1, 8, -89.0302} }, 70, { mkEq("yb", 69, "b", 1, true, true) }, 0, 0);
   bool leaf_b1 = (leafB1[0].start_position == 1 && leafB1[0].end_position == 1);
   TEST_EQUAL(leaf_b1, pooled_b1)   // both true: the flipped b1 pins -89 to M1
 

@@ -177,9 +177,15 @@ namespace OpenMS
     /// deliberately mirrors ProteoformTracker::narrowModifications_ Pass B (the MS3 localization pass),
     /// scoped to ONE scan -- it is NOT the cumulative cross-scan pooled pass. Returns @p wide_sites
     /// unchanged when @p fragment_length <= 1, or for any site no bracketing fragment constrains.
+    ///
+    /// FRAME: a fragment's equiv_index is in the FULL-PROTEIN frame (MS3FragmentMatcher::computeEquivalentIon:
+    /// prefix `region_start + i`, suffix `P - region_end + i`), while @p wide_sites and the brackets are in the
+    /// fragment's RENDER frame. @p prefix_offset (the render frame's region_start) and @p suffix_offset
+    /// (P - region_end) convert one into the other; both are 0 only when the proteoform spans the whole protein.
     static std::vector<PTMSite> narrowFragmentPTMSites(
         const std::vector<PTMSite>& wide_sites, int fragment_length,
-        const std::vector<ProteoformMatch::FragmentMatch>& fragments);
+        const std::vector<ProteoformMatch::FragmentMatch>& fragments,
+        int prefix_offset, int suffix_offset);
 
     /// I2: signal-to-noise of a precursor over the ACTUAL commanded isolation window [lo, hi] (m/z).
     /// signal = the selected charge's intensity within the window (the engine's already-computed

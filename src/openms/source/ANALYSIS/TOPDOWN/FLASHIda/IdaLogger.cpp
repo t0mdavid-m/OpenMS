@@ -800,11 +800,18 @@ namespace OpenMS
       render_ctx.protein_accession = ctx.protein_accession;
       std::string wide_seq;
       std::vector<FragmentAnalysis::PTMSite> wide_sites;
-      if (MS3FragmentMatcher::fragmentProFormaSites(config_.identification().proteinOr(ctx.protein_sequence), render_ctx,
+      const std::string& render_protein = config_.identification().proteinOr(ctx.protein_sequence);
+      if (MS3FragmentMatcher::fragmentProFormaSites(render_protein, render_ctx,
               ctx.fragment_ion_type, ctx.fragment_ion_index, wide_seq, wide_sites))
       {
+        // The matched ions' equiv indices are full-protein (computeEquivalentIon over the same region); the
+        // render frame starts at region_start (prefix) / ends at region_end (suffix).
+        const int P = static_cast<int>(render_protein.size());
+        const int prefix_offset = std::max(ctx.start_pos, 0);
+        const int suffix_offset = P - (ctx.end_pos < 0 ? P : ctx.end_pos);
         narrowed_sites = FragmentAnalysis::narrowFragmentPTMSites(
-            wide_sites, static_cast<int>(wide_seq.size()), match.fragments);   // THIS scan's ions only
+            wide_sites, static_cast<int>(wide_seq.size()), match.fragments,
+            prefix_offset, suffix_offset);                                     // THIS scan's ions only
         eff_ptm_sites = &narrowed_sites;
         id_render_seq = wide_seq;                // render the SAME fragment scan_commands renders
       }
@@ -812,7 +819,8 @@ namespace OpenMS
       {
         // Defensive fallback (render ctx not populated, e.g. a degenerate row): previous behaviour.
         narrowed_sites = FragmentAnalysis::narrowFragmentPTMSites(
-            match.ptm_sites, static_cast<int>(match.proteoform_sequence.size()), match.fragments);
+            match.ptm_sites, static_cast<int>(match.proteoform_sequence.size()), match.fragments,
+            0, 0);   // the match's whole sequence: render frame == full-protein frame
         eff_ptm_sites = &narrowed_sites;
       }
     }
