@@ -3450,10 +3450,10 @@ END_SECTION
 
 START_SECTION(search_the_apply_is_the_second_analysis_mutex_site_and_the_search_holds_none)
 {
-  auto ms1_scans = loadTsvScans(ms1_cytc_tsv_path);
-  auto ms2_scans = loadTsvScans(ms2_cytc_fresh_tsv_path);
+  auto ms1_scans = loadTsvScans(FI_MS1_CYTC2);
+  auto ms2_scans = loadTsvScans(FI_MS2_CYTC2);
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
-  const std::string cfg = searchPoolCytcJson(1);
+  const std::string cfg = inclusionPinCytc2(searchPoolCytcJson(1));
   FLASHIda ida(const_cast<char*>(cfg.c_str()));
   TEST_EQUAL(FLASHIdaTestAccess::searchThreads(ida), 1)
 
@@ -3483,7 +3483,7 @@ START_SECTION(search_the_apply_is_the_second_analysis_mutex_site_and_the_search_
 
   const int pushed = ida.waitForSearchIdle();
   TEST_EQUAL(FLASHIdaTestAccess::appliesFinished(ida), 1)
-  TEST_EQUAL(pushed > 0, true)   // cytC identifies and the ambiguity objective targets MS3 (processScan_ms3_commands)
+  TEST_EQUAL(pushed > 0, true)   // cytC identifies and the ambiguity objective targets the heme (inclusionPinCytc2)
   TEST_EQUAL(FLASHIdaTestAccess::queueSize(ida, 1), ms3_before + static_cast<size_t>(pushed))
   TEST_EQUAL(ida.waitForSearchIdle(), 0)   // the count is handed out once
 }

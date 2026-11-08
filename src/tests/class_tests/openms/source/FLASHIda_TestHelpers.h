@@ -780,6 +780,24 @@ namespace
     return cfg;
   }
 
+  // inclusionPinCytc on the SECOND cytC fixture set (FI_MS1_CYTC2 / FI_MS2_CYTC2 + inclusion_cytc_12307.txt), the one
+  // the inclusion_ms3_cytc golden drives, with the Met-less sequence method_ms3_cytc_new.json names. Its survey mass
+  // is that run's true cytC mass (12307.17), and under the proteome search (ADR-0061 push 4c) the ambiguity objective
+  // still has heme-containing targets there (b21, b25, b32). On fresh_scan57 the search places the N-terminal acetyl
+  // by FLASHTnT's Protein N-term rule and no observed fragment contains the heme, so ambiguity mode plans no MS3 on
+  // that spectrum's true precursor: a section that needs an ambiguity-mode MS3 to inspect pins this set instead.
+  inline std::string inclusionPinCytc2(std::string cfg)
+  {
+    cfg = inclusionPinCytc(cfg);
+    auto rep = [&cfg](const std::string& from, const std::string& to) {
+      auto p = cfg.find(from);
+      if (p != std::string::npos) cfg.replace(p, from.size(), to);
+    };
+    rep("configs/inclusion_cytc.txt\"", "configs/inclusion_cytc_12307.txt\"");
+    rep("\"MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE\"", "\"GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE\"");
+    return cfg;
+  }
+
   // The C++-schema twin of test-data/configs/method_exploration_kinetic.json (ADR-0047): cytC 17+ pinned
   // through inclusion_cytc_z17.txt, a kinetic_model HCD sweep 1..50/10 on the ion trap, the study's all-in
   // HCD k2, follow-up on the Orbitrap. Already pinned, so no inclusionPin* step is needed on top.
@@ -1039,6 +1057,8 @@ namespace
   const std::string FI_MS1_CYTC  = "../../FlashIDA/test-data/spectra/ms1_cytc.txt";
   const std::string FI_MS2_CYTC  = "../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt";
   const std::string FI_MS2_CYTC149 = "../../FlashIDA/test-data/spectra/ms2_cytc_scan149.txt";
+  const std::string FI_MS1_CYTC2 = "../../FlashIDA/test-data/spectra/ms1_cytc2.txt";        // one survey, scan 372
+  const std::string FI_MS2_CYTC2 = "../../FlashIDA/test-data/spectra/ms2_cytc2_scan434.txt";
 
   // ----------------------------------------------------------------------------
   // The search pool (ADR-0062): tools for the sections that pin the mechanism and therefore do NOT

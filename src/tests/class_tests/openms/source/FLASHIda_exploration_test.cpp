@@ -1846,14 +1846,14 @@ END_SECTION
 START_SECTION(ms3_selection_no_exploration_standard_targeting)
 {
   // P7-U08: MS3 with selection but no exploration -> standard MS3 commands.
-  // Inclusion-pin the cytC precursor + M-starting proteoform so the real fresh57 b/y ladder
-  // matches; the MS2-exploration winner then emits MS3 directly (overrides empty ->
+  // Inclusion-pin the cytc2 precursor + its Met-less proteoform (inclusionPinCytc2) so the real scan434
+  // b/y ladder matches; the MS2-exploration winner then emits MS3 directly (overrides empty ->
   // initiateNextLevel, Exploration.cpp:817-822).
-  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
-  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+  auto ms1_scans = loadTsvScans(FI_MS1_CYTC2);
+  auto ms2_scans = loadTsvScans(FI_MS2_CYTC2);
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
-  std::string cfg_str = inclusionPinCytc(ms3_selection_only_config);
+  std::string cfg_str = inclusionPinCytc2(ms3_selection_only_config);
   FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
 
   ExplResult c = driveOneExplorationGroup(ida, ms1_scans, ms2_scans[0]);
@@ -1880,11 +1880,11 @@ START_SECTION(ms2_exploration_fixed_ce_ms3_carries_parent_context)
   // The drive passes a non-null but EMPTY ms3_ion_map: MS3 commands are dequeued and recorded but never
   // fed back (the harness never fabricates MS3 data), so the cache entries are still outstanding when we
   // read them — a returning MS3 erases its own entry.
-  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
-  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+  auto ms1_scans = loadTsvScans(FI_MS1_CYTC2);
+  auto ms2_scans = loadTsvScans(FI_MS2_CYTC2);
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
-  std::string cfg_str = inclusionPinCytc(ms3_selection_only_config);
+  std::string cfg_str = inclusionPinCytc2(ms3_selection_only_config);
   FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
 
   const std::map<std::string, std::vector<ScanData>> no_ms3_fixtures;  // non-null + empty => record, never feed
@@ -1911,11 +1911,11 @@ START_SECTION(ms3_exploration_variants_do_not_retain_parent_contexts)
   // map exactly once, so an erased entry can never be re-read), which is why nothing caught it.
   //
   // Here all MS3 variants are fed back, so a correct engine ends with an empty cache.
-  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
-  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+  auto ms1_scans = loadTsvScans(FI_MS1_CYTC2);
+  auto ms2_scans = loadTsvScans(FI_MS2_CYTC2);
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
-  std::string cfg_str = inclusionPinCytc(ms3_exploration_config);
+  std::string cfg_str = inclusionPinCytc2(ms3_exploration_config);
   FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
 
   const int budget = 256 + 64 * static_cast<int>(ms1_scans.size() + 1);
@@ -1936,13 +1936,13 @@ START_SECTION(ms2_exploration_production_winner_then_ms3)
   // a production-MS2 re-acquisition (Exploration.cpp:749-810) rather than MS3-direct. Feeding
   // that winner back drives the standard MS2->MS3 path, so MS3 is still acquired FROM the winning
   // scan. Real cytC data, inclusion-pinned.
-  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
-  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+  auto ms1_scans = loadTsvScans(FI_MS1_CYTC2);
+  auto ms2_scans = loadTsvScans(FI_MS2_CYTC2);
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
   // Inject a non-tolerance override so config_.level(2).overrides stays non-empty
   // (tolerance_ppm would be extracted+erased; "analyzer" persists).
-  std::string cfg_str = inclusionPinCytc(ms3_selection_only_config);
+  std::string cfg_str = inclusionPinCytc2(ms3_selection_only_config);
   {
     auto p = cfg_str.find("\"metric\": \"mass_count\"");
     ABORT_IF(p == std::string::npos)
@@ -1966,11 +1966,11 @@ START_SECTION(ms2_then_ms3_exploration_acquires_ms3)
   // inclusion-pinned + real cytC: the MS2-exploration winner cascades into MS3-level commands.
   // Verifies the MS2->MS3 exploration chain actually reaches MS3 on real data (existing MS3-
   // exploration sections only assert structure on synthetic data).
-  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
-  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+  auto ms1_scans = loadTsvScans(FI_MS1_CYTC2);
+  auto ms2_scans = loadTsvScans(FI_MS2_CYTC2);
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
-  std::string cfg_str = inclusionPinCytc(ms3_exploration_config);
+  std::string cfg_str = inclusionPinCytc2(ms3_exploration_config);
   FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
 
   ExplResult c = driveOneExplorationGroup(ida, ms1_scans, ms2_scans[0]);
@@ -3100,14 +3100,14 @@ END_SECTION
 
 START_SECTION(ms2_exploration_returns_command_count)
 {
-  // Inclusion-pinned cytC + M-proteoform + real fresh57 ladder: the MS2-exploration winner
+  // Inclusion-pinned cytc2 + its Met-less proteoform + real scan434 ladder: the MS2-exploration winner
   // emits MS3 (overrides empty -> initiateNextLevel), so the winning feed's processScan
   // returns a positive command count.
-  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
-  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+  auto ms1_scans = loadTsvScans(FI_MS1_CYTC2);
+  auto ms2_scans = loadTsvScans(FI_MS2_CYTC2);
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
-  std::string cfg_str = inclusionPinCytc(ms3_selection_only_config);
+  std::string cfg_str = inclusionPinCytc2(ms3_selection_only_config);
   FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
 
   ExplResult c = driveOneExplorationGroup(ida, ms1_scans, ms2_scans[0]);
@@ -3801,13 +3801,13 @@ END_SECTION
 
 START_SECTION(inclusion_ms3_full_acquisition_roundtrip)
 {
-  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
-  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
-  ABORT_IF(ms1_scans.size() < 2 || ms2_scans.empty())
+  auto ms1_scans = loadTsvScans(FI_MS1_CYTC2);
+  auto ms2_scans = loadTsvScans(FI_MS2_CYTC2);
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
-  // C++-schema mirror of method_inclusion.json + inclusion_cytc.txt: inclusion mode
-  // (target_mode=1) pinned to the single ~12360 Da cytC target, the M-starting cytC
-  // proteoform (so the real fresh57 b/y ladder matches and MS3 fires), standard MS2 and
+  // C++-schema mirror of method_inclusion.json on the cytc2 set (inclusionPinCytc2): inclusion mode
+  // (target_mode=1) pinned to the single 12307 Da cytC target, the Met-less cytC
+  // proteoform (so the real scan434 b/y ladder matches and MS3 fires), standard MS2 and
   // MS3 intensity selection (NO exploration block), and a large agc_interval so only
   // idle AGCs are emitted.
   const char* inclusion_ms3_config = R"({
@@ -3842,7 +3842,7 @@ START_SECTION(inclusion_ms3_full_acquisition_roundtrip)
   },
   "files": {
     "target_logs": [],
-    "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt"
+    "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc_12307.txt"
   },
   "precursor_selection": {
     "rt_window": 180,
@@ -3855,7 +3855,7 @@ START_SECTION(inclusion_ms3_full_acquisition_roundtrip)
   },
   "identification": {
     "reference": {
-      "sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
+      "sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
     },
     "flashtnt": {
       "min_length": 3,
@@ -3902,11 +3902,10 @@ START_SECTION(inclusion_ms3_full_acquisition_roundtrip)
 
   // H-full id-chaining drive over the one canonical contract (runInterleaved), replacing the
   // inlined `for (it<300; idle<3)` driver that re-implemented it. We feed a SINGLE strong MS1 scan
-  // (ms1_scans[1] = scan 134, the cytC envelope; ms1_scans[0] = scan 132 is a weak edge scan that
-  // selects 0 precursors), so an MS1 re-survey after it is fed counts as idle (avoids RT
+  // (ms1_cytc2's only survey, scan 372, the cytC envelope), so an MS1 re-survey after it is fed counts as idle (avoids RT
   // self-exclusion churn). MS2 = ms2_scans[0]; the MS3 feed uses the MS2-as-MS3 shortcut
   // (ms3_ion_map == nullptr), matching the original inline driver's MS3 feed.
-  AcqResult a = runInterleaved(ida, std::vector<ScanData>{ms1_scans[1]},
+  AcqResult a = runInterleaved(ida, std::vector<ScanData>{ms1_scans[0]},
                                std::vector<ScanData>{ms2_scans[0]}, nullptr, 300);
   delete ida;
 
@@ -3961,9 +3960,9 @@ END_SECTION
 
 START_SECTION(exploration_multiplexed_ms3_inherits_the_variant_notch_set)
 {
-  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
-  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
-  ABORT_IF(ms1_scans.size() < 2 || ms2_scans.empty())
+  auto ms1_scans = loadTsvScans(FI_MS1_CYTC2);
+  auto ms2_scans = loadTsvScans(FI_MS2_CYTC2);
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
   // Same cytC MS2->MS3 acquisition as the section above, with targeting off and an MS2 CE sweep added,
   // so the MS3s arrive via the exploration cascade rather than the regular path. @PC@/@FC@ are spliced
@@ -4062,16 +4061,15 @@ START_SECTION(exploration_multiplexed_ms3_inherits_the_variant_notch_set)
 }
 )JSON";
 
-  // inclusionPinCytc is the canonical cytC recipe every other cytC section here uses -- it swaps
-  // targeting none -> inclusion and points inclusion_list at inclusion_cytc.txt. Required, not
-  // decorative: under targeting "none" the top-qscore precursor of this survey is not reliably cytC,
-  // and if it is not, the fresh57 ladder matches nothing and no MS3 fires at all. Its other two
-  // replacements (M-start sequence, characterization block) are already satisfied above, so they no-op.
+  // inclusionPinCytc2 is the cytc2 recipe the other ambiguity-MS3 cytC sections here use -- it swaps
+  // targeting none -> inclusion, points inclusion_list at inclusion_cytc_12307.txt and the sequence at the
+  // Met-less cytC. Required, not decorative: under targeting "none" the top-qscore precursor of this survey
+  // is not reliably cytC, and if it is not, the scan434 ladder matches nothing and no MS3 fires at all.
   auto instantiate = [&cfg_template](const std::string& pc, const std::string& fc) {
     std::string s = cfg_template;
     s.replace(s.find("@PC@"), 4, pc);
     s.replace(s.find("@FC@"), 4, fc);
-    return inclusionPinCytc(s);
+    return inclusionPinCytc2(s);
   };
 
   // Notch charge list of one cascade stage, as ints -- structural, so no float tolerance is involved.
@@ -4084,7 +4082,7 @@ START_SECTION(exploration_multiplexed_ms3_inherits_the_variant_notch_set)
 
   auto drive = [&](const std::string& cfg) {
     FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg.c_str()));
-    AcqResult a = runInterleaved(ida, std::vector<ScanData>{ms1_scans[1]},
+    AcqResult a = runInterleaved(ida, std::vector<ScanData>{ms1_scans[0]},
                                  std::vector<ScanData>{ms2_scans[0]}, nullptr, 300);
     delete ida;
     return a;
@@ -4152,9 +4150,9 @@ END_SECTION
 
 START_SECTION(ms3_min_charge_floor_filters_all_targets)
 {
-  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
-  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
-  ABORT_IF(ms1_scans.size() < 2 || ms2_scans.empty())
+  auto ms1_scans = loadTsvScans(FI_MS1_CYTC2);
+  auto ms2_scans = loadTsvScans(FI_MS2_CYTC2);
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
   // Clone of inclusion_ms3_config (A5) with selection_strategy.ms2.min_charge = 99 —
   // impossible floor that filters every charge-1-3 MS3 target at Exploration.cpp:1038.
@@ -4190,7 +4188,7 @@ START_SECTION(ms3_min_charge_floor_filters_all_targets)
   },
   "files": {
     "target_logs": [],
-    "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt"
+    "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc_12307.txt"
   },
   "precursor_selection": {
     "rt_window": 180,
@@ -4203,7 +4201,7 @@ START_SECTION(ms3_min_charge_floor_filters_all_targets)
   },
   "identification": {
     "reference": {
-      "sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
+      "sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
     },
     "flashtnt": {
       "min_length": 3,
@@ -4248,7 +4246,7 @@ START_SECTION(ms3_min_charge_floor_filters_all_targets)
 )";
   std::string s99(cfg99);
   FLASHIda* ida = new FLASHIda(const_cast<char*>(s99.c_str()));
-  AcqResult a = runInterleaved(ida, std::vector<ScanData>{ms1_scans[1]},
+  AcqResult a = runInterleaved(ida, std::vector<ScanData>{ms1_scans[0]},
                                std::vector<ScanData>{ms2_scans[0]}, nullptr, 300);
   delete ida;
 
@@ -4262,9 +4260,9 @@ END_SECTION
 
 START_SECTION(ms3_min_charge_default_emits_ms3)
 {
-  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
-  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
-  ABORT_IF(ms1_scans.size() < 2 || ms2_scans.empty())
+  auto ms1_scans = loadTsvScans(FI_MS1_CYTC2);
+  auto ms2_scans = loadTsvScans(FI_MS2_CYTC2);
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
   // Clone of inclusion_ms3_config (A5) with selection_strategy.ms2.min_charge = 1 —
   // a permissive floor that lets all fragment charges through; positive control proving
@@ -4302,7 +4300,7 @@ START_SECTION(ms3_min_charge_default_emits_ms3)
   },
   "files": {
     "target_logs": [],
-    "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt"
+    "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc_12307.txt"
   },
   "precursor_selection": {
     "rt_window": 180,
@@ -4315,7 +4313,7 @@ START_SECTION(ms3_min_charge_default_emits_ms3)
   },
   "identification": {
     "reference": {
-      "sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
+      "sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
     },
     "flashtnt": {
       "min_length": 3,
@@ -4360,7 +4358,7 @@ START_SECTION(ms3_min_charge_default_emits_ms3)
 )";
   std::string s1(cfg1);
   FLASHIda* ida = new FLASHIda(const_cast<char*>(s1.c_str()));
-  AcqResult a = runInterleaved(ida, std::vector<ScanData>{ms1_scans[1]},
+  AcqResult a = runInterleaved(ida, std::vector<ScanData>{ms1_scans[0]},
                                std::vector<ScanData>{ms2_scans[0]}, nullptr, 300);
   delete ida;
 

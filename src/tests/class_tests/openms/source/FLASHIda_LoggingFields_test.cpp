@@ -1358,13 +1358,13 @@ END_SECTION
 /////////////////////////////////////////////////////////////
 START_SECTION(results_exploration_followup_columns)
 {
-  auto ms1 = loadTsvScans(CYTC_MS1);
-  auto ms2 = loadTsvScans(CYTC_MS2);
+  auto ms1 = loadTsvScans(FI_MS1_CYTC2);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
   // Inclusion-pin the cytC precursor + M-start proteoform; add a non-tolerance override ("analyzer")
   // so config_.level(2).overrides stays non-empty -> the winner is a production-MS2 re-acquisition.
-  std::string cfg = inclusionPinCytc(ms3SelectionOnlyConfig());
+  std::string cfg = inclusionPinCytc2(ms3SelectionOnlyConfig());
   {
     auto p = cfg.find("\"metric\": \"mass_count\"");
     ABORT_IF(p == std::string::npos)
@@ -1409,12 +1409,12 @@ END_SECTION
 /////////////////////////////////////////////////////////////
 START_SECTION(results_ms3_exploration_columns)
 {
-  auto ms1 = loadTsvScans(CYTC_MS1);
-  auto ms2 = loadTsvScans(CYTC_MS2);
+  auto ms1 = loadTsvScans(FI_MS1_CYTC2);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
   const std::string dir = freshLogDir("lf_i4ms3");
-  std::string cfg = injectRuntime(inclusionPinCytc(ms3ExplorationConfig()), dir);
+  std::string cfg = injectRuntime(inclusionPinCytc2(ms3ExplorationConfig()), dir);
   FLASHIda ida(const_cast<char*>(cfg.c_str()));
   auto r = driveOneExplorationGroup(&ida, ms1, ms2[0]);
   ABORT_IF(r.group_commands == 0)
@@ -1473,12 +1473,12 @@ END_SECTION
 /////////////////////////////////////////////////////////////
 START_SECTION(commands_exploration_ms3_parent_is_ms2)
 {
-  auto ms1 = loadTsvScans(CYTC_MS1);
-  auto ms2 = loadTsvScans(CYTC_MS2);
+  auto ms1 = loadTsvScans(FI_MS1_CYTC2);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
   const std::string dir = freshLogDir("lf_f1");
-  std::string cfg = injectRuntime(inclusionPinCytc(ms3ExplorationConfig()), dir);
+  std::string cfg = injectRuntime(inclusionPinCytc2(ms3ExplorationConfig()), dir);
   FLASHIda ida(const_cast<char*>(cfg.c_str()));
   auto r = driveOneExplorationGroup(&ida, ms1, ms2[0]);
   ABORT_IF(r.group_commands == 0)
@@ -1512,12 +1512,12 @@ END_SECTION
 /////////////////////////////////////////////////////////////
 START_SECTION(commands_exploration_ms3_stage1_scores_nonzero)
 {
-  auto ms1 = loadTsvScans(CYTC_MS1);
-  auto ms2 = loadTsvScans(CYTC_MS2);
+  auto ms1 = loadTsvScans(FI_MS1_CYTC2);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
   const std::string dir = freshLogDir("lf_f2");
-  std::string cfg = injectRuntime(inclusionPinCytc(ms3ExplorationConfig()), dir);
+  std::string cfg = injectRuntime(inclusionPinCytc2(ms3ExplorationConfig()), dir);
   FLASHIda ida(const_cast<char*>(cfg.c_str()));
   auto r = driveOneExplorationGroup(&ida, ms1, ms2[0]);
   ABORT_IF(r.group_commands == 0)
