@@ -163,6 +163,10 @@ public:
   std::vector<ProteoformEntry> entries;
   std::vector<DatabaseProtein> proteins;
 
+  /// recompute what finish_() derives from the public entries, after a caller
+  /// edits them (FLASHIda adds a fixed label to every residue of one kind)
+  void refresh() { finish_(); }
+
 private:
   /// fill the per-entry tables and the identity flag from entries and proteins
   void finish_();
