@@ -2942,7 +2942,9 @@ END_SECTION
 // match, an MS3 row through its MS2 context. An MS2 self-match is FLASHTnT's PrSM: its raw score is a
 // -log10 probability (>= 0), and its identification score = the ExtensionScore (flash_extender_score) + 8 x
 // max(0, ...), so never below it. skip_precursor_inference is on, so the inferred mass is -1 or a real mass.
-// Nothing closes a Precursor out yet. pooled: protein, the accession the model's winner chose.
+// The drive authors no identification.threshold, so nothing is closed out (closed_out 0, never closed_out_skip;
+// FLASHIda_ProcessScan_test's close_out_* sections drive a threshold). pooled: protein, the accession the model's
+// winner chose.
 //
 // The §T9 drive (identifying cytC recipe + the real per-ion MS3 fixtures), because it is the one that yields
 // MS2 rows, MS3 identification rows and pooled rows in one run. Each kind is required, so no check is vacuous.

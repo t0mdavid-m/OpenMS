@@ -3617,4 +3617,163 @@ START_SECTION(search_dispose_with_searches_in_flight)
 }
 END_SECTION
 
+// ===== Real-time close-out (ADR-0061 d.7-d.10, ADR-0062 d.3/d.6, push 5) =========================================
+namespace
+{
+  /// Strict-inclusion cytC (one target, so every MS2 is cytC) with acquisition unable to arm a bar
+  /// (tqscore_threshold 1.0: arms_bars is strict >, and a qscore never exceeds 1), an identifying reference (heme
+  /// needs max_mod_mass >= 616), and @p threshold when given -- so a close-out is the only thing that can bar cytC.
+  std::string closeOutCytcJson(const std::string& dir, std::optional<double> threshold,
+                               const std::string& inclusion = "inclusion_cytc.txt", bool separate = false)
+  {
+    nlohmann::json j = nlohmann::json::parse(buildJsonWithLogDir(dir));
+    j["deconvolution"]["tqscore_threshold"] = 1.0;
+    j["precursor_selection"]["targeting"] = "inclusion";
+    j["precursor_selection"]["strict_inclusion"] = true;
+    if (separate) j["precursor_selection"]["precursor_charges"] = "separate";
+    j["files"]["inclusion_list"] = "../../FlashIDA/test-data/configs/" + inclusion;
+    j["identification"] = {
+      {"reference", {{"sequence", "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"}}},
+      {"flashtnt", {{"max_blind_mod_count", 2}, {"max_mod_mass", 700}}}};
+    if (threshold) j["identification"]["threshold"] = *threshold;
+    return j.dump();
+  }
+
+  struct CloseOutRun
+  {
+    int ms2_cytc = 0;          ///< MS2 commands at cytC's nominal mass
+    int closed_out_rows = 0;   ///< identification.tsv MS2 rows with closed_out 1
+    int skipped = 0;           ///< scan_results MS2 rows with search closed_out_skip
+    int searched = 0;          ///< scan_results MS2 rows with search searched
+  };
+
+  CloseOutRun readCloseOut(const std::string& dir)
+  {
+    CloseOutRun r;
+    auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
+    for (const auto& row : cmds.rows)
+      if (cell(cmds, row, "ms_level") == "2" && (int)(toD(cell(cmds, row, "mono_mass")) + 0.5) == 12351) ++r.ms2_cytc;
+    auto idf = TSVFile::parse(dir + "/identification.tsv");
+    for (const auto& row : idf.rows)
+      if (cell(idf, row, "ms_level") == "2" && cell(idf, row, "closed_out") == "1") ++r.closed_out_rows;
+    auto res = TSVFile::parse(dir + "/scan_results.tsv");
+    for (const auto& row : res.rows)
+    {
+      if (cell(res, row, "ms_level") != "2") continue;
+      if (cell(res, row, "search") == "closed_out_skip") ++r.skipped;
+      if (cell(res, row, "search") == "searched") ++r.searched;
+    }
+    return r;
+  }
+}
+
+// ADR-0061 d.7: an identification at the threshold arms cytC's bars at the identifying MS2, for rt_window. With
+// acquisition unable to arm a bar, cytC is acquired again and again without a threshold, and exactly once with one
+// (ms1_cytc's 50 surveys span 64 s, inside the 180 s window). The identifying row says closed_out 1.
+// (The bar's expiry is acquisition memory's own rt_window rule, pinned by
+// processScan_acquisition_memory_expires_after_rt_window_seconds; the drivers feed an MS2 at its fixture's own RT,
+// so they cannot age a close-out against shifted surveys.)
+START_SECTION(close_out_bars_the_identified_species_for_rt_window)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  auto run = [&](std::optional<double> threshold, const std::string& tag) {
+    const std::string dir = freshLogDir(tag);
+    const std::string cfg = closeOutCytcJson(dir, threshold);
+    {
+      FLASHIda ida(const_cast<char*>(cfg.c_str()));
+      runInterleaved(&ida, ms1, ms2);
+    }
+    return readCloseOut(dir);
+  };
+  const CloseOutRun open = run(std::nullopt, "closeout_none");
+  const CloseOutRun closed = run(100.0, "closeout_100");
+
+  TEST_EQUAL(open.ms2_cytc > 1, true)      // nothing bars cytC: re-acquired
+  TEST_EQUAL(open.closed_out_rows, 0)
+  TEST_EQUAL(closed.ms2_cytc, 1)           // closed out at its first MS2, barred for the rest of the run
+  TEST_EQUAL(closed.closed_out_rows, 1)
+  TEST_EQUAL(closed.skipped, 0)            // one MS2, nothing left to skip
+}
+END_SECTION
+
+// ADR-0062 d.6 as the owner scoped it (2026-11-08): a closed-out species' later scans are not searched, except the
+// closing Precursor's own. Under `separate` one survey's cytC unit is one Precursor per charge: the first charge's MS2
+// closes the species out, the unit is committed so its other charges still go out (ADR-0061 d.9), and each of them
+// -- another Precursor of the closed-out species -- is finished unsearched as closed_out_skip.
+START_SECTION(close_out_skips_another_precursors_scans_of_the_species)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  const std::string dir = freshLogDir("closeout_separate");
+  const std::string cfg = closeOutCytcJson(dir, 100.0, "inclusion_cytc.txt", true);
+  {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    runInterleaved(&ida, ms1, ms2);
+  }
+  const CloseOutRun r = readCloseOut(dir);
+  TEST_EQUAL(r.ms2_cytc >= 2, true)   // one survey's separate charges (non-vacuity: there is a sibling to skip)
+  TEST_EQUAL(r.closed_out_rows, 1)
+  TEST_EQUAL(r.searched, 1)           // only the closing MS2 searched
+  TEST_EQUAL(r.skipped, r.ms2_cytc - 1)
+}
+END_SECTION
+
+// ADR-0061 d.9: a close-out mid-sweep leaves the sweep alone. The closing Precursor's own remaining variants are
+// still searched (owner 2026-11-08), the group completes, and its winner still cascades into MS3 -- characterization
+// gets its winner. The cytc2 set, whose ambiguity objective has a target (inclusionPinCytc2).
+START_SECTION(close_out_mid_sweep_keeps_the_sweep_and_its_searches)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC2);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC2);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  const std::string dir = freshLogDir("closeout_sweep");
+  nlohmann::json j = nlohmann::json::parse(injectRuntime(inclusionPinCytc2(ms3SelectionOnlyConfig()), dir));
+  j["identification"]["threshold"] = 50.0;
+  const std::string cfg = j.dump();
+  ExplResult c;
+  {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    c = driveOneExplorationGroup(&ida, ms1, ms2[0]);
+  }
+  ABORT_IF(c.group_commands == 0)
+  TEST_EQUAL(c.found_ms3, true)   // the winner still cascaded
+  const CloseOutRun r = readCloseOut(dir);
+  TEST_EQUAL(r.closed_out_rows >= 1, true)
+  TEST_EQUAL(r.skipped, 0)        // no variant of the closing Precursor went unsearched
+  TEST_EQUAL(r.searched, c.group_commands)
+}
+END_SECTION
+
+// ADR-0061 d.10, owner 2026-11-08: a species whose inclusion row names charges is never closed out. It keeps walking
+// its named charges exactly as without a threshold, and no row says closed_out 1.
+START_SECTION(authored_charge_species_is_never_closed_out)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  auto run = [&](std::optional<double> threshold, const std::string& tag) {
+    const std::string dir = freshLogDir(tag);
+    const std::string cfg = closeOutCytcJson(dir, threshold, "inclusion_cytc_charges.txt");
+    {
+      FLASHIda ida(const_cast<char*>(cfg.c_str()));
+      runInterleaved(&ida, ms1, ms2);
+    }
+    return readCloseOut(dir);
+  };
+  const CloseOutRun without = run(std::nullopt, "closeout_authored_none");
+  const CloseOutRun with = run(100.0, "closeout_authored_100");
+  TEST_EQUAL(without.ms2_cytc > 0, true)
+  TEST_EQUAL(with.ms2_cytc, without.ms2_cytc)
+  TEST_EQUAL(with.closed_out_rows, 0)
+  TEST_EQUAL(with.skipped, 0)
+}
+END_SECTION
+
 END_TEST

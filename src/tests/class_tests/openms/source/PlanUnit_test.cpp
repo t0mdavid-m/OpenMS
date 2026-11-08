@@ -89,6 +89,21 @@ namespace
         case K::TqMzRt: m.tqscore_exceeding_mz_rt_map_[s.key] = s.value; break;
         case K::AuthoredAcquired: m.authored_acquired_rt_map_[{s.key, s.charge}] = s.value; break;
         case K::LegacyTargetChargeErase: break;   // not acquisition memory; no admission gate reads it
+        // ADR-0061 d.7: a close-out arms the same two bars, only ever extending them (applyStamps' max).
+        case K::CloseOutMassRt:
+        {
+          auto it = m.tqscore_exceeding_mass_rt_map_.find(s.key);
+          if (it == m.tqscore_exceeding_mass_rt_map_.end()) m.tqscore_exceeding_mass_rt_map_[s.key] = s.value;
+          else it->second = std::max(it->second, s.value);
+          break;
+        }
+        case K::CloseOutMzRt:
+        {
+          auto it = m.tqscore_exceeding_mz_rt_map_.find(s.key);
+          if (it == m.tqscore_exceeding_mz_rt_map_.end()) m.tqscore_exceeding_mz_rt_map_[s.key] = s.value;
+          else it->second = std::max(it->second, s.value);
+          break;
+        }
       }
     }
     return m;
@@ -209,6 +224,12 @@ START_SECTION(wouldBar_matches_admitCandidate_on_the_gate_table)
     {"qbar equal to score", {stamp(K::MassQscore, 12351, 0.90)}, key(0.90), false},
     {"two qbars, the lower last", {stamp(K::MassQscore, 12351, 0.95), stamp(K::MassQscore, 12351, 0.85)}, key(0.90), false},
     {"two qbars, the higher last", {stamp(K::MassQscore, 12351, 0.85), stamp(K::MassQscore, 12351, 0.95)}, key(0.90), true},
+    // ADR-0061 d.7: a close-out bars exactly as the acquisition bars do, and an authored species reads neither.
+    {"CloseOutMass only", {stamp(K::CloseOutMassRt, 12351, 60.0)}, key(0.90), true},
+    {"CloseOutMass on another mass", {stamp(K::CloseOutMassRt, 12000, 60.0)}, key(0.90), false},
+    {"CloseOutMz only", {stamp(K::CloseOutMzRt, 951, 60.0)}, key(0.90), true},
+    {"authored ignores both close-out bars",
+     {stamp(K::CloseOutMassRt, 12351, 60.0), stamp(K::CloseOutMzRt, 951, 60.0)}, key(0.90, true), false},
   };
 
   for (const auto& r : rows)
@@ -218,6 +239,30 @@ START_SECTION(wouldBar_matches_admitCandidate_on_the_gate_table)
     TEST_EQUAL(r.name + (bars ? ": bars" : ": admits"), r.name + (r.expect_bar ? ": bars" : ": admits"))
     TEST_EQUAL(r.name + (bars ? ": bars" : ": admits"), r.name + (real ? ": bars" : ": admits"))
   }
+}
+END_SECTION
+
+// ADR-0061 d.7: "A close-out only ever extends a bar." applyStamps applies the close-out kinds as the max of the
+// existing stamp and its own, and inserts when there is none; the acquisition kinds keep their overwrite.
+START_SECTION(close_out_stamp_only_extends_a_bar)
+{
+  using K = MemoryStamp::Kind;
+  Config cfg{realSurveyConfig(0.9)};
+  Deconvolution deconv(cfg, cfg.toleranceList());
+  PrecursorSelection ps(cfg, deconv);
+
+  ps.applyStamps({stamp(K::TqMassRt, 12351, 100.0)});
+  ps.applyStamps({stamp(K::CloseOutMassRt, 12351, 80.0)});
+  TEST_REAL_SIMILAR(FLASHIdaTestAccess::surveyMemory(ps).tqscore_exceeding_mass_rt_map_.at(12351), 100.0)  // never earlier
+  ps.applyStamps({stamp(K::CloseOutMassRt, 12351, 120.0)});
+  TEST_REAL_SIMILAR(FLASHIdaTestAccess::surveyMemory(ps).tqscore_exceeding_mass_rt_map_.at(12351), 120.0)  // extended
+  ps.applyStamps({stamp(K::TqMassRt, 12351, 90.0)});
+  TEST_REAL_SIMILAR(FLASHIdaTestAccess::surveyMemory(ps).tqscore_exceeding_mass_rt_map_.at(12351), 90.0)   // Tq unchanged: assigns
+
+  ps.applyStamps({stamp(K::CloseOutMzRt, 951, 70.0)});   // no entry yet: inserted
+  TEST_REAL_SIMILAR(FLASHIdaTestAccess::surveyMemory(ps).tqscore_exceeding_mz_rt_map_.at(951), 70.0)
+  ps.applyStamps({stamp(K::CloseOutMzRt, 951, 65.0)});
+  TEST_REAL_SIMILAR(FLASHIdaTestAccess::surveyMemory(ps).tqscore_exceeding_mz_rt_map_.at(951), 70.0)
 }
 END_SECTION
 

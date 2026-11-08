@@ -626,6 +626,52 @@ START_SECTION(reconcile_refuses_a_unit_committed_since_the_fold)
 }
 END_SECTION
 
+// ADR-0061 d.9 / ADR-0062 d.3: a close-out withdraws the species' wholly unsent plan units at EVERY CV in one
+// queue_mutex_ step and puts its stamps in the inbox. A committed unit of the species (a scan already sent) keeps
+// its remaining commands, and another species is untouched.
+START_SECTION(close_out_withdraws_unsent_units_at_every_cv)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+
+  q.replacePlan(-40.0, {unit(12351, {ms2(51, 13), ms2(52, 14)}, -40.0)}, {}, {});   // committed below
+  ABORT_IF(!q.dequeue().has_value())                                                  // sends 51: the unit commits
+  (void)q.takeCommitted();                                                            // the analysis thread folded it
+  q.replacePlan(-60.0, {unit(12351, {ms2(53, 13)}, -60.0)}, {}, {});                   // unsent, other CV
+  q.replacePlan(-80.0, {unit(12351, {ms2(54, 13)}, -80.0), unit(13000, {ms2(55, 13, 1001.0)}, -80.0)}, {}, {});
+
+  const std::vector<MemoryStamp> stamps = {stamp(MemoryStamp::Kind::CloseOutMassRt, 12351, 0, 70.0),
+                                           stamp(MemoryStamp::Kind::CloseOutMzRt, 951, 0, 70.0)};
+  const ReplanResult r = q.closeOut(12351, stamps);
+
+  std::set<int> dropped(r.dropped_scan_ids.begin(), r.dropped_scan_ids.end());
+  TEST_EQUAL(dropped == std::set<int>({53, 54}), true)   // both CVs' unsent units
+  TEST_EQUAL(r.kept, 1)                                   // the committed one
+  TEST_EQUAL(signature(q.takeCommitted()) == signature(stamps), true)
+  const std::vector<int> drained = drainIds(q);
+  TEST_EQUAL(std::set<int>(drained.begin(), drained.end()) == std::set<int>({52, 55}), true)   // its remainder; another species
+  TEST_EQUAL(static_cast<int>(drained.size()), 2)
+}
+END_SECTION
+
+// The close-out's stamps also reach committed_since_fold_: a survey that planned the species before the analysis
+// thread folded the close-out has its fresh unit reconciled away, the same way a commit in that gap is.
+START_SECTION(close_out_stamps_reconcile_a_racing_plan)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+
+  q.closeOut(12351, {stamp(MemoryStamp::Kind::CloseOutMassRt, 12351, 0, 70.0)});
+  PlanUnit u = unit(12351, {ms2(61, 13, 1100.0)}, 0.0, 2);   // another isolation m/z: the mass bar alone refuses it
+  u.unit_id = 88;
+  const ReplanResult r = q.replacePlan(0.0, {u, unit(13000, {ms2(62, 13, 1001.0)}, 0.0, 2)}, {}, {});
+
+  TEST_EQUAL(r.reconciled_unit_ids == std::vector<int>({88}), true)
+  TEST_EQUAL(r.added, 1)
+  TEST_EQUAL(drainIds(q) == std::vector<int>({62}), true)
+}
+END_SECTION
+
 START_SECTION(unregistered_commands_are_never_dropped)
 {
   Config cfg{std::string(minimal_config)};

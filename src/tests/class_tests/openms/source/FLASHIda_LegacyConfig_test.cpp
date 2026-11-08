@@ -684,6 +684,31 @@ START_SECTION(fixed_mod_non_empty_is_refused)
 }
 END_SECTION
 
+// ADR-0061 d.6 (push 5): identification.threshold. Absent (or null) = identify and log, never close out; an authored
+// finite number > 0 round-trips; zero, a negative, a string and a non-number are refused with a message naming the key.
+START_SECTION(threshold_absent_never_closes_out_and_authored_round_trips)
+{
+  {
+    Config cfg{withIdentification(R"({ "reference": { "sequence": "PEPTIDEK" } })")};
+    TEST_EQUAL(cfg.identification().threshold.has_value(), false)
+  }
+  {
+    Config cfg{withIdentification(R"({ "reference": { "sequence": "PEPTIDEK" }, "threshold": null })")};
+    TEST_EQUAL(cfg.identification().threshold.has_value(), false)
+  }
+  {
+    Config cfg{withIdentification(R"({ "reference": { "sequence": "PEPTIDEK" }, "threshold": 42.5 })")};
+    TEST_EQUAL(cfg.identification().threshold.has_value(), true)
+    TEST_REAL_SIMILAR(*cfg.identification().threshold, 42.5)
+  }
+  for (const std::string bad : {std::string("0"), std::string("-1"), std::string("\"high\""), std::string("[500]")})
+  {
+    const std::string msg = loadError(withIdentification(R"({ "reference": { "sequence": "PEPTIDEK" }, "threshold": )" + bad + " }"));
+    TEST_EQUAL(contains(msg, "identification.threshold must be a finite number > 0"), true)
+  }
+}
+END_SECTION
+
 // ADR-0061 d.13: "Every unset key takes FLASHTnT's default". An identification without flashtnt, with an
 // empty one and with a null one gives FLASHTnT's Param for every knob (ex:skip_precursor_inference aside,
 // ADR-0061's true), and authored values reach FLASHTnT under its own names.

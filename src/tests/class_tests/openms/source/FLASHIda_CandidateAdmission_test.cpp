@@ -549,4 +549,25 @@ END_SECTION
 
 /////////////////////////////////////////////////////////////
 
+// ADR-0061 d.8: an inferred precursor mass is the same species as the commanded one when it is 1..3 isotope
+// spacings away or a charge harmonic (x2, x3, /2, /3), judged at the MS1 tolerance of the larger mass (owner
+// 2026-11-08). Anything else, a +57 Da glycine for one, is a different species and is not closed out.
+START_SECTION(same_species_isotope_and_harmonic_at_ms1_tolerance)
+{
+  const double m = 12351.39;
+  const double tol_ppm = 10.0;
+  for (int k = 1; k <= 3; ++k)
+  {
+    TEST_EQUAL(sameSpeciesMass(m, m + k * 1.00235, tol_ppm), true)
+    TEST_EQUAL(sameSpeciesMass(m, m - k * 1.00235, tol_ppm), true)
+  }
+  TEST_EQUAL(sameSpeciesMass(m, m + 4 * 1.00235, tol_ppm), false)   // four steps: not "the same species seen twice"
+  for (double r : {2.0, 3.0, 0.5, 1.0 / 3.0}) TEST_EQUAL(sameSpeciesMass(m, m * r, tol_ppm), true)
+  TEST_EQUAL(sameSpeciesMass(m, m + 57.02146, tol_ppm), false)
+  TEST_EQUAL(sameSpeciesMass(m, m + 1.00235 + 0.5, tol_ppm), false)   // 0.5 Da off an isotope step, far outside 10 ppm
+  TEST_EQUAL(sameSpeciesMass(m, m + 1.00235 + 0.1, tol_ppm), true)    // 0.1 Da is inside 10 ppm of 12352 Da (0.124 Da)
+  TEST_EQUAL(sameSpeciesMass(m, -1.0, tol_ppm), false)                // no inferred mass
+}
+END_SECTION
+
 END_TEST
