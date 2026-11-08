@@ -172,7 +172,7 @@ private:
   bool protein_top_two_ = false;
   /// with scoring_model_: weight of the free shift's search space (log10 shiftedCandidateCount) taken from a determined blind-shift PrSM's confidence
   double shift_penalty_ = 0.0;
-  /// class "undetermined, both termini": decoy weight factor and pseudo-count of decoys in its PrSM and proteoform q-values
+  /// class "undetermined, both termini": decoy weight factor (PrSM and proteoform q-values) and pseudo-count of decoys (PrSM q-values)
   double undetermined_decoy_weight_ = 1.0;
   double undetermined_pseudo_decoys_ = 0.0;
   /// class "undetermined, open terminus" reported apart (PrSM q-value 1)
