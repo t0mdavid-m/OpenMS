@@ -274,6 +274,11 @@ winner (`initiateNextLevel` inside `applyVariant`) still runs under the lock.
   `ms_settings.ms3_quant` and marker `'Q'`. It returns on the regular MS3 branch, is read by
   `Quantification::measure(..., 2, "ms3_quant")` (level 2: the extractor walks a one-spectrum experiment), and is never cached for annotation. The search fixes iodoTMT6plex on
   every C (`ProteomeSearch`'s `FixedLabel`, FLASHTnT's per-entry fixed masses through `ProteoformDatabase::refresh()`).
+- **The operator view** (ADR-0065 push 2): `PrecursorBoard board_` is fed at the drain's send, an MS2's return,
+  the apply and the survey, under its own mutex (lock order `analysis_mutex_` -> board; the drain and the render
+  thread hold no `analysis_mutex_`). `ConsoleView::start` returns null unless stdout is a VT-capable Windows
+  console; its render thread snapshots the board (`boardSnapshot_`) and paints through `EventLog::paint`.
+  `~FLASHIda` stops the view, then the pool, then prints the run summary through `EventLog::summary`.
 - **A close-out runs on the apply** (ADR-0061 push 5, `closeOutIfIdentified_`): an MS2 whose
   `search_identification_score` reaches `identification.threshold` arms `CloseOutMassRt`/`CloseOutMzRt` (max-applied)
   through `ScanCommandQueue::closeOut`, which also withdraws the species' uncommitted units at every CV under
