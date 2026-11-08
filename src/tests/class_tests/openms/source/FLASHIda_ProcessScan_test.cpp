@@ -4018,6 +4018,41 @@ START_SECTION(per_proteoform_end_to_end_cytc)
     else it->second.insert(ion);
   }
   for (const auto& cl : clusters) TEST_EQUAL(static_cast<int>(cl.second.size()) <= max_targets, true)
+
+  // No fragment (ion type + index + charge) is dequeued twice for one proteoform unless at >= 2x the highest intensity
+  // it went out at before (stage 1's charge intensity, what the commit records). Same clustering as above.
+  auto repeatsBelow2x = [](const std::vector<ScanCommand>& cmds) {
+    std::vector<std::pair<Ms3ProteoformKey, std::map<std::pair<std::string, int>, double>>> sent;
+    int repeats = 0, below_2x = 0;
+    for (const ScanCommand& c : cmds)
+    {
+      Ms3ProteoformKey k;
+      k.commanded_mass = c.mono_mass;
+      std::string ion;
+      if (!decodeTrailingIonKey(c.scan_description, ion)) continue;
+      const std::pair<std::string, int> frag{ion, std::abs(c.stages[1].charge_state)};
+      size_t at = sent.size();
+      for (size_t i = 0; i < sent.size(); ++i)
+        if (sameProteoform(sent[i].first, k, 10.0)) { at = i; break; }
+      if (at == sent.size()) sent.push_back({k, {}});
+      std::map<std::pair<std::string, int>, double>& seen = sent[at].second;
+      auto prev = seen.find(frag);
+      if (prev != seen.end())
+      {
+        ++repeats;
+        if (c.precursor_intensity_s1 < 2.0 * prev->second) ++below_2x;
+        prev->second = std::max(prev->second, c.precursor_intensity_s1);
+      }
+      else
+        seen[frag] = c.precursor_intensity_s1;
+    }
+    return std::make_pair(repeats, below_2x);
+  };
+  const std::pair<int, int> rep_on = repeatsBelow2x(on), rep_off = repeatsBelow2x(off);
+  std::cout << "[per_proteoform_end_to_end_cytc] repeated fragments off=" << rep_off.first << " (below 2x " << rep_off.second
+            << ") on=" << rep_on.first << " (below 2x " << rep_on.second << ")" << std::endl;
+  TEST_EQUAL(rep_off.second > 0, true)   // non-vacuity: ungoverned, a proteoform's fragment goes out again at 1x
+  TEST_EQUAL(rep_on.second, 0)
 }
 END_SECTION
 
