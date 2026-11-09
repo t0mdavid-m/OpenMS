@@ -28,6 +28,9 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ProteomeSearch.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FixedModifications.h>
+#include <OpenMS/CHEMISTRY/Residue.h>
+#include <OpenMS/CHEMISTRY/ResidueDB.h>
 #include <OpenMS/CONCEPT/Constants.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
 #include <OpenMS/FORMAT/MzMLFile.h>
@@ -562,6 +565,133 @@ START_SECTION(labelled_search_identifies_the_itmt_fixture)
           if (std::fabs(masses[i] - 329.226595) < 0.01 && (starts[i] == 51 || starts[i] == 52)) labelled_c = true;
       }
       TEST_EQUAL(labelled_c, true)
+    }
+  }
+}
+END_SECTION
+
+// ADR-0067 d.4: the fixed_mod parameter gives the search the FLASHTnT tool's former process-wide ResidueDB overwrite gave it.
+// Real data both times: the iodoTMT YdfZ scan with iodoTMT6plex (C), and the E. coli slice with Carbamidomethyl (C). The parameter
+// route runs first, on a clean ResidueDB; then the old route overwrites C as the tool did and searches without fixed_mod. LAST
+// SECTION: the overwrite is process-wide (it is restored at the end, but nothing after it may rely on that).
+START_SECTION(the_fixed_mod_parameter_equals_the_residuedb_overwrite)
+{
+  const FixedModifications itmt = FixedModifications::fromNames({"iodoTMT6plex (C)"});
+  const FixedModifications cam = FixedModifications::fromNames({"Carbamidomethyl (C)"});
+  Param p_itmt = params;
+  p_itmt.setValue("fixed_mod", std::vector<std::string> {"iodoTMT6plex (C)"});
+  Param p_cam = params;
+  p_cam.setValue("fixed_mod", std::vector<std::string> {"Carbamidomethyl (C)"});
+
+  // the YdfZ fixture, deconvolved as labelled_search_identifies_the_itmt_fixture does
+  const auto scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_itmt_ydfz_cid28_scan1325.txt");
+  TEST_EQUAL(scans.size(), 1)
+  if (! scans.empty())
+  {
+    Config config(buildJsonWithLogDir(""));
+    Deconvolution deconv(config, config.toleranceList());
+    const ScanData& sd = scans[0];
+    deconv.deconvolveMSn(sd.mzs.data(), sd.ints.data(), (int)sd.mzs.size(), sd.rt, 7600.99053, 10);
+    const DeconvolvedSpectrum ds = deconv.storedMS2();
+    MSSpectrum raw;
+    for (Size i = 0; i < sd.mzs.size(); ++i) raw.emplace_back(Peak1D(sd.mzs[i], sd.ints[i]));
+    raw.setRT(sd.rt);
+    raw.setMSLevel(2);
+    std::vector<FASTAFile::FASTAEntry> ref3;
+    ref3.emplace_back("sp|P64463|YDFZ_ECOLI", "", "MTTYDRNRNAITTGSRVMVSGTGHTGKILSIDTEGLTAEQIRRGKTVVVEGCEEKLAPLDLIRLGMN");
+    ref3.emplace_back("two_cys", "", "MKCAQCHTVEKGGKHKTGPNLHGLFGRK");
+    ref3.emplace_back("no_cys", "", "MAKLHDYYKDEVVKKLMTEFNYNSVMQVPRVEK");
+
+    auto searchYdfZ = [&](const Param& p) {
+      ProteomeSearch search(ref3, p);
+      ProteomeSearch::Worker worker(search);
+      return worker.search(ds, config.toleranceList()[1], raw, 1325);
+    };
+    auto searchSlice = [&](const Param& p) {
+      std::map<int, std::vector<ProteinHit>> by_scan;
+      ProteomeSearch search(fasta, p);
+      ProteomeSearch::Worker worker(search);
+      for (int scan : in.scans)
+      {
+        auto hits = worker.search(in.ds.at(scan), in.ms2_tol, in.raw.at(scan), scan);
+        if (! hits.empty()) by_scan[scan] = std::move(hits);
+      }
+      return by_scan;
+    };
+    auto spansC = [](const ProteinHit& h) {
+      const String& seq = h.getSequence();
+      const int start = h.metaValueExists("StartPosition") ? (int)h.getMetaValue("StartPosition") : 0;
+      const int end = h.metaValueExists("EndPosition") ? (int)h.getMetaValue("EndPosition") : 0;
+      const int first = start > 0 ? start - 1 : 0, last = end > 0 ? std::min(end, (int)seq.size()) : (int)seq.size();
+      return first < last && seq.substr(first, last - first).find('C') != std::string::npos;
+    };
+    auto doubles = [](const ProteinHit& h, const std::string& key) {
+      return h.metaValueExists(key) ? h.getMetaValue(key).toDoubleList() : std::vector<double> {};
+    };
+    auto ints = [](const ProteinHit& h, const std::string& key) {
+      return h.metaValueExists(key) ? h.getMetaValue(key).toIntList() : std::vector<int> {};
+    };
+    auto number = [](const ProteinHit& h, const std::string& key) { return h.metaValueExists(key) ? (double)h.getMetaValue(key) : -1.0; };
+    // the same PrSM: identical strings and positions, doubles within 1e-6 (a fixed mass added per residue may round differently in the
+    // last bits where a sum falls back to AASequence)
+    auto sameHit = [&](const ProteinHit& a, const ProteinHit& b, const std::string& what) {
+      auto close = [](double x, double y) { return std::fabs(x - y) <= 1e-6; };
+      bool same = a.getAccession() == b.getAccession() && number(a, "StartPosition") == number(b, "StartPosition")
+                  && number(a, "EndPosition") == number(b, "EndPosition") && ints(a, "ModificationStarts") == ints(b, "ModificationStarts")
+                  && ints(a, "ModificationEnds") == ints(b, "ModificationEnds") && close(a.getScore(), b.getScore())
+                  && close(number(a, "ExtensionScore"), number(b, "ExtensionScore")) && close(number(a, "RawScore"), number(b, "RawScore"));
+      const auto ma = doubles(a, "Modifications"), mb = doubles(b, "Modifications");
+      same = same && ma.size() == mb.size();
+      for (Size i = 0; same && i < ma.size(); ++i) same = close(ma[i], mb[i]);
+      if (! same)
+      {
+        std::cout << "[FIXED-MOD-EQUIVALENCE] differs, " << what << ": " << a.getAccession() << " score " << std::setprecision(17) << a.getScore()
+                  << " raw " << number(a, "RawScore") << " vs " << b.getAccession() << " score " << b.getScore() << " raw " << number(b, "RawScore")
+                  << std::endl;
+      }
+      return same;
+    };
+
+    // the parameter route, ResidueDB clean
+    TEST_EQUAL(ResidueDB::getInstance()->getResidue((unsigned char)'C')->getMonoWeight(Residue::Internal) == FixedModifications::none().mass('C'), true)
+    const auto new_ydfz = searchYdfZ(p_itmt);
+    const auto new_slice = searchSlice(p_cam);
+
+    // the old route: the tool's overwrite, then no fixed_mod
+    Residue* c = const_cast<Residue*>(ResidueDB::getInstance()->getResidue((unsigned char)'C'));
+    const double plain_full = c->getMonoWeight(Residue::Full);
+    c->setMonoWeight(plain_full + itmt.delta('C'));
+    TEST_EQUAL(c->getMonoWeight(Residue::Internal) == itmt.mass('C'), true) // the table's fixed mass is the overwrite's, to the bit
+    const auto old_ydfz = searchYdfZ(params);
+    c->setMonoWeight(plain_full + cam.delta('C'));
+    const auto old_slice = searchSlice(params);
+    c->setMonoWeight(plain_full);
+
+    std::cout << "[FIXED-MOD-EQUIVALENCE] ydfz hits new=" << new_ydfz.size() << " old=" << old_ydfz.size() << "; slice scans with a PrSM new="
+              << new_slice.size() << " old=" << old_slice.size() << std::endl;
+    // not vacuous: a real labelled identification, and slice PrSMs whose span carries a fixed C
+    TEST_EQUAL(new_ydfz.empty(), false)
+    if (! new_ydfz.empty())
+    {
+      TEST_STRING_EQUAL(new_ydfz[0].getAccession(), "sp|P64463|YDFZ_ECOLI")
+    }
+    Size with_c = 0;
+    for (const auto& [scan, hits] : new_slice) with_c += spansC(*bestOf(hits)) ? 1 : 0;
+    std::cout << "[FIXED-MOD-EQUIVALENCE] slice best PrSMs spanning a C: " << with_c << std::endl;
+    TEST_EQUAL(with_c > 0, true)
+
+    TEST_EQUAL(new_ydfz.size(), old_ydfz.size())
+    for (Size i = 0; i < new_ydfz.size() && i < old_ydfz.size(); ++i) TEST_EQUAL(sameHit(new_ydfz[i], old_ydfz[i], "ydfz hit " + std::to_string(i)), true)
+    std::vector<int> new_scans, old_scans;
+    for (const auto& [s, h] : new_slice) new_scans.push_back(s);
+    for (const auto& [s, h] : old_slice) old_scans.push_back(s);
+    TEST_EQUAL(new_scans == old_scans, true)
+    for (const auto& [scan, hits] : new_slice)
+    {
+      const auto it = old_slice.find(scan);
+      if (it == old_slice.end()) continue;
+      TEST_EQUAL(hits.size(), it->second.size())
+      for (Size i = 0; i < hits.size() && i < it->second.size(); ++i) TEST_EQUAL(sameHit(hits[i], it->second[i], "slice scan " + std::to_string(scan)), true)
     }
   }
 }
