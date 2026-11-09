@@ -176,7 +176,7 @@ private `monitor_deconv_` (ADR-0042). **Do not merge the monitor engine into `de
 ## Logging (`FLASHIda/IdaLogger.cpp`)
 
 Five streams in `runtime.log_dir` (empty = nothing opens; the host creates the directory):
-`ida.log` (free text, decision record), `scan_commands.tsv` (36 columns, one row per dequeued
+`ida.log` (free text, decision record), `scan_commands.tsv` (37 columns, one row per dequeued
 command; what FLASHDeconv reads), `scan_results.tsv` (56), `identification.tsv` (46),
 `pooled_identification.tsv` (20). `IdaLogger` serialises each stream itself.
 
