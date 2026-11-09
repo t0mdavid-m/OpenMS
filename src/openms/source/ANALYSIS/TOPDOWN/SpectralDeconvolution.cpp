@@ -81,7 +81,7 @@ namespace OpenMS
     defaults_.setValue(
       "tol", DoubleList {10.0, 10.0},
       "PPM Tolerance for MS1, 2, ...: Specify the tolerance values in parts per million (ppm) using the this option. For example, -tol 10.0 5.0 sets "
-      "the tolerance to 10.0 ppm for MS1 and 5.0 ppm for MS2. "
+      "the tolerance to 10.0 ppm for MS1 and 5.0 ppm for MS2. An MS level beyond the list takes its last value. "
       "If a negative value (e.g., -1) is given for an MS level, its tolerance is determined from the data: spectra of the level are deconvolved at 30 ppm "
       "(every 64th, then more until 20,000 peak errors or every 4th spectrum), and the tolerance is set so that +-0.8 x tol (the window in which a peak is "
       "taken) holds 98% of the peak errors of the masses of Qscore >= 0.9, after the random peaks are subtracted (no fit). If the errors reach beyond "
@@ -113,14 +113,14 @@ namespace OpenMS
 
     defaults_.setValue("min_cos", DoubleList {.85, .85},
                        "Cosine similarity thresholds between avg. and observed isotope pattern for MS1, 2, ...: e.g., -min_cos 0.3 0.6 to specify 0.3 "
-                       "and 0.6 for MS1 and MS2, respectively.");
+                       "and 0.6 for MS1 and MS2, respectively. An MS level beyond the list takes its last value.");
     defaults_.addTag("min_cos", "advanced");
     defaults_.setMinFloat("min_cos", 0.5);
     defaults_.setMaxFloat("min_cos", 1.0);
 
     defaults_.setValue("min_snr", DoubleList {.25, .25},
                        "Minimum charge SNR (the SNR of the isotope pattern of a specific charge) thresholds for MS1, 2, ...: e.g., -min_snr 1.0 0.6 to "
-                       "specify 1.0 and 0.6 for MS1 and MS2, respectively.");
+                       "specify 1.0 and 0.6 for MS1 and MS2, respectively. An MS level beyond the list takes its last value.");
     defaults_.addTag("min_snr", "advanced");
     defaults_.setMinFloat("min_snr", 0.25);
 

@@ -970,6 +970,16 @@ void FLASHDeconvAlgorithm::run(MSExperiment& map,
   sd_ = SpectralDeconvolution();
   Param sd_param = param_.copy("SD:", true);
   sd_param.setValue("allowed_isotope_error", param_.getValue("allowed_isotope_error"));
+  // The per-MS-level lists default to two entries (MS1, MS2); a higher MS level takes the list's last entry, so an MS3 spectrum is
+  // deconvolved with the MS2 values. Unpadded, an MS3 spectrum read past the end of each list (tol aborted the run).
+  for (const char* key : {"tol", "min_cos", "min_snr"})
+  {
+    DoubleList values = sd_param.getValue(key);
+    if (values.empty()) continue;
+    while (values.size() < current_max_ms_level_) values.push_back(values.back());
+    sd_param.setValue(key, values);
+  }
+  tols_ = sd_param.getValue("tol");
   OPENMS_LOG_INFO<< "Calculating Averagines ... " << std::flush;
   sd_.setParameters(sd_param);
   sd_.calculateAveragine(use_RNA_averagine_);
