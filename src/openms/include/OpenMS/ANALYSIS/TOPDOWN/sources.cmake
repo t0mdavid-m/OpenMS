@@ -47,6 +47,7 @@ set(sources_list_h
         TopDownIsobaricQuantification.h
         MassLadderAlgorithm.h
         ProteoformDatabase.h
+        FixedModifications.h
 )
 
 ### add path to the filenames

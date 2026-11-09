@@ -42,6 +42,7 @@ set(sources_list
         TopDownIsobaricQuantification.cpp
         MassLadderAlgorithm.cpp
         ProteoformDatabase.cpp
+        FixedModifications.cpp
 )
 
 ### add path to the filenames
