@@ -112,6 +112,29 @@ public:
     raw_loader_ = std::move(loader);
   }
 
+  /// one MS3 spectrum of a reported PrSM, as annotateMS3_ annotated it (-out_ms3)
+  struct MS3Row
+  {
+    int prsm_index = -1;        ///< the PrSM (Index), as the PrSM file numbers it
+    int scan = 0;               ///< the PrSM's scan (the MS3 spectrum's parent)
+    int ms3_scan = 0;
+    double precursor_mass = 0;  ///< the MS3 precursor's deconvolved mass
+    int precursor_charge = 0;   ///< its charge in the raw MS3 spectrum (0: none)
+    std::string identity;       ///< the fragment of the proteoform the precursor is (e.g. y70; +w/-w: with/without a window it splits); "none"
+    std::string live_label;     ///< FLASHIda's label of the precursor (scan description); "" without one
+    int hypotheses = -1;        ///< sub-ion hypotheses (n); -1: not annotated
+    int matched = -1;           ///< matched sub-ions (k)
+    double chance_rate = -1;    ///< p0 of the MS3 spectrum
+    double score = 0;           ///< -log10 P(X >= k), X ~ Binomial(n, p0), of this spectrum alone
+    int bonds = 0;              ///< bonds of the proteoform the matched sub-ions cover
+    int new_bonds = 0;          ///< of them, bonds the PrSM's MS2 spectrum does not cover
+  };
+  /// the MS3 spectra of the reported PrSMs, one row each (empty without MS3 spectra or without a raw file)
+  const std::vector<MS3Row>& getMS3Rows() const
+  {
+    return ms3_rows_;
+  }
+
   /// The protein-level hits, as they were ranked before proteoform characterization. Filled in
   /// both modes, so a run can be used to shortlist proteins even when the extension is performed.
   void getProteinHits(std::vector<ProteinHit>& hits) const
@@ -144,6 +167,11 @@ private:
   void releaseRawSpectra_();
   /// annotate every hit of @p hits on its raw spectrum (loaded by loadRawSpectra_) and set the combined score
   void annotateOnRawSpectra_(std::vector<ProteinHit>& hits) const;
+  /// the MS3 evidence of every hit of @p hits with MS3 spectra (ADR-0001), on the raw MS3 spectra: meta values MS3Score, MS3MatchedSubIons,
+  /// MS3OnlyBonds and RawCoverage (MS2 and MS3 bonds); one MS3Row per MS3 spectrum into ms3_rows_. The score is not changed.
+  void annotateMS3_(std::vector<ProteinHit>& hits);
+  /// the rows of annotateMS3_
+  std::vector<MS3Row> ms3_rows_;
   /// the raw evidence of the PrSMs of each proteoform combined (meta values CombinedPrSMs, CombinedCoverage, CombinedCoverageChance on its
   /// representative): @p clusters as markRepresentativeProteoformHits_ returns them, @p qvalues the PrSM q-values, a PrSM taking part if its
   /// q-value is at most @p rep_q (with @p use_fdr; otherwise only the representative's own termini and modifications count)
@@ -219,6 +247,8 @@ private:
   std::vector<ProteinHit> proteoform_hits_;
   /// the MS3 spectra (scan numbers) of each parent scan, read from the deconvolved MS3 spectra (ADR-0001)
   std::map<int, std::vector<int>> ms3_scans_of_;
+  /// the deconvolved precursor mass (precursormass=) of each MS3 spectrum, by its scan
+  std::map<int, double> ms3_precursor_mass_;
   std::vector<ProteinHit> protein_hits_;
   std::vector<FLASHHelperClasses::Tag> tags_;
   std::map<int, std::vector<int>> matching_hits_indices_;

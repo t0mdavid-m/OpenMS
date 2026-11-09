@@ -156,6 +156,12 @@ protected:
     registerOutputFile_("out_prsm", "<file>", "", "Output PrSM-level tsv file containing PrSMs.");
     setValidFormats_("out_prsm", ListUtils::create<std::string>("tsv"));
 
+    registerOutputFile_("out_ms3", "<file>", "",
+                        "Output tsv file with one row per reported PrSM and MS3 spectrum of its scan: the MS3 precursor's identity in the "
+                        "proteoform, its sub-ions matched on the raw MS3 spectrum, their chance rate and score, and the bonds they cover "
+                        "(needs -in_raw; empty without MS3 spectra).", false);
+    setValidFormats_("out_ms3", ListUtils::create<std::string>("tsv"));
+
     registerOutputFile_("out_tag", "<file>", "", "Output tag-level tsv file containing matched tags.", false);
     setValidFormats_("out_tag", ListUtils::create<std::string>("tsv"));
 
@@ -276,6 +282,7 @@ protected:
     std::string out_prsm_file = getStringOption_("out_prsm");
     std::string out_pro_file = getStringOption_("out_pro");
     std::string out_protein_file = getStringOption_("out_protein");
+    std::string out_ms3_file = getStringOption_("out_ms3");
 
     //-------------------------------------------------------------
     // reading input
@@ -352,6 +359,7 @@ protected:
     tnt_param.remove("threads");
     tnt_param.remove("no_progress");
     tnt_param.remove("force");
+    tnt_param.remove("out_ms3");
     tnt_param.remove("test");
 
     double pro_fdr = tnt_param.getValue("pro_fdr");
@@ -515,6 +523,13 @@ protected:
     {
       FLASHTnTFile::writeProteins(tnt.getProteinHits(), out_protein_stream);
       out_protein_stream.close();
+    }
+    if (! out_ms3_file.empty())
+    {
+      fstream out_ms3_stream;
+      out_ms3_stream.open(out_ms3_file, fstream::out);
+      FLASHTnTFile::writeMS3(tnt.getMS3Rows(), out_ms3_stream);
+      out_ms3_stream.close();
     }
 
     // the results and the input are freed with all threads instead of by the serial destructors

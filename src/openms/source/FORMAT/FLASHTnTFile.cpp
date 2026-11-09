@@ -38,7 +38,19 @@ void FLASHTnTFile::writePrSMHeader(std::fstream& fs, bool chimeric, bool ms3)
         "\tProteoformIndex\tCandidateSource\tFDRClass\tModVariable\tDecoyPrecursorWeight\tProteinLevelQvalue"
         "\tExtensionScore\tRawScore\tRawMatchedFragments\tRawFragmentHypotheses\tRawCoverage(%)"
      << (chimeric ? "\tChimericRound\tMatchedMasses\tRemovedMasses\tResidualNullScore\tResidualScoreRatio\tUniqueMasses\tUniqueScore" : "")
-     << (ms3 ? "\tMS3Scans" : "") << "\n";
+     << (ms3 ? "\tMS3Scans\tMS3Score\tMS3MatchedSubIons\tMS3OnlyBonds" : "") << "\n";
+}
+
+/// the MS3 spectra of the reported PrSMs, one row each (FLASHTnTAlgorithm::getMS3Rows)
+void FLASHTnTFile::writeMS3(const std::vector<FLASHTnTAlgorithm::MS3Row>& rows, std::fstream& fs)
+{
+  fs << "PrSMIndex\tScan\tMS3Scan\tPrecursorMass\tPrecursorCharge\tIdentity\tLiveLabel\tSubIonHypotheses\tMatchedSubIons\tChanceRate\tScore\tBonds\tNewBonds\n";
+  for (const auto& r : rows)
+  {
+    fs << r.prsm_index << "\t" << r.scan << "\t" << r.ms3_scan << "\t" << std::to_string(r.precursor_mass) << "\t" << r.precursor_charge << "\t" << r.identity
+       << "\t" << r.live_label << "\t" << r.hypotheses << "\t" << r.matched << "\t" << r.chance_rate << "\t" << r.score << "\t" << r.bonds << "\t"
+       << r.new_bonds << "\n";
+  }
 }
 
 /// write header line for Proteoform file
@@ -247,7 +259,7 @@ namespace
     static const std::unordered_map<std::string, OpenMS::UInt> keys = [] {
       auto& registry = OpenMS::MetaInfoInterface::metaRegistry();
       std::unordered_map<std::string, OpenMS::UInt> k;
-      for (const char* n : {"ChimericRound", "CombinedCoverage", "CombinedCoverageChance", "CombinedPrSMs", "DecoyPrecursor", "Description", "EndPosition", "ExtensionScore", "FDRClass", "GappedTag", "GivenMass", "Index", "MS3Scans", "Mass", "MatchedAA", "MatchedMassIndices", "ModificationACCs", "ModificationEnds", "ModificationIDs", "ModificationStarts", "ModificationVariable", "Modifications", "NumMass", "PrecursorLadder", "PrecursorSNR", "PrecursorScore", "ProteinQvalue", "ProteoformIndex", "ProteoformLevel", "ProteoformMassByFragmentMass", "RT", "RawCoverage", "RawFragmentHypotheses", "RawMatchedFragments", "RawScore", "RemovedMasses", "ResidualNullScore", "ResidualScoreRatio", "Scan", "SlidingLadder", "StartPosition", "TagIndices", "TerminalLadder", "TheoreticalMass", "UniqueMasses", "UniqueScore", "proqvalue", "qvalue"})
+      for (const char* n : {"ChimericRound", "CombinedCoverage", "CombinedCoverageChance", "CombinedPrSMs", "DecoyPrecursor", "Description", "EndPosition", "ExtensionScore", "FDRClass", "GappedTag", "GivenMass", "Index", "MS3MatchedSubIons", "MS3OnlyBonds", "MS3Scans", "MS3Score", "Mass", "MatchedAA", "MatchedMassIndices", "ModificationACCs", "ModificationEnds", "ModificationIDs", "ModificationStarts", "ModificationVariable", "Modifications", "NumMass", "PrecursorLadder", "PrecursorSNR", "PrecursorScore", "ProteinQvalue", "ProteoformIndex", "ProteoformLevel", "ProteoformMassByFragmentMass", "RT", "RawCoverage", "RawFragmentHypotheses", "RawMatchedFragments", "RawScore", "RemovedMasses", "ResidualNullScore", "ResidualScoreRatio", "Scan", "SlidingLadder", "StartPosition", "TagIndices", "TerminalLadder", "TheoreticalMass", "UniqueMasses", "UniqueScore", "proqvalue", "qvalue"})
         k.emplace(n, registry.registerName(n));
       return k;
     }();
@@ -549,6 +561,10 @@ void OpenMS::FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::
         const auto ms3_scans = hit.getMetaValue(prsmKey("MS3Scans")).toIntList();
         for (Size k = 0; k < ms3_scans.size(); k++) ss << (k ? " " : "") << ms3_scans[k];
       }
+      // the MS3 evidence (FLASHTnTAlgorithm::annotateMS3_; 0 without MS3 spectra or a raw file)
+      ss << "\t" << (hit.metaValueExists(prsmKey("MS3Score")) ? (double)hit.getMetaValue(prsmKey("MS3Score")) : 0.0) << "\t"
+         << (hit.metaValueExists(prsmKey("MS3MatchedSubIons")) ? (int)hit.getMetaValue(prsmKey("MS3MatchedSubIons")) : 0) << "\t"
+         << (hit.metaValueExists(prsmKey("MS3OnlyBonds")) ? (int)hit.getMetaValue(prsmKey("MS3OnlyBonds")) : 0);
     }
     ss << "\n";
     rows[h] = ss.str();

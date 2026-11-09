@@ -108,7 +108,7 @@ UInt tntKey(const char* name)
   static const std::unordered_map<std::string, UInt> keys = [] {
     auto& registry = MetaInfoInterface::metaRegistry();
     std::unordered_map<std::string, UInt> k;
-    for (const char* n : {"BlindModCount", "DeconvMassInfo", "DecoyPrecursor", "EndPosition", "ExtensionScore", "FDRClass", "FastaIndex", "GivenMass", "Index", "MS3Scans", "Mass", "MassLostToFeatureOwner", "ModificationEnds", "ModificationStarts", "Modifications", "PrSMIndices", "ProteinQvalue", "ProteoformIndex", "ProteoformMassByFragmentMass", "RT", "RawCoverage", "RawFragmentHypotheses", "RawMatchedFragments", "RawScore", "Representative", "Scan", "StartPosition", "TagIndices", "proqvalue", "qvalue"})
+    for (const char* n : {"BlindModCount", "DeconvMassInfo", "DecoyPrecursor", "EndPosition", "ExtensionScore", "FDRClass", "FastaIndex", "GivenMass", "Index", "MS3MatchedSubIons", "MS3OnlyBonds", "MS3Scans", "MS3Score", "Mass", "MassLostToFeatureOwner", "ModificationEnds", "ModificationStarts", "Modifications", "PrSMIndices", "ProteinQvalue", "ProteoformIndex", "ProteoformMassByFragmentMass", "RT", "RawCoverage", "RawFragmentHypotheses", "RawMatchedFragments", "RawScore", "Representative", "Scan", "StartPosition", "TagIndices", "proqvalue", "qvalue"})
       k.emplace(n, registry.registerName(n));
     return k;
   }();
@@ -1110,6 +1110,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 {
   setLogType(CMD);
   ms3_scans_of_.clear();
+  ms3_precursor_mass_.clear();
+  ms3_rows_.clear();
 
   // The database (ProteoformDatabase): without one, the FASTA entries are the proteins (the identity database), and every step below
   // that reads it is the search as before. With a PEFF database, an entry is a processed form of a protein with fixed modifications: the
@@ -1258,6 +1260,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     std::vector<FLASHHelperClasses::Tag> tags;
     std::exception_ptr error;
     int ms3_scan = 0, ms3_parent = -1; // an MSn spectrum (n >= 3): its scan and its parent's (0: none); -1: not one
+    double ms3_mass = 0;                // and its precursor's deconvolved mass (0: none)
   };
   std::vector<TaggedSpectrum> tagged(map.size());
   auto tagSpectrum = [&](int index, TaggedSpectrum& out) {
@@ -1272,6 +1275,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       const Size p = info.find("precursorscan=");
       out.ms3_scan = FLASHDeconvAlgorithm::getScanNumber(map, index);
       out.ms3_parent = p == std::string::npos ? 0 : std::max(0, std::stoi(info.substr(p + 14)));
+      const Size pm = info.find("precursormass=");
+      out.ms3_mass = pm == std::string::npos ? 0.0 : std::stod(info.substr(pm + 14));
       return;
     }
 
@@ -1448,6 +1453,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     if (out.ms3_parent > 0)
     {
       ms3_scans_of_[out.ms3_parent].push_back(out.ms3_scan);
+      ms3_precursor_mass_[out.ms3_scan] = out.ms3_mass;
       ms3_linked++;
     }
     else if (out.ms3_parent == 0) ms3_unlinked++;
@@ -4499,7 +4505,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       hit.setMetaValue(tntKey("ProteoformIndex"), it == prsm_to_proteoform.end() ? -1 : it->second);
     }
   }
-  // the MS3 spectra of each PrSM's scan (ADR-0001), only when the input has MS3
+  // the MS3 spectra of each PrSM's scan (ADR-0001) and their evidence, only when the input has MS3
   if (ms3_linked > 0)
   {
     for (auto& hit : proteoform_hits_)
@@ -4507,6 +4513,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       const auto it = ms3_scans_of_.find((int)hit.getMetaValue(tntKey("Scan")));
       hit.setMetaValue(tntKey("MS3Scans"), it == ms3_scans_of_.end() ? std::vector<int>() : it->second);
     }
+    annotateMS3_(proteoform_hits_);
   }
   if (native_rule) setNativeTermini_();
   setProteoformLevels_(*db);
@@ -4973,6 +4980,305 @@ void FLASHTnTAlgorithm::annotateOnRawSpectra_(std::vector<ProteinHit>& hits) con
   }
   OPENMS_LOG_INFO << "Raw spectra: " << raw_peaks_.size() << " loaded (" << raw_profile_count_ << " centroided); PrSMs annotated: " << annotated
                   << " of " << hits.size() << " (" << without_spectrum << " without their scan in the raw file)" << std::endl;
+}
+
+namespace
+{
+  // FLASHIda's label of an MS3 precursor in the scan description ("!'TR7.86k@12y70" -> "y70"); "" without one
+  std::string ms3LiveLabel(const MSSpectrum& spec)
+  {
+    if (! spec.metaValueExists("scan description")) return std::string();
+    const std::string d = spec.getMetaValue("scan description").toString();
+    const Size at = d.find('@');
+    if (at == std::string::npos) return std::string();
+    Size p = at + 1;
+    while (p < d.size() && std::isdigit((unsigned char)d[p])) p++;
+    return d.substr(p);
+  }
+
+  // whether an MS3 spectrum fragmented its precursor with electrons (the activation of its first precursor, the stage it isolated)
+  bool electronActivated(const MSSpectrum& spec)
+  {
+    if (spec.getPrecursors().empty()) return false;
+    for (const auto method : spec.getPrecursors().front().getActivationMethods())
+    {
+      if (method == Precursor::ActivationMethod::ETD || method == Precursor::ActivationMethod::ECD || method == Precursor::ActivationMethod::ETciD
+          || method == Precursor::ActivationMethod::EThcD)
+        return true;
+    }
+    return false;
+  }
+} // namespace
+
+void FLASHTnTAlgorithm::annotateMS3_(std::vector<ProteinHit>& hits)
+{
+  // An MS3 spectrum fragmented one fragment of its parent MS2 spectrum. Under a PrSM, that fragment (its precursor identity) is a fragment of
+  // the proteoform at the MS3 precursor mass (the MS2 ion types, the raw tolerance, +-1 isotope above 5 kDa), and the MS3 spectrum is the
+  // spectrum of that fragment: a short proteoform of its residues and the modifications it holds, with the fragment's terminal group on its
+  // cleaved end, annotated on the raw MS3 spectrum like a PrSM (FLASHAnnotatorAlgorithm: its chance rate p0 from the mass-shifted decoy
+  // fragments of the same spectrum; sub-ions c/z after electron activation, else b/y; charges capped by the MS3 precursor's). A
+  // modification window the fragment splits is tried with its mass (+w) and without (-w); a sub-ion that splits one is not annotated
+  // (FLASHAnnotatorAlgorithm). Each MS3 spectrum keeps its best identity; the spectra of one identity are pooled (a sub-ion counts once,
+  // chance 1 - prod(1 - p0), the most hypotheses), and MS3Score sums the pooled scores of the PrSM's identities. Each matched sub-ion covers
+  // one bond of the proteoform.
+  ms3_rows_.clear();
+  if (! raw_loader_ || ms3_scans_of_.empty()) return;
+  std::set<int> scans;
+  for (const auto& hit : hits)
+  {
+    const int scan = hit.getMetaValue(tntKey("Scan"));
+    const auto it = ms3_scans_of_.find(scan);
+    if (it == ms3_scans_of_.end()) continue;
+    scans.insert(scan);
+    scans.insert(it->second.begin(), it->second.end());
+  }
+  if (scans.empty()) return;
+  loadRawSpectra_(scans);
+
+  Param aparam = annotator_param_;
+  aparam.setValue("internal_ions", "false");
+  FLASHAnnotatorAlgorithm ms2_annotator; // the PrSM's fragments (its ion types) and the bonds of its MS2 spectrum
+  ms2_annotator.setParameters(aparam);
+  FLASHAnnotatorAlgorithm by_annotator, cz_annotator; // the sub-ions
+  aparam.setValue("ion_type", std::vector<std::string> {"b", "y"});
+  by_annotator.setParameters(aparam);
+  aparam.setValue("ion_type", std::vector<std::string> {"c", "z"});
+  cz_annotator.setParameters(aparam);
+  const double tol = (double)annotator_param_.getValue("tol") * 1e-6;
+  const auto is_prefix = [](const std::string& type) { return type == "a" || type == "b" || type == "c"; };
+
+  // one precursor identity of one MS3 spectrum under one PrSM
+  struct Identity
+  {
+    Size hit = 0;
+    int ms3_scan = 0;
+    std::string name;
+    bool prefix = true;  // the precursor: a prefix or a suffix fragment of the proteoform
+    int length = 0;      // its residues
+    bool electron = false;
+    Size prsm = 0;       // its short proteoform in by_prsms or cz_prsms
+  };
+  std::vector<Identity> identities;
+  std::vector<FLASHAnnotatorAlgorithm::PrSM> by_prsms, cz_prsms, ms2_prsms(hits.size());
+  std::vector<double> ms2_precursor_mass(hits.size(), -1.0);
+  std::vector<std::pair<Size, int>> ms3_of_hits; // (hit, MS3 scan), for the rows
+  double max_mass = 0;
+  for (Size h = 0; h < hits.size(); h++)
+  {
+    const auto it = ms3_scans_of_.find((int)hits[h].getMetaValue(tntKey("Scan")));
+    if (it == ms3_scans_of_.end() || ! toRawPrSM_(hits[h], ms2_prsms[h], ms2_precursor_mass[h]))
+    {
+      ms2_prsms[h].spectrum_index = -1; // a PrSM without MS3 spectra is not annotated again
+      continue;
+    }
+    const auto& prsm = ms2_prsms[h];
+    max_mass = std::max({max_mass, ms2_precursor_mass[h], FLASHAnnotatorAlgorithm::getProteoformMass(prsm.sequence, prsm.modifications)});
+    FLASHAnnotatorAlgorithm::PrSM uncapped = prsm;
+    uncapped.precursor_charge = 0;
+    std::vector<FLASHAnnotatorAlgorithm::Fragment> whole, split;
+    if (! ms2_annotator.getFragments(uncapped, whole, &split)) continue;
+    const int L = (int)prsm.sequence.size();
+    for (int ms3_scan : it->second)
+    {
+      ms3_of_hits.emplace_back(h, ms3_scan);
+      const auto slot = raw_slot_.find(ms3_scan);
+      const auto mit = ms3_precursor_mass_.find(ms3_scan);
+      if (slot == raw_slot_.end() || mit == ms3_precursor_mass_.end() || mit->second <= 0) continue;
+      const double m3 = mit->second;
+      const MSSpectrum& spec = raw_spectra_[slot->second];
+      const int z3 = spec.getPrecursors().empty() ? 0 : std::abs(spec.getPrecursors().front().getCharge());
+      const bool electron = electronActivated(spec);
+      // variant 0: the fragment holds its windows whole; 1: with the windows it splits; 2: without them
+      const auto consider = [&](const FLASHAnnotatorAlgorithm::Fragment& f, double mass, int variant) {
+        bool at_mass = false;
+        const int iso = m3 > 5000 ? 1 : 0;
+        for (int k = -iso; k <= iso; k++) at_mass |= std::abs(mass + k * Constants::ISOTOPE_MASSDIFF_55K_U - m3) <= tol * m3;
+        if (! at_mass) return;
+        const std::string& type = ms2_annotator.getIonTypes()[f.ion_type];
+        const bool prefix = is_prefix(type);
+        const int first = prefix ? 0 : L - f.length, last = prefix ? f.length - 1 : L - 1;
+        FLASHAnnotatorAlgorithm::PrSM sub;
+        sub.sequence = prsm.sequence.substr(first, f.length);
+        for (const auto& mod : prsm.modifications)
+        {
+          const int s = std::min(mod.start, mod.end), e = std::max(mod.start, mod.end);
+          if (e < first || s > last) continue;
+          if (! (s >= first && e <= last) && variant != 1) continue;
+          FLASHAnnotatorAlgorithm::Modification m;
+          m.mass = mod.mass;
+          m.start = std::max(s, first) - first;
+          m.end = std::min(e, last) - first;
+          sub.modifications.push_back(m);
+        }
+        // the fragment's terminal group on its cleaved end (b: -H2O, c: -H2O + NH3, ...), so that the short proteoform has the fragment's mass
+        const double plain = FLASHAnnotatorAlgorithm::getProteoformMass(sub.sequence, sub.modifications);
+        if (plain < 0) return;
+        FLASHAnnotatorAlgorithm::Modification end_group;
+        end_group.mass = mass - plain;
+        end_group.start = end_group.end = prefix ? f.length - 1 : 0;
+        sub.modifications.push_back(end_group);
+        sub.precursor_charge = z3;
+        sub.spectrum_index = slot->second;
+        Identity id;
+        id.hit = h;
+        id.ms3_scan = ms3_scan;
+        id.name = type + StringUtils::toStr(f.length) + (variant == 1 ? "+w" : (variant == 2 ? "-w" : ""));
+        id.prefix = prefix;
+        id.length = f.length;
+        id.electron = electron;
+        auto& list = electron ? cz_prsms : by_prsms;
+        id.prsm = list.size();
+        list.push_back(std::move(sub));
+        identities.push_back(std::move(id));
+      };
+      for (const auto& f : whole) consider(f, f.mono_mass, 0);
+      for (const auto& f : split)
+      {
+        const std::string& type = ms2_annotator.getIonTypes()[f.ion_type];
+        const int first = is_prefix(type) ? 0 : L - f.length, last = is_prefix(type) ? f.length - 1 : L - 1;
+        double split_mass = 0;
+        for (const auto& mod : prsm.modifications)
+        {
+          const int s = std::min(mod.start, mod.end), e = std::max(mod.start, mod.end);
+          if (e >= first && s <= last && ! (s >= first && e <= last)) split_mass += mod.mass;
+        }
+        consider(f, f.mono_mass + split_mass, 1);
+        consider(f, f.mono_mass, 2);
+      }
+    }
+  }
+
+  // the isotope tables once, beyond the heaviest PrSM; the MS2 charge caps as annotateOnRawSpectra_ sets them
+  std::vector<double> iso_mzs, iso_intensities;
+  for (auto* annotator : {&ms2_annotator, &by_annotator, &cz_annotator}) annotator->getIsotopeEnvelope(max_mass + 200.0, 1, iso_mzs, iso_intensities);
+  for (Size h = 0; h < hits.size(); h++)
+  {
+    if (ms2_prsms[h].spectrum_index < 0) continue;
+    int reason = 4;
+    ms2_prsms[h].precursor_charge = ms2_annotator.precursorChargeCap(raw_spectra_[ms2_prsms[h].spectrum_index], ms2_precursor_mass[h], reason);
+  }
+  std::vector<FLASHAnnotatorAlgorithm::Result> ms2_results, by_results, cz_results;
+  ms2_annotator.annotate(raw_peaks_, ms2_prsms, ms2_results);
+  by_annotator.annotate(raw_peaks_, by_prsms, by_results);
+  cz_annotator.annotate(raw_peaks_, cz_prsms, cz_results);
+  const auto result_of = [&](const Identity& id) -> const FLASHAnnotatorAlgorithm::Result& { return (id.electron ? cz_results : by_results)[id.prsm]; };
+  const auto annotator_of = [&](const Identity& id) -> const FLASHAnnotatorAlgorithm& { return id.electron ? cz_annotator : by_annotator; };
+
+  // the bonds of the proteoform that the matched sub-ions of an identity cover (bond b: between residues b and b + 1, 1-based, 1 .. L - 1)
+  const auto bonds_of = [&](const Identity& id) {
+    std::set<int> bonds;
+    const int L = (int)ms2_prsms[id.hit].sequence.size();
+    for (const auto& e : result_of(id).envelopes)
+    {
+      if (e.first >= 0 || e.decoy_shift != 0) continue;
+      const bool sub_prefix = is_prefix(annotator_of(id).getIonTypes()[e.ion_type]);
+      const int bond = id.prefix ? (sub_prefix ? e.length : id.length - e.length) : (sub_prefix ? L - id.length + e.length : L - e.length);
+      if (bond >= 1 && bond < L) bonds.insert(bond);
+    }
+    return bonds;
+  };
+  std::vector<std::set<int>> ms2_bonds(hits.size());
+  for (Size h = 0; h < hits.size(); h++)
+  {
+    if (h >= ms2_results.size()) break;
+    for (const auto& e : ms2_results[h].envelopes)
+      if (e.first < 0 && e.decoy_shift == 0) ms2_bonds[h].insert(e.bond);
+  }
+
+  // the best identity of each MS3 spectrum (the highest score of its spectrum alone)
+  std::map<std::pair<Size, int>, Size> best;
+  for (Size i = 0; i < identities.size(); i++)
+  {
+    const auto& r = result_of(identities[i]);
+    if (! r.annotated || r.fragment_hypotheses <= 0) continue;
+    const auto key = std::make_pair(identities[i].hit, identities[i].ms3_scan);
+    const auto it = best.find(key);
+    if (it == best.end() || r.score > result_of(identities[it->second]).score) best[key] = i;
+  }
+
+  // per PrSM, the spectra of each identity pooled
+  struct Pool
+  {
+    int hypotheses = 0;
+    std::set<std::pair<bool, int>> matched; // (prefix sub-ion, length)
+    double log_miss = 0;                    // sum of log(1 - p0)
+  };
+  std::vector<std::map<std::string, Pool>> pools(hits.size());
+  std::vector<std::set<int>> ms3_bonds(hits.size());
+  for (const auto& [hit_scan, i] : best)
+  {
+    const auto& id = identities[i];
+    const auto& r = result_of(id);
+    auto& pool = pools[id.hit][id.name];
+    pool.hypotheses = std::max(pool.hypotheses, r.fragment_hypotheses);
+    for (const auto& e : r.envelopes)
+      if (e.first < 0 && e.decoy_shift == 0) pool.matched.emplace(is_prefix(annotator_of(id).getIonTypes()[e.ion_type]), e.length);
+    pool.log_miss += std::log1p(-std::min(std::max(r.chance_rate, 0.0), 1.0 - 1e-12));
+    const auto bonds = bonds_of(id);
+    ms3_bonds[id.hit].insert(bonds.begin(), bonds.end());
+  }
+
+  for (const auto& [h, ms3_scan] : ms3_of_hits)
+  {
+    MS3Row row;
+    row.prsm_index = hits[h].metaValueExists(tntKey("Index")) ? (int)hits[h].getMetaValue(tntKey("Index")) : -1;
+    row.scan = hits[h].getMetaValue(tntKey("Scan"));
+    row.ms3_scan = ms3_scan;
+    const auto mit = ms3_precursor_mass_.find(ms3_scan);
+    row.precursor_mass = mit == ms3_precursor_mass_.end() ? 0 : mit->second;
+    const auto slot = raw_slot_.find(ms3_scan);
+    if (slot != raw_slot_.end())
+    {
+      const MSSpectrum& spec = raw_spectra_[slot->second];
+      row.precursor_charge = spec.getPrecursors().empty() ? 0 : std::abs(spec.getPrecursors().front().getCharge());
+      row.live_label = ms3LiveLabel(spec);
+    }
+    const auto it = best.find(std::make_pair(h, ms3_scan));
+    if (it == best.end()) row.identity = "none";
+    else
+    {
+      const auto& id = identities[it->second];
+      const auto& r = result_of(id);
+      row.identity = id.name;
+      row.hypotheses = r.fragment_hypotheses;
+      row.matched = r.matched_fragments;
+      row.chance_rate = r.chance_rate;
+      row.score = std::max(0.0, r.score);
+      const auto bonds = bonds_of(id);
+      row.bonds = (int)bonds.size();
+      for (int b : bonds) row.new_bonds += ms2_bonds[h].count(b) == 0 ? 1 : 0;
+    }
+    ms3_rows_.push_back(std::move(row));
+  }
+
+  Size with_evidence = 0;
+  for (Size h = 0; h < hits.size(); h++)
+  {
+    auto& hit = hits[h];
+    double score = 0;
+    int matched = 0;
+    for (const auto& [name, pool] : pools[h])
+    {
+      const double p = -std::expm1(pool.log_miss);
+      matched += (int)pool.matched.size();
+      if (pool.hypotheses > 0 && p > 0 && p < 1) score += std::max(0.0, FLASHAnnotatorAlgorithm::binomialTailScore(pool.hypotheses, (int)pool.matched.size(), p));
+    }
+    int only = 0;
+    for (int b : ms3_bonds[h]) only += ms2_bonds[h].count(b) == 0 ? 1 : 0;
+    hit.setMetaValue(tntKey("MS3Score"), score);
+    hit.setMetaValue(tntKey("MS3MatchedSubIons"), matched);
+    hit.setMetaValue(tntKey("MS3OnlyBonds"), only);
+    const int L = (int)ms2_prsms[h].sequence.size();
+    if (! ms3_bonds[h].empty() && L > 1)
+    {
+      std::set<int> all = ms2_bonds[h];
+      all.insert(ms3_bonds[h].begin(), ms3_bonds[h].end());
+      hit.setMetaValue(tntKey("RawCoverage"), 100.0 * (double)all.size() / (double)(L - 1));
+      with_evidence++;
+    }
+  }
+  OPENMS_LOG_INFO << "MS3 evidence: " << ms3_rows_.size() << " MS3 spectra of " << hits.size() << " PrSMs, " << best.size() << " with a precursor identity; "
+                  << with_evidence << " PrSMs with MS3-covered bonds" << std::endl;
 }
 
 void FLASHTnTAlgorithm::setCombinedCoverage_(const std::vector<std::vector<Size>>& clusters, const std::vector<double>& qvalues, double rep_q, bool use_fdr)
