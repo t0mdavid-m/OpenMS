@@ -21,10 +21,14 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <set>
 
 namespace OpenMS
 {
+/// learned PrSM scoring loaded from scoring_model (defined in FLASHTnTAlgorithm.cpp)
+struct LearnedScoringModel;
+
 /**
 @brief
 @ingroup Topdown
@@ -161,6 +165,26 @@ private:
   /// one PrSM per spectrum: the best by score (a determined mass and termini break a tie, then the coverage, then the earlier PrSM);
   /// @p label and @p score_name go into the log line
   static void keepBestPerSpectrum_(std::vector<ProteinHit>& hits, const std::string& label, const std::string& score_name);
+  /// FLASH_TRACE_FEATURES: every candidate PrSM before the spectrum's choice, appended to @p file (diagnostics)
+  void traceCandidates_(const std::vector<ProteinHit>& hits, const char* file) const;
+  /// learned PrSM scoring (scoring_model): its choice weights and confidence trees; null when off
+  std::shared_ptr<const LearnedScoringModel> scoring_model_;
+  /// protein q-values: open-terminus PrSMs scored with the model of "undetermined, both termini"
+  bool protein_open_terminus_model_ = false;
+  /// protein q-values from the two best PrSMs of each protein (protein_ranking top_two_prsms) instead of its best proteoform
+  bool protein_top_two_ = false;
+  /// protein_ranking model: protein q-values from the learned confidence of each protein's best PrSM (with the learned scoring)
+  bool protein_model_fdr_ = false;
+  /// with scoring_model_: weight of the free shift's search space (log10 shiftedCandidateCount) taken from a determined blind-shift PrSM's confidence
+  double shift_penalty_ = 0.0;
+  /// class "undetermined, both termini": decoy weight factor (PrSM and proteoform q-values) and pseudo-count of decoys (PrSM q-values)
+  double undetermined_decoy_weight_ = 1.0;
+  double undetermined_pseudo_decoys_ = 0.0;
+  /// class "undetermined, open terminus" reported apart (PrSM q-value 1)
+  bool open_terminus_separate_ = false;
+  /// with scoring_model_: the spectrum's PrSM chosen by the model's choice score, the others removed, and its score replaced by the model's
+  /// confidence (the combined score kept as meta value CombinedScore). @p spectra: the deconvolved spectra by scan number.
+  void applyLearnedScoring_(std::vector<ProteinHit>& hits, const std::map<int, const MSSpectrum*>& spectra) const;
   /// residual search rounds of chimeric spectra after the first search (0: off)
   int chimeric_rounds_ = 0;
   /// candidates from gapped tags: off, fallback (spectra without sequence-tag candidates), both, only
