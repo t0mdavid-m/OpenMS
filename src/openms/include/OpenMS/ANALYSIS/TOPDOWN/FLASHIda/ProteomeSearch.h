@@ -64,7 +64,7 @@ namespace OpenMS
 
     /// identification.flashtnt's knobs, each as (config key, FLASHTnTAlgorithm parameter name), in the order
     /// Config declares them. The one place the mapping lives: parametersFor writes through it and the tests
-    /// read it. fixed_mod is not here: it has no FLASHTnT parameter and Config refuses it non-empty.
+    /// read it. fixed_mod maps to FLASHTnTAlgorithm's own fixed_mod (ADR-0067).
     static const std::vector<std::pair<std::string, std::string>>& knobNames();
 
     /// defaultParameters() with every knob of @p settings written to its FLASHTnT name (booleans as the

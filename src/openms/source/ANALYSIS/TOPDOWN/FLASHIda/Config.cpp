@@ -39,6 +39,7 @@
 // channel resolves to an ordinal HERE, at load. Quantification.h includes Config.h, not the other
 // way round, so this is a one-way dependency and not a cycle.
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Quantification.h>
+#include <OpenMS/CONCEPT/Exception.h>
 
 #include <algorithm>
 #include <cmath>
@@ -581,10 +582,24 @@ namespace OpenMS
       if (authored("terminal_ladders")) ft.terminal_ladders = flashtnt["terminal_ladders"].get<bool>();
       if (authored("precursor_ladders")) ft.precursor_ladders = flashtnt["precursor_ladders"].get<bool>();
       if (authored("skip_precursor_inference")) ft.skip_precursor_inference = flashtnt["skip_precursor_inference"].get<bool>();
-      // fixed_mod has no FLASHTnT parameter in real time: only [] (or null) is accepted.
-      if (authored("fixed_mod") && !(flashtnt["fixed_mod"].is_array() && flashtnt["fixed_mod"].empty()))
-        throw std::invalid_argument(
-            "Config: identification.flashtnt.fixed_mod is not supported in real time; leave it empty (ADR-0061).");
+      // ADR-0067: fixed modifications, one residue-mass table for the search and every FLASHIda reader. The
+      // table applies the rule (name or Unimod accession with its residue, residue anywhere, one per residue).
+      identification_.fixed_mods = FixedModifications{};
+      if (authored("fixed_mod"))
+      {
+        const json& fm = flashtnt["fixed_mod"];
+        if (!fm.is_array() || !std::all_of(fm.begin(), fm.end(), [](const json& v) { return v.is_string(); }))
+          throw std::invalid_argument("Config: identification.flashtnt.fixed_mod must be a list of modification names (ADR-0067).");
+        ft.fixed_mod = fm.get<std::vector<std::string>>();
+        try
+        {
+          identification_.fixed_mods = FixedModifications::fromNames(ft.fixed_mod);
+        }
+        catch (const Exception::BaseException& e)
+        {
+          throw std::invalid_argument(std::string("Config: identification.flashtnt.") + e.what());
+        }
+      }
 
       // ADR-0062 d.1: the search pool's size. Unauthored = the core count minus two, at least 1. An
       // authored value must be a whole number of threads, at least 1: a pool of zero searches nothing.
@@ -1492,6 +1507,10 @@ namespace OpenMS
               std::string("Config: quantification.scan is \"") + sc + "\" but quantification.labelling is \""
               + quant_.labelling + "\". The quantification MS3 targets iodoTMT on cysteine, a 6-plex reagent: labelling "
               "must be \"tmt6plex\" (ADR-0064).");
+        if (identification_.fixed_mods.delta('C') != 0.0)
+          throw std::invalid_argument(
+              std::string("Config: identification.flashtnt.fixed_mod: a fixed modification of C cannot be combined with "
+                          "quantification.scan \"") + sc + "\", which already fixes iodoTMT6plex on every C (ADR-0064, ADR-0067).");
         if (identification_.method == AnnotationMethod::Refine)
           throw std::invalid_argument(
               std::string("Config: quantification.scan is \"") + sc + "\" but identification.method is \"refine\". "

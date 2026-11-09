@@ -31,12 +31,14 @@ namespace OpenMS
   {
     // FLASHTnTAlgorithm's constructor inserts the Tagger's parameters under "tag:" and the Extender's under
     // "ex:"; max_blind_mod_count, max_mod_mass, var_mod and max_var_mod_count are its own top-level copies,
-    // which it hands to the Extender.
+    // which it hands to the Extender. fixed_mod is its own too (ADR-0067): it hands it to the tagger, gapped tagger,
+    // extender and annotator.
     static const std::vector<std::pair<std::string, std::string>> names = {
       {"min_length", "tag:min_length"},
       {"max_length", "tag:max_length"},
       {"allow_gap", "tag:allow_gap"},
       {"max_aa_in_gap", "tag:max_aa_in_gap"},
+      {"fixed_mod", "fixed_mod"},
       {"max_blind_mod_count", "max_blind_mod_count"},
       {"max_mod_mass", "max_mod_mass"},
       {"var_mod", "var_mod"},
@@ -64,6 +66,7 @@ namespace OpenMS
     p.setValue(name("max_length"), s.max_length);
     p.setValue(name("allow_gap"), flag(s.allow_gap));
     p.setValue(name("max_aa_in_gap"), s.max_aa_in_gap);
+    p.setValue(name("fixed_mod"), s.fixed_mod);
     p.setValue(name("max_blind_mod_count"), s.max_blind_mod_count);
     p.setValue(name("max_mod_mass"), s.max_mod_mass);
     p.setValue(name("var_mod"), s.var_mod);

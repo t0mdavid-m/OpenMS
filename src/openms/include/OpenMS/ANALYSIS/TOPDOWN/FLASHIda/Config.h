@@ -37,6 +37,7 @@
 #include <OpenMS/config.h>
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/RefineSettings.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FixedModifications.h>
 #include <OpenMS/DATASTRUCTURES/ListUtils.h>
 
 #include <cstdint>
@@ -377,9 +378,9 @@ namespace OpenMS
     int max_length = 8;                      ///< tag:max_length
     bool allow_gap = false;                  ///< tag:allow_gap (a Param string "true"/"false")
     int max_aa_in_gap = 2;                   ///< tag:max_aa_in_gap
-    /// Always empty: a non-empty identification.flashtnt.fixed_mod is refused at load (no FLASHTnT
-    /// parameter takes it in real time). Still passed to the single-protein matcher's Tagger and
-    /// Extender as the empty Param list, NOT their declared {""}.
+    /// fixed_mod: the authored names (ADR-0067), passed verbatim to FLASHTnT and to the single-protein
+    /// matcher's Tagger and Extender (an empty list as the empty Param list, NOT their declared {""}).
+    /// IdentificationConfig::fixed_mods is their table.
     std::vector<std::string> fixed_mod;
     int max_blind_mod_count = 1;             ///< max_blind_mod_count
     double max_mod_mass = 500.0;             ///< max_mod_mass, Da
@@ -420,6 +421,10 @@ namespace OpenMS
 
     /// identification.flashtnt -- the matcher's tagger/extender tuning.
     FlashTnTSettings flashtnt;
+
+    /// The table of flashtnt.fixed_mod (ADR-0067), built at load: the residue masses every FLASHIda ladder,
+    /// MS3 match and logged ProForma reads. Empty when none is authored.
+    FixedModifications fixed_mods;
 
     /// identification.search_threads (ADR-0062 d.1) -- the size of the search pool that matches MS2s
     /// beside the analysis thread. Unauthored: the core count minus two (the acquisition PC also runs
