@@ -171,6 +171,12 @@ namespace OpenMS
     static std::string toProForma(const std::string& sequence,
                                   const std::vector<PTMSite>& ptm_sites);
 
+    /// The ProForma of an MS2 match's matched proteoform: @p match carries the FULL protein in proteoform_sequence,
+    /// full-protein 1-based PTM sites and the region [region_start, region_end) separately (-1 = that side open).
+    /// Renders the region substring with region-relative 1-based sites clamped to [1, L], the pooled log's frame
+    /// (ProteoformTracker). No region, or the whole protein, gives exactly toProForma(proteoform_sequence, ptm_sites).
+    static std::string regionProForma(const ProteoformMatch& match);
+
     /// Narrow fragment-frame ambiguous PTM ranges using ONLY this scan's matched MS3 sub-fragments
     /// (per-scan identification evidence). For each wide site [s,e] (1-based, SUBSEQUENCE frame) and each
     /// matched sub-fragment that BRACKETS it (backbone cleavage strictly inside the range), tighten the

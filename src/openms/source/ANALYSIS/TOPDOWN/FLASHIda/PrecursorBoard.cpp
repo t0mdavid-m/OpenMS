@@ -56,7 +56,7 @@ namespace OpenMS
 
   std::string PrecursorBoard::proformaOf(const FragmentAnalysis::ProteoformMatch& match)
   {
-    return FragmentAnalysis::toProForma(match.proteoform_sequence, match.ptm_sites);
+    return FragmentAnalysis::regionProForma(match);   // the matched region, as identification.tsv's MS2 row
   }
 
   BoardRow& PrecursorBoard::rowFor_(double mass)

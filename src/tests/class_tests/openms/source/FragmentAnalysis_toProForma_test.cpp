@@ -123,4 +123,61 @@ START_SECTION(toProForma_ambiguous_at_start)
 }
 END_SECTION
 
+// An MS2 match carries the FULL protein, full-protein 1-based sites and the matched region separately (matchFromPrSM).
+// identification.tsv's MS2 row and the console board render the matched region, in the pooled log's frame.
+// FAILS UNDER: rendering the whole reference protein (the Met-retained "MG[+42.0106]..." of a Met-removed cytC), or
+// cutting the region without shifting the sites into it.
+START_SECTION(regionProForma_renders_the_matched_region)
+{
+  const std::string cytc = "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
+  ABORT_IF(cytc.size() != 105)
+
+  // Met removed, acetylated Gly: region [1, 105), the acetyl at full position 2.
+  FragmentAnalysis::ProteoformMatch met_removed;
+  met_removed.proteoform_sequence = cytc;
+  met_removed.region_start = 1;
+  met_removed.region_end = 105;
+  PTMSite acetyl;
+  acetyl.start_position = 2;
+  acetyl.end_position = 2;
+  acetyl.position = 2;
+  acetyl.mass_shift = 42.0106;
+  met_removed.ptm_sites = {acetyl};
+  TEST_STRING_EQUAL(FragmentAnalysis::regionProForma(met_removed), "G[+42.0106]" + cytc.substr(2))
+
+  // C-terminal truncation [0, 80): 80 residues, nothing past the cut.
+  FragmentAnalysis::ProteoformMatch c_truncated;
+  c_truncated.proteoform_sequence = cytc;
+  c_truncated.region_start = 0;
+  c_truncated.region_end = 80;
+  TEST_STRING_EQUAL(FragmentAnalysis::regionProForma(c_truncated), cytc.substr(0, 80))
+  TEST_EQUAL(FragmentAnalysis::regionProForma(c_truncated).size(), 80)
+
+  // No region (-1/-1): exactly toProForma on the whole sequence.
+  FragmentAnalysis::ProteoformMatch whole;
+  whole.proteoform_sequence = cytc;
+  PTMSite heme;
+  heme.start_position = 15;
+  heme.end_position = 22;
+  heme.position = 18;
+  heme.mass_shift = 615.1694;
+  whole.ptm_sites = {heme};
+  TEST_STRING_EQUAL(FragmentAnalysis::regionProForma(whole), FragmentAnalysis::toProForma(cytc, {heme}))
+
+  // A site straddling the region start (full 8-12 in a region starting at index 10) is clamped into the region
+  // (region 1-2, "FV"), not dropped.
+  FragmentAnalysis::ProteoformMatch straddle;
+  straddle.proteoform_sequence = cytc;
+  straddle.region_start = 10;
+  straddle.region_end = 105;
+  PTMSite phospho;
+  phospho.start_position = 8;
+  phospho.end_position = 12;
+  phospho.position = 10;
+  phospho.mass_shift = 79.9663;
+  straddle.ptm_sites = {phospho};
+  TEST_STRING_EQUAL(FragmentAnalysis::regionProForma(straddle), "(FV)[+79.9663]" + cytc.substr(12))
+}
+END_SECTION
+
 END_TEST

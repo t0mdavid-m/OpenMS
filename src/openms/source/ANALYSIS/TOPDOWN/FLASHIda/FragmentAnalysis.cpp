@@ -1395,6 +1395,29 @@ namespace
     return result;
   }
 
+  std::string FragmentAnalysis::regionProForma(const ProteoformMatch& match)
+  {
+    const std::string& protein = match.proteoform_sequence;
+    const int P = static_cast<int>(protein.size());
+    const int ws = std::min(std::max(match.region_start, 0), P);
+    const int we = (match.region_end < 0) ? P : std::min(std::max(match.region_end, ws), P);
+    if (ws == 0 && we == P) return toProForma(protein, match.ptm_sites);
+
+    // The region frame the pooled log renders (ProteoformTracker: region_pos = full_pos - ws), clamped to [1, L] as
+    // matchFromPrSM clamps the frame it matched the fragments in, so a site at the cut is moved inward, not dropped.
+    const int L = we - ws;
+    std::vector<PTMSite> sites;
+    sites.reserve(match.ptm_sites.size());
+    for (PTMSite site : match.ptm_sites)
+    {
+      site.start_position = std::min(std::max(site.start_position - ws, 1), L);
+      site.end_position = std::min(std::max(site.end_position - ws, 1), L);
+      site.position = (site.start_position + site.end_position) / 2;
+      sites.push_back(site);
+    }
+    return toProForma(protein.substr(ws, L), sites);
+  }
+
   std::vector<FragmentAnalysis::PTMSite> FragmentAnalysis::narrowFragmentPTMSites(
       const std::vector<PTMSite>& wide_sites, int L,
       const std::vector<ProteoformMatch::FragmentMatch>& fragments,

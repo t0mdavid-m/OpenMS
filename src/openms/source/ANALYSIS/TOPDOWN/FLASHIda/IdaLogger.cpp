@@ -837,7 +837,11 @@ namespace OpenMS
       }
     }
 
-    std::string proforma = FragmentAnalysis::toProForma(id_render_seq, *eff_ptm_sites);
+    // An MS2 match carries the FULL protein and its region separately: render the matched region (as the pooled log
+    // and the MS3 rows do), not the whole reference. start_pos/end_pos keep their full-protein coordinates.
+    std::string proforma = (ms_level != 3 && match_has_proteoform)
+        ? FragmentAnalysis::regionProForma(match)
+        : FragmentAnalysis::toProForma(id_render_seq, *eff_ptm_sites);
 
     std::ostringstream ms2_frags, ms2_masses;
     ms2_frags << std::fixed << std::setprecision(4);
