@@ -597,7 +597,12 @@ namespace OpenMS
         }
         catch (const Exception::BaseException& e)
         {
-          throw std::invalid_argument(std::string("Config: identification.flashtnt.") + e.what());
+          // the table's own message ("fixed_mod <name>: ..."), without InvalidValue's "the value '...' was used but is not valid; "
+          std::string message = e.what();
+          const std::string boilerplate = "was used but is not valid; ";
+          const auto at = message.find(boilerplate);
+          if (at != std::string::npos) message = message.substr(at + boilerplate.size());
+          throw std::invalid_argument("Config: identification.flashtnt." + message);
         }
       }
 
