@@ -119,15 +119,6 @@ protected:
                        "A UniProtKB XML file gives the same results as the PEFF converted from it.",
                        true);
 
-    registerStringList_("fixed_mod", "<name>", std::vector<String>(),
-                        "Fixed modifications, by name with the residue (e.g. 'Carbamidomethyl (C)' for alkylated cysteines, 'TMT6plex (K)') or by Unimod "
-                        "accession number with the residue (e.g. '4 (C)'; 'UNIMOD:4 (C)' is the same). "
-                        "The residue's mass is changed for the whole search: every occurrence in targets and decoys, in sequence tags (a tag reads "
-                        "the modified residue as its letter), mass ladders, the extension, the raw-spectrum scoring and the reported masses. Only "
-                        "modifications of a residue anywhere, one per residue (not terminal ones). Written as ProForma global modifications, "
-                        "e.g. <[+57.021464|UNIMOD:4]@C>. With a PEFF database an annotated modification of such a residue adds to it.",
-                        false);
-
     registerIntOption_("peff_max_mods", "<number>", 1,
                        "PEFF or UniProtKB XML database: at most this many annotated modification units fixed on an entry (0: the processed forms "
                        "only). A unit is a residue with one or more of its annotated modifications on distinct sites of it, or all disulfide bonds of "
@@ -199,46 +190,24 @@ protected:
     String in_file = getStringOption_("in");
     const String in_db = getStringOption_("db");
 
-    // Fixed modifications change the residue masses of the search, the in-process amino acid set (ResidueDB), before anything reads them:
-    // every mass of the search -- tags, ladders, the extension, the raw annotation, the reported masses -- is that residue's.
-    String fixed_proforma;
+    // Fixed modifications (ADR-0067): a parameter of the algorithms, one residue-mass table that every reader of the search shares.
+    // Checked here, so that a modification the rule refuses stops the run with a clear message.
+    FixedModifications fixed_mods;
+    try
     {
-      std::set<char> fixed_residues;
-      for (const String& name : getStringList_("fixed_mod"))
-      {
-        if (name.empty()) continue;
-        const ResidueModification* mod = nullptr;
-        try
-        {
-          mod = FLASHHelperClasses::resolveModification(name); // a name or a Unimod accession, with its residue
-        }
-        catch (const Exception::BaseException& e)
-        {
-          OPENMS_LOG_ERROR << "-fixed_mod " << name << ": " << e.what() << endl;
-          return ILLEGAL_PARAMETERS;
-        }
-        const char origin = mod->getOrigin();
-        if (mod->getTermSpecificity() != ResidueModification::ANYWHERE || ! std::isupper((unsigned char)origin) || origin == 'X')
-        {
-          OPENMS_LOG_ERROR << "-fixed_mod " << name << ": only a modification of a residue anywhere can be fixed (not a terminal one)." << endl;
-          return ILLEGAL_PARAMETERS;
-        }
-        if (! fixed_residues.insert(origin).second)
-        {
-          OPENMS_LOG_ERROR << "-fixed_mod: two fixed modifications of residue " << origin << "." << endl;
-          return ILLEGAL_PARAMETERS;
-        }
-        Residue* residue = const_cast<Residue*>(ResidueDB::getInstance()->getResidue((unsigned char)origin));
-        const double before = residue->getMonoWeight(Residue::Internal);
-        residue->setMonoWeight(residue->getMonoWeight(Residue::Full) + mod->getDiffMonoMass());
-        String accession = mod->getUniModAccession();
-        accession.substitute("UniMod:", "UNIMOD:");
-        fixed_proforma += "<[" + ProteoformDatabase::proformaTag(accession, mod->getDiffMonoMass()) + "]@" + String(origin) + ">";
-        OPENMS_LOG_INFO << "Fixed modification " << mod->getFullId() << ": residue " << origin << " " << before << " -> "
-                        << residue->getMonoWeight(Residue::Internal) << " Da" << endl;
-      }
+      fixed_mods = FixedModifications::fromNames(getParam_().getValue("fixed_mod").toStringVector());
     }
-    FLASHTnTFile::setGlobalFixedModifications(fixed_proforma);
+    catch (const Exception::BaseException& e)
+    {
+      OPENMS_LOG_ERROR << "-fixed_mod: " << e.what() << endl;
+      return ILLEGAL_PARAMETERS;
+    }
+    for (const auto& entry : fixed_mods.entries())
+    {
+      OPENMS_LOG_INFO << "Fixed modification " << entry.name << ": residue " << entry.residue << " " << FixedModifications::none().mass(entry.residue)
+                      << " -> " << fixed_mods.mass(entry.residue) << " Da" << endl;
+    }
+    FLASHTnTFile::setGlobalFixedModifications(fixed_mods);
     // variable modifications: checked here, so that a name or an accession the database does not know stops the run with a clear message
     for (const auto& name : getParam_().getValue("var_mod").toStringVector())
     {
@@ -319,7 +288,6 @@ protected:
     auto tnt_param = getParam_();
     tnt_param.remove("in");
     tnt_param.remove("db");
-    tnt_param.remove("fixed_mod");
     tnt_param.remove("peff_max_mods");
     tnt_param.remove("peff_mod_masses");
     tnt_param.remove("in_raw");
@@ -357,7 +325,7 @@ protected:
     const bool peff = db_format != DatabaseFormat::FASTA;
     if (peff)
     {
-      database.loadPEFF(peff_file, getIntOption_("peff_max_mods"), getStringList_("peff_mod_masses"), fasta_entry);
+      database.loadPEFF(peff_file, getIntOption_("peff_max_mods"), getStringList_("peff_mod_masses"), fasta_entry, fixed_mods);
       const auto& st = database.getLoadStatistics();
       Size targets = 0, with_mods = 0;
       for (const auto& p : database.proteins) targets += ! p.decoy;

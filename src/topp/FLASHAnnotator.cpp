@@ -261,6 +261,43 @@ protected:
       return INCOMPATIBLE_INPUT_DATA;
     }
     auto field = [](const std::vector<String>& row, int col) -> String { return (col >= 0 && col < (int)row.size()) ? row[col] : String(); };
+    // a FLASHTnT PrSM file: the fixed modifications of its search, the global prefix of its ProForma strings (ADR-0067); every PrSM
+    // with a ProForma string must carry the same. A file of another tool expands them onto the residues of its ProForma strings.
+    FixedModifications fixed_mods;
+    if (col_sequence >= 0 && col_proforma >= 0)
+    {
+      bool first = true;
+      for (const auto& row : rows)
+      {
+        const String proforma = field(row, col_proforma).trim();
+        if (proforma.empty()) continue; // a PrSM without a determined proteoform has no ProForma string
+        FixedModifications row_mods;
+        try
+        {
+          row_mods = FixedModifications::fromProFormaPrefix(proforma);
+        }
+        catch (const Exception::BaseException& e)
+        {
+          OPENMS_LOG_ERROR << in_prsm_file << ": " << e.what() << endl;
+          return INCOMPATIBLE_INPUT_DATA;
+        }
+        if (first)
+        {
+          fixed_mods = row_mods;
+          first = false;
+        }
+        else if (row_mods != fixed_mods)
+        {
+          OPENMS_LOG_ERROR << "The PrSMs of " << in_prsm_file << " differ in their fixed modifications (ProForma global modifications)" << endl;
+          return INCOMPATIBLE_INPUT_DATA;
+        }
+      }
+      if (! fixed_mods.empty())
+      {
+        algorithm_param.setValue("fixed_mod", fixed_mods.names());
+        annotator.setParameters(algorithm_param);
+      }
+    }
 
     std::set<int> needed_scans;
     for (const auto& row : rows)
@@ -394,7 +431,7 @@ protected:
       // co-isolated species, and a charge derived from it would cap the fragment charges too low
       const double mass = toDouble_(field(row, col_precursor_mass), -1);
       prsm_masses[r] = mass;
-      max_prsm_mass = std::max({max_prsm_mass, mass, FLASHAnnotatorAlgorithm::getProteoformMass(prsm.sequence, prsm.modifications)});
+      max_prsm_mass = std::max({max_prsm_mass, mass, FLASHAnnotatorAlgorithm::getProteoformMass(prsm.sequence, prsm.modifications, fixed_mods)});
 
       const auto it = scan_to_slot.find(toInt_(field(row, col_scan), -1));
       if (it == scan_to_slot.end())
