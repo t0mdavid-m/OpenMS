@@ -248,6 +248,7 @@ namespace OpenMS
           break;
         }
         deconvolved_spectrum_.setPrecursor(precursor);
+        if (ms_level_ >= 3) break; // an MSn spectrum (n >= 3) lists the fragment it isolated first; the next is the stage below
       }
 
       // a target precursor m/z needs its charge (help of precursor_mz): without one it built a precursor of mass 0, which capped the MSn masses

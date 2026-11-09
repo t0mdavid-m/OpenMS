@@ -799,11 +799,15 @@ namespace OpenMS
     // the deconvolved spectra in parallel (each from its own deconvolved spectrum), added below in the input order
     std::vector<MSSpectrum> deconvolved_mzMLs(deconvolved_spectra.size());
     std::vector<std::exception_ptr> errors(deconvolved_spectra.size());
+    // an MSn spectrum (n >= 3) with a precursor is written even without masses: it carries its parent link (DeconvMassInfo), and
+    // FLASHTnT scores an MS3 on its raw spectrum
+    std::vector<char> keep_empty(deconvolved_spectra.size(), 0);
 #pragma omp parallel for schedule(dynamic, 16)
     for (SignedSize i = 0; i < (SignedSize)deconvolved_spectra.size(); i++)
     {
       auto& deconvolved_spectrum = deconvolved_spectra[i];
-      if (deconvolved_spectrum.empty() || deconvolved_spectrum.isDecoy()) continue;
+      keep_empty[i] = deconvolved_spectrum.getOriginalSpectrum().getMSLevel() >= 3 && ! deconvolved_spectrum.getPrecursorPeakGroup().empty();
+      if ((deconvolved_spectrum.empty() && ! keep_empty[i]) || deconvolved_spectrum.isDecoy()) continue;
       try
       {
         deconvolved_mzMLs[i] = deconvolved_spectrum.toSpectrum(mzml_charge, tols[deconvolved_spectrum.getOriginalSpectrum().getMSLevel() - 1], false);
@@ -816,7 +820,7 @@ namespace OpenMS
     for (Size i = 0; i < deconvolved_spectra.size(); i++)
     {
       if (errors[i]) std::rethrow_exception(errors[i]);
-      if (deconvolved_mzMLs[i].empty()) continue;
+      if (deconvolved_mzMLs[i].empty() && ! keep_empty[i]) continue;
       deconvolved_map.addSpectrum(std::move(deconvolved_mzMLs[i]));
     }
   }
