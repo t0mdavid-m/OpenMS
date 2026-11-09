@@ -120,6 +120,26 @@ namespace
   {
     return {scanOf(32, 1, "!!=S"), scanOf(33, 1, "!!>S"), scanOf(37, 2, "!!BR5.30533k@10", {531.790649})};
   }
+
+  // REAL rows of the Caco-2 histone MS3 run (2026-11-09) for the MS3 sections: survey !'> is scan 584, MS2 !'C scan 589 isolating
+  // 660.466857910156, and its MS3 !'T scan 598, which msconvert lists with the fragment first (654.749450683594) and the stage below
+  // it next (660.466857910156). The MS3 row is two-stage ("stage0;stage1").
+  const Cells kCaS584 = surveyRow("!'>", "2332603844");
+  const Cells kCaM589 = {"!'C", "recording", "2", "!'>", "94", "2", "7909.9925", "12", "660.467", "1.21772", "0.664304", "0.698838",
+                         "1.8409", "0.919571", "1.44169", "0.731669", "HCD", "29", "29", "0", "0", "0", "1.0493", "21407.8", "126896",
+                         "", "0", "", "!'CR7.90999k@12", "0", "0", "200.0000", "2000.0000", "!'>", "0.6802", "2332604621"};
+  const Cells kCaT598 = {"!'T", "recording", "3", "!'C", "94", "1", "7909.9925;7838.9237", "12;12", "660.467;654.749", "1.21772;2",
+                         "0.664304;0.600953", "0.698838;0.749014", "1.8409;10.3754", "0.919571;0.908401", "1.44169;3.35059",
+                         "0.731669;0.940875", "HCD;CID", "29;35", "29;35", "0;0", "0;0", "0;0", "1.0493;2.01605", "21407.8;10111.5",
+                         "126896;15500.5", "y", "70",
+                         "SSPPPQPQPPPPPARRLSYATTVNIHVGGGGRLRPAKAQVRLNHPALLASTQESMGLHRAQGAPDA(PFHM)[+453.0862]", "!'TR7.86k@12y70",
+                         "0", "0", "200.0000", "2000.0000", "", "", "2332607242"};
+
+  std::vector<ScanCommandJoin::Scan> caScans()
+  {
+    return {scanOf(584, 1, "!'>S"), scanOf(589, 2, "!'CR7.90999k@12", {660.466857910156}),
+            scanOf(598, 3, "!'TR7.86k@12y70", {654.749450683594, 660.466857910156})};
+  }
 }
 
 START_TEST(FLASHIda_Logging, "$Id$")
@@ -1155,6 +1175,45 @@ START_SECTION(scan_commands_join_accepts_any_isolation_target_of_an_msx_scan)
                                               scanOf(37, 2, "!!BR5.30533k@10", {590.878, 531.790649})};
   auto located = ScanCommandJoin::join(scans, rows);
   TEST_EQUAL(located.count(37), 1)
+}
+END_SECTION
+
+// T18b / T18c -- an MS3 is located under the MS2 that its row names (MS3 search, ADR-0001); fixture kCa* above.
+// Fails if an MS3 row is read at its first stage (the MS2's precursor) instead of the fragment its command isolated.
+START_SECTION(scan_commands_parse_reads_the_fragment_stage_of_an_ms3_row)
+{
+  auto rows = ScanCommandJoin::parse(writeCommandsFile("scj_t18b", {kCmdHeader, kCaS584, kCaM589, kCaT598}));
+  ABORT_IF(rows.count("!'T") == 0)
+  const auto& t = rows["!'T"];
+  TEST_EQUAL(t.ms_level, 3)
+  TEST_EQUAL(t.parent_tracking_id, std::string("!'C"))
+  TEST_EQUAL(t.charge, 12)
+  TEST_TRUE(std::abs(t.mono_mass - 7838.9237) < 1e-9)
+  TEST_TRUE(std::abs(t.precursor_mz - 654.749) < 1e-9)
+  TEST_TRUE(std::abs(t.qscore - 0.600953) < 1e-9)
+  TEST_TRUE(std::abs(t.peakgroup_intensity - 15500.5) < 1e-9)
+  TEST_TRUE(std::abs(rows["!'C"].mono_mass - 7909.9925) < 1e-9)
+}
+END_SECTION
+
+// Fails if an MS3 is not located, located under the survey instead of its MS2, given a parent that is not in the data file, or
+// joined although its fragment is not what the spectrum isolated.
+START_SECTION(scan_commands_join_locates_an_ms3_under_its_parent_ms2)
+{
+  auto rows = ScanCommandJoin::parse(writeCommandsFile("scj_t18c", {kCmdHeader, kCaS584, kCaM589, kCaT598}));
+  auto located = ScanCommandJoin::join(caScans(), rows);
+  TEST_EQUAL(located.size(), 2)
+  ABORT_IF(located.count(598) == 0 || located.count(589) == 0)
+  TEST_EQUAL(located[598].parent_scan_number, 589)
+  TEST_EQUAL(located[589].parent_scan_number, 584)
+
+  std::vector<ScanCommandJoin::Scan> cropped = {scanOf(584, 1, "!'>S"), scanOf(598, 3, "!'TR7.86k@12y70", {654.749450683594, 660.466857910156})};
+  auto cropped_located = ScanCommandJoin::join(cropped, rows);
+  ABORT_IF(cropped_located.count(598) == 0)
+  TEST_EQUAL(cropped_located[598].parent_scan_number, -1)
+
+  auto foreign = ScanCommandJoin::parse(writeCommandsFile("scj_t18d", {kCmdHeader, kCaS584, kCaM589, withCell(kCaT598, "precursor_mz", "660.467;612.345")}));
+  TEST_EXCEPTION(Exception::InvalidValue, ScanCommandJoin::join(caScans(), foreign))
 }
 END_SECTION
 

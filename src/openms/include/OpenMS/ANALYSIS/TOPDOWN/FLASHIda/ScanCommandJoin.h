@@ -58,8 +58,9 @@ namespace OpenMS
    * routinely not the one acquired just before the scan.
    *
    * Pure on purpose: parse() reads one file, join() maps data to data. Neither knows FLASHDeconv, which is
-   * what lets both be tested from the FLASHIda side. MS2 only; rows of other levels keep id, parent and
-   * level, because decision 5 checks the level of every joined scan and the parent walk needs the parents.
+   * what lets both be tested from the FLASHIda side. MS2 and MS3: an MS3 row is read at its fragment stage and
+   * an MS3 is located under the MS2 its row names as parent. Rows of other levels keep id, parent and level,
+   * because decision 5 checks the level of every joined scan and the parent walk needs the parents.
    */
   struct ScanCommandJoin
   {
@@ -86,7 +87,8 @@ namespace OpenMS
       /// survey re-planned it. "" when no survey decided it, or the file predates the column.
       std::string decision_survey_id;
       int ms_level = 0;
-      // Everything below is filled for ms_level == 2 rows ONLY (ADR-0046 decision 8).
+      // Everything below is filled for ms_level 2 and 3 rows ONLY (ADR-0046 decision 8); an MS3 row's from its
+      // fragment stage (the second ';' group), the ion its command isolated.
       double mono_mass = 0;             ///< the commanded precursor's monoisotopic mass
       int charge = 0;                   ///< the ANCHOR charge: first ',' value of a multiplexed cell
       double precursor_mz = 0;          ///< the anchor's isolation centre
@@ -103,10 +105,10 @@ namespace OpenMS
       std::vector<double> isolation_targets;  ///< one per precursor element (several under MSX)
     };
 
-    /// The join's answer for one commanded MS2.
+    /// The join's answer for one commanded MS2 or MS3.
     struct Located
     {
-      int parent_scan_number = -1;   ///< the survey the command was decided from; -1 = not in this data file
+      int parent_scan_number = -1;   ///< MS2: the survey the command was decided from; MS3: its parent MS2; -1 = not in this data file
       Row row;
     };
 
@@ -179,20 +181,22 @@ namespace OpenMS
         try
         {
           r.ms_level = StringUtils::toInt32(cell[col["ms_level"]]);
-          if (r.ms_level == 2)
+          if (r.ms_level == 2 || r.ms_level == 3)
           {
-            r.mono_mass = StringUtils::toDouble(cell[col["mono_mass"]]);
-            r.charge = StringUtils::toInt32(anchorOf_(cell[col["charge"]]));
-            r.precursor_mz = StringUtils::toDouble(anchorOf_(cell[col["precursor_mz"]]));
-            r.qscore = StringUtils::toDouble(cell[col["qscore"]]);
-            r.charge_cos = StringUtils::toDouble(cell[col["charge_cos"]]);
-            r.charge_snr = StringUtils::toDouble(cell[col["charge_snr"]]);
-            r.iso_cos = StringUtils::toDouble(cell[col["iso_cos"]]);
-            r.snr = StringUtils::toDouble(cell[col["snr"]]);
-            r.charge_score = StringUtils::toDouble(cell[col["charge_score"]]);
-            r.ppm_error = StringUtils::toDouble(cell[col["ppm_error"]]);
-            r.precursor_intensity = StringUtils::toDouble(cell[col["precursor_intensity"]]);
-            r.peakgroup_intensity = StringUtils::toDouble(cell[col["peakgroup_intensity"]]);
+            // an MS3 row is two-stage ("stage0;stage1"): its command isolated the fragment of stage 1
+            const auto stage = [&](const char* name) { return stageOf_(cell[col[name]], (size_t)(r.ms_level - 2)); };
+            r.mono_mass = StringUtils::toDouble(stage("mono_mass"));
+            r.charge = StringUtils::toInt32(anchorOf_(stage("charge")));
+            r.precursor_mz = StringUtils::toDouble(anchorOf_(stage("precursor_mz")));
+            r.qscore = StringUtils::toDouble(stage("qscore"));
+            r.charge_cos = StringUtils::toDouble(stage("charge_cos"));
+            r.charge_snr = StringUtils::toDouble(stage("charge_snr"));
+            r.iso_cos = StringUtils::toDouble(stage("iso_cos"));
+            r.snr = StringUtils::toDouble(stage("snr"));
+            r.charge_score = StringUtils::toDouble(stage("charge_score"));
+            r.ppm_error = StringUtils::toDouble(stage("ppm_error"));
+            r.precursor_intensity = StringUtils::toDouble(stage("precursor_intensity"));
+            r.peakgroup_intensity = StringUtils::toDouble(stage("peakgroup_intensity"));
           }
         }
         catch (const Exception::ConversionError& e)
@@ -210,7 +214,7 @@ namespace OpenMS
       return rows;
     }
 
-    /// Join the spectra of a data file to the rows of its acquisition. Returns the commanded MS2 scans, by
+    /// Join the spectra of a data file to the rows of its acquisition. Returns the commanded MS2 and MS3 scans, by
     /// scan number. Throws InvalidValue when the file does not belong to the data (see the class comment).
     static std::map<int, Located> join(const std::vector<Scan>& scans, const std::map<std::string, Row>& rows)
     {
@@ -245,7 +249,7 @@ namespace OpenMS
         const Scan& s = *entry.second;
         const Row& r = rows.at(entry.first);
         bool ok = (r.ms_level == s.ms_level);
-        if (ok && s.ms_level == 2)
+        if (ok && (s.ms_level == 2 || s.ms_level == 3))
         {
           ok = false;
           for (double target : s.isolation_targets) { if (std::abs(target - r.precursor_mz) <= ANCHOR_MZ_TOL) { ok = true; } }
@@ -260,10 +264,10 @@ namespace OpenMS
           }
           continue;
         }
-        if (s.ms_level != 2) { continue; }
+        if (s.ms_level != 2 && s.ms_level != 3) { continue; }
         Located l;
         l.row = r;
-        l.parent_scan_number = surveyScanNumber_(r, rows, scan_of);
+        l.parent_scan_number = s.ms_level == 2 ? surveyScanNumber_(r, rows, scan_of) : parentScanNumber_(r, rows, scan_of);
         located[s.scan_number] = l;
       }
       if (n_offenders > 0)
@@ -295,6 +299,28 @@ namespace OpenMS
 
     /// "17,16,15" -> "17": the anchor comes first, its co-isolated notches after (ADR-0016).
     static std::string anchorOf_(const std::string& cell) { return cell.substr(0, cell.find(',')); }
+
+    /// "7909.9925;7838.9237", 1 -> "7838.9237": the @p k -th stage of a per-stage cell; a stage-less cell is its own stage.
+    static std::string stageOf_(const std::string& cell, size_t k)
+    {
+      size_t st = 0;
+      for (size_t i = 0; i < k; ++i)
+      {
+        const size_t ed = cell.find(';', st);
+        if (ed == std::string::npos) { return cell.substr(st); }
+        st = ed + 1;
+      }
+      return cell.substr(st, cell.find(';', st) - st);
+    }
+
+    /// The MS2 an MS3 command fragmented: the spectrum carrying the row's parent_tracking_id when that row is an MS2; -1 otherwise.
+    static int parentScanNumber_(const Row& row, const std::map<std::string, Row>& rows, const std::map<std::string, const Scan*>& scan_of)
+    {
+      auto r = rows.find(row.parent_tracking_id);
+      if (r == rows.end() || r->second.ms_level != 2) { return -1; }
+      auto s = scan_of.find(row.parent_tracking_id);
+      return s == scan_of.end() ? -1 : s->second->scan_number;
+    }
 
     /// The survey the command was DECIDED on, when the row names one; otherwise walk parent_tracking_id up the ROWS to
     /// the MS1 survey. Either way, then ask which spectrum carries that id. A re-planned command keeps its lineage in

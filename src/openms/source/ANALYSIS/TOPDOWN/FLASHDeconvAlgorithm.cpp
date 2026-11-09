@@ -587,9 +587,10 @@ void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vec
       findPrecursorPeakGroupsForMSnSpectra_(map, deconvolved_spectra, ms_level);
     }
 
-    // the precursor scan of an MSn spectrum without a precursor peak group: the preceding spectrum of the lower MS level
+    // the precursor scan of an MS2 spectrum without a precursor peak group: the preceding spectrum of the lower MS level. Not of an
+    // MSn spectrum (n >= 3): its parent is rarely the MS(n-1) spectrum before it, and a wrong one would read as its parent downstream.
     auto needs_fallback_scan = [&](const MSSpectrum& spec) {
-      if (ms_level <= 1) return false;
+      if (ms_level <= 1 || ms_level >= 3) return false;
       const auto it = native_id_precursor_peak_group_map_.find(spec.getNativeID());
       return it == native_id_precursor_peak_group_map_.end() || it->second.empty();
     };
@@ -991,7 +992,10 @@ void FLASHDeconvAlgorithm::run(MSExperiment& map,
       scans.push_back(s);
     }
     located_by_scan_ = ScanCommandJoin::join(scans, ScanCommandJoin::parse(scan_commands_file_));
-    OPENMS_LOG_INFO << "FLASHIda scan commands used: " << scan_commands_file_ << " (" << located_by_scan_.size() << " commanded MS2 scans located)" << std::endl;
+    Size located_ms3 = 0;
+    for (const auto& entry : located_by_scan_) located_ms3 += entry.second.row.ms_level == 3 ? 1 : 0;
+    OPENMS_LOG_INFO << "FLASHIda scan commands used: " << scan_commands_file_ << " (" << located_by_scan_.size() - located_ms3 << " commanded MS2 and "
+                    << located_ms3 << " MS3 scans located)" << std::endl;
   }
 
   updateMSLevels_(map);
@@ -1182,14 +1186,16 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
     int scan_number = getScanNumber(map, index);
     std::string native_id = spec.getNativeID();
 
-    // ADR-0046: a commanded MS2 is located by its command. Null for an uncommanded scan, for MSn > 2, and when
-    // the survey the command names is not in this data file (an RT crop) -- those keep the search below unchanged.
+    // ADR-0046: a commanded MS2 or MS3 is located by its command (an MS3 under the MS2 its row names). Null for an uncommanded
+    // scan, for MSn > 3, and when the parent the command names is not in this data file (an RT crop) -- those keep the search
+    // below unchanged, except an MS3: with a scan_commands file given, an MS3 the file cannot place gets no precursor.
     const ScanCommandJoin::Located* located = nullptr;
-    if (ms_level == 2)
+    if (ms_level == 2 || ms_level == 3)
     {
       auto lit = located_by_scan_.find(scan_number);
       if (lit != located_by_scan_.end() && lit->second.parent_scan_number > 0) { located = &lit->second; }
     }
+    if (ms_level >= 3 && located == nullptr && ! scan_commands_file_.empty()) { continue; }
 
     // as the serial parse would: the first spectrum (in this order) whose CV does not parse throws
     const auto cv_at = [&](Size i) {

@@ -936,8 +936,12 @@ FLASHDeconv then takes ITS OWN PeakGroup nearest row.mono_mass from THAT survey
   foreign `scan_commands.tsv` joins 100 % of scans by id; the row-vs-spectrum check (MS level, anchor
   m/z within 0.01) is what tells them apart. A duplicate id, or a file that joins nothing, aborts too.
   A spectrum with no id or no row is an ordinary **uncommanded scan** and is never an error.
-- **MS2 only.** MS3 rows are parsed and level-checked; nothing locates an MS3 yet — no acquired run
-  exists to show how pwiz writes a two-stage precursor list.
+- **MS2 and MS3.** pwiz writes an MS3's precursor list fragment first (the stage-1 window), then the
+  stage below it, with no `spectrumRef` (Caco-2 histone MS3 run, 2026-11-09). An MS3 row is read at its
+  stage-1 group, its m/z checked against the spectrum's targets, and it is located under the spectrum
+  carrying its `parent_tracking_id` (an MS2; -1 otherwise). With `-FD:scan_commands` given, FLASHDeconv
+  gives an MS3 the file cannot place no precursor, and never the preceding MS2 as a fallback; without it,
+  `FLASHDeconvAlgorithm::parentCandidates` (same MS1-stage target, nearest first) finds the parent.
 - ⚠️ **`parse` resolves columns by header name and requires no column added after 2026-09.** Every
   run folder already on disk must keep parsing; `scan_commands_parse_reads_a_pre_adr0046_run_folder_file`
   pins that with three rows copied from a real one. A column *rename* in `IdaLogger` breaks
