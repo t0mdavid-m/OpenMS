@@ -622,7 +622,6 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
   // all of them sorted by mass. A deconvolved mass plus a shift (of its ion type and, at the N-terminus, of the forms without the
   // initiator Met and with acetylation) that lands on a residue sum reads from the intact terminus; no sequence tag is needed. The sums
   // from the N-terminus are also built for the precursor ladders alone: they are the window sums of a protein of standard residues only.
-  const auto* rdb = ResidueDB::getInstance();
   const std::string& standard = standard_residues;
   // the fixed modification masses of an entry by residue (empty: none)
   auto fixedByResidue = [&](Size k, std::vector<double>& extra) {

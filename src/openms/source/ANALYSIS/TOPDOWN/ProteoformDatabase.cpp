@@ -495,7 +495,6 @@ void ProteoformDatabase::build(const std::vector<FASTAFile::FASTAEntry>& input, 
     mass = it->second.second;
     return it->second.first;
   };
-  const auto* rdb = ResidueDB::getInstance();
   auto residueMass = [&](char c) {
     if (movable_residues.find(c) == std::string::npos && c != 'U' && c != 'O') return 0.0;
     return fixed_mods.mass(c);

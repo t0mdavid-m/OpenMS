@@ -124,6 +124,7 @@ protected:
     {
       auto param = FLASHAnnotatorAlgorithm().getDefaults();
       param.remove("ion_type");
+      param.remove("fixed_mod"); // read from the PrSM file's ProForma prefix (ADR-0067), not an option
       return param;
     }
     throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Unknown subsection", prefix);
