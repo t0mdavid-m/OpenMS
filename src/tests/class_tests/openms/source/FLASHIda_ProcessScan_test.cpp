@@ -1342,6 +1342,56 @@ namespace
   }
 }
 
+// ===== The rescue scan (ADR-0068) ===================================================================================
+namespace
+{
+  const std::string kUbiquitin = "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG";
+
+  nlohmann::json etdRescue()
+  {
+    return nlohmann::json::parse(R"({ "analyzer": "Orbitrap", "activation": "ETD", "reaction_time": 12, "resolution": 120000 })");
+  }
+
+  /// closeOutCytcJson (strict-inclusion cytC, nothing but a close-out can bar it) plus an ETD rescue scan.
+  /// @p reference replaces the cytC reference when given; @p threads sizes the search pool when > 0.
+  std::string rescueCytcJson(const std::string& dir, double threshold, bool separate = false,
+                             const std::string& reference = "", int threads = 0)
+  {
+    nlohmann::json j = nlohmann::json::parse(closeOutCytcJson(dir, threshold, "inclusion_cytc.txt", separate));
+    if (!reference.empty()) j["identification"]["reference"] = {{"sequence", reference}};
+    if (threads > 0) j["identification"]["search_threads"] = threads;
+    j["ms_settings"]["ms2_rescue"] = etdRescue();
+    return j.dump();
+  }
+
+  bool isEtd(const ScanCommand& c) { return c.num_stages > 0 && std::string(c.stages[0].activation_type) == "ETD"; }
+
+  int countOf(const std::string& text, const std::string& needle)
+  {
+    int n = 0;
+    for (size_t p = text.find(needle); p != std::string::npos; p = text.find(needle, p + needle.size())) ++n;
+    return n;
+  }
+
+  /// The MS2s a drive sent, split into rescues (ETD) and the identification scans that could trigger one (HCD).
+  struct RescueSplit
+  {
+    std::vector<ScanCommand> rescues, triggers;
+  };
+  RescueSplit splitRescues(const AcqResult& acq)
+  {
+    RescueSplit s;
+    for (const auto& c : acq.ms2_cmds) (isEtd(c) ? s.rescues : s.triggers).push_back(c);
+    return s;
+  }
+
+  /// Feed @p s as the answer to the MS2 command @p c.
+  void feedMs2(FLASHIda& ida, ScanCommand c, const ScanData& s)
+  {
+    ida.processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 2, c.scan_description, 0.0, instrumentScanNumberOf(s));
+  }
+}
+
 START_TEST(FLASHIda_ProcessScan, "$Id$")
 
 /////////////////////////////////////////////////////////////
@@ -4057,55 +4107,6 @@ START_SECTION(per_proteoform_end_to_end_cytc)
 }
 END_SECTION
 
-// ===== The rescue scan (ADR-0068) ===================================================================================
-namespace
-{
-  const std::string kUbiquitin = "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG";
-
-  nlohmann::json etdRescue()
-  {
-    return nlohmann::json::parse(R"({ "analyzer": "Orbitrap", "activation": "ETD", "reaction_time": 12, "resolution": 120000 })");
-  }
-
-  /// closeOutCytcJson (strict-inclusion cytC, nothing but a close-out can bar it) plus an ETD rescue scan.
-  /// @p reference replaces the cytC reference when given; @p threads sizes the search pool when > 0.
-  std::string rescueCytcJson(const std::string& dir, double threshold, bool separate = false,
-                             const std::string& reference = "", int threads = 0)
-  {
-    nlohmann::json j = nlohmann::json::parse(closeOutCytcJson(dir, threshold, "inclusion_cytc.txt", separate));
-    if (!reference.empty()) j["identification"]["reference"] = {{"sequence", reference}};
-    if (threads > 0) j["identification"]["search_threads"] = threads;
-    j["ms_settings"]["ms2_rescue"] = etdRescue();
-    return j.dump();
-  }
-
-  bool isEtd(const ScanCommand& c) { return c.num_stages > 0 && std::string(c.stages[0].activation_type) == "ETD"; }
-
-  int countOf(const std::string& text, const std::string& needle)
-  {
-    int n = 0;
-    for (size_t p = text.find(needle); p != std::string::npos; p = text.find(needle, p + needle.size())) ++n;
-    return n;
-  }
-
-  /// The MS2s a drive sent, split into rescues (ETD) and the identification scans that could trigger one (HCD).
-  struct RescueSplit
-  {
-    std::vector<ScanCommand> rescues, triggers;
-  };
-  RescueSplit splitRescues(const AcqResult& acq)
-  {
-    RescueSplit s;
-    for (const auto& c : acq.ms2_cmds) (isEtd(c) ? s.rescues : s.triggers).push_back(c);
-    return s;
-  }
-
-  /// Feed @p s as the answer to the MS2 command @p c.
-  void feedMs2(FLASHIda& ida, ScanCommand c, const ScanData& s)
-  {
-    ida.processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 2, c.scan_description, 0.0, instrumentScanNumberOf(s));
-  }
-}
 
 // An identification below the threshold buys exactly one rescue per detection: priority 0, an 'R', the trigger as its
 // parent, searched like any MS2. Under `single` one detection is one 'R', so rescues == triggers.
