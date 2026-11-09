@@ -63,7 +63,16 @@ is airtight:
   knob is added once, not per site. `fixed_mod` is set **unconditionally** there: an empty config
   list is passed verbatim as an empty Param list, *not* left at the algorithms' declared `{""}`
   placeholder — pinned by `FragmentAnalysis_test`'s `build*Param_sets_fixed_mod_when_empty`. Since ADR-0067 both algorithms
-  **read** it (`FixedModifications::fromNames`); `Config` still refuses a non-empty list, so it is empty.
+  **read** it (`FixedModifications::fromNames`), and since its push 2 `Config` accepts an authored list and builds it
+  into `IdentificationConfig::fixed_mods`: the one table every FLASHIda ladder (`computePTMAdjustedFragmentMasses`,
+  `runTagBasedFragmentMatching_`'s flanking masses and `vec_pro`, `matchFromPrSM`), MS3 match
+  (`MS3FragmentMatcher::computeTheoreticalMasses`/`computeProteinPrefixMasses`/`calibrateAndScore`), Refine ladder and
+  logged ProForma reads. A fixed modification is never a PrSM modification, so a ladder that skipped the table would be
+  off by its mass on every fragment with the residue. The static readers default the table to `none()` for the tests;
+  every production caller passes `config_.identification().fixed_mods`. The logged `proteoform` columns
+  (`identification.tsv`, `pooled_identification.tsv`, `scan_commands.tsv`'s `ms3_proteoform`) are prefixed with its
+  ProForma global modifications (empty: none). Under `quantification.scan` ms3/both a fixed C is refused: the ADR-0064
+  label already fixes every C.
 
 > **Name trap.** `TopDownIsobaricQuantification` (flat, off-limits, used only by
 > `FLASHDeconvAlgorithm`) and `FLASHIda/Quantification` (IDA, fair game) are unrelated — but the
@@ -563,7 +572,8 @@ or legacy fallback.
   `Config::identification()` returns an `IdentificationConfig`: `sequence` (from
   `identification.reference.sequence`, refused empty), `method`, `refine`, `has_refine_block`,
   `flashtnt` (`FlashTnTSettings`: `min_length`, `max_length`, `allow_gap`, `max_aa_in_gap`,
-  `fixed_mod`, `max_blind_mod_count`, `max_mod_mass`) and `enabled()` (= non-empty sequence). Read
+  `fixed_mod`, `max_blind_mod_count`, `max_mod_mass`), `fixed_mods` (ADR-0067: the table of `flashtnt.fixed_mod`,
+  built at load) and `enabled()` (= non-empty sequence). Read
   sites: `config_.identification().sequence` (was `characterization().protein_sequence`),
   `.method`/`.refine`, `.flashtnt.*` (was `targeting().min_tag_length` etc.); the three MS2-matching
   gates in `FLASHIda.cpp` read `identification().enabled()`. `CharacterizationConfig` no longer

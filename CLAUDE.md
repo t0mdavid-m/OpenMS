@@ -126,7 +126,7 @@ private `monitor_deconv_` (ADR-0042). **Do not merge the monitor engine into `de
   (or `exhaustive`, ADR-0055) ⇒ zero MS3, by design.
 - **`identification` gates matching; its `characterization` block gates MS3** (ADR-0061).
   `Config::identification()` (`IdentificationConfig`: `sequence`, `method`, `refine`,
-  `has_refine_block`, `flashtnt`, `enabled()` = non-empty sequence) replaces
+  `has_refine_block`, `flashtnt`, `fixed_mods`, `enabled()` = non-empty sequence) replaces
   `characterization().protein_sequence`/`.method`/`.refine` and `targeting()`'s seven FLASHTnT
   fields; the three MS2-matching gates in `FLASHIda.cpp` read `identification().enabled()`. Root
   `characterization`/`flashtnt` and the moved keys throw with a migration message.
