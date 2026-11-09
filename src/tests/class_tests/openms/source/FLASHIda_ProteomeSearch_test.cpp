@@ -625,33 +625,6 @@ START_SECTION(the_fixed_mod_parameter_equals_the_residuedb_overwrite)
       const int first = start > 0 ? start - 1 : 0, last = end > 0 ? std::min(end, (int)seq.size()) : (int)seq.size();
       return first < last && seq.substr(first, last - first).find('C') != std::string::npos;
     };
-    auto doubles = [](const ProteinHit& h, const std::string& key) {
-      return h.metaValueExists(key) ? h.getMetaValue(key).toDoubleList() : std::vector<double> {};
-    };
-    auto ints = [](const ProteinHit& h, const std::string& key) {
-      return h.metaValueExists(key) ? h.getMetaValue(key).toIntList() : std::vector<int> {};
-    };
-    auto number = [](const ProteinHit& h, const std::string& key) { return h.metaValueExists(key) ? (double)h.getMetaValue(key) : -1.0; };
-    // the same PrSM: identical strings and positions, doubles within 1e-6 (a fixed mass added per residue may round differently in the
-    // last bits where a sum falls back to AASequence)
-    auto sameHit = [&](const ProteinHit& a, const ProteinHit& b, const std::string& what) {
-      auto close = [](double x, double y) { return std::fabs(x - y) <= 1e-6; };
-      bool same = a.getAccession() == b.getAccession() && number(a, "StartPosition") == number(b, "StartPosition")
-                  && number(a, "EndPosition") == number(b, "EndPosition") && ints(a, "ModificationStarts") == ints(b, "ModificationStarts")
-                  && ints(a, "ModificationEnds") == ints(b, "ModificationEnds") && close(a.getScore(), b.getScore())
-                  && close(number(a, "ExtensionScore"), number(b, "ExtensionScore")) && close(number(a, "RawScore"), number(b, "RawScore"));
-      const auto ma = doubles(a, "Modifications"), mb = doubles(b, "Modifications");
-      same = same && ma.size() == mb.size();
-      for (Size i = 0; same && i < ma.size(); ++i) same = close(ma[i], mb[i]);
-      if (! same)
-      {
-        std::cout << "[FIXED-MOD-EQUIVALENCE] differs, " << what << ": " << a.getAccession() << " score " << std::setprecision(17) << a.getScore()
-                  << " raw " << number(a, "RawScore") << " vs " << b.getAccession() << " score " << b.getScore() << " raw " << number(b, "RawScore")
-                  << std::endl;
-      }
-      return same;
-    };
-
     // the parameter route, ResidueDB clean
     TEST_EQUAL(ResidueDB::getInstance()->getResidue((unsigned char)'C')->getMonoWeight(Residue::Internal) == FixedModifications::none().mass('C'), true)
     const auto new_ydfz = searchYdfZ(p_itmt);
@@ -673,26 +646,33 @@ START_SECTION(the_fixed_mod_parameter_equals_the_residuedb_overwrite)
     TEST_EQUAL(new_ydfz.empty(), false)
     if (! new_ydfz.empty())
     {
-      TEST_STRING_EQUAL(new_ydfz[0].getAccession(), "sp|P64463|YDFZ_ECOLI")
+      TEST_STRING_EQUAL(bestOf(new_ydfz)->getAccession(), "sp|P64463|YDFZ_ECOLI")
     }
     Size with_c = 0;
     for (const auto& [scan, hits] : new_slice) with_c += spansC(*bestOf(hits)) ? 1 : 0;
     std::cout << "[FIXED-MOD-EQUIVALENCE] slice best PrSMs spanning a C: " << with_c << std::endl;
     TEST_EQUAL(with_c > 0, true)
 
-    TEST_EQUAL(new_ydfz.size(), old_ydfz.size())
-    for (Size i = 0; i < new_ydfz.size() && i < old_ydfz.size(); ++i) TEST_EQUAL(sameHit(new_ydfz[i], old_ydfz[i], "ydfz hit " + std::to_string(i)), true)
+    // compared as the file's in-process parity sections compare two searches: the same spectra with a PrSM, and per spectrum the
+    // best PrSM by sameRow (accession, positions, modification positions exact; every number to relative 1e-9). A spectrum's PrSM
+    // order is not stable, so only the best PrSM is compared.
+    TEST_EQUAL(new_ydfz.empty(), old_ydfz.empty())
+    if (! new_ydfz.empty() && ! old_ydfz.empty())
+    {
+      TEST_EQUAL(sameRow(prsmRow(*bestOf(new_ydfz)), prsmRow(*bestOf(old_ydfz)), "YdfZ best PrSM, fixed_mod vs ResidueDB overwrite"), true)
+    }
     std::vector<int> new_scans, old_scans;
     for (const auto& [s, h] : new_slice) new_scans.push_back(s);
     for (const auto& [s, h] : old_slice) old_scans.push_back(s);
     TEST_EQUAL(new_scans == old_scans, true)
+    Size same = 0;
     for (const auto& [scan, hits] : new_slice)
     {
       const auto it = old_slice.find(scan);
       if (it == old_slice.end()) continue;
-      TEST_EQUAL(hits.size(), it->second.size())
-      for (Size i = 0; i < hits.size() && i < it->second.size(); ++i) TEST_EQUAL(sameHit(hits[i], it->second[i], "slice scan " + std::to_string(scan)), true)
+      same += sameRow(prsmRow(*bestOf(hits)), prsmRow(*bestOf(it->second)), "slice best PrSM, fixed_mod vs ResidueDB overwrite, scan " + std::to_string(scan));
     }
+    TEST_EQUAL(same, new_slice.size())
   }
 }
 END_SECTION
