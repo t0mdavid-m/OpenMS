@@ -236,6 +236,36 @@ int FLASHDeconvAlgorithm::getScanNumber(const MSExperiment& map, Size index)
   return scan_number;
 }
 
+namespace
+{
+  // the isolation window target m/z of a precursor (MzMLHandler stores the selected ion m/z as its m/z when the two differ)
+  double isolationTarget(const Precursor& p)
+  {
+    return p.metaValueExists("isolation window target m/z") ? (double)p.getMetaValue("isolation window target m/z") : p.getMZ();
+  }
+}
+
+std::vector<Size> FLASHDeconvAlgorithm::parentCandidates(const MSExperiment& map, Size index)
+{
+  std::vector<Size> candidates;
+  const auto& spec = map[index];
+  const uint ms_level = spec.getMSLevel();
+  if (ms_level < 3 || spec.getPrecursors().size() < 2) return candidates;
+  const double target = isolationTarget(spec.getPrecursors()[1]);
+  for (Size i = index; i-- > 0;)
+  {
+    if (spec.getRT() - map[i].getRT() > 300.0) break;
+    if (map[i].getMSLevel() != ms_level - 1) continue;
+    for (const auto& p : map[i].getPrecursors())
+    {
+      if (std::abs(isolationTarget(p) - target) > 0.01) continue;
+      candidates.push_back(i);
+      break;
+    }
+  }
+  return candidates;
+}
+
 std::vector<double> FLASHDeconvAlgorithm::getTolerances() const
 {
   return tols_;
@@ -1185,6 +1215,13 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
         }
       }
     }
+    else if (ms_level >= 3)
+    {
+      // An MSn spectrum (n >= 3) isolated a fragment of one MS(n-1) spectrum, rarely the one just before it (118 of 1,114 MS3 of a
+      // FLASHIda run): the candidates are the earlier MS(n-1) spectra that isolated its stage n-1 target, the nearest first. The
+      // nearest that holds a mass in the window is the parent; no neighbours are added, as they isolated other precursors.
+      survey_indices = parentCandidates(map, index);
+    }
     else
     {
       std::vector<Size> before, after;
@@ -1239,6 +1276,8 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       window_target_mz = target_mz;
       start_mz = loffset > 100.0 ? loffset : -loffset + target_mz;
       end_mz = uoffest > 100.0 ? uoffest : uoffest + target_mz;
+      // an MSn spectrum (n >= 3) lists the fragment it isolated first; the next precursor is the stage below, an MS(n-2) window
+      if (ms_level >= 3) break;
     }
 
     // The best precursor of one survey spectrum: among the target masses whose peaks lie in the window, the one of the highest charge

@@ -94,6 +94,13 @@ namespace OpenMS
     /// get scan number of the spectrum in @p index -th in @p map
     static int getScanNumber(const MSExperiment& map, Size index);
 
+    /**
+      @brief The candidate parent spectra of an MSn spectrum (n >= 3), the nearest first: the earlier spectra of MS level n - 1, at most
+      300 s before it, that isolated (within 0.01 Th) the target of the spectrum's stage n - 1, its second precursor as msconvert writes
+      them (the fragment isolated in stage n first, the stage below it next). Empty for n < 3 or a spectrum with a single precursor.
+    */
+    static std::vector<Size> parentCandidates(const MSExperiment& map, Size index);
+
   protected:
     void updateMembers_() override;
 
