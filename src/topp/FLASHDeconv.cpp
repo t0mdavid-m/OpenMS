@@ -381,7 +381,7 @@ protected:
       for (auto& deconvolved_spectrum : deconvolved_spectra)
       {
         uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
-        if (out_spec_file[ms_level - 1].empty()) continue;
+        if (ms_level > out_spec_file.size() || out_spec_file[ms_level - 1].empty()) continue; // no file for this MS level
         FLASHDeconvSpectrumFile::writeDeconvolvedMasses(deconvolved_spectrum, out_spec_streams[ms_level - 1], in_file, fd.getAveragine(), fd.getDecoyAveragine(),
                                                         tols[ms_level - 1], write_detail, report_decoy, fd.getNoiseDecoyWeight(ms_level));
         PeakGroupScoring::writeAttCsvForQscoreTraining(deconvolved_spectrum, out_train_streams[ms_level - 1]);
@@ -456,7 +456,7 @@ protected:
       for (auto& deconvolved_spectrum : deconvolved_spectra)
       {
         uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
-        if (out_topfd_file[ms_level - 1].empty()) continue;
+        if (ms_level > out_topfd_file.size() || out_topfd_file[ms_level - 1].empty()) continue; // no file for MS3 and above
 
         FLASHDeconvSpectrumFile::writeTopFD(deconvolved_spectrum, out_topfd_streams[ms_level - 1], in_file, 1,
                                             per_ms_level_deconv_spec_count.begin()->first);
