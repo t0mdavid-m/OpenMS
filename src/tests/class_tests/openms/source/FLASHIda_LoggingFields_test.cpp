@@ -67,12 +67,13 @@ START_SECTION(schema_column_counts)
   auto r = TSVFile::parse(dir + "/scan_results.tsv");
   auto i = TSVFile::parse(dir + "/identification.tsv");
 
-  TEST_EQUAL(c.headers.size(), 36)   // E6: + scan_description; P5: + precursor_id; + ms3_proteoform (wide MS3 fragment); ADR-0012: + faims_enabled;
+  TEST_EQUAL(c.headers.size(), 37)   // E6: + scan_description; P5: + precursor_id; + ms3_proteoform (wide MS3 fragment); ADR-0012: + faims_enabled;
                                      // ADR-0026 d6: + first_mass/last_mass (32 -> 34). Inserted between faims_enabled and
                                      // enqueue_ts, so every c.colIndex pinned below and c.headers.back() are unchanged --
                                      // that they still pass IS the proof the insertion point was the only admissible one.
                                      // Survey re-planning: + decision_survey_id/isolation_purity (34 -> 36), in the same
                                      // gap before enqueue_ts and for the same reason.
+                                     // ADR-0069: + predicted_bond_yield (36 -> 37), in the same gap, for the same reason.
   // E5: + ms_level; F5: + winner_tracking_id; slim-down: -5 id-payload cols (34->29); per-charge
   // deconv output replaced 4 columns (masses/intensities/min_charge/max_charge) with 3
   // (masses/charges/intensities), min and max being derivable from the charge list (29->28); then
@@ -133,6 +134,7 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(c.colIndex("faims_enabled"), 30)
   TEST_EQUAL(c.colIndex("decision_survey_id"), 33)
   TEST_EQUAL(c.colIndex("isolation_purity"), 34)
+  TEST_EQUAL(c.colIndex("predicted_bond_yield"), 35)          // ADR-0069: -1 on every row until a yield gate tests it
   TEST_EQUAL(r.headers.front(), std::string("tracking_id"))
   TEST_EQUAL(r.colIndex("ms_level"), 1)
   TEST_EQUAL(r.headers.back(), std::string("search_ms"))      // ADR-0061 push 4b: the search block follows the kinetic one
@@ -208,7 +210,7 @@ START_SECTION(commands_ms2_columns)
 
   bool found = false;
   bool tid_ok = true, type_ok = true, act_ok = true, ce_ok = true, qsc_ok = true;
-  bool snr_ok = true, ppm_ok = true, pint_ok = true, parent_ok = true, ion_ok = true, nosemi = true;
+  bool snr_ok = true, ppm_ok = true, pint_ok = true, parent_ok = true, ion_ok = true, nosemi = true, pby_ok = true;
   for (const auto& row : t.rows)
   {
     if (lvl >= (int)row.size() || row[lvl] != "2") continue;
@@ -223,6 +225,7 @@ START_SECTION(commands_ms2_columns)
     pint_ok   = pint_ok   && posFinite(toD(cell(t, row, "precursor_intensity")));
     parent_ok = parent_ok && isTrackingId(cell(t, row, "parent_tracking_id"));  // == its MS1
     ion_ok    = ion_ok    && cell(t, row, "ion_type").empty() && (cell(t, row, "ion_index") == "0");
+    pby_ok    = pby_ok    && (cell(t, row, "predicted_bond_yield") == "-1");  // ADR-0069: no yield gate tests an MS2
     nosemi    = nosemi    && (cell(t, row, "charge").find(';') == std::string::npos)
                          && (cell(t, row, "qscore").find(';') == std::string::npos);  // single stage
     TEST_TRUE(inMass(toD(cell(t, row, "mono_mass"))))
@@ -234,7 +237,7 @@ START_SECTION(commands_ms2_columns)
   TEST_TRUE(found)
   TEST_TRUE(tid_ok)  TEST_TRUE(type_ok)  TEST_TRUE(act_ok)  TEST_TRUE(ce_ok)
   TEST_TRUE(qsc_ok)  TEST_TRUE(snr_ok)   TEST_TRUE(ppm_ok)  TEST_TRUE(pint_ok)
-  TEST_TRUE(parent_ok) TEST_TRUE(ion_ok) TEST_TRUE(nosemi)
+  TEST_TRUE(parent_ok) TEST_TRUE(ion_ok) TEST_TRUE(nosemi) TEST_TRUE(pby_ok)
 }
 END_SECTION
 
@@ -269,7 +272,7 @@ START_SECTION(commands_ms3_two_stage)
 
   bool found = false, stage1_populated = false;
   bool charge2_ok = true, ce_stage1_ok = true, act2_ok = true, ion_ok = true, parent_ok = true;
-  bool score2_ok = true, hcd_stage1_ok = true;
+  bool score2_ok = true, hcd_stage1_ok = true, pby_ok = true;
   bool lineage_ok = true, lineage_checked = false;  // §C2: fragment charge bounded by its REAL source-MS2 charge
   for (const auto& row : t.rows)
   {
@@ -288,6 +291,7 @@ START_SECTION(commands_ms3_two_stage)
     hcd_stage1_ok = hcd_stage1_ok && hcd.size() == 2 && std::abs(toD(hcd[1]) - 35.0) < 1.0;
 
     ion_ok = ion_ok && ionTypeOk(cell(t, row, "ion_type")) && (std::atoi(cell(t, row, "ion_index").c_str()) >= 1);
+    pby_ok = pby_ok && (cell(t, row, "predicted_bond_yield") == "-1");  // ADR-0069: no yield_gate in this config
     std::string parent = cell(t, row, "parent_tracking_id");
     parent_ok = parent_ok && isTrackingId(parent);  // == its MS2
 
@@ -326,7 +330,7 @@ START_SECTION(commands_ms3_two_stage)
   }
   TEST_TRUE(found)
   TEST_TRUE(charge2_ok)  TEST_TRUE(ce_stage1_ok)  TEST_TRUE(act2_ok)  TEST_TRUE(hcd_stage1_ok)
-  TEST_TRUE(ion_ok)      TEST_TRUE(parent_ok)     TEST_TRUE(score2_ok)
+  TEST_TRUE(ion_ok)      TEST_TRUE(parent_ok)     TEST_TRUE(score2_ok)  TEST_TRUE(pby_ok)
   TEST_TRUE(stage1_populated)  // proves the MS3 2-stage scoring plumb reached the writer
   TEST_TRUE(lineage_checked)   // §C2: at least one MS3 two-stage charge cell was joined to its source MS2
   TEST_TRUE(lineage_ok)        // §C2: every MS3 fragment charge fits inside its REAL source-MS2 charge

@@ -118,6 +118,10 @@ namespace OpenMS
                              // than parent_tracking_id, the lineage) and the purity of its window on that survey.
                              // Empty on every row no survey decided. Same gap as above, for the same reason.
                              << "decision_survey_id\tisolation_purity\t"
+                             // ADR-0069: the predicted bond yield E an MS3's yield gate admitted it at; -1 on every
+                             // row no yield gate tested (MS1, MS2, an MS3 with its gate off or no ion index). Same
+                             // gap as above, for the same reason.
+                             << "predicted_bond_yield\t"
                              << "enqueue_ts\n";
         commands_tsv_stream_.flush();
       }
@@ -539,6 +543,7 @@ namespace OpenMS
                          << mz(cmd.last_mass) << "\t"
                          << quoteLogCell(decision_survey) << "\t"
                          << isolation_purity << "\t"
+                         << "-1" << "\t"                  // ADR-0069 predicted_bond_yield: no yield gate yet
                          << cmd.enqueue_timestamp_ms << "\n";
     commands_tsv_stream_.flush();
   }
