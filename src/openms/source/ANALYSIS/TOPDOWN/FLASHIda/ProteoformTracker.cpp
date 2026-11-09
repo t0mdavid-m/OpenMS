@@ -390,11 +390,11 @@ namespace OpenMS
       const std::vector<const DeconvolvedSpectrum*>& variant_spectra, const std::string& protein_sequence,
       const MS3FragmentMatcher::ProteoformContext& ctx, char fragment_ion_type, int fragment_ion_index,
       double loose_tolerance_ppm, double tight_tolerance_ppm,
-      std::vector<FragmentAnalysis::ProteoformMatch>* detailed_results)
+      std::vector<FragmentAnalysis::ProteoformMatch>* detailed_results, const FixedModifications& fixed_mods)
   {
     return MS3FragmentMatcher::calibrateAndScore(variant_spectra, protein_sequence, ctx, fragment_ion_type,
                                                  fragment_ion_index, loose_tolerance_ppm, tight_tolerance_ppm,
-                                                 detailed_results);
+                                                 detailed_results, fixed_mods);
   }
 
   void ProteoformTracker::feedScan(int precursor_id, uint8_t ms_level, const Ms2Params& params, int scan_id,
@@ -1385,7 +1385,8 @@ namespace OpenMS
 
     // Pool: a path is supported by this mass once ANY of its scans' pieces fit (decision 8).
     const std::vector<Refine::Path>& c = st.candidates->assemble.candidates;
-    const Refine::PieceVerdict v = Refine::pieceTest(ms3, String(m.proteoform_sequence), c[0], c[1], rec->target, loose_ppm, tight_ppm);
+    const Refine::PieceVerdict v = Refine::pieceTest(ms3, String(m.proteoform_sequence), c[0], c[1], rec->target, loose_ppm, tight_ppm,
+                                                       config_.identification().fixed_mods);
     rec->fits_a = rec->fits_a || v.fits_a;
     rec->fits_b = rec->fits_b || v.fits_b;
     rec->returned = true;
@@ -1874,7 +1875,7 @@ namespace OpenMS
     }
 
     std::map<char, std::vector<double>> ladder;   // region-frame theoreticals (ambiguous mods at range boundary)
-    FragmentAnalysis::computePTMAdjustedFragmentMasses(region_seq, winner_ptms, ion_types, ladder);
+    FragmentAnalysis::computePTMAdjustedFragmentMasses(region_seq, winner_ptms, ion_types, ladder, config_.identification().fixed_mods);
 
     const double tol_ppm = config_.level(2).tolerance_ppm;
 
@@ -2112,7 +2113,7 @@ namespace OpenMS
         other_ptms.push_back(site);
       }
       std::map<char, std::vector<double>> baseline;
-      FragmentAnalysis::computePTMAdjustedFragmentMasses(region_seq, other_ptms, ion_types, baseline);
+      FragmentAnalysis::computePTMAdjustedFragmentMasses(region_seq, other_ptms, ion_types, baseline, config_.identification().fixed_mods);
 
       // Ambiguous range in the region frame (1-based inclusive).
       int rs_region = mod.candidate_start - ws;
@@ -2275,7 +2276,7 @@ namespace OpenMS
         site.mass_shift = mod.mass_shift;
         ptm_sites.push_back(site);
       }
-      r.proforma = FragmentAnalysis::toProForma(region_seq, ptm_sites);
+      r.proforma = config_.identification().fixed_mods.proformaPrefix() + FragmentAnalysis::toProForma(region_seq, ptm_sites); // ADR-0067
     }
 
     // --- protein: the accession the winner's MS2 match chose (ADR-0061 push 4b) ---

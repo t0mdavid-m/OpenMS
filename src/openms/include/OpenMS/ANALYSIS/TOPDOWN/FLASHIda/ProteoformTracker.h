@@ -453,7 +453,8 @@ namespace OpenMS
         const std::vector<const DeconvolvedSpectrum*>& variant_spectra, const std::string& protein_sequence,
         const MS3FragmentMatcher::ProteoformContext& ctx, char fragment_ion_type, int fragment_ion_index,
         double loose_tolerance_ppm, double tight_tolerance_ppm,
-        std::vector<FragmentAnalysis::ProteoformMatch>* detailed_results = nullptr);
+        std::vector<FragmentAnalysis::ProteoformMatch>* detailed_results = nullptr,
+        const FixedModifications& fixed_mods = FixedModifications::none());
 
   private:
     /// Map all observations in @p scan onto @p mdl's fragments map (skeleton: no-op).

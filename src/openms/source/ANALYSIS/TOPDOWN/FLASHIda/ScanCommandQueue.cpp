@@ -525,7 +525,8 @@ namespace OpenMS
     // queue_mutex_ is already held and is non-recursive.
     const std::string ms3_proteoform = MS3FragmentMatcher::fragmentProForma(
         config_.identification().proteinOr(proto_ctx.protein_sequence), proto_ctx, ion_type, frag_index);
-    if (!ms3_proteoform.empty()) ms3_cmd_proteoform_[id] = ms3_proteoform;
+    // ADR-0067: prefixed with the search's fixed modifications (ProForma global modifications; empty: none)
+    if (!ms3_proteoform.empty()) ms3_cmd_proteoform_[id] = config_.identification().fixed_mods.proformaPrefix() + ms3_proteoform;
     cmd.msn_level = 3;
     cmd.priority = priority;
     cmd.is_agc = 0;

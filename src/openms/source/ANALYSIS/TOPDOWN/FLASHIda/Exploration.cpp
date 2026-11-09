@@ -661,7 +661,8 @@ namespace OpenMS
         group.fragment_ion_index,
         MS3FragmentMatcher::LOOSE_TOLERANCE_PPM,
         config_.level(group.msn_level).tolerance_ppm,
-        &detailed_results);
+        &detailed_results,
+        config_.identification().fixed_mods);
 
       for (size_t vi = 0; vi < calibrated_scores.size(); ++vi)
       {

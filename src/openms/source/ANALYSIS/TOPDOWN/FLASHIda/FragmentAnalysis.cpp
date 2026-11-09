@@ -87,92 +87,6 @@ namespace
   using PTMSite = FragmentAnalysis::PTMSite;
 
 
-  /// Calculate theoretical fragment masses with PTM adjustments from FLASHExtender
-  /// For each PTM at positions [start, end], fragments containing that region get the PTM mass added
-  void calculatePTMAdjustedFragmentMasses(
-      const String& sequence,
-      const std::vector<PTMSite>& ptm_sites,
-      double b_ion_shift,
-      double y_ion_shift,
-      std::vector<double>& prefix_masses,
-      std::vector<double>& suffix_masses)
-  {
-    // Clean sequence (replace I with L for mass calculation)
-    String clean_seq = sequence;
-    std::replace(clean_seq.begin(), clean_seq.end(), 'I', 'L');
-
-    int seq_len = static_cast<int>(clean_seq.size());
-    prefix_masses.clear();
-    suffix_masses.clear();
-    prefix_masses.reserve(seq_len);
-    suffix_masses.reserve(seq_len);
-
-    // For each position, calculate cumulative PTM mass contribution
-    // A b-ion at position i (b_i) contains residues 1..i
-    // For ambiguous PTMs [S,E], use end_position as cutoff to be consistent with y-ions
-    // This ensures b_E+ are modified (definitely contain PTM regardless of exact position)
-    std::vector<double> ptm_at_or_before(seq_len + 1, 0.0);
-    for (const auto& ptm : ptm_sites)
-    {
-      // PTM affects all b-ions from b(end_position) onwards (definitely contain PTM)
-      for (int i = ptm.end_position; i <= seq_len; ++i)
-      {
-        ptm_at_or_before[i] += ptm.mass_shift;
-      }
-    }
-
-    // Calculate prefix masses (b-ions) with PTM adjustment
-    double cumulative_mass = 0.0;
-    for (int i = 0; i < seq_len; ++i)
-    {
-      char aa = clean_seq[i];
-      if (aa != 'X')
-      {
-        const Residue* res = ResidueDB::getInstance()->getResidue(aa);
-        if (res != nullptr)
-        {
-          cumulative_mass += res->getMonoWeight(Residue::Internal);
-        }
-      }
-      // b_{i+1} covers positions 1..(i+1), add PTM if start <= i+1
-      double ptm_contribution = ptm_at_or_before[i + 1];
-      prefix_masses.push_back(cumulative_mass + ptm_contribution + b_ion_shift);
-    }
-
-    // For y-ions: y_n covers positions (L-n+1)..L
-    // y_n definitely contains PTM [S,E] if it covers position S (start_position)
-    // That means (L-n+1) <= S, i.e., n >= L - S + 1
-    // This is consistent with b-ion logic: only mark as modified if definitely contains PTM
-    std::vector<double> ptm_for_suffix(seq_len + 1, 0.0);
-    for (const auto& ptm : ptm_sites)
-    {
-      // y_n includes PTM if n >= L - start_position + 1 (definitely contains PTM)
-      int min_n = seq_len - ptm.start_position + 1;
-      for (int n = min_n; n <= seq_len; ++n)
-      {
-        ptm_for_suffix[n] += ptm.mass_shift;
-      }
-    }
-
-    // Calculate suffix masses (y-ions) with PTM adjustment
-    cumulative_mass = 0.0;
-    for (int i = seq_len - 1; i >= 0; --i)
-    {
-      char aa = clean_seq[i];
-      if (aa != 'X')
-      {
-        const Residue* res = ResidueDB::getInstance()->getResidue(aa);
-        if (res != nullptr)
-        {
-          cumulative_mass += res->getMonoWeight(Residue::Internal);
-        }
-      }
-      // This is y_{seq_len - i} (e.g., i=seq_len-1 gives y_1)
-      int y_number = seq_len - i;
-      double ptm_contribution = ptm_for_suffix[y_number];
-      suffix_masses.push_back(cumulative_mass + ptm_contribution + y_ion_shift);
-    }
-  }
 
 
 } // anonymous namespace
@@ -230,7 +144,8 @@ namespace
       const String& sequence,
       const std::vector<PTMSite>& ptm_sites,
       const std::vector<std::string>& ion_types,
-      std::map<char, std::vector<double>>& fragment_masses_map)
+      std::map<char, std::vector<double>>& fragment_masses_map,
+      const FixedModifications& fixed_mods)
   {
     fragment_masses_map.clear();
 
@@ -280,7 +195,7 @@ namespace
         const Residue* res = ResidueDB::getInstance()->getResidue(aa);
         if (res != nullptr)
         {
-          cumulative_mass += res->getMonoWeight(Residue::Internal);
+          cumulative_mass += fixed_mods.mass(aa);
         }
       }
       double ptm_contribution = ptm_at_or_before[i + 1];
@@ -299,7 +214,7 @@ namespace
         const Residue* res = ResidueDB::getInstance()->getResidue(aa);
         if (res != nullptr)
         {
-          cumulative_mass += res->getMonoWeight(Residue::Internal);
+          cumulative_mass += fixed_mods.mass(aa);
         }
       }
       int y_number = seq_len - i;
@@ -481,7 +396,7 @@ namespace
         double n_mass = 0;
         for (Size j = 0; j < pos; ++j)
         {
-          n_mass += ResidueDB::getInstance()->getResidue(clean_seq[j])->getMonoWeight(Residue::Internal);
+          n_mass += config_.identification().fixed_mods.mass(clean_seq[j]);
         }
         double n_diff = static_cast<int>(std::round(n_mass - tags[i].getNtermMass()));
         n_flanking_masses_set.insert(n_diff);
@@ -490,7 +405,7 @@ namespace
         Size tag_end = pos + tag_seq.size();
         for (Size j = tag_end; j < clean_seq.size(); ++j)
         {
-          c_mass += ResidueDB::getInstance()->getResidue(clean_seq[j])->getMonoWeight(Residue::Internal);
+          c_mass += config_.identification().fixed_mods.mass(clean_seq[j]);
         }
         double c_diff = static_cast<int>(std::round(c_mass - tags[i].getCtermMass()));
         c_flanking_masses_set.insert(c_diff);
@@ -519,14 +434,14 @@ namespace
 
     for (Size j = 0; j < clean_seq.size(); ++j)
     {
-      mass += ResidueDB::getInstance()->getResidue(clean_seq[j])->getMonoWeight(Residue::Internal);
+      mass += config_.identification().fixed_mods.mass(clean_seq[j]);
       vec.insert(static_cast<int>(std::round(mass)));
     }
 
     mass = 0;
     for (Size j = clean_seq.size(); j > 0; --j)
     {
-      mass += ResidueDB::getInstance()->getResidue(clean_seq[j - 1])->getMonoWeight(Residue::Internal);
+      mass += config_.identification().fixed_mods.mass(clean_seq[j - 1]);
       rev_vec.insert(static_cast<int>(std::round(mass)));
     }
 
@@ -560,7 +475,8 @@ namespace
     //    re-matches the spectrum's fragments on the proteoform (shared with the proteome search, ADR-0061 push 4c).
     const auto& best_hit = proteoform_hits[0];
     result.score = best_hit.getScore();
-    return matchFromPrSM(best_hit, protein_sequence, stored_ms2, ion_types_str, ppm_tolerance, result, matches);
+    return matchFromPrSM(best_hit, protein_sequence, stored_ms2, ion_types_str, ppm_tolerance, result, matches,
+                         config_.identification().fixed_mods);
   }
 
   // A PrSM on @p protein_sequence (FLASHExtender's, or FLASHTnT's whose positions are the same 1-based inclusive ones)
@@ -569,7 +485,7 @@ namespace
   int FragmentAnalysis::matchFromPrSM(const ProteinHit& best_hit, const String& protein_sequence,
                                       const DeconvolvedSpectrum& stored_ms2, const std::vector<std::string>& ion_types_str,
                                       double ppm_tolerance, ProteoformMatch& result,
-                                      std::vector<TagBasedFragmentMatch>& matches)
+                                      std::vector<TagBasedFragmentMatch>& matches, const FixedModifications& fixed_mods)
   {
     matches.clear();
 
@@ -665,7 +581,7 @@ namespace
 
     // 10. Calculate PTM-adjusted theoretical fragment masses for all configured ion types
     std::map<char, std::vector<double>> fragment_masses_map;
-    FragmentAnalysis::computePTMAdjustedFragmentMasses(matching_sequence, local_ptm_sites, ion_types_str, fragment_masses_map);
+    FragmentAnalysis::computePTMAdjustedFragmentMasses(matching_sequence, local_ptm_sites, ion_types_str, fragment_masses_map, fixed_mods);
 
     // 11. Match observed masses against PTM-adjusted theoretical masses (all ion types)
     for (Size peak_idx = 0; peak_idx < stored_ms2.size(); ++peak_idx)
@@ -784,7 +700,8 @@ namespace
     // 2. Detect, Assemble. tolerance_ppm overrides the configured tolerance the way it does on the tag path.
     RefineSettings settings = config_.identification().refine;
     if (tolerance_ppm > 0.0) settings.tolerance_ppm = tolerance_ppm;
-    const Refine::Ladder ladder = Refine::ladder(protein_sequence, FragmentAnalysis::getIonTypesForFragmentationMethod(fragmentation_method));
+    const Refine::Ladder ladder = Refine::ladder(protein_sequence, FragmentAnalysis::getIonTypesForFragmentationMethod(fragmentation_method),
+                                                 config_.identification().fixed_mods);
     auto rec = std::make_shared<RefineCandidates>();
     rec->detect = Refine::detect(masses, intensities, ladder, settings);
     rec->assemble = Refine::assemble(masses, intensities, ladder, rec->detect, settings);
@@ -925,7 +842,7 @@ namespace
       result.score = extension;
       const double ppm_tolerance = (tolerance_ppm > 0.0) ? tolerance_ppm : config_.level(2).tolerance_ppm;
       n = matchFromPrSM(hit, searched.protein_sequence, stored_ms2, FragmentAnalysis::getIonTypesForFragmentationMethod(fragmentation_method),
-                        ppm_tolerance, result, matches);
+                        ppm_tolerance, result, matches, config_.identification().fixed_mods);
       result.identification_score = hit.getScore();
     }
     result.raw_term = raw_term;

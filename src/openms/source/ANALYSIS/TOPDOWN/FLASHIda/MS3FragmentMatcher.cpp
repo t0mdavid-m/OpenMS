@@ -69,7 +69,8 @@ namespace OpenMS
   std::vector<MS3FragmentMatcher::TheoreticalMass> MS3FragmentMatcher::computeTheoreticalMasses(
     const std::string& subsequence,
     const std::vector<std::string>& ion_types,
-    const std::vector<FragmentAnalysis::PTMSite>& ptm_sites)
+    const std::vector<FragmentAnalysis::PTMSite>& ptm_sites,
+    const FixedModifications& fixed_mods)
   {
     int n = static_cast<int>(subsequence.size());
     if (n < 2) return {};
@@ -80,7 +81,7 @@ namespace OpenMS
     {
       const Residue* res = ResidueDB::getInstance()->getResidue(subsequence[i]);
       if (res != nullptr)
-        res_mass[i] = res->getMonoWeight(Residue::Internal);
+        res_mass[i] = fixed_mods.mass(subsequence[i]);
     }
 
     // Separate fixed and ambiguous PTMs (convert 1-based PTMSite to 0-based)
@@ -401,14 +402,15 @@ namespace OpenMS
   std::vector<double> MS3FragmentMatcher::computeProteinPrefixMasses(
     const std::string& protein_sequence,
     const std::vector<FragmentAnalysis::PTMSite>& ptm_sites,
-    int proteoform_start)
+    int proteoform_start,
+    const FixedModifications& fixed_mods)
   {
     int n = static_cast<int>(protein_sequence.size());
     std::vector<double> prefix(n + 1, 0.0);
     for (int i = 0; i < n; ++i)
     {
       const Residue* res = ResidueDB::getInstance()->getResidue(protein_sequence[i]);
-      double mass = (res != nullptr) ? res->getMonoWeight(Residue::Internal) : 0.0;
+      double mass = (res != nullptr) ? fixed_mods.mass(protein_sequence[i]) : 0.0;
       for (const auto& ptm : ptm_sites)
       {
         if (ptm.start_position != ptm.end_position) continue;
@@ -552,7 +554,8 @@ namespace OpenMS
     int fragment_ion_index,
     double loose_tolerance_ppm,
     double tight_tolerance_ppm,
-    std::vector<FragmentAnalysis::ProteoformMatch>* detailed_results)
+    std::vector<FragmentAnalysis::ProteoformMatch>* detailed_results,
+    const FixedModifications& fixed_mods)
   {
     std::vector<double> scores(variant_spectra.size(), 0.0);
 
@@ -585,7 +588,7 @@ namespace OpenMS
     auto ion_types = getMS3IonTypes(fragment_ion_type);
 
     // Compute theoretical masses once
-    auto theoretical = computeTheoreticalMasses(subseq, ion_types, rebased_ptms);
+    auto theoretical = computeTheoreticalMasses(subseq, ion_types, rebased_ptms, fixed_mods);
     if (theoretical.empty()) return scores;
 
     // The fragment's residues in the parent protein (1-based inclusive): the [MS3-SCORE] event and the detailed results.
@@ -619,7 +622,7 @@ namespace OpenMS
     std::vector<double> protein_prefix;
     if (detailed_results != nullptr)
     {
-      protein_prefix = computeProteinPrefixMasses(protein_sequence, ctx.ptm_sites, ctx.region_start);
+      protein_prefix = computeProteinPrefixMasses(protein_sequence, ctx.ptm_sites, ctx.region_start, fixed_mods);
       detailed_results->resize(variant_spectra.size());
       for (size_t vi = 0; vi < variant_spectra.size(); ++vi)
       {

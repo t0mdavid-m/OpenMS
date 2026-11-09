@@ -113,7 +113,8 @@ namespace OpenMS
     static std::vector<TheoreticalMass> computeTheoreticalMasses(
       const std::string& subsequence,
       const std::vector<std::string>& ion_types,
-      const std::vector<FragmentAnalysis::PTMSite>& ptm_sites = {});
+      const std::vector<FragmentAnalysis::PTMSite>& ptm_sites = {},
+      const FixedModifications& fixed_mods = FixedModifications::none());
 
     // -- Matching --
 
@@ -175,7 +176,8 @@ namespace OpenMS
       int fragment_ion_index,
       double loose_tolerance_ppm,
       double tight_tolerance_ppm,
-      std::vector<FragmentAnalysis::ProteoformMatch>* detailed_results = nullptr);
+      std::vector<FragmentAnalysis::ProteoformMatch>* detailed_results = nullptr,
+      const FixedModifications& fixed_mods = FixedModifications::none());
 
     /// Compute the equivalent full-protein ion for an MS3 fragment match.
     static void computeEquivalentIon(
@@ -196,7 +198,8 @@ namespace OpenMS
     static std::vector<double> computeProteinPrefixMasses(
       const std::string& protein_sequence,
       const std::vector<FragmentAnalysis::PTMSite>& ptm_sites = {},
-      int proteoform_start = 0);
+      int proteoform_start = 0,
+      const FixedModifications& fixed_mods = FixedModifications::none());
 
     /// Sum the ambiguous PTM mass (start!=end; fixed PTMs already live in the prefix masses) that falls
     /// within the EQUIVALENT full-protein ion's own residue coverage (prefix b/a of index k -> absolute

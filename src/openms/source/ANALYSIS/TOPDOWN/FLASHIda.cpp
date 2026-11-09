@@ -1850,7 +1850,8 @@ FLASHIda::FLASHIda(char* arg) :
               cached_ms2_ctx.fragment_ion_index,
               MS3FragmentMatcher::LOOSE_TOLERANCE_PPM,
               config_.level(3).tolerance_ppm,
-              &ms3_matches);
+              &ms3_matches,
+              config_.identification().fixed_mods);
             
             // logging if fragment ions are found.
             if (!ms3_matches.empty() && !ms3_matches[0].fragments.empty())

@@ -34,6 +34,7 @@
 
 #pragma once
 
+#include <OpenMS/ANALYSIS/TOPDOWN/FixedModifications.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
@@ -244,7 +245,8 @@ namespace OpenMS
     static void computePTMAdjustedFragmentMasses(const String& sequence,
                                                  const std::vector<PTMSite>& ptm_sites,
                                                  const std::vector<std::string>& ion_types,
-                                                 std::map<char, std::vector<double>>& fragment_masses_map);
+                                                 std::map<char, std::vector<double>>& fragment_masses_map,
+                                                 const FixedModifications& fixed_mods = FixedModifications::none());
 
     /// Constructor: takes a reference to the shared Config
     explicit FragmentAnalysis(const Config& config);
@@ -462,7 +464,8 @@ namespace OpenMS
      */
     static int matchFromPrSM(const ProteinHit& hit, const String& protein_sequence, const DeconvolvedSpectrum& stored_ms2,
                              const std::vector<std::string>& ion_types, double ppm_tolerance, ProteoformMatch& result,
-                             std::vector<TagBasedFragmentMatch>& matches);
+                             std::vector<TagBasedFragmentMatch>& matches,
+                             const FixedModifications& fixed_mods = FixedModifications::none());
 
     /**
      * @brief Refine's MS2 match (identification.method refine, ADR-0049): the sibling of runTagBasedFragmentMatching_.

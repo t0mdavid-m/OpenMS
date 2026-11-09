@@ -83,7 +83,7 @@ namespace OpenMS
     /// The prefix series is the first prefix type (a/b/c) of @p ion_types, the suffix series the first
     /// suffix type (x/y/z); b and y when a side names none. Masses come from
     /// FragmentAnalysis::computePTMAdjustedFragmentMasses, so the residue arithmetic is the engine's.
-    static Ladder ladder(const String& sequence, const std::vector<std::string>& ion_types);
+    static Ladder ladder(const String& sequence, const std::vector<std::string>& ion_types, const FixedModifications& fixed_mods = FixedModifications::none());
 
     /// One detected level: a region of the Signal at or above the cut.
     struct Level
@@ -194,7 +194,8 @@ namespace OpenMS
     /// One MS3 scan of one discriminating mass: calibrate on shared pieces, then test discriminating,
     /// shift-carrying pieces per path (decision 8).
     static PieceVerdict pieceTest(const DeconvolvedSpectrum& ms3, const String& sequence, const Path& a, const Path& b,
-                                  const Discriminating& target, double loose_ppm, double tight_ppm);
+                                  const Discriminating& target, double loose_ppm, double tight_ppm,
+                                  const FixedModifications& fixed_mods = FixedModifications::none());
 
     struct Recount
     {

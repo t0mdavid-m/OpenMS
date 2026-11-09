@@ -145,7 +145,7 @@ namespace OpenMS
     }
   } // namespace
 
-  Refine::Ladder Refine::ladder(const String& sequence, const std::vector<std::string>& ion_types)
+  Refine::Ladder Refine::ladder(const String& sequence, const std::vector<std::string>& ion_types, const FixedModifications& fixed_mods)
   {
     std::string prefix_type, suffix_type;
     for (const auto& ion : ion_types)
@@ -164,7 +164,7 @@ namespace OpenMS
       for (char aa : sequence)
       {
         const Residue* r = ResidueDB::getInstance()->getResidue(aa == 'I' ? 'L' : aa);
-        out.residues.push_back(r != nullptr && aa != 'X' ? r->getMonoWeight(Residue::Internal) : 0.0);
+        out.residues.push_back(r != nullptr && aa != 'X' ? fixed_mods.mass(aa == 'I' ? 'L' : aa) : 0.0);
       }
       for (double r : out.residues) out.sequence_mass += r;
       out.sequence_mass += kWater;
@@ -172,7 +172,7 @@ namespace OpenMS
     }
 
     std::map<char, std::vector<double>> by_type;
-    FragmentAnalysis::computePTMAdjustedFragmentMasses(sequence, {}, {prefix_type, suffix_type}, by_type);
+    FragmentAnalysis::computePTMAdjustedFragmentMasses(sequence, {}, {prefix_type, suffix_type}, by_type, fixed_mods);
     const std::vector<double>& p = by_type[prefix_type[0]]; // p[i] = the prefix ion with i+1 residues, i = 0..L-1
     const std::vector<double>& q = by_type[suffix_type[0]]; // q[i] = the suffix ion with i+1 residues
 
@@ -838,7 +838,8 @@ namespace OpenMS
   // ======================================================================================================================
 
   Refine::PieceVerdict Refine::pieceTest(const DeconvolvedSpectrum& ms3, const String& sequence, const Path& a, const Path& b,
-                                         const Discriminating& target, double loose_ppm, double tight_ppm)
+                                         const Discriminating& target, double loose_ppm, double tight_ppm,
+                                         const FixedModifications& fixed_mods)
   {
     using TM = MS3FragmentMatcher::TheoreticalMass;
     PieceVerdict out;
@@ -869,8 +870,8 @@ namespace OpenMS
       const int start = isPrefix(sd.type) ? 1 : L - sd.index + 1;
       const auto rebased = MS3FragmentMatcher::rebasePTMSites(sd.ctx.ptm_sites, start, sd.index);
       const auto types = MS3FragmentMatcher::getMS3IonTypes(sd.type);
-      sd.theo = MS3FragmentMatcher::computeTheoreticalMasses(sub, types, rebased);
-      sd.bare = MS3FragmentMatcher::computeTheoreticalMasses(sub, types, {}); // the bare backbone of every piece
+      sd.theo = MS3FragmentMatcher::computeTheoreticalMasses(sub, types, rebased, fixed_mods);
+      sd.bare = MS3FragmentMatcher::computeTheoreticalMasses(sub, types, {}, fixed_mods); // the bare backbone of every piece
       sd.has = !sd.theo.empty();
       return sd;
     };
@@ -923,7 +924,7 @@ namespace OpenMS
       std::vector<FragmentAnalysis::ProteoformMatch> detail;
       // loose = 0: calibrateAndScore's own pass 1 then matches nothing and leaves its correction at 1.0, so the only
       // calibration is the shared-piece scaling above -- a path is never calibrated on the pieces whose fit is tested
-      MS3FragmentMatcher::calibrateAndScore({&corrected}, seq, own.ctx, own.type, own.index, 0.0, tight_ppm, &detail);
+      MS3FragmentMatcher::calibrateAndScore({&corrected}, seq, own.ctx, own.type, own.index, 0.0, tight_ppm, &detail, fixed_mods);
       if (detail.empty()) return false;
       int count = 0;
       for (const auto& fm : detail[0].fragments)
