@@ -520,19 +520,19 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      {"advanced"});
   defaults_.setMinFloat("shift_penalty", 0.0);
   defaults_.setValue("undetermined_decoy_weight", 1.0,
-                     "PrSM and proteoform q-values of the class \"undetermined, both termini\": each decoy counts this many times (2E/D = 1.2 "
+                     "With the learned scoring (scoring_model): PrSM and proteoform q-values of the class \"undetermined, both termini\": each decoy counts this many times (2E/D = 1.2 "
                      "over the class on the development runs' shuffled entrapment; at 1.2 the held-out results were those of 1 within two "
                      "identifications). 1: off.",
                      {"advanced"});
   defaults_.setMinFloat("undetermined_decoy_weight", 1.0);
   defaults_.setValue("undetermined_pseudo_decoys", 1.0,
-                     "PrSM q-values of the class \"undetermined, both termini\": the decoy count starts at this value, so that its "
+                     "With the learned scoring (scoring_model): PrSM q-values of the class \"undetermined, both termini\": the decoy count starts at this value, so that its "
                      "best PrSMs of a run do not pass at q-value 0 above the run's first decoy (where the development runs' shuffled entrapment "
                      "held its excess errors). 0: off.",
                      {"advanced"});
   defaults_.setMinFloat("undetermined_pseudo_decoys", 0.0);
   defaults_.setValue("open_terminus_prsms", "separate",
-                     "PrSMs of the class \"undetermined, open terminus\" (one terminus and the mass unknown): 'count' gives them PrSM q-values as "
+                     "With the learned scoring (scoring_model): PrSMs of the class \"undetermined, open terminus\" (one terminus and the mass unknown): 'count' gives them PrSM q-values as "
                      "every class; 'separate' reports them with q-value 1, apart from the identifications (as their proteoforms and proteins "
                      "already are): no decoy weight or pseudo-count brought the class to 1% on the development runs (3.7-7.3% shuffled entrapment).",
                      {"advanced"});
@@ -2739,8 +2739,11 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         }
         // undetermined_decoy_weight / undetermined_pseudo_decoys: the both-termini class counted with heavier decoys and a pseudo-count;
         // open_terminus_prsms separate: the open-terminus class passes nothing (its rows stay, at q-value 1)
-        const bool both_termini_class = c == (int)fdr_class_both_termini;
-        const bool separate_class = c == (int)fdr_class_open_terminus && open_terminus_separate_;
+        // only with the learned scoring, which the calibration was measured with: without it (-native, no -in_raw, scoring_model none)
+        // every class is counted as before
+        const bool learned_scoring = scoring_model_ && raw_loader_;
+        const bool both_termini_class = learned_scoring && c == (int)fdr_class_both_termini;
+        const bool separate_class = learned_scoring && c == (int)fdr_class_open_terminus && open_terminus_separate_;
         for (const auto& [stage, hits] : by_stage)
         {
           std::vector<RankedItem<double>> ranked;
@@ -2914,7 +2917,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         // 2: 42 -> 0 proteoforms of "undetermined, both termini + precursor ladder" in a CRC lysate run, 864 fewer proteoforms in all)
         for (Size k : order)
         {
-          const bool bt = cluster_class[k] == pf_class_both_termini;
+          const bool bt = scoring_model_ && raw_loader_ && cluster_class[k] == pf_class_both_termini; // with the learned scoring only, as above
           ranked.push_back({-cluster_score[k], decoys[clusters[k][0]], decoy_weights[clusters[k][0]] * (bt ? undetermined_decoy_weight_ : 1.0)});
         }
         const double group_pseudo = 0.0;
@@ -5353,8 +5356,24 @@ void FLASHTnTAlgorithm::applyLearnedScoring_(std::vector<ProteinHit>& hits, cons
   std::map<int, std::vector<Size>> by_scan;
   for (Size i = 0; i < n; i++) by_scan[(int)hits[i].getMetaValue(tntKey("Scan"))].push_back(i);
   std::vector<bool> keep(n, false);
-  for (const auto& [scan, idx] : by_scan)
+  // the candidates arrive in the order the parallel search found them: a total order by content first, so that of duplicates (the same
+  // proteoform from a tag and from a ladder, which fall into different FDR classes) the same one is kept and ties of the choice score go the
+  // same way whatever the number of threads
+  const auto source_rank = [](const ProteinHit& h) { return h.metaValueExists("PrecursorLadder") ? 2 : h.metaValueExists("TerminalLadder") ? 1 : 0; };
+  const auto content_order = [&](Size a, Size b) {
+    if (keys[a] != keys[b]) return keys[a] < keys[b];
+    if (isBetterPrSM(hits[a], hits[b])) return true;
+    if (isBetterPrSM(hits[b], hits[a])) return false;
+    if (source_rank(hits[a]) != source_rank(hits[b])) return source_rank(hits[a]) < source_rank(hits[b]);
+    const double ea = hits[a].getMetaValue(tntKey("ExtensionScore"), 0.0), eb = hits[b].getMetaValue(tntKey("ExtensionScore"), 0.0);
+    if (ea != eb) return ea > eb;
+    const double ra = hits[a].getMetaValue(tntKey("RawScore"), 0.0), rb = hits[b].getMetaValue(tntKey("RawScore"), 0.0);
+    if (ra != rb) return ra > rb;
+    return hits[a].getMetaValue(tntKey("TagIndices"), std::string()).toString() < hits[b].getMetaValue(tntKey("TagIndices"), std::string()).toString();
+  };
+  for (auto& [scan, idx] : by_scan)
   {
+    std::stable_sort(idx.begin(), idx.end(), content_order);
     std::vector<Size> unique;
     std::set<std::string> seen;
     for (Size i : idx)
