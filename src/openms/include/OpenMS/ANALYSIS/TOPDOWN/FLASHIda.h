@@ -255,6 +255,14 @@ namespace OpenMS
     /// Expired entries are erased as they are read.
     std::unordered_map<int, ClosedOut> closed_out_;
 
+    /// ADR-0068: one rescue scan per DETECTION -- one species of one survey's selection. Under `separate` a detection's
+    /// charges are separate precursor ids, so the cap keys on (selecting survey's tracking id, nominal mass), recorded
+    /// per precursor id when a survey plans it (only with ms_settings.ms2_rescue set). A rescue carries its trigger's
+    /// precursor id, so its own return finds the detection taken and buys nothing. Analysis state (under
+    /// analysis_mutex_); never erased.
+    std::unordered_map<int, std::pair<int, int>> detection_of_precursor_;
+    std::set<std::pair<int, int>> rescued_detections_;
+
     /// Leaf lock for precursor_id_by_tracking_.
     ///
     /// Lock hierarchy: analysis_mutex_ -> { queue_mutex_, precursor_map_mutex_, the IdaLogger stream
@@ -513,6 +521,13 @@ namespace OpenMS
     /// ADR-0064: whether the species of @p mass is closed out within rt_window of @p rt by ANY Precursor, the closing
     /// one included -- so a species is quantified at MS3 once per close-out, not once per closing scan.
     bool speciesClosedOut_(double mass, double rt) const;
+
+    /// ADR-0068: record that the survey @p survey_tracking_id planned @p precursor_id for the species of @p mono_mass
+    /// (a no-op without ms_settings.ms2_rescue). Called at both allocPrecursorId_ sites.
+    void noteDetection_(int precursor_id, int survey_tracking_id, double mono_mass);
+
+    /// ADR-0068: claim the one rescue of @p precursor_id's detection; false if that detection already bought one.
+    bool rescueDetectionFree_(int precursor_id, double mono_mass);
 
     /// Whether a scan of @p mass belonging to @p precursor_id is skipped (ADR-0062 d.6): its species was closed out
     /// within rt_window of @p rt by ANOTHER Precursor. Analysis state.

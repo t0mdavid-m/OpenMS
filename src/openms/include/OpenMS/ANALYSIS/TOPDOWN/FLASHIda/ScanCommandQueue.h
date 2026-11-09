@@ -88,6 +88,7 @@ namespace OpenMS
     int kept = 0;     ///< committed units at the CV whose queued commands stay
     int added = 0;    ///< units inserted
     int adjusted = 0; ///< adjustable commands rewritten
+    std::vector<int> withdrawn_rescue_ids; ///< closeOut only: queued rescue scans withdrawn (also in dropped_scan_ids)
   };
 
   /**
@@ -277,6 +278,11 @@ namespace OpenMS
     /// charge the R may move to, and an empty set must never read as "unrestricted".
     void registerAdjustable(int scan_id, std::vector<int> covered_charges, int q_survey_id, int nominal_mass = 0);
 
+    /// Register a queued rescue scan (ADR-0068) of the species @p nominal_mass, so a close-out of that species
+    /// withdraws it while it waits. Call BEFORE the push. The entry leaves on dequeue (a sent rescue goes out as
+    /// decided), on expiry or cancel, and on withdrawal. No survey's replacePlan ever reads it.
+    void registerRescue(int scan_id, int nominal_mass);
+
     /// An adjustable bought R still queued, as waitingAt sees it.
     struct WaitingAdjustable
     {
@@ -318,7 +324,8 @@ namespace OpenMS
     /// committed-stamps inbox (so the next survey's fold arms the bars) and to committed_since_fold_ (so a survey
     /// racing that fold reconciles the species away), and withdraw every still-UNCOMMITTED plan unit of
     /// @p nominal_mass at EVERY CV. A committed unit (a scan already sent, a started sweep) is kept, as are children
-    /// that are not plan units (MS3s, follow-ups, a bought R). The caller closes / drops the returned groups after.
+    /// that are not plan units (MS3s, follow-ups, a bought R) -- except a registered rescue scan still queued, which
+    /// is withdrawn (ADR-0068; withdrawn_rescue_ids). The caller closes / drops the returned groups after.
     ReplanResult closeOut(int nominal_mass, const std::vector<MemoryStamp>& stamps);
 
     /// Take (find + erase) the decision info written for @p scan_id; nullopt for commands no survey decided.
@@ -465,6 +472,9 @@ namespace OpenMS
 
     /// scan_id -> adjustable bought R, while it is queued.
     std::unordered_map<int, AdjustableR> adjustable_;
+
+    /// scan_id -> nominal mass of a registered rescue scan (ADR-0068), while it is queued.
+    std::unordered_map<int, int> rescue_;
 
     /// Stamps committed by dequeue_ since the last takeCommitted, in COMMIT order -- wouldBar takes the last
     /// MassQscore by position, so neither may ever be sorted or merged out of order.

@@ -810,6 +810,7 @@ namespace OpenMS
           if (--unit.commands_left == 0) units_.erase(unit_id);
         }
         adjustable_.erase(cmd.scan_id);
+        rescue_.erase(cmd.scan_id);   // ADR-0068: a sent rescue goes out as decided; no close-out withdraws it now
         commitMs3_(cmd.scan_id);   // ADR-0066: a registered MS3 commits its fragment (a miss when the registry is empty)
         return cmd;
       }
@@ -820,6 +821,7 @@ namespace OpenMS
   void ScanCommandQueue::forgetQueued_(int scan_id)
   {
     adjustable_.erase(scan_id);
+    rescue_.erase(scan_id);
     decision_info_.erase(scan_id);
     auto u = unit_of_.find(scan_id);
     if (u == unit_of_.end()) return;
@@ -1216,7 +1218,37 @@ namespace OpenMS
       r.dropped_sweep_groups.insert(r.dropped_sweep_groups.end(), u.sweep_group_ids.begin(), u.sweep_group_ids.end());
     }
     dropUnits_(leaving, r);
+
+    // ADR-0068: a registered rescue scan of the species still queued is withdrawn -- it was bought because the
+    // identification was not enough. A sent one left rescue_ at its dequeue, so it is never touched here.
+    std::set<int> rescues;
+    for (const auto& [id, n] : rescue_)
+      if (n == nominal_mass) rescues.insert(id);
+    if (!rescues.empty())
+    {
+      for (int p = 0; p < 4; ++p)
+      {
+        auto it = queues_[p].begin();
+        while (it != queues_[p].end())
+        {
+          if (rescues.count(it->scan_id) > 0)
+          {
+            r.dropped_scan_ids.push_back(it->scan_id);
+            r.withdrawn_rescue_ids.push_back(it->scan_id);
+            it = queues_[p].erase(it);
+          }
+          else ++it;
+        }
+      }
+      for (const int id : rescues) forgetQueued_(id);   // erases rescue_ (and any decision info)
+    }
     return r;
+  }
+
+  void ScanCommandQueue::registerRescue(int scan_id, int nominal_mass)
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    rescue_[scan_id] = nominal_mass;
   }
 
   ReplanResult ScanCommandQueue::replacePlan(double cv, std::vector<PlanUnit> units, const std::vector<AdjustRequest>& adjust,

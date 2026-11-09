@@ -298,6 +298,9 @@ FLASHIda::FLASHIda(char* arg) :
         ion_sets.insert(FragmentAnalysis::getIonTypesForFragmentationMethod(ov->second));
       // The identification scan a quantification screen buys is held on quant_, not on the roster, so its activation
       // needs its own database (owner 2026-11-08, ADR-0064): an ETD 'R' bought by a 'Q' would otherwise find none.
+      // ADR-0068: the rescue scan is held on identification_, not on the roster; an ETD rescue searched on b/y finds none.
+      if (ident.has_rescue_scan)
+        ion_sets.insert(FragmentAnalysis::getIonTypesForFragmentationMethod(ident.rescue_scan.activation));
       if (config_.quantification().screensAtMs2() && config_.quantification().has_identification_scan)
         ion_sets.insert(FragmentAnalysis::getIonTypesForFragmentationMethod(config_.quantification().identification_scan.activation));
       for (const std::vector<std::string>& ions : ion_sets)
@@ -491,6 +494,7 @@ FLASHIda::FLASHIda(char* arg) :
         // One precursor_id per MS1-selected precursor; every CE-sweep variant of this precursor
         // shares it (they are the same MS1 selection -> same charge -> same model).
         const int precursor_id = allocPrecursorId_();
+        noteDetection_(precursor_id, parent_tracking_id, selected[i].getMonoMass());   // ADR-0068
         ScanCommand ms1_ctx{};
         ms1_ctx.scan_id  = parent_tracking_id;
         ms1_ctx.faims_cv = parent_ctx.faims_cv;  // CV travels via the resolved MS1 context
@@ -529,6 +533,7 @@ FLASHIda::FLASHIda(char* arg) :
       {
         // One precursor_id per MS1-selected precursor; all of its MS2 scan-config commands share it.
         const int precursor_id = allocPrecursorId_();
+        noteDetection_(precursor_id, parent_tracking_id, selected[i].getMonoMass());   // ADR-0068
         const auto& roster = config_.level(2).scans;
         for (size_t si = 0; si < roster.size(); ++si)
         {
@@ -1090,6 +1095,31 @@ FLASHIda::FLASHIda(char* arg) :
       board_.onResult(parent_ctx.mono_mass, ms3_targeting.proteoform_match, closed_out, config_.identification().threshold);
     }
 
+    // ADR-0068: an identification scan that was searched and fell short of the close-out threshold (no proteoform, or a
+    // score below it) buys one rescue scan per detection (rescueDetectionFree_). Short is the complement of
+    // reachesThreshold_, so an inclusion target whose row names charges -- it reaches the score but is never closed out
+    // -- buys none. The species is tested with no closing-Precursor exemption: a sibling charge may have closed it out
+    // while this scan was being searched. The rescue carries this scan's precursor id, so its own return buys nothing.
+    if (config_.identification().has_rescue_scan && !dropped && !is_quant_scan && !closed_out && parent_ctx.num_stages > 0
+        && parent_ctx.mono_mass > 0.0 && !reachesThreshold_(ms3_targeting.proteoform_match, parent_ctx.mono_mass)
+        && !speciesClosedOut_(parent_ctx.mono_mass, rt) && rescueDetectionFree_(precursor_id, parent_ctx.mono_mass))
+    {
+      const FragmentAnalysis::ProteoformMatch& m = ms3_targeting.proteoform_match;
+      const bool unidentified = m.proteoform_sequence.empty() || m.fragments.empty();
+      const int nominal = SpectralDeconvolution::getNominalMass(parent_ctx.mono_mass);
+      ScanCommand rescue = queue_.buildFollowUp(parent_ctx, config_.identification().rescue_scan, 'R');
+      // Registered BEFORE the push: once pushed, the drain may dequeue it at once, and a registration after that would
+      // leave an entry no dequeue ever erases.
+      queue_.registerRescue(rescue.scan_id, nominal);
+      stampAndPush_(rescue, precursor_id);
+      child_ids.push_back(ScanCommandQueue::encode(rescue.scan_id));
+      commands_pushed++;
+      EventLine() << "[RESCUE] precursor_id=" << precursor_id << " nominal=" << nominal
+                  << " score=" << m.search_identification_score
+                  << " reason=" << (unidentified ? "unidentified" : "below_threshold")
+                  << " id=" << ScanCommandQueue::encode(rescue.scan_id) << " trigger=" << parent_id_str;
+    }
+
     // Write MS2 identification row if proteoform was matched.
     // Gate on the actual match (proteoform_match), NOT on ms3_targeting.proteoform_sequence — the
     // latter is only set when found>0 (MS3 targets were selected), so an unambiguous ID that yields
@@ -1269,6 +1299,22 @@ FLASHIda::FLASHIda(char* arg) :
     return commanded_mass > 0.0;
   }
 
+  void FLASHIda::noteDetection_(int precursor_id, int survey_tracking_id, double mono_mass)
+  {
+    if (!config_.identification().has_rescue_scan) return;   // only the rescue cap reads it
+    detection_of_precursor_[precursor_id] = {survey_tracking_id, SpectralDeconvolution::getNominalMass(mono_mass)};
+  }
+
+  bool FLASHIda::rescueDetectionFree_(int precursor_id, double mono_mass)
+  {
+    // A precursor no survey planned (none today: both allocPrecursorId_ sites note it) is its own detection.
+    auto it = detection_of_precursor_.find(precursor_id);
+    const std::pair<int, int> detection = (it != detection_of_precursor_.end())
+        ? it->second
+        : std::pair<int, int>{-precursor_id, SpectralDeconvolution::getNominalMass(mono_mass)};
+    return rescued_detections_.insert(detection).second;
+  }
+
   bool FLASHIda::speciesClosedOut_(double mass, double rt) const
   {
     auto it = closed_out_.find(SpectralDeconvolution::getNominalMass(mass));
@@ -1319,6 +1365,8 @@ FLASHIda::FLASHIda(char* arg) :
     for (int g : r.dropped_quant_groups) quant_.closeGroup(g);
     for (int g : r.dropped_sweep_groups) exploration_.dropGroup(g);
     forgetTracking_(r.dropped_scan_ids);
+    for (int id : r.withdrawn_rescue_ids)   // ADR-0068: bought because the identification was not enough; now it is
+      EventLine() << "[RESCUE-WITHDRAWN] id=" << ScanCommandQueue::encode(id) << " nominal=" << nominal;
 
     ClosedOut& co = closed_out_[nominal];
     co.rt = co.closing_precursor_ids.empty() ? rt : std::max(co.rt, rt);   // a close-out only extends

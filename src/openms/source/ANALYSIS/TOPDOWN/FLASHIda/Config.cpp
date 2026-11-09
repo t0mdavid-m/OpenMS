@@ -1046,7 +1046,7 @@ namespace OpenMS
     // ms2_quant is a bare slot beside ms1/ms2/ms3, not a name reference (ADR-0038) -- the same
     // shape characterization already uses, where the decision section holds no scan config and
     // ms_settings.ms3 supplies the parameters with no key pointing at it.
-    rejectUnknownKeys(ms_settings, {"ms1", "ms2", "ms2_quant", "ms3", "ms3_quant", "additional_ms2"}, "ms_settings");
+    rejectUnknownKeys(ms_settings, {"ms1", "ms2", "ms2_quant", "ms2_rescue", "ms3", "ms3_quant", "additional_ms2"}, "ms_settings");
 
     if (ms_settings.contains("ms2") && ms_settings["ms2"].is_array())
       throw std::invalid_argument(
@@ -1102,6 +1102,12 @@ namespace OpenMS
     {
       quant_.ms3_quant_scan = parseNamedScan(ms_settings["ms3_quant"], "ms_settings.ms3_quant");
       quant_.has_ms3_quant_scan = true;
+    }
+    // ADR-0068: the rescue scan, a bare slot whose presence is the switch; held on identification_, which decides it.
+    if (ms_settings.contains("ms2_rescue") && ms_settings["ms2_rescue"].is_object())
+    {
+      identification_.rescue_scan = parseNamedScan(ms_settings["ms2_rescue"], "ms_settings.ms2_rescue");
+      identification_.has_rescue_scan = true;
     }
 
     // additional_ms2: user-authored KEYS, so they cannot be allowlisted -- validated as identifiers
@@ -1491,6 +1497,14 @@ namespace OpenMS
     // reporter_mz_tol is narrower than half the scheme's channel spacing. The user is trusted on
     // both, which is exactly why quant_verdict is a four-way enum: it is now the only route by
     // which a misconfigured screen is discovered.
+    // ADR-0068: a rescue scan is bought by an identification that falls short of the close-out threshold, so it
+    // needs identification with a reference and a threshold.
+    if (identification_.has_rescue_scan && (!identification_.enabled() || !identification_.threshold.has_value()))
+      throw std::invalid_argument(
+          "Config: ms_settings.ms2_rescue is set but identification.threshold is not set. A rescue scan is bought when "
+          "an identification scan finds no proteoform or one scoring below the close-out threshold, so it needs "
+          "identification with a reference and a threshold (ADR-0068).");
+
     if (quant_.enabled)
     {
       // ADR-0064. Reading at MS3 needs the live identification that buys it, the label it targets, and stage 1.

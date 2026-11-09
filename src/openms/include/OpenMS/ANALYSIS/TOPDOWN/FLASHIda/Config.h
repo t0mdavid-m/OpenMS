@@ -436,6 +436,12 @@ namespace OpenMS
     /// close out. Authored: a finite number > 0, calibrated offline (real time carries no FDR).
     std::optional<double> threshold;
 
+    /// ms_settings.ms2_rescue (ADR-0068) -- the scan an identification scan that fell short of `threshold` (no
+    /// proteoform, or a score below it) buys, once per Precursor. A bare scan slot whose presence is the switch; held
+    /// here because the identification decides it. Refused without `threshold`.
+    ScanConfig rescue_scan;
+    bool has_rescue_scan = false;
+
     /// Whether MS2s are matched at all.
     bool enabled() const { return !sequence.empty() || !fasta.empty(); }
 
