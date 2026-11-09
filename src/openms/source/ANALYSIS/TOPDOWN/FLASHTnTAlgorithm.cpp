@@ -5412,9 +5412,14 @@ void FLASHTnTAlgorithm::applyLearnedScoring_(std::vector<ProteinHit>& hits, cons
     hit.setScore(confidence);
     keep[best] = true;
   }
+  // no self-move: with libc++ (macOS) a defaulted move assignment onto itself empties the hit's short strings (its accession)
   Size w = 0;
   for (Size i = 0; i < n; i++)
-    if (keep[i]) hits[w++] = std::move(hits[i]);
+  {
+    if (! keep[i]) continue;
+    if (w != i) hits[w] = std::move(hits[i]);
+    w++;
+  }
   hits.resize(w);
 }
 
