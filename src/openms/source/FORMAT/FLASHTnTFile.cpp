@@ -30,14 +30,15 @@ void FLASHTnTFile::writeTagHeader(std::fstream& fs)
 }
 
 /// write header line for PrSM file
-void FLASHTnTFile::writePrSMHeader(std::fstream& fs, bool chimeric)
+void FLASHTnTFile::writePrSMHeader(std::fstream& fs, bool chimeric, bool ms3)
 {
   fs << "PrSMIndex\tScan\tRetentionTime\tNumMass\tProteinAccession\tProteinDescription\tPrecursorMass\tProteoformMass\tProteoformMassFromComplementaryFragmentIonPairs\tDatabaseSequence\tProteinSequence\tProf"
         "orma\tProteoformLevel\tMatchingFragments\tCoverage(%)\tStartPosition\tEndPosition"
         "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tPrecursorQscore\tPrecursorSNR\tScore\tPrSMLevelQvalue\tProteoformLevelQvalue"
         "\tProteoformIndex\tCandidateSource\tFDRClass\tModVariable\tDecoyPrecursorWeight\tProteinLevelQvalue"
         "\tExtensionScore\tRawScore\tRawMatchedFragments\tRawFragmentHypotheses\tRawCoverage(%)"
-     << (chimeric ? "\tChimericRound\tMatchedMasses\tRemovedMasses\tResidualNullScore\tResidualScoreRatio\tUniqueMasses\tUniqueScore" : "") << "\n";
+     << (chimeric ? "\tChimericRound\tMatchedMasses\tRemovedMasses\tResidualNullScore\tResidualScoreRatio\tUniqueMasses\tUniqueScore" : "")
+     << (ms3 ? "\tMS3Scans" : "") << "\n";
 }
 
 /// write header line for Proteoform file
@@ -246,7 +247,7 @@ namespace
     static const std::unordered_map<std::string, OpenMS::UInt> keys = [] {
       auto& registry = OpenMS::MetaInfoInterface::metaRegistry();
       std::unordered_map<std::string, OpenMS::UInt> k;
-      for (const char* n : {"ChimericRound", "CombinedCoverage", "CombinedCoverageChance", "CombinedPrSMs", "DecoyPrecursor", "Description", "EndPosition", "ExtensionScore", "FDRClass", "GappedTag", "GivenMass", "Index", "Mass", "MatchedAA", "MatchedMassIndices", "ModificationACCs", "ModificationEnds", "ModificationIDs", "ModificationStarts", "ModificationVariable", "Modifications", "NumMass", "PrecursorLadder", "PrecursorSNR", "PrecursorScore", "ProteinQvalue", "ProteoformIndex", "ProteoformLevel", "ProteoformMassByFragmentMass", "RT", "RawCoverage", "RawFragmentHypotheses", "RawMatchedFragments", "RawScore", "RemovedMasses", "ResidualNullScore", "ResidualScoreRatio", "Scan", "SlidingLadder", "StartPosition", "TagIndices", "TerminalLadder", "TheoreticalMass", "UniqueMasses", "UniqueScore", "proqvalue", "qvalue"})
+      for (const char* n : {"ChimericRound", "CombinedCoverage", "CombinedCoverageChance", "CombinedPrSMs", "DecoyPrecursor", "Description", "EndPosition", "ExtensionScore", "FDRClass", "GappedTag", "GivenMass", "Index", "MS3Scans", "Mass", "MatchedAA", "MatchedMassIndices", "ModificationACCs", "ModificationEnds", "ModificationIDs", "ModificationStarts", "ModificationVariable", "Modifications", "NumMass", "PrecursorLadder", "PrecursorSNR", "PrecursorScore", "ProteinQvalue", "ProteoformIndex", "ProteoformLevel", "ProteoformMassByFragmentMass", "RT", "RawCoverage", "RawFragmentHypotheses", "RawMatchedFragments", "RawScore", "RemovedMasses", "ResidualNullScore", "ResidualScoreRatio", "Scan", "SlidingLadder", "StartPosition", "TagIndices", "TerminalLadder", "TheoreticalMass", "UniqueMasses", "UniqueScore", "proqvalue", "qvalue"})
         k.emplace(n, registry.registerName(n));
       return k;
     }();
@@ -469,7 +470,7 @@ std::string FLASHTnTFile::getProFormaString(const ProteinHit& hit)
 }
 
 
-void OpenMS::FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::fstream& fs, bool chimeric)
+void OpenMS::FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::fstream& fs, bool chimeric, bool ms3)
 {
   // the rows formatted in parallel, each into its own string, written in input order; an error is rethrown before anything is written, as
   // by the serial loop
@@ -539,7 +540,17 @@ void OpenMS::FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::
        << (hit.metaValueExists(prsmKey("FDRClass")) ? hit.getMetaValue(prsmKey("FDRClass")).toString() : std::string()) << "\t" << modVariable(hit) << "\t"
        << (hit.metaValueExists(prsmKey("DecoyPrecursor")) ? (double)hit.getMetaValue(prsmKey("DecoyPrecursor")) : 0.0) << "\t"
        << std::to_string(hit.metaValueExists(prsmKey("ProteinQvalue")) ? (double)hit.getMetaValue(prsmKey("ProteinQvalue")) : -1) << rawColumns(hit)
-       << (chimeric ? chimericColumns(hit) : std::string()) << "\n";
+       << (chimeric ? chimericColumns(hit) : std::string());
+    if (ms3) // the MS3 spectra of the PrSM's scan, space-joined (ADR-0001)
+    {
+      ss << "\t";
+      if (hit.metaValueExists(prsmKey("MS3Scans")))
+      {
+        const auto ms3_scans = hit.getMetaValue(prsmKey("MS3Scans")).toIntList();
+        for (Size k = 0; k < ms3_scans.size(); k++) ss << (k ? " " : "") << ms3_scans[k];
+      }
+    }
+    ss << "\n";
     rows[h] = ss.str();
     }
     catch (...)

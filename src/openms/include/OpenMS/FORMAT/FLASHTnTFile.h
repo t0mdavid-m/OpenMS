@@ -27,8 +27,9 @@ namespace OpenMS
     /// ChimericRound (0: the search of the whole spectrum, r: residual round r), MatchedMasses (deconvolved masses on the PrSM's path),
     /// RemovedMasses (masses removed from the spectrum before the PrSM's round), ResidualNullScore (the best extension score of the other
     /// decoy PrSMs of the same residual search; -1: none or round 0) and ResidualScoreRatio (extension score / ResidualNullScore; -1:
-    /// undefined)
-    static void writePrSMHeader(std::fstream& fs, bool chimeric = false);
+    /// undefined). With @p ms3 (the input has MS3 spectra), a last column MS3Scans: the space-joined scans of the MS3 spectra of the
+    /// PrSM's scan, empty for none.
+    static void writePrSMHeader(std::fstream& fs, bool chimeric = false, bool ms3 = false);
 
     /// write header line for Proteoform output file (@p chimeric: as writePrSMHeader, the values of the representative PrSM)
     static void writeProHeader(std::fstream& fs, bool chimeric = false);
@@ -42,7 +43,7 @@ namespace OpenMS
     /// write the features in regular file output
     static void writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_tol, std::fstream& fs);
 
-    static void writePrSMs(const std::vector<ProteinHit>& hits, std::fstream& fs, bool chimeric = false);
+    static void writePrSMs(const std::vector<ProteinHit>& hits, std::fstream& fs, bool chimeric = false, bool ms3 = false);
 
     /**
       @brief the ProForma 2.0 string of a PrSM or proteoform hit; empty if a terminus is undetermined (ProForma cannot express it)

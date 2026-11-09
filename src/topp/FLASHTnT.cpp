@@ -357,6 +357,8 @@ protected:
     double pro_fdr = tnt_param.getValue("pro_fdr");
     // the chimeric columns are written only with the residual search, so that other outputs keep their format
     const bool chimeric = (int)tnt_param.getValue("chimeric_rounds") > 0 || tnt_param.getValue("native").toString() == "true"; // -native searches a residual round
+    // the MS3Scans column is written only when the input has MS3 spectra, so that other outputs keep their format (ADR-0001)
+    const bool ms3 = std::any_of(map.begin(), map.end(), [](const MSSpectrum& spec) { return spec.getMSLevel() >= 3; });
     OPENMS_LOG_INFO << "Finding sequence tags from deconvolved spectra ..." << endl;
 
     std::vector<FASTAFile::FASTAEntry> fasta_entry;
@@ -456,7 +458,7 @@ protected:
     if (! out_prsm_file.empty())
     {
       out_prsm_stream = fstream(out_prsm_file, fstream::out);
-      FLASHTnTFile::writePrSMHeader(out_prsm_stream, chimeric);
+      FLASHTnTFile::writePrSMHeader(out_prsm_stream, chimeric, ms3);
     }
 
     if (! out_pro_file.empty())
@@ -501,7 +503,7 @@ protected:
     }
     if (! out_prsm_file.empty())
     {
-      FLASHTnTFile::writePrSMs(proteoform_hits, out_prsm_stream, chimeric);
+      FLASHTnTFile::writePrSMs(proteoform_hits, out_prsm_stream, chimeric, ms3);
       out_prsm_stream.close();
     }
     if (! out_pro_file.empty())

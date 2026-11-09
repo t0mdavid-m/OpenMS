@@ -217,6 +217,8 @@ private:
   int min_protein_hits_ = 5;
   double protein_fdr_ = 0.1;
   std::vector<ProteinHit> proteoform_hits_;
+  /// the MS3 spectra (scan numbers) of each parent scan, read from the deconvolved MS3 spectra (ADR-0001)
+  std::map<int, std::vector<int>> ms3_scans_of_;
   std::vector<ProteinHit> protein_hits_;
   std::vector<FLASHHelperClasses::Tag> tags_;
   std::map<int, std::vector<int>> matching_hits_indices_;

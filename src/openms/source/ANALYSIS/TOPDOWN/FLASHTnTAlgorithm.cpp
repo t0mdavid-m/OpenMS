@@ -108,7 +108,7 @@ UInt tntKey(const char* name)
   static const std::unordered_map<std::string, UInt> keys = [] {
     auto& registry = MetaInfoInterface::metaRegistry();
     std::unordered_map<std::string, UInt> k;
-    for (const char* n : {"BlindModCount", "DeconvMassInfo", "DecoyPrecursor", "EndPosition", "ExtensionScore", "FDRClass", "FastaIndex", "GivenMass", "Index", "Mass", "MassLostToFeatureOwner", "ModificationEnds", "ModificationStarts", "Modifications", "PrSMIndices", "ProteinQvalue", "ProteoformIndex", "ProteoformMassByFragmentMass", "RT", "RawCoverage", "RawFragmentHypotheses", "RawMatchedFragments", "RawScore", "Representative", "Scan", "StartPosition", "TagIndices", "proqvalue", "qvalue"})
+    for (const char* n : {"BlindModCount", "DeconvMassInfo", "DecoyPrecursor", "EndPosition", "ExtensionScore", "FDRClass", "FastaIndex", "GivenMass", "Index", "MS3Scans", "Mass", "MassLostToFeatureOwner", "ModificationEnds", "ModificationStarts", "Modifications", "PrSMIndices", "ProteinQvalue", "ProteoformIndex", "ProteoformMassByFragmentMass", "RT", "RawCoverage", "RawFragmentHypotheses", "RawMatchedFragments", "RawScore", "Representative", "Scan", "StartPosition", "TagIndices", "proqvalue", "qvalue"})
       k.emplace(n, registry.registerName(n));
     return k;
   }();
@@ -1109,6 +1109,7 @@ namespace
 void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile::FASTAEntry>& original_fasta_entry, const ProteoformDatabase* db)
 {
   setLogType(CMD);
+  ms3_scans_of_.clear();
 
   // The database (ProteoformDatabase): without one, the FASTA entries are the proteins (the identity database), and every step below
   // that reads it is the search as before. With a PEFF database, an entry is a processed form of a protein with fixed modifications: the
@@ -1256,11 +1257,23 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     std::vector<PeakGroup> all_masses;
     std::vector<FLASHHelperClasses::Tag> tags;
     std::exception_ptr error;
+    int ms3_scan = 0, ms3_parent = -1; // an MSn spectrum (n >= 3): its scan and its parent's (0: none); -1: not one
   };
   std::vector<TaggedSpectrum> tagged(map.size());
   auto tagSpectrum = [&](int index, TaggedSpectrum& out) {
     const auto& spec = map[index];
     nextProgress();
+
+    // An MSn spectrum (n >= 3) is never searched: it is evidence for its parent's PrSM (ADR-0001). Only its parent is read, from
+    // DeconvMassInfo's precursorscan= (FLASHDeconv writes a linked MS3 even without masses); 0 when it has none.
+    if (spec.getMSLevel() >= 3)
+    {
+      const std::string info = spec.metaValueExists(tntKey("DeconvMassInfo")) ? spec.getMetaValue(tntKey("DeconvMassInfo")).toString() : std::string();
+      const Size p = info.find("precursorscan=");
+      out.ms3_scan = FLASHDeconvAlgorithm::getScanNumber(map, index);
+      out.ms3_parent = p == std::string::npos ? 0 : std::max(0, std::stoi(info.substr(p + 14)));
+      return;
+    }
 
     if (spec.size() < 5) return;
 
@@ -1428,9 +1441,16 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     for (const auto& out : tagged) tag_total += out.tags.size();
     tags_.reserve(tag_total);
   }
+  Size ms3_linked = 0, ms3_unlinked = 0;
   for (auto& out : tagged)
   {
     if (out.error) std::rethrow_exception(out.error);
+    if (out.ms3_parent > 0)
+    {
+      ms3_scans_of_[out.ms3_parent].push_back(out.ms3_scan);
+      ms3_linked++;
+    }
+    else if (out.ms3_parent == 0) ms3_unlinked++;
     if (! out.with_masses) continue;
     tol = out.tol;
     if (out.ms_level > 1 && ms2_tol < 0) ms2_tol = tol;
@@ -1444,6 +1464,11 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   }
 
   endProgress();
+  if (ms3_linked + ms3_unlinked > 0)
+  {
+    OPENMS_LOG_INFO << "MS3 spectra (not searched, evidence for their parent's PrSM): " << ms3_linked << " linked to " << ms3_scans_of_.size()
+                    << " parent spectra, " << ms3_unlinked << " without a parent (left out)" << std::endl;
+  }
 
   for (Size i = 0; i < tags_.size(); i++)
   {
@@ -4472,6 +4497,15 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     {
       const auto it = prsm_to_proteoform.find((int)hit.getMetaValue(tntKey("Index")));
       hit.setMetaValue(tntKey("ProteoformIndex"), it == prsm_to_proteoform.end() ? -1 : it->second);
+    }
+  }
+  // the MS3 spectra of each PrSM's scan (ADR-0001), only when the input has MS3
+  if (ms3_linked > 0)
+  {
+    for (auto& hit : proteoform_hits_)
+    {
+      const auto it = ms3_scans_of_.find((int)hit.getMetaValue(tntKey("Scan")));
+      hit.setMetaValue(tntKey("MS3Scans"), it == ms3_scans_of_.end() ? std::vector<int>() : it->second);
     }
   }
   if (native_rule) setNativeTermini_();
