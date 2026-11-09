@@ -681,4 +681,21 @@ START_SECTION(([EXTRA] an unknown ion class never projects, at ANY index))
 }
 END_SECTION
 
+// ADR-0067 push 2: an MS3 sub-fragment that contains a fixed residue carries its mass.
+START_SECTION(theoretical_masses_carry_the_fixed_mass)
+{
+  const FixedModifications itmt = FixedModifications::fromNames({"iodoTMT6plex (C)"});
+  const std::string sub = "PECTK";  // C is residue 3: b3 and b4 contain it
+  const auto plain = MS3FragmentMatcher::computeTheoreticalMasses(sub, {"b"});
+  const auto fixed = MS3FragmentMatcher::computeTheoreticalMasses(sub, {"b"}, {}, itmt);
+  TEST_EQUAL(fixed.size(), plain.size())
+  TOLERANCE_ABSOLUTE(1e-6)
+  for (Size i = 0; i < fixed.size() && i < plain.size(); ++i)
+  {
+    TEST_EQUAL(fixed[i].position, plain[i].position)
+    TEST_REAL_SIMILAR(fixed[i].mass, plain[i].mass + (fixed[i].position >= 3 ? 329.226595 : 0.0))
+  }
+}
+END_SECTION
+
 END_TEST

@@ -663,23 +663,34 @@ START_SECTION(reference_is_fasta_xor_sequence)
 }
 END_SECTION
 
-// fixed_mod has no FLASHTnT parameter in real time: a non-empty one is refused with a message saying so;
-// [] and null load.
-START_SECTION(fixed_mod_non_empty_is_refused)
+// ADR-0067: identification.flashtnt.fixed_mod is the search's fixed modifications, built into one table at load
+// (FixedModifications: a name or Unimod accession with its residue, residue anywhere, one per residue). A refused
+// modification stops the load with the table's message; a string is not a list; [] and null give an empty table.
+START_SECTION(fixed_mod_builds_the_table)
 {
   // Delimited raw strings: a parenthesised mod name contains the default raw-string terminator.
-  const std::string msg = loadError(withIdentification(
-      R"JSON({ "reference": { "sequence": "PEPTIDEK" }, "flashtnt": { "fixed_mod": ["Carbamidomethyl (C)"] } })JSON"));
-  TEST_EQUAL(contains(msg, "identification.flashtnt.fixed_mod is not supported in real time; leave it empty"), true)
-  // Any non-empty shape, not only a list.
+  Config cfg{withIdentification(
+      R"JSON({ "reference": { "sequence": "PEPTIDEK" }, "flashtnt": { "fixed_mod": ["iodoTMT6plex (C)"] } })JSON")};
+  TEST_EQUAL(cfg.identification().flashtnt.fixed_mod.size(), 1)
+  TEST_STRING_EQUAL(cfg.identification().flashtnt.fixed_mod[0], "iodoTMT6plex (C)")
+  TEST_REAL_SIMILAR(cfg.identification().fixed_mods.delta('C'), 329.226595)
+  TEST_EQUAL(cfg.identification().fixed_mods.delta('M'), 0.0)
+
   TEST_EQUAL(contains(loadError(withIdentification(
       R"JSON({ "reference": { "sequence": "PEPTIDEK" }, "flashtnt": { "fixed_mod": "Carbamidomethyl (C)" } })JSON")),
-      "identification.flashtnt.fixed_mod is not supported in real time"), true)
+      "identification.flashtnt.fixed_mod must be a list of modification names"), true)
+  const std::string unknown = loadError(withIdentification(
+      R"JSON({ "reference": { "sequence": "PEPTIDEK" }, "flashtnt": { "fixed_mod": ["NoSuchModification (C)"] } })JSON"));
+  TEST_EQUAL(contains(unknown, "Config: identification.flashtnt.fixed_mod NoSuchModification (C)"), true)
+  TEST_EQUAL(contains(loadError(withIdentification(
+      R"JSON({ "reference": { "sequence": "PEPTIDEK" }, "flashtnt": { "fixed_mod": ["Acetyl (Protein N-term)"] } })JSON")),
+      "only a modification of a residue anywhere can be fixed"), true)
 
   for (const std::string ft : {std::string(R"("fixed_mod": [])"), std::string(R"("fixed_mod": null)")})
   {
-    Config cfg{withIdentification(R"({ "reference": { "sequence": "PEPTIDEK" }, "flashtnt": { )" + ft + " } }")};
-    TEST_EQUAL(cfg.identification().flashtnt.fixed_mod.empty(), true)
+    Config empty{withIdentification(R"({ "reference": { "sequence": "PEPTIDEK" }, "flashtnt": { )" + ft + " } }")};
+    TEST_EQUAL(empty.identification().flashtnt.fixed_mod.empty(), true)
+    TEST_EQUAL(empty.identification().fixed_mods.empty(), true)
   }
 }
 END_SECTION
@@ -741,7 +752,7 @@ START_SECTION(flashtnt_unset_keys_take_flashtnt_defaults)
   const Param tnt = FLASHTnTAlgorithm().getDefaults();
   const Param realtime = ProteomeSearch::defaultParameters();
   const auto& knobs = ProteomeSearch::knobNames();
-  TEST_EQUAL(knobs.size(), 13)
+  TEST_EQUAL(knobs.size(), 14)
 
   std::set<std::string> keys, names;
   for (const auto& [key, name] : knobs)
@@ -752,7 +763,7 @@ START_SECTION(flashtnt_unset_keys_take_flashtnt_defaults)
   }
   TEST_EQUAL(keys.size(), knobs.size())
   TEST_EQUAL(names.size(), knobs.size())
-  TEST_EQUAL(keys.count("fixed_mod"), 0)
+  TEST_EQUAL(keys.count("fixed_mod"), 1)  // ADR-0067: FLASHTnTAlgorithm's own fixed_mod
 
   for (const std::string unset : {std::string(""), std::string(R"(, "flashtnt": {})"), std::string(R"(, "flashtnt": null)")})
   {
@@ -786,12 +797,13 @@ START_SECTION(flashtnt_unset_keys_take_flashtnt_defaults)
       "max_blind_mod_count": 2, "max_mod_mass": 616.5,
       "var_mod": ["Oxidation (M)", "Acetyl (N-term)"], "max_var_mod_count": 1, "max_protein_hits": 7,
       "gapped_tags": "off", "terminal_ladders": false, "precursor_ladders": false,
-      "skip_precursor_inference": false, "fixed_mod": [] } })JSON";
+      "skip_precursor_inference": false, "fixed_mod": ["Carbamidomethyl (C)"] } })JSON";
   const std::vector<std::pair<std::string, ParamValue>> expected = {
     {"min_length", ParamValue(4)},
     {"max_length", ParamValue(9)},
     {"allow_gap", ParamValue("true")},
     {"max_aa_in_gap", ParamValue(3)},
+    {"fixed_mod", ParamValue(std::vector<std::string>{"Carbamidomethyl (C)"})},
     {"max_blind_mod_count", ParamValue(2)},
     {"max_mod_mass", ParamValue(616.5)},
     {"var_mod", ParamValue(std::vector<std::string>{"Oxidation (M)", "Acetyl (N-term)"})},

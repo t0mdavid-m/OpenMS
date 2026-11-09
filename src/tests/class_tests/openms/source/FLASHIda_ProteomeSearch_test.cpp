@@ -26,6 +26,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ProteomeSearch.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FixedModifications.h>
@@ -565,6 +566,107 @@ START_SECTION(labelled_search_identifies_the_itmt_fixture)
           if (std::fabs(masses[i] - 329.226595) < 0.01 && (starts[i] == 51 || starts[i] == 52)) labelled_c = true;
       }
       TEST_EQUAL(labelled_c, true)
+    }
+  }
+}
+END_SECTION
+
+// ADR-0067 push 2: an authored identification.flashtnt.fixed_mod reaches the real-time search through parametersFor,
+// with no label. The iodoTMT YdfZ scan is identified with iodoTMT6plex fixed on its cysteine as a residue mass (never a
+// PrSM modification), and matchFromPrSM, given the table, matches the fragments that carry it.
+START_SECTION(authored_fixed_mod_identifies_the_itmt_fixture)
+{
+  const auto scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_itmt_ydfz_cid28_scan1325.txt");
+  TEST_EQUAL(scans.size(), 1)
+  if (! scans.empty())
+  {
+    Config config(buildJsonWithLogDir(""));
+    Deconvolution deconv(config, config.toleranceList());
+    const ScanData& sd = scans[0];
+    deconv.deconvolveMSn(sd.mzs.data(), sd.ints.data(), (int)sd.mzs.size(), sd.rt, 7600.99053, 10);
+    const DeconvolvedSpectrum ds = deconv.storedMS2();
+    MSSpectrum raw;
+    for (Size i = 0; i < sd.mzs.size(); ++i) raw.emplace_back(Peak1D(sd.mzs[i], sd.ints[i]));
+    raw.setRT(sd.rt);
+    raw.setMSLevel(2);
+    const String ydfz = "MTTYDRNRNAITTGSRVMVSGTGHTGKILSIDTEGLTAEQIRRGKTVVVEGCEEKLAPLDLIRLGMN";
+    std::vector<FASTAFile::FASTAEntry> ref;
+    ref.emplace_back("sp|P64463|YDFZ_ECOLI", "", ydfz);
+    FlashTnTSettings with_fixed;
+    with_fixed.fixed_mod = {"iodoTMT6plex (C)"};
+    auto searchWith = [&](const FlashTnTSettings& settings) {
+      ProteomeSearch search(ref, ProteomeSearch::parametersFor(settings));
+      ProteomeSearch::Worker worker(search);
+      return worker.search(ds, config.toleranceList()[1], raw, 1325);
+    };
+    {
+      ProteomeSearch unlabelled(ref, ProteomeSearch::parametersFor(with_fixed));
+      TEST_EQUAL(unlabelled.labelledDatabase() == nullptr, true)  // no per-entry label: the table alone
+    }
+    const auto hits = searchWith(with_fixed);
+    TEST_EQUAL(hits.empty(), false)
+    if (! hits.empty())
+    {
+      const ProteinHit& best = *bestOf(hits);
+      TEST_STRING_EQUAL(best.getAccession(), "sp|P64463|YDFZ_ECOLI")
+      bool label_as_modification = false;
+      if (best.metaValueExists("Modifications"))
+      {
+        for (double m : best.getMetaValue("Modifications").toDoubleList())
+          if (std::fabs(m - 329.226595) < 0.01) label_as_modification = true;
+      }
+      TEST_EQUAL(label_as_modification, false)  // a fixed modification is a residue mass, not a PrSM modification
+      const FixedModifications table = FixedModifications::fromNames(with_fixed.fixed_mod);
+      const auto ions = FragmentAnalysis::getIonTypesForFragmentationMethod("CID");
+      FragmentAnalysis::ProteoformMatch with_table, without_table;
+      std::vector<FragmentAnalysis::TagBasedFragmentMatch> m_with, m_without;
+      const int n_with = FragmentAnalysis::matchFromPrSM(best, ydfz, ds, ions, config.toleranceList()[1], with_table, m_with, table);
+      const int n_without = FragmentAnalysis::matchFromPrSM(best, ydfz, ds, ions, config.toleranceList()[1], without_table, m_without);
+      std::cout << "[FIXED-MOD-ITMT] score " << best.getScore() << ", fragments matched with the table " << n_with << ", without "
+                << n_without << std::endl;
+      TEST_EQUAL(n_with > n_without, true)  // the fragments that carry the label match only with the table
+    }
+  }
+}
+END_SECTION
+
+// ADR-0067 push 2, the paired negative: without fixed_mod (and no label) the same scan is not matched as well -- YdfZ is
+// absent, or its best PrSM scores strictly lower than with the label fixed.
+START_SECTION(without_fixed_mod_the_itmt_fixture_is_not_matched_as_well)
+{
+  const auto scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_itmt_ydfz_cid28_scan1325.txt");
+  TEST_EQUAL(scans.size(), 1)
+  if (! scans.empty())
+  {
+    Config config(buildJsonWithLogDir(""));
+    Deconvolution deconv(config, config.toleranceList());
+    const ScanData& sd = scans[0];
+    deconv.deconvolveMSn(sd.mzs.data(), sd.ints.data(), (int)sd.mzs.size(), sd.rt, 7600.99053, 10);
+    const DeconvolvedSpectrum ds = deconv.storedMS2();
+    MSSpectrum raw;
+    for (Size i = 0; i < sd.mzs.size(); ++i) raw.emplace_back(Peak1D(sd.mzs[i], sd.ints[i]));
+    raw.setRT(sd.rt);
+    raw.setMSLevel(2);
+    const String ydfz = "MTTYDRNRNAITTGSRVMVSGTGHTGKILSIDTEGLTAEQIRRGKTVVVEGCEEKLAPLDLIRLGMN";
+    std::vector<FASTAFile::FASTAEntry> ref;
+    ref.emplace_back("sp|P64463|YDFZ_ECOLI", "", ydfz);
+    FlashTnTSettings with_fixed;
+    with_fixed.fixed_mod = {"iodoTMT6plex (C)"};
+    auto searchWith = [&](const FlashTnTSettings& settings) {
+      ProteomeSearch search(ref, ProteomeSearch::parametersFor(settings));
+      ProteomeSearch::Worker worker(search);
+      return worker.search(ds, config.toleranceList()[1], raw, 1325);
+    };
+    const auto with = searchWith(with_fixed);
+    const auto without = searchWith(FlashTnTSettings{});
+    TEST_EQUAL(with.empty(), false)
+    if (! with.empty())
+    {
+      const double s_with = bestOf(with)->getScore();
+      const double s_without = without.empty() ? -1.0 : bestOf(without)->getScore();
+      std::cout << "[FIXED-MOD-ITMT] best score with fixed_mod " << s_with << ", without " << (without.empty() ? String("none") : String(s_without))
+                << std::endl;
+      TEST_EQUAL(without.empty() || s_without < s_with, true)
     }
   }
 }

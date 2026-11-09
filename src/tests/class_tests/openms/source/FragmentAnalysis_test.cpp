@@ -1106,4 +1106,51 @@ END_SECTION
 
 /////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////
+// ADR-0067 push 2: a fixed modification is a residue mass, so every ladder ion that contains the residue carries it.
+START_SECTION(the_ladder_carries_the_fixed_mass)
+{
+  const FixedModifications itmt = FixedModifications::fromNames({"iodoTMT6plex (C)"});
+  const String seq = "PEPCTIDE";  // C is residue 4 (1-based): b4.. and y5.. contain it
+  std::map<char, std::vector<double>> plain, fixed, none;
+  FragmentAnalysis::computePTMAdjustedFragmentMasses(seq, {}, {"b", "y"}, plain);
+  FragmentAnalysis::computePTMAdjustedFragmentMasses(seq, {}, {"b", "y"}, none, FixedModifications::none());
+  FragmentAnalysis::computePTMAdjustedFragmentMasses(seq, {}, {"b", "y"}, fixed, itmt);
+  TEST_EQUAL(plain == none, true)  // an empty table changes nothing, to the bit
+  TEST_EQUAL(fixed['b'].size(), plain['b'].size())
+  TEST_EQUAL(fixed['y'].size(), plain['y'].size())
+  TOLERANCE_ABSOLUTE(1e-6)
+  for (Size i = 0; i < fixed['b'].size() && i < plain['b'].size(); ++i)  // b_(i+1)
+  {
+    TEST_REAL_SIMILAR(fixed['b'][i], plain['b'][i] + (i + 1 >= 4 ? 329.226595 : 0.0))
+  }
+  for (Size i = 0; i < fixed['y'].size() && i < plain['y'].size(); ++i)  // y_(i+1)
+  {
+    TEST_REAL_SIMILAR(fixed['y'][i], plain['y'][i] + (i + 1 >= 5 ? 329.226595 : 0.0))
+  }
+}
+END_SECTION
+
+// ADR-0067 push 2: an authored fixed_mod reaches the single-protein matcher's Tagger and Extender verbatim.
+START_SECTION(buildTaggerParam_passes_an_authored_fixed_mod)
+{
+  std::string json = empty_fixed_mod_config;
+  const std::string from = R"("fixed_mod": [])";
+  const auto at = json.find(from);
+  TEST_EQUAL(at != std::string::npos, true)
+  if (at != std::string::npos)
+  {
+    json.replace(at, from.size(), R"JSON("fixed_mod": ["iodoTMT6plex (C)"])JSON");
+    Config cfg{json};
+    const Param tagger = FragmentAnalysis::buildTaggerParam(cfg, {"b", "y"});
+    const Param extender = FragmentAnalysis::buildExtenderParam(cfg, {"b", "y"}, 500.0);
+    for (const Param* p : {&tagger, &extender})
+    {
+      const auto fm = p->getValue("fixed_mod").toStringVector();
+      TEST_EQUAL(fm.size(), 1)
+      if (fm.size() == 1) TEST_STRING_EQUAL(fm[0], "iodoTMT6plex (C)")
+    }
+  }
+}
+END_SECTION
+
 END_TEST

@@ -96,10 +96,15 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   TEST_EQUAL(cfg.identification().flashtnt.max_aa_in_gap, j["identification"]["flashtnt"]["max_aa_in_gap"].get<int>())
   TEST_EQUAL(cfg.identification().flashtnt.max_blind_mod_count, j["identification"]["flashtnt"]["max_blind_mod_count"].get<int>())
   TEST_REAL_SIMILAR(cfg.identification().flashtnt.max_mod_mass, j["identification"]["flashtnt"]["max_mod_mass"].get<double>())
-  // fixed_mod: [] is the only value Config accepts (ADR-0061 push 4c), so the reference carries an empty array.
+  // fixed_mod (ADR-0067): the reference authors iodoTMT6plex on C, and Config builds it into the table.
   TEST_EQUAL(j["identification"]["flashtnt"]["fixed_mod"].is_array(), true)
-  TEST_EQUAL((int)j["identification"]["flashtnt"]["fixed_mod"].size(), 0)
-  TEST_EQUAL(cfg.identification().flashtnt.fixed_mod.empty(), true)
+  TEST_EQUAL((int)j["identification"]["flashtnt"]["fixed_mod"].size(), 1)
+  TEST_EQUAL(cfg.identification().flashtnt.fixed_mod.size(), 1)
+  if (cfg.identification().flashtnt.fixed_mod.size() == 1)
+  {
+    TEST_STRING_EQUAL(cfg.identification().flashtnt.fixed_mod[0], j["identification"]["flashtnt"]["fixed_mod"][0].get<std::string>())
+  }
+  TEST_REAL_SIMILAR(cfg.identification().fixed_mods.delta('C'), 329.226595)
   // --- identification.search_threads (ADR-0062: the search pool's size) ---
   TEST_EQUAL(cfg.identification().search_threads, j["identification"]["search_threads"].get<int>())
 

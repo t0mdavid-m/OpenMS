@@ -1378,6 +1378,34 @@ START_SECTION(quantification_ms3_structural_rejections)
 }
 END_SECTION
 
+// ADR-0067 push 2: under quantification.scan ms3/both the iodoTMT label already fixes every C (ADR-0064), so a fixed
+// modification of C is refused; one of another residue loads, and a fixed C loads under scan ms2.
+START_SECTION(fixed_mod_on_c_is_refused_under_the_ms3_label)
+{
+  const std::string fixed_c =
+      R"JSON("identification": { "reference": { "sequence": "PEPTCIDEK" }, "threshold": 10, "flashtnt": { "fixed_mod": ["Carbamidomethyl (C)"] } },)JSON";
+  const std::string fixed_m =
+      R"JSON("identification": { "reference": { "sequence": "PEPTCIDEK" }, "threshold": 10, "flashtnt": { "fixed_mod": ["Oxidation (M)"] } },)JSON";
+  for (const char* sc : {R"("scan": "ms3")", R"("scan": "both")"})
+  {
+    std::string msg;
+    try
+    {
+      Config refused(q3Cfg(sc, fixed_c));
+    }
+    catch (const std::invalid_argument& e)
+    {
+      msg = e.what();
+    }
+    TEST_EQUAL(msg.find("a fixed modification of C cannot be combined with quantification.scan") != std::string::npos, true)
+    Config other(q3Cfg(sc, fixed_m));
+    TEST_REAL_SIMILAR(other.identification().fixed_mods.delta('M'), 15.994915)
+  }
+  Config ms2(q3Cfg(R"("scan": "ms2")", fixed_c));
+  TEST_REAL_SIMILAR(ms2.identification().fixed_mods.delta('C'), 57.021464)
+}
+END_SECTION
+
 #undef IDENT_TH
 #undef MS3_QUANT
 #undef QUANT_CONDS

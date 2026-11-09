@@ -1235,4 +1235,20 @@ END_SECTION
 
 /////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////
+// ADR-0067 push 2: Refine's ladder is built from the same residue masses, fixed modifications included.
+START_SECTION(the_ladder_carries_the_fixed_mass)
+{
+  const FixedModifications itmt = FixedModifications::fromNames({"iodoTMT6plex (C)"});
+  const Refine::Ladder plain = Refine::ladder("PEPCTIDEK", {"b", "y"});
+  const Refine::Ladder fixed = Refine::ladder("PEPCTIDEK", {"b", "y"}, itmt);
+  TEST_EQUAL(fixed.residues.size(), plain.residues.size())
+  TOLERANCE_ABSOLUTE(1e-6)
+  for (Size i = 0; i < fixed.residues.size() && i < plain.residues.size(); ++i)
+  {
+    TEST_REAL_SIMILAR(fixed.residues[i], plain.residues[i] + (i == 3 ? 329.226595 : 0.0))
+  }
+  TEST_REAL_SIMILAR(fixed.sequence_mass, plain.sequence_mass + 329.226595)
+}
+END_SECTION
+
 END_TEST
