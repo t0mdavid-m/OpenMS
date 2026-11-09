@@ -88,7 +88,7 @@ void FLASHTaggerAlgorithm::updateEdgeMasses_()
 
   for (const auto& aa : aas_)
   {
-    double aa_mass = aa->getMonoWeight(Residue::Internal);
+    double aa_mass = fixed_mods_.mass(aa->getOneLetterCode()[0]);
     //if (aa_mass_map_.find(aa_mass) == aa_mass_map_.end()) aa_mass_map_[aa_mass] = std::vector<Residue>();
     aa_mass_map_[aa_mass].push_back(*aa);
   }
@@ -362,6 +362,7 @@ void FLASHTaggerAlgorithm::updateMembers_()
 {
   min_tag_length_ = param_.getValue("min_length");
   max_tag_length_ = param_.getValue("max_length");
+  fixed_mods_ = FixedModifications::fromNames(param_.getValue("fixed_mod").toStringVector());
 
   std::vector<double> prefix_shifts, suffix_shifts;
   common_shifts_.clear();
@@ -943,7 +944,7 @@ namespace
 // The internal mass of the residues [begin, end) of @p seq without its X, as AASequence::fromString() of them gives it with
 // getMonoWeight(Residue::Internal) when all are one-letter codes A-Z of residues (each ResidueDB::getResidue(char), their masses added to 0
 // in sequence order): the same additions in the same order, without parsing. False if another character is among them (AASequence then).
-bool sumInternalMasses(const String& seq, Size begin, Size end, double& sum, Size& count)
+bool sumInternalMasses(const String& seq, Size begin, Size end, double& sum, Size& count, const FixedModifications& fixed_mods)
 {
   static const ResidueDB* rdb = ResidueDB::getInstance();
   static const Residue* unknown = rdb->getResidue(String("X"));
@@ -956,7 +957,7 @@ bool sumInternalMasses(const String& seq, Size begin, Size end, double& sum, Siz
     if (c < 'A' || c > 'Z') return false;
     const Residue* r = rdb->getResidue((unsigned char)c);
     if (r == nullptr || r == unknown) return false;
-    sum += r->getMonoWeight(Residue::Internal);
+    sum += fixed_mods.mass(c);
     count++;
   }
   return true;
@@ -968,7 +969,7 @@ void FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(std::vector<
                                                                    double flanking_mass_tol,
                                                                    const String& seq, //
                                                                    const FLASHHelperClasses::Tag& tag,
-                                                                   const std::vector<std::pair<int, double>>* fixed)
+                                                                   const std::vector<std::pair<int, double>>* fixed, const FixedModifications& fixed_mods)
 {
   // the summed fixed modification masses of the residues [begin, end) of seq
   auto fixedSum = [fixed](Size begin, Size end) {
@@ -995,12 +996,12 @@ void FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(std::vector<
     if (tag.getNtermMass() > 0)
     {
       if (pos == 0) {}
-      else if (sumInternalMasses(seq, 0, pos, sum, count)) { delta_mass = tag.getNtermMass() - (count == 0 ? 0 : sum); }
+      else if (sumInternalMasses(seq, 0, pos, sum, count, fixed_mods)) { delta_mass = tag.getNtermMass() - (count == 0 ? 0 : sum); }
       else
       {
         auto nterm = seq.substr(0, pos);
         if (with_x) { nterm.erase(remove(nterm.begin(), nterm.end(), 'X'), nterm.end()); }
-        delta_mass = tag.getNtermMass() - (nterm.empty() ? 0 : AASequence::fromString(nterm).getMonoWeight(Residue::Internal));
+        delta_mass = tag.getNtermMass() - (nterm.empty() ? 0 : fixed_mods.internalMass(AASequence::fromString(nterm)));
       }
       if (fixed != nullptr && pos > 0) delta_mass -= fixedSum(0, pos);
     }
@@ -1008,12 +1009,12 @@ void FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(std::vector<
     {
       const Size cterm_start = pos + tag.getSequence().length();
       if (cterm_start >= seq.length()) {}
-      else if (sumInternalMasses(seq, cterm_start, seq.length(), sum, count)) { delta_mass = tag.getCtermMass() - (count == 0 ? 0 : sum); }
+      else if (sumInternalMasses(seq, cterm_start, seq.length(), sum, count, fixed_mods)) { delta_mass = tag.getCtermMass() - (count == 0 ? 0 : sum); }
       else
       {
         auto cterm = seq.substr(cterm_start);
         if (with_x) cterm.erase(remove(cterm.begin(), cterm.end(), 'X'), cterm.end());
-        delta_mass = tag.getCtermMass() - (cterm.empty() ? 0 : AASequence::fromString(cterm).getMonoWeight(Residue::Internal));
+        delta_mass = tag.getCtermMass() - (cterm.empty() ? 0 : fixed_mods.internalMass(AASequence::fromString(cterm)));
       }
       if (fixed != nullptr && cterm_start < seq.length()) delta_mass -= fixedSum(cterm_start, seq.length());
     }

@@ -28,16 +28,16 @@ namespace OpenMS
 namespace
 {
   /// internal (residue) monoisotopic masses by one-letter code; 0 for codes without a residue of positive mass
-  const std::vector<double>& residueMasses()
+  std::vector<double> residueMassTable(const FixedModifications& fixed_mods)
   {
-    static const std::vector<double> masses = [] {
+    const std::vector<double> masses = [&fixed_mods] {
       std::vector<double> m(256, 0.0);
       const ResidueDB* db = ResidueDB::getInstance();
       for (int c = 'A'; c <= 'Z'; c++)
       {
         const Residue* r = db->getResidue((unsigned char)c);
         if (r == nullptr) continue;
-        double w = r->getMonoWeight(Residue::Internal);
+        double w = fixed_mods.mass((char)c);
         if (w <= 0) continue;
         m[c] = w;
         m[c - 'A' + 'a'] = w;
@@ -191,12 +191,15 @@ void FLASHAnnotatorAlgorithm::setDefaultParams_()
                      "one) or 'all'. For a PrSM whose start or end position is undetermined (-1), 'none' is used.");
   defaults_.setValidStrings("internal_extension", {"none", "tag1", "all"});
 
+  defaults_.setValue("fixed_mod", std::vector<std::string> {}, "Fixed modifications, as FLASHTnT's fixed_mod.");
   defaultsToParam_();
 }
 
 void FLASHAnnotatorAlgorithm::updateMembers_()
 {
   tol_ = param_.getValue("tol");
+  fixed_mods_ = FixedModifications::fromNames(param_.getValue("fixed_mod").toStringVector());
+  residue_masses_ = residueMassTable(fixed_mods_);
   calibrate_on_ = param_.getValue("calibrate").toString() == "true";
   cal_tol_ = param_.getValue("calibration_tol");
   min_peaks_ = param_.getValue("min_peaks");
@@ -447,10 +450,10 @@ void FLASHAnnotatorAlgorithm::toPeakArrays(const MSSpectrum& spec, PeakArrays& p
   peaks.indexBuckets();
 }
 
-double FLASHAnnotatorAlgorithm::getProteoformMass(const String& sequence, const std::vector<Modification>& modifications)
+double FLASHAnnotatorAlgorithm::getProteoformMass(const String& sequence, const std::vector<Modification>& modifications, const FixedModifications& fixed_mods)
 {
   static const double water = Residue::getInternalToFull().getMonoWeight();
-  const auto& aa = residueMasses();
+  const auto aa = residueMassTable(fixed_mods);
   double mass = water;
   for (const char c : sequence)
   {
@@ -564,7 +567,7 @@ bool FLASHAnnotatorAlgorithm::getFragments(const PrSM& prsm, std::vector<Fragmen
 {
   fragments.clear();
   if (span_fragments != nullptr) span_fragments->clear();
-  const auto& aa = residueMasses();
+  const auto& aa = residue_masses_;
   const int length = (int)prsm.sequence.size();
   std::vector<double> prefix_mass(length + 1, .0);
   for (int i = 0; i < length; i++)
@@ -992,7 +995,7 @@ void FLASHAnnotatorAlgorithm::annotateOne_(const PeakArrays& spec, const std::ve
   if (! internal_on_ || empty || length < 5) return;
 
   // internal pieces [first, last], both ends inside the proteoform, 2 .. internal_max_length residues, every internal ion type
-  const auto& aa = residueMasses();
+  const auto& aa = residue_masses_;
   std::vector<double> prefix(length + 1, .0);
   for (int i = 0; i < length; i++)
   {
@@ -1256,7 +1259,7 @@ void FLASHAnnotatorAlgorithm::annotate(const std::vector<PeakArrays>& spectra, c
   results.assign(prsms.size(), Result());
 
   // the isotope table must cover the heaviest fragment. It is computed here, once, before the parallel region.
-  const auto& aa = residueMasses();
+  const auto& aa = residue_masses_;
   double max_fragment_mass = 0;
   for (const auto& prsm : prsms)
   {

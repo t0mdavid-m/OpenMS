@@ -27,6 +27,7 @@
 #include <memory>
 #include <set>
 #include <unordered_set>
+#include <OpenMS/ANALYSIS/TOPDOWN/FixedModifications.h>
 
 namespace OpenMS
 {
@@ -132,6 +133,7 @@ public:
     std::vector<std::vector<std::uint32_t>> pro_prefix_index, pro_suffix_index;
     FLASHGappedTaggerAlgorithm gapped_tagger;
     MassLadderAlgorithm mass_ladders;
+    FixedModifications fixed_mods; ///< the fixed modifications it was built with
   };
   /// Build the database side of run() for @p fasta_entry and @p db with this instance's parameters. run() builds one itself when none is set.
   std::shared_ptr<PreparedDatabase> prepareDatabase(const std::vector<FASTAFile::FASTAEntry>& fasta_entry,
@@ -163,6 +165,7 @@ private:
   RawSpectrumLoader raw_loader_;
   /// the database side run() reuses (setPreparedDatabase); nullptr: run() builds its own
   std::shared_ptr<const PreparedDatabase> prepared_;
+  FixedModifications fixed_mods_; ///< fixed_mod, handed to the tagger, gapped tagger, extender and annotator
   /// weight of the raw-spectrum evidence score added to the extension score for the FDR
   double raw_score_weight_ = 8.0;
   /// the raw spectra of loadRawSpectra_, by position (raw_slot_: scan to position): their peaks centroided into raw_peaks_ and removed
@@ -256,6 +259,7 @@ private:
   static void vectorizeProteinSequence_(const std::vector<std::string>& cleaned_protein_seqs,
                             std::vector<std::unordered_set<int>>& vec_pro,
                             std::vector<std::unordered_set<int>>& rev_vec_pro,
-                            const std::vector<std::vector<std::pair<int, double>>>* fixed = nullptr);
+                            const std::vector<std::vector<std::pair<int, double>>>* fixed = nullptr,
+                            const FixedModifications& fixed_mods = FixedModifications::none());
 };
 } // namespace OpenMS

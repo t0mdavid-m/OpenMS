@@ -16,6 +16,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <OpenMS/ANALYSIS/TOPDOWN/FixedModifications.h>
 
 namespace OpenMS
 {
@@ -115,6 +116,7 @@ private:
 
   // parameters
   double max_gap_mass_ = 5000;
+  FixedModifications fixed_mods_;
   double bin_width_ = 0.1;
   int min_tag_size_ = 4;
   int max_tag_size_ = 4;

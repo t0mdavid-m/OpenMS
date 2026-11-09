@@ -18,6 +18,11 @@
 
 namespace OpenMS
 {
+namespace
+{
+  FixedModifications global_fixed_mods; // FLASHTnTFile::setGlobalFixedModifications
+}
+
 /**
   @brief FLASHTnT output *.tsv file format
    @ingroup FileIO
@@ -186,12 +191,12 @@ void FLASHTnTFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_
               }
             }
           }
-          FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(pos, masses, -1, seq, tag, fixed.empty() ? nullptr : &fixed);
+          FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(pos, masses, -1, seq, tag, fixed.empty() ? nullptr : &fixed, global_fixed_mods);
 
           if (last < (int)seq.size()) seq = seq.substr(0, std::max(0, last));
           if (first > 0) seq = seq.substr(std::min((int)seq.size(), first));
           FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(pos_in_truncated, masses_in_truncated, flanking_mass_tol, seq, tag,
-                                                                         fixed.empty() ? nullptr : &fixed_in_truncated);
+                                                                         fixed.empty() ? nullptr : &fixed_in_truncated, global_fixed_mods);
           if (!pos_in_truncated.empty())
           {
             for (int i = 0; i < pos.size(); i++)
@@ -316,14 +321,9 @@ namespace
   }
 } // namespace
 
-namespace
+void FLASHTnTFile::setGlobalFixedModifications(const FixedModifications& fixed_mods)
 {
-  String global_fixed_proforma; // FLASHTnTFile::setGlobalFixedModifications
-}
-
-void FLASHTnTFile::setGlobalFixedModifications(const String& proforma_prefix)
-{
-  global_fixed_proforma = proforma_prefix;
+  global_fixed_mods = fixed_mods;
 }
 
 String FLASHTnTFile::getProFormaString(const ProteinHit& hit)
@@ -442,7 +442,7 @@ String FLASHTnTFile::getProFormaString(const ProteinHit& hit)
       return "";
     }
   }
-  return global_fixed_proforma + pf.toString();
+  return global_fixed_mods.proformaPrefix() + pf.toString();
 }
 
 

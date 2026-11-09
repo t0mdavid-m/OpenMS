@@ -24,6 +24,7 @@
 #include <limits>
 #include <unordered_map>
 #include <vector>
+#include <OpenMS/ANALYSIS/TOPDOWN/FixedModifications.h>
 
 namespace OpenMS
 {
@@ -396,7 +397,7 @@ private:
    * @param mode mode
    */
   static void getProMasses_(const ProteinHit& hit, std::vector<double>& pro_masses, int mode,
-                            const std::vector<std::pair<int, double>>* fixed = nullptr);
+                            const std::vector<std::pair<int, double>>* fixed = nullptr, const FixedModifications& fixed_mods = FixedModifications::none());
 
   /***
    * calculate precursor mass with fragment mass pairs
@@ -552,6 +553,7 @@ private:
   int path_alternative_margin_ = 0;
   /// per database entry, its fixed modifications (position, mass) and their kinds (setFixedModifications); nullptr: none
   const std::vector<std::vector<std::pair<int, double>>>* fixed_masses_ = nullptr;
+  FixedModifications fixed_mods_; ///< fixed_mod: the residue masses of the search
   const std::vector<std::vector<std::pair<int, std::uint8_t>>>* occupancy_ = nullptr;
   int max_blind_mod_cntr_ = 1;
   int max_var_mod_cntr_ = 0;

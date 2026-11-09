@@ -15,6 +15,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <OpenMS/ANALYSIS/TOPDOWN/FixedModifications.h>
 
 namespace OpenMS
 {
@@ -141,7 +142,7 @@ public:
     rank one entry per protein); nullptr or an identity database: every sequence is a protein of its own
   */
   void buildIndex(const std::vector<std::string>& protein_seqs, const std::vector<std::string>& ion_types, bool terminal_ladders,
-                  bool precursor_ladders, const ProteoformDatabase* db = nullptr);
+                  bool precursor_ladders, const ProteoformDatabase* db = nullptr, const FixedModifications& fixed_mods = FixedModifications::none());
 
   /**
     @brief the terminal-ladder candidates of a spectrum. Thread safe once the index is built.

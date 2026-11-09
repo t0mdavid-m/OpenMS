@@ -557,7 +557,7 @@ template<typename Entry> void indexByDalton(const std::vector<Entry>& index, std
 } // namespace
 
 void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seqs, const std::vector<std::string>& ion_types, bool terminal_ladders,
-                                     bool precursor_ladders, const ProteoformDatabase* db)
+                                     bool precursor_ladders, const ProteoformDatabase* db, const FixedModifications& fixed_mods)
 {
   ion_residue_shifts_.clear();
   protein_lengths_.clear();
@@ -641,8 +641,8 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
       const Size pos = reverse ? seq.size() - 1 - j : j;
       const char aa = seq[pos];
       if (standard.find(aa) == std::string::npos) break;
-      if (extra.empty()) out.push_back(out.back() + rdb->getResidue(aa)->getMonoWeight(Residue::Internal));
-      else out.push_back(out.back() + rdb->getResidue(aa)->getMonoWeight(Residue::Internal) + extra[pos]);
+      if (extra.empty()) out.push_back(out.back() + fixed_mods.mass(aa));
+      else out.push_back(out.back() + fixed_mods.mass(aa) + extra[pos]);
     }
   };
   ladder_pre_.resize(protein_seqs.size());
@@ -696,7 +696,7 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
       std::sort(ladder_suf_index_.begin(), ladder_suf_index_.end(), by_mass);
     }
 
-    const double met = rdb->getResidue('M')->getMonoWeight(Residue::Internal);
+    const double met = fixed_mods.mass('M');
     const double acetyl = EmpiricalFormula("C2H2O").getMonoWeight();
     for (const auto& [prefix, shift] : ion_residue_shifts_)
     {
@@ -734,7 +734,7 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
       for (Size x = 0; x < seq.size(); x++)
       {
         const char aa = seq[x];
-        const double mass = standard_residues.find(aa) == std::string::npos ? 0.0 : rdb->getResidue(aa)->getMonoWeight(Residue::Internal);
+        const double mass = standard_residues.find(aa) == std::string::npos ? 0.0 : fixed_mods.mass(aa);
         if (extra.empty()) own.push_back(own.back() + mass);
         else own.push_back(own.back() + mass + (mass > 0 ? extra[x] : 0.0));
       }

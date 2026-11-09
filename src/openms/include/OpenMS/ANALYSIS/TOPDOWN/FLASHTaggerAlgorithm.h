@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
+#include <OpenMS/ANALYSIS/TOPDOWN/FixedModifications.h>
 
 namespace OpenMS
 {
@@ -150,7 +151,7 @@ public:
                                                       double flanking_mass_tol,
                                                       const String& seq,
                                                       const FLASHHelperClasses::Tag& tag,
-                                                      const std::vector<std::pair<int, double>>* fixed = nullptr);
+                                                      const std::vector<std::pair<int, double>>* fixed = nullptr, const FixedModifications& fixed_mods = FixedModifications::none());
 
   /// maximum node score for tag generation and extension
   const static int max_node_score = 8;
@@ -204,6 +205,7 @@ private:
   static Size find_with_X_(const std::string_view& A, const String& B, Size pos = 0);
 
   std::set<const Residue*> aas_ = ResidueDB::getInstance()->getResidues("Natural19WithoutI");
+  FixedModifications fixed_mods_; ///< fixed_mod: the residue masses of the de-novo alphabet
   std::map<double, std::vector<Residue>> aa_mass_map_;
   std::map<double, std::vector<std::vector<Residue>>> gap_mass_map_;
   std::map<int, std::map<int, std::vector<String>>> edge_aa_map_;

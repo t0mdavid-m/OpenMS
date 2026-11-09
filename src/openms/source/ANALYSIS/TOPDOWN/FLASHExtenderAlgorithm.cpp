@@ -111,6 +111,7 @@ namespace OpenMS
 
   void FLASHExtenderAlgorithm::updateMembers_()
   {
+    fixed_mods_ = FixedModifications::fromNames(param_.getValue("fixed_mod").toStringVector());
     max_blind_mod_cntr_ = param_.getValue("max_blind_mod_count");
     max_mod_mass_ = param_.getValue("max_mod_mass");
     skip_precursor_inference_ = param_.getValue("skip_precursor_inference") == "true";
@@ -648,7 +649,7 @@ namespace OpenMS
   }
 
   void FLASHExtenderAlgorithm::getProMasses_(const ProteinHit& hit, std::vector<double>& pro_masses, int mode,
-                                             const std::vector<std::pair<int, double>>* fixed)
+                                             const std::vector<std::pair<int, double>>* fixed, const FixedModifications& fixed_mods)
   {
     pro_masses.reserve(hit.getSequence().size() + 1);
     pro_masses.push_back(0);
@@ -662,7 +663,7 @@ namespace OpenMS
       {
         if (aa == 'X') pro_masses.push_back(pro_masses.back()); // repeat the previous mass
         else
-          pro_masses.push_back(pro_masses.back() + ResidueDB::getInstance()->getResidue(aa)->getMonoWeight(Residue::Internal));
+          pro_masses.push_back(pro_masses.back() + fixed_mods.mass(aa));
       }
       return;
     }
@@ -678,7 +679,7 @@ namespace OpenMS
       const char aa = seq[k];
       if (aa == 'X') pro_masses.push_back(pro_masses.back()); // repeat the previous mass
       else
-        pro_masses.push_back(pro_masses.back() + ResidueDB::getInstance()->getResidue(aa)->getMonoWeight(Residue::Internal) + extra[k]);
+        pro_masses.push_back(pro_masses.back() + fixed_mods.mass(aa) + extra[k]);
     }
   }
 
@@ -784,7 +785,6 @@ namespace OpenMS
     const bool with_span = ! lower_case && masses.size() >= 2;
     const double tag_span = with_span ? masses.back() - masses.front() : 0;
     const double margin = with_span ? std::max(0.05, 2 * tol_ * (masses.front() + masses.back())) : 0;
-    const auto* rdb = ResidueDB::getInstance();
     std::vector<int> kept;
     kept.reserve(positions.size());
     for (int pos : positions)
@@ -803,7 +803,7 @@ namespace OpenMS
       {
         const char c = k < (int)seq.size() ? seq[k] : 'X';
         if (c < 'A' || c > 'Z' || c == 'X' || c == 'B' || c == 'J' || c == 'Z') plain = false;
-        else span += rdb->getResidue(c)->getMonoWeight(Residue::Internal);
+        else span += fixed_mods_.mass(c);
       }
       // without a mass span to compare (lowercase letters, an unknown residue): placed only off the fixed residues
       if (! plain)
@@ -1085,7 +1085,7 @@ namespace OpenMS
       if (! positions_set)
       {
         std::vector<double> masses;
-        FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(positions, masses, -1, seq, tag);
+        FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(positions, masses, -1, seq, tag, nullptr, fixed_mods_);
         if (hi.fixed_ != nullptr) keepFixedConsistentPlacements_(seq, tag, *hi.fixed_, positions);
         positions_set = true;
       }
@@ -1093,7 +1093,7 @@ namespace OpenMS
       std::sort(tag_masses.begin(), tag_masses.end());
 
       double seq_mass = 0;
-      if (has_lower_case) { seq_mass = AASequence::fromString(upper_tag_seq, true).getMonoWeight(Residue::Internal); }
+      if (has_lower_case) { seq_mass = fixed_mods_.internalMass(AASequence::fromString(upper_tag_seq, true)); }
       std::vector<double> start_masses, end_masses, start_tols, end_tols;
       if (tag.getCtermMass() >= 0) // suffix
       {
@@ -1409,8 +1409,8 @@ namespace OpenMS
         {
           const String& seq = hit.getSequence();
           std::vector<double> pre, suf;
-          getProMasses_(hit, pre, 1, hi.fixed_);
-          getProMasses_(hit, suf, 0, hi.fixed_);
+          getProMasses_(hit, pre, 1, hi.fixed_, fixed_mods_);
+          getProMasses_(hit, suf, 0, hi.fixed_, fixed_mods_);
           const int L = (int)seq.size();
           const double room = pre.back() - (given_precursor_mass_ - i2f_mass);
           for (Size t = 0; t < matched_tags.size(); t++)
@@ -1420,7 +1420,7 @@ namespace OpenMS
             if (! positions_set)
             {
               std::vector<double> masses;
-              FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(positions, masses, -1, seq, tag);
+              FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(positions, masses, -1, seq, tag, nullptr, fixed_mods_);
               if (hi.fixed_ != nullptr) keepFixedConsistentPlacements_(seq, tag, *hi.fixed_, positions);
               positions_set = true;
             }
@@ -1503,7 +1503,7 @@ namespace OpenMS
           // auto& node_spec = hi.node_spec_map_[hi.mode_] = MSSpectrum();
           // auto& tol_spec = hi.tol_spec_map_[hi.mode_] = MSSpectrum();
 
-          getProMasses_(hit, pro_masses, hi.mode_, hi.fixed_);
+          getProMasses_(hit, pro_masses, hi.mode_, hi.fixed_, fixed_mods_);
           updateHitInformation_(dspec, hi, pro_masses.back());
 
           hi.visited_.clear(); // dag_ is rebuilt per mode
@@ -2048,7 +2048,7 @@ namespace OpenMS
                 }
 
                 FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(positions, masses, max_mod_mass_ * max_blind_mod_cntr_ + 1, seq, tag,
-                                                                               hi.fixed_ != nullptr ? &seq_fixed : nullptr);
+                                                                               hi.fixed_ != nullptr ? &seq_fixed : nullptr, fixed_mods_);
                 tag_matched = ! positions.empty();
                 break;
               }

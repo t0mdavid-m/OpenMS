@@ -91,12 +91,14 @@ FLASHGappedTaggerAlgorithm::FLASHGappedTaggerAlgorithm() : DefaultParamHandler("
   defaults_.setValue("bin_width", 0.1, "Mass bin width of the protein window index (Da). A tolerance window is looked up in every bin it touches.");
   defaults_.setMinFloat("bin_width", 0.001);
   defaults_.addTag("bin_width", "advanced");
+  defaults_.setValue("fixed_mod", std::vector<std::string> {}, "Fixed modifications (FLASHTnTAlgorithm sets them).");
   defaultsToParam_();
 }
 
 void FLASHGappedTaggerAlgorithm::updateMembers_()
 {
   max_gap_mass_ = param_.getValue("max_gap_mass");
+  fixed_mods_ = FixedModifications::fromNames(param_.getValue("fixed_mod").toStringVector());
   min_tag_size_ = param_.getValue("min_tag_size");
   max_tag_size_ = std::max(min_tag_size_, (int)param_.getValue("max_tag_size"));
   beam_width_ = param_.getValue("beam_width");
@@ -122,7 +124,7 @@ void FLASHGappedTaggerAlgorithm::buildIndex(const std::vector<std::string>& prot
   double aa_mass[128] = {0};
   for (const char* c = standard_residues; *c; ++c)
   {
-    aa_mass[(int)*c] = ResidueDB::getInstance()->getResidue(*c)->getMonoWeight(Residue::Internal);
+    aa_mass[(int)*c] = fixed_mods_.mass(*c);
   }
 
   // residues concatenated
@@ -354,7 +356,7 @@ void FLASHGappedTaggerAlgorithm::search(const DeconvolvedSpectrum& dspec, double
   std::vector<double> residue_masses, dipeptide_masses;
   if (skip_consecutive_)
   {
-    for (const char* c = standard_residues; *c; ++c) residue_masses.push_back(ResidueDB::getInstance()->getResidue(*c)->getMonoWeight(Residue::Internal));
+    for (const char* c = standard_residues; *c; ++c) residue_masses.push_back(fixed_mods_.mass(*c));
     std::sort(residue_masses.begin(), residue_masses.end());
     for (double a : residue_masses)
     {

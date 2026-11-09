@@ -16,6 +16,7 @@
 #include <set>
 #include <utility>
 #include <vector>
+#include <OpenMS/ANALYSIS/TOPDOWN/FixedModifications.h>
 
 namespace OpenMS
 {
@@ -218,7 +219,7 @@ public:
   const std::vector<String>& getInternalIonTypes() const;
 
   /// neutral monoisotopic mass of the proteoform (residues + water + modifications); -1 for an unknown residue
-  static double getProteoformMass(const String& sequence, const std::vector<Modification>& modifications);
+  static double getProteoformMass(const String& sequence, const std::vector<Modification>& modifications, const FixedModifications& fixed_mods = FixedModifications::none());
 
   /// -log10 P(X >= k) for X ~ Binomial(n, p), computed in log space and capped at max_score_
   static double binomialTailScore(int n, int k, double p);
@@ -364,6 +365,8 @@ private:
 
   /// parameters
   double tol_ = 10.0;
+  FixedModifications fixed_mods_;
+  std::vector<double> residue_masses_; ///< by one-letter code, upper and lower case, with fixed_mods_
   double cal_tol_ = 20.0;
   bool calibrate_on_ = true;
   int min_peaks_ = 3;

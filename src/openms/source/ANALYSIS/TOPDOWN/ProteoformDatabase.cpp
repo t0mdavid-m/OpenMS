@@ -433,15 +433,15 @@ void ProteoformDatabase::finish_()
 }
 
 void ProteoformDatabase::loadPEFF(const String& file, int max_mods, const std::vector<String>& mod_masses,
-                                  std::vector<FASTAFile::FASTAEntry>& fasta_entries)
+                                  std::vector<FASTAFile::FASTAEntry>& fasta_entries, const FixedModifications& fixed_mods)
 {
   std::vector<FASTAFile::FASTAEntry> input;
   FASTAFile().load(file, input); // skips the '#' header lines of a PEFF file
-  build(input, max_mods, mod_masses, fasta_entries);
+  build(input, max_mods, mod_masses, fasta_entries, fixed_mods);
 }
 
 void ProteoformDatabase::build(const std::vector<FASTAFile::FASTAEntry>& input, int max_mods, const std::vector<String>& mod_masses,
-                               std::vector<FASTAFile::FASTAEntry>& fasta_entries)
+                               std::vector<FASTAFile::FASTAEntry>& fasta_entries, const FixedModifications& fixed_mods)
 {
   entries.clear();
   proteins.clear();
@@ -498,7 +498,7 @@ void ProteoformDatabase::build(const std::vector<FASTAFile::FASTAEntry>& input, 
   const auto* rdb = ResidueDB::getInstance();
   auto residueMass = [&](char c) {
     if (movable_residues.find(c) == std::string::npos && c != 'U' && c != 'O') return 0.0;
-    return rdb->getResidue(c)->getMonoWeight(Residue::Internal);
+    return fixed_mods.mass(c);
   };
 
   // A parsed protein: forms, units and the entries made of them. The entries of a decoy generated for it mirror them.

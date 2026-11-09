@@ -15,6 +15,7 @@
 #include <map>
 #include <utility>
 #include <vector>
+#include <OpenMS/ANALYSIS/TOPDOWN/FixedModifications.h>
 
 namespace OpenMS
 {
@@ -109,11 +110,12 @@ public:
     @param mod_masses masses by accession that replace (or, "skip", leave out) those of ModificationsDB, e.g. "MOD:01819=100.016044"
     @param fasta_entries output: per entry, the protein's identifier and description and the form's letters
   */
-  void loadPEFF(const String& file, int max_mods, const std::vector<String>& mod_masses, std::vector<FASTAFile::FASTAEntry>& fasta_entries);
+  void loadPEFF(const String& file, int max_mods, const std::vector<String>& mod_masses, std::vector<FASTAFile::FASTAEntry>& fasta_entries,
+                const FixedModifications& fixed_mods = FixedModifications::none());
 
   /// the entries of a parsed PEFF (or FASTA) entry list, as loadPEFF makes them from its file; for tests and callers that read the file themselves
   void build(const std::vector<FASTAFile::FASTAEntry>& input, int max_mods, const std::vector<String>& mod_masses,
-             std::vector<FASTAFile::FASTAEntry>& fasta_entries);
+             std::vector<FASTAFile::FASTAEntry>& fasta_entries, const FixedModifications& fixed_mods = FixedModifications::none());
 
   /// one entry per protein, at offset 0 over its whole length, without fixed modifications (a FASTA search)
   bool isIdentity() const

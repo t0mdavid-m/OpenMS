@@ -105,7 +105,7 @@ UInt tntKey(const char* name)
 // The candidate proteoforms a blind shift opens on a protein: the windows (residue i to j) of @p sequence whose mass is within @p max_shift of
 // @p mass, each of which a shift would make fit; every window when the mass is unknown (<= 0). Without a shift only the windows at the
 // mass itself are candidates, so the count is the multiple-testing burden of a PrSM with a shift, as TopPIC counts its candidates by type.
-double shiftedCandidateCount(const String& sequence, double mass, double max_shift)
+double shiftedCandidateCount(const String& sequence, double mass, double max_shift, const FixedModifications& fixed_mods)
 {
   const Size n = sequence.size();
   if (n == 0) return 1.0;
@@ -114,7 +114,7 @@ double shiftedCandidateCount(const String& sequence, double mass, double max_shi
   for (Size i = 0; i < n; i++)
   {
     const Residue* r = ResidueDB::getInstance()->getResidue((unsigned char)sequence[i]);
-    prefix[i + 1] = prefix[i] + (r != nullptr ? r->getMonoWeight(Residue::Internal) : 0.0);
+    prefix[i + 1] = prefix[i] + (r != nullptr ? fixed_mods.mass(sequence[i]) : 0.0);
   }
   static const double water = EmpiricalFormula("H2O").getMonoWeight();
   double count = 0;
@@ -365,9 +365,17 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "entrapment 10 of 1584 proteoforms instead of 12 of 1490, and 25% faster.");
   defaults_.setValue("max_mod_mass", 500.0, "Maximum absolute mass of blind modifications.");
 
+  defaults_.setValue("fixed_mod", std::vector<std::string> {},
+                     "Fixed modifications, by name with the residue (e.g. 'Carbamidomethyl (C)' for alkylated cysteines, 'TMT6plex (K)') or by Unimod "
+                     "accession number with the residue (e.g. '4 (C)'; 'UNIMOD:4 (C)' is the same). "
+                     "The residue's mass is changed for the whole search: every occurrence in targets and decoys, in sequence tags (a tag reads "
+                     "the modified residue as its letter), mass ladders, the extension, the raw-spectrum scoring and the reported masses. Only "
+                     "modifications of a residue anywhere, one per residue (not terminal ones). Written as ProForma global modifications, "
+                     "e.g. <[+57.021464|UNIMOD:4]@C>. With a PEFF database an annotated modification of such a residue adds to it.");
+
   auto tparam = FLASHTaggerAlgorithm().getDefaults();
   tparam.remove("ion_type");
-  tparam.remove("fixed_mod"); // unused by the tagger (FLASHIda sets it); fixed modifications are the FLASHTnT tool's fixed_mod
+  tparam.remove("fixed_mod"); // set from the top-level fixed_mod (updateMembers_)
   defaults_.insert("tag:", tparam);
 
   auto eparam = FLASHExtenderAlgorithm().getDefaults();
@@ -375,7 +383,7 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   eparam.remove("max_var_mod_count");
   eparam.remove("max_blind_mod_count");
   eparam.remove("max_mod_mass");
-  eparam.remove("fixed_mod"); // unused by the extender (FLASHIda sets it)
+  eparam.remove("fixed_mod"); // set from the top-level fixed_mod (updateMembers_)
   eparam.remove("var_mod");
 
   defaults_.insert("ex:", eparam);
@@ -478,7 +486,9 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "added no proteoforms, while the small penalty added 1.4% at unchanged entrapment.");
   defaults_.setValidStrings("learn_var_mod_penalty", {"true", "false"});
   defaults_.addTag("learn_var_mod_penalty", "advanced");
-  defaults_.insert("gapped:", FLASHGappedTaggerAlgorithm().getDefaults());
+  auto gparam = FLASHGappedTaggerAlgorithm().getDefaults();
+  gparam.remove("fixed_mod");
+  defaults_.insert("gapped:", gparam);
   defaults_.setValue("raw_score_weight", 8.0,
                      "With the raw mzML (-in_raw), every PrSM is annotated on its raw spectrum (FLASHAnnotator: isotope envelopes of the proteoform's "
                      "fragments at every charge) and ranked for the FDR by its extension score plus this weight times its raw score (-log10 of the "
@@ -500,6 +510,7 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.addTag("path_alternative_margin", "advanced");
   auto aparam = FLASHAnnotatorAlgorithm().getDefaults();
   aparam.remove("ion_type");
+  aparam.remove("fixed_mod");
   defaults_.insert("raw:", aparam);
   defaultsToParam_();
 }
@@ -519,6 +530,12 @@ void FLASHTnTAlgorithm::updateMembers_()
   gapped_param_ = param_.copy("gapped:", true);
   annotator_param_ = param_.copy("raw:", true);
   annotator_param_.setValue("ion_type", param_.getValue("ion_type"));
+  const auto fixed_mod = param_.getValue("fixed_mod");
+  tagger_param_.setValue("fixed_mod", fixed_mod);
+  extender_param_.setValue("fixed_mod", fixed_mod);
+  gapped_param_.setValue("fixed_mod", fixed_mod);
+  annotator_param_.setValue("fixed_mod", fixed_mod);
+  fixed_mods_ = FixedModifications::fromNames(fixed_mod.toStringVector());
   raw_score_weight_ = param_.getValue("raw_score_weight");
   gapped_mode_ = param_.getValue("gapped_tags").toString();
   candidate_ranking_ = param_.getValue("candidate_ranking").toString();
@@ -896,7 +913,8 @@ void FLASHTnTAlgorithm::setProteinQvalues_(const std::vector<int>& hit_class, co
 void FLASHTnTAlgorithm::vectorizeProteinSequence_(const std::vector<std::string>& cleaned_protein_seqs,
                                                      std::vector<std::unordered_set<int>>& vec_pro,
                                                      std::vector<std::unordered_set<int>>& rev_vec_pro,
-                                                     const std::vector<std::vector<std::pair<int, double>>>* fixed)
+                                                     const std::vector<std::vector<std::pair<int, double>>>* fixed,
+                                                     const FixedModifications& fixed_mods)
 {
   // proteins in parallel; each set is a copy of one built by the same insertions, as push_back copied it, so that it iterates in the same
   // order (FLASHExtenderAlgorithm::getBestMassShift_ breaks ties by that order)
@@ -925,7 +943,7 @@ void FLASHTnTAlgorithm::vectorizeProteinSequence_(const std::vector<std::string>
     for (Size j = 0; j < seq.size(); j++)
     {
       Size index = j;
-      mass += ResidueDB::getInstance()->getResidue(seq[index])->getMonoWeight(Residue::Internal);
+      mass += fixed_mods.mass(seq[index]);
       if (! extra.empty()) mass += extra[index];
       int vindex = int(round(mass));
       vec.insert(vindex);
@@ -934,7 +952,7 @@ void FLASHTnTAlgorithm::vectorizeProteinSequence_(const std::vector<std::string>
     for (Size j = 0; j < seq.size(); j++)
     {
       Size index = seq.size() - j - 1;
-      mass += ResidueDB::getInstance()->getResidue(seq[index])->getMonoWeight(Residue::Internal);
+      mass += fixed_mods.mass(seq[index]);
       if (! extra.empty()) mass += extra[index];
       int vindex = int(round(mass));
       rev_vec.insert(vindex);
@@ -966,6 +984,7 @@ std::shared_ptr<FLASHTnTAlgorithm::PreparedDatabase> FLASHTnTAlgorithm::prepareD
   // run()'s database side, moved here as it was (its locals are pd's members), so that a real-time search builds it once (ADR-0061)
   auto prepared = std::make_shared<PreparedDatabase>();
   auto& pd = *prepared;
+  pd.fixed_mods = fixed_mods_;
   if (db == nullptr)
   {
     pd.identity_db = ProteoformDatabase::fromFASTA(original_fasta_entry);
@@ -1058,7 +1077,7 @@ std::shared_ptr<FLASHTnTAlgorithm::PreparedDatabase> FLASHTnTAlgorithm::prepareD
     index_clock = now;
     return s;
   };
-  vectorizeProteinSequence_(pd.cleaned_protein_seqs, pd.vec_pro, pd.rev_vec_pro, with_fixed ? &pd.cleaned_fixed : nullptr);
+  vectorizeProteinSequence_(pd.cleaned_protein_seqs, pd.vec_pro, pd.rev_vec_pro, with_fixed ? &pd.cleaned_fixed : nullptr, fixed_mods_);
   const double t_mass_sets = lap();
 
   // exact residue sums from the N- and the C-terminus per protein, for the protein-level score (FLASHTaggerAlgorithm::runMatchingExact);
@@ -1083,17 +1102,17 @@ std::shared_ptr<FLASHTnTAlgorithm::PreparedDatabase> FLASHTnTAlgorithm::prepareD
       double plain = 0; // as the sum of an entry without fixed modifications
       for (Size j = 0; j < seq.size(); j++)
       {
-        const double m = ResidueDB::getInstance()->getResidue(seq[j])->getMonoWeight(Residue::Internal);
+        const double m = fixed_mods_.mass(seq[j]);
         plain += m;
         pre.push_back(pre.back() + m + extra[j]);
       }
       pd.pro_plain_mass[k] = plain;
       for (Size j = 0; j < seq.size(); j++)
-        suf.push_back(suf.back() + ResidueDB::getInstance()->getResidue(seq[seq.size() - 1 - j])->getMonoWeight(Residue::Internal) + extra[seq.size() - 1 - j]);
+        suf.push_back(suf.back() + fixed_mods_.mass(seq[seq.size() - 1 - j]) + extra[seq.size() - 1 - j]);
       continue;
     }
-    for (Size j = 0; j < seq.size(); j++) pre.push_back(pre.back() + ResidueDB::getInstance()->getResidue(seq[j])->getMonoWeight(Residue::Internal));
-    for (Size j = 0; j < seq.size(); j++) suf.push_back(suf.back() + ResidueDB::getInstance()->getResidue(seq[seq.size() - 1 - j])->getMonoWeight(Residue::Internal));
+    for (Size j = 0; j < seq.size(); j++) pre.push_back(pre.back() + fixed_mods_.mass(seq[j]));
+    for (Size j = 0; j < seq.size(); j++) suf.push_back(suf.back() + fixed_mods_.mass(seq[seq.size() - 1 - j]));
   }
   // their bucket indices, with which FLASHTaggerAlgorithm::scoreShifts looks the residue sum of a mass up instead of walking to it
   pd.pro_prefix_index.resize(pd.cleaned_protein_seqs.size());
@@ -1115,7 +1134,7 @@ std::shared_ptr<FLASHTnTAlgorithm::PreparedDatabase> FLASHTnTAlgorithm::prepareD
   const double t_gapped = lap();
   // the sliding ladders of native mode read the runs of standard residues of the precursor ladders
   lap();
-  pd.mass_ladders.buildIndex(pd.protein_seqs, param_.getValue("ion_type").toStringVector(), terminal_ladders_, (precursor_ladders_ && ! protein_level_only_) || (native_ && pd.decoy_factor > 0), db);
+  pd.mass_ladders.buildIndex(pd.protein_seqs, param_.getValue("ion_type").toStringVector(), terminal_ladders_, (precursor_ladders_ && ! protein_level_only_) || (native_ && pd.decoy_factor > 0), db, fixed_mods_);
   OPENMS_LOG_INFO << "Database indexes (wall s): protein mass sets " << t_mass_sets << ", residue sums " << t_residue_sums << ", gapped tags "
                   << t_gapped << ", mass ladders " << lap() << std::endl;
   return prepared;
@@ -1137,6 +1156,10 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   std::shared_ptr<PreparedDatabase> own_prepared; // built here when nothing was prepared (setPreparedDatabase)
   if (! prepared_) own_prepared = prepareDatabase(original_fasta_entry, db);
   const PreparedDatabase& prepared = prepared_ ? *prepared_ : *own_prepared;
+  if (prepared.fixed_mods != fixed_mods_)
+  {
+    throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "run(): the prepared database was built with other fixed modifications", "fixed_mod");
+  }
   db = prepared.db;
   decoy_factor_ = prepared.decoy_factor;
   const bool by_entry = ! db->isIdentity(); // several entries per protein, or fixed modifications
@@ -1421,7 +1444,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       const Residue* r = rdb->getResidue((unsigned char)c);
       if (r == nullptr || r == unknown) continue;
       aa_plain[c] = true;
-      aa_internal_mass[c] = r->getMonoWeight(Residue::Internal);
+      aa_internal_mass[c] = fixed_mods_.mass((char)c);
     }
   }
 
@@ -1567,9 +1590,9 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           {
             const String& cleanseq = cleaned_protein_seqs[h.protein];
             const String& seq = seqs[h.needle_index];
-            nmass = h.query_pos <= 0 ? .0 : AASequence::fromString(cleanseq.substr(0, h.query_pos)).getMonoWeight(Residue::Internal);
+            nmass = h.query_pos <= 0 ? .0 : fixed_mods_.internalMass(AASequence::fromString(cleanseq.substr(0, h.query_pos)));
             cmass = cleanseq.length() - seq.length() <= h.query_pos ? .0 :
-              AASequence::fromString(cleanseq.substr(h.query_pos + seq.length(), cleanseq.length() - h.query_pos - seq.length())).getMonoWeight(Residue::Internal);
+              fixed_mods_.internalMass(AASequence::fromString(cleanseq.substr(h.query_pos + seq.length(), cleanseq.length() - h.query_pos - seq.length())));
             if (entry_fixed != nullptr && ! (*entry_fixed)[h.protein].empty())
             {
               nmass += h.nmass; // the fixed masses before and after the tag
@@ -4460,7 +4483,7 @@ std::function<double(const ProteinHit&)> FLASHTnTAlgorithm::alternativeRawScorer
 #pragma omp critical(flashtnt_alternative_raw_score)
     {
       std::vector<double> iso_mzs, iso_intensities;
-      annotator->getIsotopeEnvelope(std::max(precursor_mass, FLASHAnnotatorAlgorithm::getProteoformMass(prsm.sequence, prsm.modifications)) + 200.0, 1,
+      annotator->getIsotopeEnvelope(std::max(precursor_mass, FLASHAnnotatorAlgorithm::getProteoformMass(prsm.sequence, prsm.modifications, fixed_mods_)) + 200.0, 1,
                                     iso_mzs, iso_intensities);
       int reason = 4;
       prsm.precursor_charge = annotator->precursorChargeCap(raw_spectra_[prsm.spectrum_index], precursor_mass, reason);
@@ -4490,7 +4513,7 @@ void FLASHTnTAlgorithm::annotateOnRawSpectra_(std::vector<ProteinHit>& hits) con
   {
     auto& prsm = prsms[i];
     if (! toRawPrSM_(hits[i], prsm, precursor_masses[i])) without_spectrum++;
-    max_mass = std::max({max_mass, precursor_masses[i], FLASHAnnotatorAlgorithm::getProteoformMass(prsm.sequence, prsm.modifications)});
+    max_mass = std::max({max_mass, precursor_masses[i], FLASHAnnotatorAlgorithm::getProteoformMass(prsm.sequence, prsm.modifications, fixed_mods_)});
   }
   // the isotope table once, beyond the heaviest PrSM; then the precursor charge caps
   std::vector<double> iso_mzs, iso_intensities;
@@ -4523,7 +4546,7 @@ void FLASHTnTAlgorithm::annotateOnRawSpectra_(std::vector<ProteinHit>& hits) con
     if (blindModCount_(hit) > 0)
     {
       const double mass = (double)hit.getMetaValue(tntKey("Mass"), -1.0);
-      raw = std::max(0.0, raw - std::log10(shiftedCandidateCount(hit.getSequence(), mass, max_total_mod_mass_)));
+      raw = std::max(0.0, raw - std::log10(shiftedCandidateCount(hit.getSequence(), mass, max_total_mod_mass_, fixed_mods_)));
     }
     hit.setScore(hit.getScore() + raw_score_weight_ * raw);
   }

@@ -14,6 +14,7 @@
 #include <iostream>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FixedModifications.h>
 
 namespace OpenMS
 {
@@ -53,9 +54,9 @@ namespace OpenMS
     */
     static String getProFormaString(const ProteinHit& hit);
 
-    /// the fixed modifications of the whole search (FLASHTnT -fixed_mod) as ProForma global modifications, e.g. "<[+57.021464|UNIMOD:4]@C>",
-    /// written before every ProForma string (empty: none)
-    static void setGlobalFixedModifications(const String& proforma_prefix);
+    /// the fixed modifications of the whole search (FLASHTnT -fixed_mod): their ProForma global prefix, e.g. "<[+57.021464|UNIMOD:4]@C>", is
+    /// written before every ProForma string (empty: none), and tag positions are computed with their masses
+    static void setGlobalFixedModifications(const FixedModifications& fixed_mods);
 
     static void writeProteoforms(const std::vector<ProteinHit>& hits, std::fstream& fs, double pro_fdr, bool chimeric = false);
   };
