@@ -16,6 +16,7 @@
 
 #include "FLASHIda_TestHelpers.h"  // ground-truth harness: ScanData/loadTsvScans/AcqResult/runInterleaved/runFullCycle
 #include "FLASHIda_TestAccess.h"   // FLASHIdaTestAccess: push/queue/queueSize/explorationActive (private-state access)
+#include "FLASHIda_EventCapture.h" // the rescue sections (ADR-0068) read [RESCUE] / [RESCUE-WITHDRAWN] / [CLOSE-OUT]
 
 #include <nlohmann/json.hpp>  // buildCapConfig edits the parsed document, not the text
 
@@ -4053,6 +4054,275 @@ START_SECTION(per_proteoform_end_to_end_cytc)
             << ") on=" << rep_on.first << " (below 2x " << rep_on.second << ")" << std::endl;
   TEST_EQUAL(rep_off.second > 0, true)   // non-vacuity: ungoverned, a proteoform's fragment goes out again at 1x
   TEST_EQUAL(rep_on.second, 0)
+}
+END_SECTION
+
+// ===== The rescue scan (ADR-0068) ===================================================================================
+namespace
+{
+  const std::string kUbiquitin = "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG";
+
+  nlohmann::json etdRescue()
+  {
+    return nlohmann::json::parse(R"({ "analyzer": "Orbitrap", "activation": "ETD", "reaction_time": 12, "resolution": 120000 })");
+  }
+
+  /// closeOutCytcJson (strict-inclusion cytC, nothing but a close-out can bar it) plus an ETD rescue scan.
+  /// @p reference replaces the cytC reference when given; @p threads sizes the search pool when > 0.
+  std::string rescueCytcJson(const std::string& dir, double threshold, bool separate = false,
+                             const std::string& reference = "", int threads = 0)
+  {
+    nlohmann::json j = nlohmann::json::parse(closeOutCytcJson(dir, threshold, "inclusion_cytc.txt", separate));
+    if (!reference.empty()) j["identification"]["reference"] = {{"sequence", reference}};
+    if (threads > 0) j["identification"]["search_threads"] = threads;
+    j["ms_settings"]["ms2_rescue"] = etdRescue();
+    return j.dump();
+  }
+
+  bool isEtd(const ScanCommand& c) { return c.num_stages > 0 && std::string(c.stages[0].activation_type) == "ETD"; }
+
+  int countOf(const std::string& text, const std::string& needle)
+  {
+    int n = 0;
+    for (size_t p = text.find(needle); p != std::string::npos; p = text.find(needle, p + needle.size())) ++n;
+    return n;
+  }
+
+  /// The MS2s a drive sent, split into rescues (ETD) and the identification scans that could trigger one (HCD).
+  struct RescueSplit
+  {
+    std::vector<ScanCommand> rescues, triggers;
+  };
+  RescueSplit splitRescues(const AcqResult& acq)
+  {
+    RescueSplit s;
+    for (const auto& c : acq.ms2_cmds) (isEtd(c) ? s.rescues : s.triggers).push_back(c);
+    return s;
+  }
+
+  /// Feed @p s as the answer to the MS2 command @p c.
+  void feedMs2(FLASHIda& ida, ScanCommand c, const ScanData& s)
+  {
+    ida.processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 2, c.scan_description, 0.0, instrumentScanNumberOf(s));
+  }
+}
+
+// An identification below the threshold buys exactly one rescue per detection: priority 0, an 'R', the trigger as its
+// parent, searched like any MS2. Under `single` one detection is one 'R', so rescues == triggers.
+START_SECTION(rescue_below_threshold_identification_buys_one_rescue)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  const std::string dir = freshLogDir("rescue_below");
+  const std::string cfg = rescueCytcJson(dir, 1e9);
+  EventCapture events;
+  AcqResult acq;
+  {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    acq = runInterleaved(&ida, ms1, ms2);
+  }
+  const RescueSplit s = splitRescues(acq);
+  ABORT_IF(s.triggers.empty())
+  TEST_EQUAL(s.rescues.size(), s.triggers.size())
+  std::set<std::string> trigger_ids;
+  for (const auto& t : s.triggers) trigger_ids.insert(ScanCommandQueue::encode(t.scan_id));
+  for (const auto& r : s.rescues)
+  {
+    TEST_EQUAL(r.priority, 0)
+    TEST_EQUAL(r.scan_description[3], 'R')
+    TEST_EQUAL(trigger_ids.count(std::string(r.parent_scan_id)), 1)
+  }
+  const std::string ev = events.str();
+  TEST_EQUAL(countOf(ev, "[RESCUE] "), (int)s.rescues.size())
+  TEST_EQUAL(countOf(ev, "reason=below_threshold"), (int)s.rescues.size())
+  const CloseOutRun r = readCloseOut(dir);
+  TEST_EQUAL(r.searched, (int)acq.ms2_cmds.size())   // the rescues are searched too
+  TEST_EQUAL(r.closed_out_rows, 0)
+}
+END_SECTION
+
+// No proteoform at all is short too: cytC's spectrum searched against ubiquitin identifies nothing.
+START_SECTION(rescue_unidentified_scan_buys_a_rescue)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  const std::string dir = freshLogDir("rescue_unidentified");
+  const std::string cfg = rescueCytcJson(dir, 1e9, false, kUbiquitin);
+  EventCapture events;
+  AcqResult acq;
+  {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    acq = runInterleaved(&ida, ms1, ms2);
+  }
+  const RescueSplit s = splitRescues(acq);
+  ABORT_IF(s.triggers.empty())
+  TEST_EQUAL(s.rescues.size(), s.triggers.size())
+  const std::string ev = events.str();
+  TEST_EQUAL(countOf(ev, "reason=unidentified"), (int)s.rescues.size())
+  TEST_EQUAL(countOf(ev, "reason=below_threshold"), 0)
+}
+END_SECTION
+
+// A scan whose identification closes the species out buys nothing, and the species' later scans are not searched.
+START_SECTION(rescue_a_close_out_buys_no_rescue)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  const std::string dir = freshLogDir("rescue_closeout");
+  const std::string cfg = rescueCytcJson(dir, 100.0);
+  EventCapture events;
+  AcqResult acq;
+  {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    acq = runInterleaved(&ida, ms1, ms2);
+  }
+  TEST_EQUAL(splitRescues(acq).rescues.size(), 0)
+  TEST_EQUAL(countOf(events.str(), "[RESCUE] "), 0)
+  TEST_EQUAL(readCloseOut(dir).closed_out_rows, 1)   // non-vacuity: the close-out happened
+}
+END_SECTION
+
+// Under `separate` a detection's charges are separate Precursors; the detection still buys one rescue, and the
+// rescue's own return buys none.
+START_SECTION(rescue_one_per_detection_under_separate_charges)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  const std::string dir = freshLogDir("rescue_separate");
+  const std::string cfg = rescueCytcJson(dir, 1e9, true);
+  AcqResult acq;
+  {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    acq = runInterleaved(&ida, ms1, ms2);
+  }
+  const RescueSplit s = splitRescues(acq);
+  std::map<std::string, std::string> survey_of_trigger;   // trigger id -> the survey that selected it
+  std::map<std::string, int> triggers_per_survey, rescues_per_survey;
+  for (const auto& t : s.triggers)
+  {
+    survey_of_trigger[ScanCommandQueue::encode(t.scan_id)] = t.parent_scan_id;
+    ++triggers_per_survey[t.parent_scan_id];
+  }
+  int max_triggers = 0;
+  for (const auto& [sv, n] : triggers_per_survey) max_triggers = std::max(max_triggers, n);
+  ABORT_IF(max_triggers < 2)   // non-vacuity: a detection with sibling charges
+  for (const auto& r : s.rescues)
+  {
+    auto it = survey_of_trigger.find(r.parent_scan_id);
+    TEST_EQUAL(it != survey_of_trigger.end(), true)   // bought by an HCD identification scan, never by a rescue
+    if (it != survey_of_trigger.end()) ++rescues_per_survey[it->second];
+  }
+  TEST_EQUAL(rescues_per_survey.size(), triggers_per_survey.size())
+  for (const auto& [sv, n] : rescues_per_survey) TEST_EQUAL(n, 1)
+}
+END_SECTION
+
+// A close-out withdraws the waiting rescue: z_a returns unidentifiable and buys one; before anything is drained, its
+// sibling z_b returns as cytC and closes the species out.
+START_SECTION(rescue_a_close_out_withdraws_the_waiting_rescue)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  auto other = loadTsvScans(kItmtMs2);   // a real spectrum of another protein: nothing in it is cytC
+  ABORT_IF(ms1.empty() || ms2.empty() || other.empty())
+  ScanData junk = other[0];
+  junk.rt = ms2[0].rt;
+
+  const std::string dir = freshLogDir("rescue_withdraw");
+  const std::string cfg = rescueCytcJson(dir, 100.0, true);
+  EventCapture events;
+  AcqResult rest;
+  {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    const std::vector<ScanData> one_survey(ms1.begin(), ms1.begin() + 1);
+    AcqResult acq = runInterleaved(&ida, one_survey, {});   // the survey's MS2s go out and stay pending
+    ABORT_IF(acq.ms2_cmds.size() < 2)
+    feedMs2(ida, acq.ms2_cmds[0], junk);
+    ida.waitForSearchIdle();
+    TEST_EQUAL(countOf(events.str(), "[RESCUE] "), 1)
+    feedMs2(ida, acq.ms2_cmds[1], ms2[0]);
+    ida.waitForSearchIdle();
+    rest = runInterleaved(&ida, {}, ms2);
+  }
+  const std::string ev = events.str();
+  TEST_EQUAL(countOf(ev, "[CLOSE-OUT]"), 1)
+  TEST_EQUAL(countOf(ev, "[RESCUE-WITHDRAWN]"), 1)
+  TEST_EQUAL(splitRescues(rest).rescues.size(), 0)
+}
+END_SECTION
+
+// The race: z_a was submitted before z_b's close-out was applied, so it is searched (the species was open at its
+// submit), and its apply comes after the close-out. It must buy nothing for a closed-out species.
+START_SECTION(rescue_a_closed_out_species_buys_no_rescue)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  auto other = loadTsvScans(kItmtMs2);
+  ABORT_IF(ms1.empty() || ms2.empty() || other.empty())
+  ScanData junk = other[0];
+  junk.rt = ms2[0].rt;
+
+  const std::string dir = freshLogDir("rescue_race");
+  const std::string cfg = rescueCytcJson(dir, 100.0, true, "", 1);   // one worker: z_b is searched and applied first
+  EventCapture events;
+  AcqResult rest;
+  {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    const std::vector<ScanData> one_survey(ms1.begin(), ms1.begin() + 1);
+    AcqResult acq = runInterleaved(&ida, one_survey, {});
+    ABORT_IF(acq.ms2_cmds.size() < 2)
+    SearchGate gate;
+    FLASHIdaTestAccess::onBeforeSearch(ida, gate.hook());
+    feedMs2(ida, acq.ms2_cmds[1], ms2[0]);   // z_b: cytC, its search held at the gate
+    ABORT_IF(!gate.reached())
+    feedMs2(ida, acq.ms2_cmds[0], junk);     // z_a: submitted while the species is still open
+    gate.release();
+    ida.waitForSearchIdle();
+    rest = runInterleaved(&ida, {}, ms2);
+  }
+  const std::string ev = events.str();
+  TEST_EQUAL(countOf(ev, "[CLOSE-OUT]"), 1)
+  TEST_EQUAL(countOf(ev, "[SEARCH-SKIPPED]"), 0)   // non-vacuity: z_a was searched, so its apply reached the guard
+  TEST_EQUAL(countOf(ev, "[RESCUE] "), 0)
+  TEST_EQUAL(splitRescues(rest).rescues.size(), 0)
+}
+END_SECTION
+
+// An exploration variant ('E') never buys one: an MS2 sweep under mass_count (no follow-up MSn at MS2) whose
+// variants all fall short of the threshold.
+START_SECTION(rescue_exploration_variants_buy_no_rescue)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  nlohmann::json j = nlohmann::json::parse(inclusionPinCytc(ms3SelectionOnlyConfig()));
+  j["identification"]["threshold"] = 1e9;
+  j["ms_settings"]["ms2_rescue"] = etdRescue();
+  const std::string cfg = j.dump();
+  EventCapture events;
+  AcqResult acq;
+  {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    acq = runInterleaved(&ida, ms1, ms2);
+  }
+  int variants = 0, identification_scans = 0;
+  for (const auto& c : acq.ms2_cmds)
+  {
+    if (c.scan_description[3] == 'E') ++variants;
+    if (c.scan_description[3] == 'R') ++identification_scans;
+  }
+  ABORT_IF(variants == 0)
+  TEST_EQUAL(identification_scans, 0)   // the premise: this sweep emits no follow-up 'R' at MS2
+  TEST_EQUAL(countOf(events.str(), "[RESCUE] "), 0)
 }
 END_SECTION
 

@@ -152,6 +152,27 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
     TEST_EQUAL(q3.data_type, jq["data_type"].get<std::string>())
   }
 
+  // --- ms_settings.ms2_rescue, the scan an identification that falls short buys (ADR-0068) ---
+  // A bare slot held on identification_; the reference authors it (with identification.threshold, which it needs),
+  // every key non-default, so each pin proves the authored value crossed the bridge.
+  {
+    const auto& rs = cfg.identification().rescue_scan;
+    const auto& jr = j["ms_settings"]["ms2_rescue"];
+    TEST_EQUAL(cfg.identification().has_rescue_scan, true)
+    TEST_EQUAL(rs.analyzer, jr["analyzer"].get<std::string>())
+    TEST_EQUAL(rs.activation, jr["activation"].get<std::string>())
+    TEST_EQUAL(rs.resolution, jr["resolution"].get<int>())
+    TEST_EQUAL(rs.agc_target, jr["agc_target"].get<int>())
+    TEST_REAL_SIMILAR(rs.max_it, jr["max_it"].get<double>())
+    TEST_REAL_SIMILAR(rs.first_mass, jr["first_mass"].get<double>())
+    TEST_REAL_SIMILAR(rs.last_mass, jr["last_mass"].get<double>())
+    TEST_EQUAL(rs.microscans, jr["microscans"].get<int>())
+    TEST_EQUAL(rs.data_type, jr["data_type"].get<std::string>())
+    TEST_REAL_SIMILAR(rs.reaction_time, jr["reaction_time"].get<double>())
+    TEST_REAL_SIMILAR(rs.reagent_max_it, jr["reagent_max_it"].get<double>())
+    TEST_EQUAL(rs.reagent_agc_target, jr["reagent_agc_target"].get<int>())
+  }
+
   // --- quantification ---
   TEST_EQUAL(cfg.quantification().enabled, j["quantification"]["enabled"].get<bool>())
   // ADR-0064: both non-default in the reference (scan both, ms3_targets 2).

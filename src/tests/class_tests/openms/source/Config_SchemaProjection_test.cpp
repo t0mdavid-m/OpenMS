@@ -1699,4 +1699,42 @@ START_SECTION(identification_section_presence_switches_and_refusals)
 }
 END_SECTION
 
+// ---- ADR-0068: ms_settings.ms2_rescue -------------------------------------------------------------------------
+#define MS2_RESCUE R"(, "ms2_rescue": { "analyzer": "Orbitrap", "activation": "ETD", "reaction_time": 12 })"
+#define RESCUE_IDENT R"("identification": { "reference": { "sequence": "PEPTCIDEK" }, "threshold": 10 },)"
+
+START_SECTION(ms2_rescue_is_parsed_onto_identification)
+{
+  Config c(cfgJson("", RESCUE_IDENT, MS2_RESCUE));
+  TEST_EQUAL(c.identification().has_rescue_scan, true)
+  TEST_STRING_EQUAL(c.identification().rescue_scan.activation, "ETD")
+  TEST_REAL_SIMILAR(c.identification().rescue_scan.reaction_time, 12.0)
+  // Held on identification, never on the dispatch roster: ms_settings.ms2 stays the one unconditional MS2.
+  TEST_EQUAL(c.level(2).scans.size(), 1)
+  TEST_STRING_EQUAL(c.level(2).scans[0].activation, "HCD")
+}
+END_SECTION
+
+START_SECTION(ms2_rescue_absent_is_off)
+{
+  Config c(cfgJson("", RESCUE_IDENT));
+  TEST_EQUAL(c.identification().has_rescue_scan, false)
+}
+END_SECTION
+
+START_SECTION(ms2_rescue_without_threshold_is_refused)
+{
+  TEST_EXCEPTION(std::invalid_argument,
+                 Config(cfgJson("", R"("identification": { "reference": { "sequence": "PEPTCIDEK" } },)", MS2_RESCUE)))
+}
+END_SECTION
+
+START_SECTION(ms2_rescue_without_identification_is_refused)
+{
+  TEST_EXCEPTION(std::invalid_argument, Config(cfgJson("", "", MS2_RESCUE)))
+}
+END_SECTION
+#undef RESCUE_IDENT
+#undef MS2_RESCUE
+
 END_TEST

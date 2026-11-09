@@ -722,6 +722,60 @@ START_SECTION(unregistered_commands_are_never_dropped)
 }
 END_SECTION
 
+// ADR-0068: a close-out withdraws the species' registered rescue scan while it waits -- and only that: an unregistered
+// follow-up of the same species and a rescue of another species stay.
+START_SECTION(close_out_withdraws_a_waiting_rescue)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+
+  q.registerRescue(41, 12351);
+  q.push(ms2(41, 13, 951.0, 0));
+  q.push(ms2(43, 13, 951.0, 0));            // a follow-up of the same species, not a rescue
+  q.registerRescue(44, 13000);
+  q.push(ms2(44, 13, 1001.0, 0));           // another species' rescue
+
+  const ReplanResult r = q.closeOut(12351, {stamp(MemoryStamp::Kind::CloseOutMassRt, 12351, 0, 70.0)});
+  TEST_EQUAL(r.dropped_scan_ids == std::vector<int>({41}), true)
+  TEST_EQUAL(r.withdrawn_rescue_ids == std::vector<int>({41}), true)
+  const std::vector<int> drained = drainIds(q);
+  TEST_EQUAL(std::set<int>(drained.begin(), drained.end()) == std::set<int>({43, 44}), true)
+  TEST_EQUAL(static_cast<int>(drained.size()), 2)
+}
+END_SECTION
+
+// Late arrival: a rescue the drain already sent goes out as decided; the close-out that follows withdraws nothing.
+START_SECTION(a_sent_rescue_is_not_withdrawn)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+
+  q.registerRescue(41, 12351);
+  q.push(ms2(41, 13, 951.0, 0));
+  const auto sent = q.dequeue();
+  ABORT_IF(!sent.has_value())
+  TEST_EQUAL(sent->scan_id, 41)
+
+  const ReplanResult r = q.closeOut(12351, {stamp(MemoryStamp::Kind::CloseOutMassRt, 12351, 0, 70.0)});
+  TEST_EQUAL(r.dropped_scan_ids.empty(), true)
+  TEST_EQUAL(r.withdrawn_rescue_ids.empty(), true)
+}
+END_SECTION
+
+// A rescue belongs to no survey's plan: a survey's replacePlan never drops it.
+START_SECTION(a_survey_never_drops_a_rescue)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+
+  q.registerRescue(41, 12351);
+  q.push(ms2(41, 13, 951.0, 0));
+  const ReplanResult r = q.replacePlan(0.0, {}, {}, {});
+  TEST_EQUAL(r.dropped_scan_ids.empty(), true)
+  TEST_EQUAL(drainIds(q) == std::vector<int>({41}), true)
+}
+END_SECTION
+
 START_SECTION(adjustable_is_rewritten_never_dropped)
 {
   Config cfg{std::string(minimal_config)};

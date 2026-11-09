@@ -582,7 +582,7 @@ namespace
   std::multiset<std::string> pushSites(const std::string& source)
   {
     static const std::vector<std::string> calls = {"stampAndPush_(", "queue_.push(", "queue_.pushAndDequeue(", "queue_.replacePlan(",
-                                                   "queue_.registerAdjustable(", "queue_.replaceMs3Plan("};
+                                                   "queue_.registerAdjustable(", "queue_.replaceMs3Plan(", "queue_.registerRescue("};
     std::multiset<std::string> sites;
     std::istringstream in(source);
     std::string line, fn;
@@ -1360,6 +1360,9 @@ START_SECTION(push_site_inventory)
     "finishRegularMS2_ | stampAndPush_(c, precursor_id);",                  // MS3 targeting
     "finishRegularMS2_ | stampAndPush_(c, precursor_id);",                  // quantification MS3 (ADR-0064), permanent
     "processScan | stampAndPush_(c, precursor_id);",                        // exploration MS3 return
+    // ADR-0068: the rescue scan an identification that fell short buys, permanent, registered so a close-out withdraws it
+    "finishRegularMS2_ | stampAndPush_(rescue, precursor_id);",
+    "finishRegularMS2_ | queue_.registerRescue(rescue.scan_id, nominal);",
     // the bought R, registered adjustable at the quant verdict
     "processScan | queue_.registerAdjustable(ident.scan_id, cons.q_covered_charges, cons.winner_survey_id,",
     // the MS1 family
