@@ -382,6 +382,23 @@ winner (`initiateNextLevel` inside `applyVariant`) still runs under the lock.
   `queue_mutex_` (the lock order holds: `analysis_mutex_` → `queue_mutex_`). `closed_out_` then skips another
   Precursor's later scan of the species inside `rt_window` (`closed_out_skip`, finished as a dropped search); the
   closing Precursor's own scans are still searched. A charge-named inclusion species is never closed out.
+- **A rescue scan is bought on the apply** (ADR-0068, `finishRegularMS2_`, right after the close-out verdict): with
+  `ms_settings.ms2_rescue` (`IdentificationConfig::rescue_scan`), a searched, non-Q MS2 that is short of the close-out
+  threshold (`!reachesThreshold_`: no proteoform, or a score below it) on a species not closed out
+  (`speciesClosedOut_`, no closing-Precursor exemption: a sibling charge may have closed it while this scan was
+  searched) buys `buildFollowUp(parent_ctx, rescue_scan, 'R')`, priority 0, at most once per **detection**.
+  Hazards:
+  - **A detection is not a precursor id.** Under `separate` each charge is its own precursor id, so the cap keys on
+    (selecting survey's tracking id, nominal mass). `noteDetection_` records it at both `allocPrecursorId_` sites
+    (only with the slot set); `rescueDetectionFree_` claims it. The rescue carries its trigger's precursor id, so its
+    own return finds the detection taken.
+  - **Register before the push.** `queue_.registerRescue(id, nominal)` goes into `rescue_`, which `closeOut`
+    withdraws while queued (`withdrawn_rescue_ids`, `[RESCUE-WITHDRAWN]`). `dequeue_` and `forgetQueued_` erase
+    it, so a sent rescue is never withdrawn. `replacePlan` never reads it. Both calls are rows of
+    `push_site_inventory`.
+  - **Its activation has its own prepared search**, the ion-set block in the constructor; an ETD rescue searched
+    on b/y would find nothing.
+  - **Events:** `[RESCUE] precursor_id=… nominal=… score=… reason=unidentified|below_threshold id=… trigger=…`.
 - **A sweep completes when its searches return**, not its scans. **Rows of searched MS2s are written in
   completion order** in production.
 - **A bounded backlog drops the oldest** (d.5): 4 waiting jobs per worker (`kSearchBacklogPerThread`,
