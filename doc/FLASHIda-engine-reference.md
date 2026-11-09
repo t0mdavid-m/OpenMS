@@ -62,7 +62,8 @@ is airtight:
   throwaway instance purely for `getDefaults()`). All three call sites route through them, so a new
   knob is added once, not per site. `fixed_mod` is set **unconditionally** there: an empty config
   list is passed verbatim as an empty Param list, *not* left at the algorithms' declared `{""}`
-  placeholder — pinned by `FragmentAnalysis_test`'s `build*Param_sets_fixed_mod_when_empty`.
+  placeholder — pinned by `FragmentAnalysis_test`'s `build*Param_sets_fixed_mod_when_empty`. Since ADR-0067 both algorithms
+  **read** it (`FixedModifications::fromNames`); `Config` still refuses a non-empty list, so it is empty.
 
 > **Name trap.** `TopDownIsobaricQuantification` (flat, off-limits, used only by
 > `FLASHDeconvAlgorithm`) and `FLASHIda/Quantification` (IDA, fair game) are unrelated — but the
@@ -85,7 +86,7 @@ is airtight:
 > `a_factor_shifts_the_ratio_and_leaves_the_reported_channels_raw` and
 > `emptiness_is_judged_on_the_raw_value` pin both.
 
-⚠️ **Three owner-approved edits sit inside the boundary.** The first is `PeakGroup::updateSNR_` (`fix(TOPDOWN)`
+⚠️ **Four owner-approved edits sit inside the boundary.** The first is `PeakGroup::updateSNR_` (`fix(TOPDOWN)`
 `9721595ca4`, 2026-10-26, on top of the FDmerge merge `d0954cf37b`). FDmerge's `updateChargeRange_` passes
 over up to two weak charges, so a charge with **no peak** can now sit inside a PeakGroup's range. With
 no signal and no noise, the two `1e-6` regularisers cancel and that charge scores SNR **exactly 1.0**,
@@ -114,7 +115,20 @@ before it (`test-data-private/ecoli_parity/tnt_reference.tsv`, run 42290157689),
 scan's PrSM order differs between builds, and RawScore's chance rate is pooled per spectrum over its PrSMs' decoy
 fragments (`FLASHAnnotatorAlgorithm::annotate`), so one decoy match at a tolerance edge moves every RawScore of that
 spectrum (scan 1005, 0.4–1.0 %, in one of four runs). PrSM identity is compared exactly, RawScore to rel 2e-2, and the
-score only by 8 × its RawScore change. Every other
+score only by 8 × its RawScore change.
+
+The fourth is ADR-0067 (2026-11-09): **fixed modifications are one residue-mass table**, `FixedModifications`
+(`TOPDOWN/FixedModifications.h`, outside the boundary). Every residue-mass read in the Tagger, GappedTagger,
+Extender, `FLASHTnTAlgorithm`, `FLASHAnnotatorAlgorithm`, `MassLadderAlgorithm`, `ProteoformDatabase` and
+`FLASHTnTFile` goes through `mass(c)`: a residue that is not fixed is read live from `ResidueDB`, as before, so an
+empty table changes no double; a fixed one is a `Residue` copy with `setMonoWeight(full + diff)`, the mass the
+FLASHTnT tool's former process-wide overwrite gave it. `fixed_mod` is a parameter of `FLASHTnTAlgorithm` (handed to
+the tagger, gapped tagger, extender and annotator, like `ion_type`), of the Annotator and GappedTagger, and the
+Tagger's and Extender's old declared-but-unread `fixed_mod` is now read. Static readers take the table as a trailing
+argument defaulting to `FixedModifications::none()`. A `PreparedDatabase` records the table it was built with, and
+`run()` throws on another. The FLASHTnT tool passes `-fixed_mod` through and no longer touches `ResidueDB`; the
+FLASHAnnotator tool reads a FLASHTnT file's table from its ProForma prefix (rows must agree) and has no option for it.
+`FLASHIda_ProteomeSearch_test`'s last section pins the parameter route to the old overwrite on real data. Every other
 FLASHDeconv/FLASHTnT file is exactly as FDmerge has it.
 
 ### Ownership tree — declaration order is load-bearing
