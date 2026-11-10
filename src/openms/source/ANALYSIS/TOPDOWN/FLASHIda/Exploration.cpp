@@ -42,6 +42,7 @@
 #include <OpenMS/DATASTRUCTURES/ListUtils.h>
 
 #include <algorithm>
+#include <utility>
 #include <sstream>
 #include <chrono>
 #include <cmath>
@@ -64,6 +65,27 @@ namespace OpenMS
     : config_(config), fragments_(fragments)
   {
     exploration_deconv_ = std::make_unique<Deconvolution>(config, config.explorationToleranceList());
+  }
+
+  std::vector<int> Exploration::sweepPermutation(int n, uint64_t seed)
+  {
+    std::vector<int> perm;
+    if (n <= 0) return perm;
+    perm.resize(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i) perm[static_cast<size_t>(i)] = i;
+    uint64_t state = seed;
+    auto next = [&state]() {   // splitmix64
+      uint64_t z = (state += 0x9E3779B97F4A7C15ULL);
+      z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+      z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+      return z ^ (z >> 31);
+    };
+    for (int i = n - 1; i > 0; --i)
+    {
+      const int j = static_cast<int>(next() % static_cast<uint64_t>(i + 1));   // modulo bias is irrelevant at sweep sizes
+      std::swap(perm[static_cast<size_t>(i)], perm[static_cast<size_t>(j)]);
+    }
+    return perm;
   }
 
   std::vector<Exploration::VariantParams> Exploration::buildVariants_(
@@ -187,6 +209,22 @@ namespace OpenMS
     ExplorationGroup group;
     group.group_id = next_group_id_++;
     group.msn_level = msn_level;
+
+    // exploration.order: under "random" this sweep acquires its whole grid -- every activation and both axes -- in its own
+    // order, drawn from the group id so it is reproducible; grid_positions keeps each variant's place in the grid for the
+    // tie-break. Under "ascending" the acquisition order is the grid order, as before.
+    std::vector<int> grid_positions(variant_params.size());
+    for (size_t gi = 0; gi < grid_positions.size(); ++gi) grid_positions[gi] = static_cast<int>(gi);
+    if (cfg.sweep_order == SweepOrder::Random && variant_params.size() > 1)
+    {
+      const std::vector<int> perm = sweepPermutation(static_cast<int>(variant_params.size()),
+                                                     kSweepSeed ^ static_cast<uint64_t>(group.group_id));
+      std::vector<VariantParams> shuffled;
+      shuffled.reserve(variant_params.size());
+      for (const int p : perm) shuffled.push_back(variant_params[static_cast<size_t>(p)]);
+      variant_params = std::move(shuffled);
+      grid_positions = perm;
+    }
     // An unassigned exhaustive target (unknown ion class) cannot be scored by a READING metric --
     // the matcher refuses to project without an ion frame, so every variant scores 0 and the winner
     // is a coin flip. RemainingPrecursor scores from isolation-window intensity alone, needs no
@@ -247,7 +285,8 @@ namespace OpenMS
     {
       const auto& vp = variant_params[i];
       ExplorationVariant v;
-      v.variant_index = i;   // one running counter; no reference scan to skip (ADR-0048)
+      v.variant_index = i;   // one running counter; no reference scan to skip (ADR-0048); the acquisition position
+      v.grid_position = grid_positions[static_cast<size_t>(i)];
       v.collision_energy = vp.collision_energy;
       v.reaction_time = vp.reaction_time;
       v.activation_type = vp.activation;
@@ -731,11 +770,16 @@ namespace OpenMS
     }
     else
     {
+      // A tie goes to the earlier GRID position (exploration.order): under "ascending" that is the earlier-acquired
+      // variant, as before; under "random" the same scores pick the same winner whatever order they were acquired in.
+      // best_idx >= 0 keeps an unscored variant (-1) from ever winning, as the strict > from -1 always has.
       for (int i = 0; i < static_cast<int>(group.variants.size()); ++i)
       {
-        if (group.variants[i].score > best_score)
+        const auto& var = group.variants[i];
+        if (var.score > best_score
+            || (best_idx >= 0 && var.score == best_score && var.grid_position < group.variants[best_idx].grid_position))
         {
-          best_score = group.variants[i].score;
+          best_score = var.score;
           best_idx = i;
         }
       }

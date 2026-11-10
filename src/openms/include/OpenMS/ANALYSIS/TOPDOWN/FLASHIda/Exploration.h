@@ -45,6 +45,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
@@ -68,7 +69,11 @@ namespace OpenMS
     /// Single variant in an exploration CE sweep
     struct ExplorationVariant
     {
-      int variant_index = -1;
+      int variant_index = -1;   ///< the ACQUISITION position in its sweep (0-based); the logged variant_index
+      /// The GRID position: where this pre-scan sits in the authored grid (activations as listed, then CE, then reaction
+      /// time, ascending). Equal to variant_index under exploration.order "ascending"; under "random" the sweep's
+      /// decision breaks a score tie on this, never on when the scan was acquired.
+      int grid_position = -1;
       double collision_energy = 0.0;
       double reaction_time = 0.0;
       std::string activation_type;
@@ -453,6 +458,14 @@ namespace OpenMS
 
     /// Number of currently active exploration groups
     int activeGroupCount() const;
+
+    /// The seed every random sweep order is derived from, with the sweep's group id (exploration.order "random").
+    static constexpr uint64_t kSweepSeed = 0x5EEDF1A5D0C0FFEEULL;
+
+    /// A permutation of 0..n-1, a pure function of (@p n, @p seed): Fisher-Yates driven by splitmix64, written out rather
+    /// than std::shuffle so the order does not depend on the standard library. Element k is the GRID position acquired
+    /// k-th. Empty for n <= 0.
+    static std::vector<int> sweepPermutation(int n, uint64_t seed);
 
     /// Number of currently active exploration groups AT ONE MSn LEVEL (ADR-0042).
     ///
