@@ -38,6 +38,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms2Params.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms3YieldModel.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ProteoformTracker.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Refine.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
@@ -1197,4 +1198,81 @@ END_SECTION
 
 /////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////
+// ADR-0069 T17. The yield gate in the discriminating round, tested at the winner path's ion: a record labelled with an
+//     ion of the best path is refused by a gate nothing passes and is neither dispatched nor stamped, ungoverned and
+//     governed; a record with no ion of the best path is admitted untested. A gate everything passes plans the round as
+//     without it.
+//
+// FAILS UNDER: the yield test placed after the record is marked (a refused record dispatched), or a record of the second
+// path alone tested at length 0 (refused instead of admitted).
+/////////////////////////////////////////////////////////////
+START_SECTION(discriminating_yield_refused_record_is_not_dispatched)
+{
+  const ScanCommand ctx = makeMs2Ctx();
+  for (const bool governed : {false, true})
+  {
+    const int pid = governed ? 73 : 72;
+    Config cfg{trackerConfig("discriminating", "refine", 3)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    feedAndFinalize(cfg, tracker, pid, 672, twoTotals());
+    const ProteoformModel* m = tracker.getModel(pid);
+    ABORT_IF(m == nullptr || !m->refine.has_value() || m->refine->records.empty())
+
+    Ms3RegistrySnapshot snap;
+    snap.found = true;
+    YieldGateConfig closed;
+    closed.threshold = 1e9;
+    Ms3PlanGate gate;   // no spectrum: the fixture carries no per-charge signal
+    gate.max_targets = 100;
+    gate.yield = &closed;
+    gate.ms_ctx = &ctx;
+    if (governed) gate.snapshot = &snap;
+    std::string log;
+    {
+      EventCapture cap;
+      tracker.planNextScans(pid, &gate);
+      log = cap.str();
+    }
+    int labelled = 0;
+    for (const DiscriminatingRecord& r : m->refine->records)
+    {
+      if (!r.target.ion_a) continue;
+      ++labelled;
+      TEST_EQUAL(r.dispatched, false)
+      TEST_EQUAL(m->dispatched_nominal_masses.count(SpectralDeconvolution::getNominalMass(r.target.mass)), 0)
+    }
+    TEST_EQUAL(labelled > 0, true)   // non-vacuity: the fixture's best path labels records
+    TEST_EQUAL(log.find("verdict=refused") != std::string::npos, true)
+    for (const DiscriminatingRecord& r : m->refine->records)
+      if (!r.target.ion_a && r.dispatched) TEST_EQUAL(log.find("verdict=untested") != std::string::npos, true)
+  }
+  // Open: the same round as without the gate.
+  {
+    const int pid = 74;
+    Config cfg{trackerConfig("discriminating", "refine", 3)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    feedAndFinalize(cfg, tracker, pid, 673, twoTotals());
+    Config cfg2{trackerConfig("discriminating", "refine", 3)};
+    IdaLogger logger2(cfg2);
+    ProteoformTracker tracker2(cfg2, logger2);
+    feedAndFinalize(cfg2, tracker2, pid, 673, twoTotals());
+    YieldGateConfig open;
+    open.threshold = 1e-12;
+    Ms3PlanGate gate;
+    gate.max_targets = 100;
+    gate.yield = &open;
+    gate.ms_ctx = &ctx;
+    const std::vector<Ms3Target> gated = tracker.planNextScans(pid, &gate);
+    const std::vector<Ms3Target> ungated = tracker2.planNextScans(pid);
+    TEST_EQUAL(gated.size(), ungated.size())
+    TEST_EQUAL(gated.empty(), false)
+    for (size_t i = 0; i < std::min(gated.size(), ungated.size()); ++i)
+      TEST_REAL_SIMILAR(gated[i].frag_mass, ungated[i].frag_mass)
+  }
+}
+END_SECTION
+
 END_TEST

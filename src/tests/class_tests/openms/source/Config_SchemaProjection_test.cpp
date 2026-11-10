@@ -1768,4 +1768,83 @@ END_SECTION
 #undef RESCUE_IDENT
 #undef MS2_RESCUE
 
+// ---------------------------------------------------------------------------------------------
+// ADR-0069: the two MS3 yield gate blocks. Absent or null: no gate. Present: every key optional, defaulting to threshold 1
+// and the core-5 coefficients; a present key must be a finite number and the threshold above 0; an unknown key throws.
+// The quantification gate set while quantification screens at MS2 only is accepted with a [CONFIG-WARN].
+START_SECTION(yield_gate_parses_defaults_and_rejects)
+{
+  const std::string ms3 = R"(, "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 35 })";
+  auto charCfg = [&ms3](const std::string& gate) {
+    return cfgJson("", R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "fragments")"
+                           + (gate.empty() ? std::string() : ", " + gate) + R"( } },)", ms3);
+  };
+  // Absent and null: no gate.
+  TEST_EQUAL(Config(charCfg("")).characterization().yield_gate.has_value(), false)
+  TEST_EQUAL(Config(charCfg(R"("yield_gate": null)")).characterization().yield_gate.has_value(), false)
+  // Empty: the gate on at its defaults.
+  {
+    Config c(charCfg(R"("yield_gate": {})"));
+    TEST_EQUAL(c.characterization().yield_gate.has_value(), true)
+    const YieldGateConfig& g = *c.characterization().yield_gate;
+    TEST_REAL_SIMILAR(g.threshold, 1.0)
+    TEST_REAL_SIMILAR(g.coefficients.intercept, -31.632174)
+    TEST_REAL_SIMILAR(g.coefficients.fragment_intensity, 1.529105)
+    TEST_REAL_SIMILAR(g.coefficients.precursor_intensity, 0.474888)
+    TEST_REAL_SIMILAR(g.coefficients.precursor_charge, -0.105683)
+    TEST_REAL_SIMILAR(g.coefficients.mass_ratio, -2.766660)
+    TEST_REAL_SIMILAR(g.coefficients.fragment_iso_cos, 21.747494)
+  }
+  // Authored: every key reaches the struct; a null key keeps its default.
+  {
+    Config c(charCfg(R"("yield_gate": { "threshold": 6, "intercept": -30.0, "fragment_intensity": 1.5, "precursor_intensity": 0.5, "precursor_charge": -0.1, "mass_ratio": -2.5, "fragment_iso_cos": null })"));
+    const YieldGateConfig& g = *c.characterization().yield_gate;
+    TEST_REAL_SIMILAR(g.threshold, 6.0)
+    TEST_REAL_SIMILAR(g.coefficients.intercept, -30.0)
+    TEST_REAL_SIMILAR(g.coefficients.fragment_intensity, 1.5)
+    TEST_REAL_SIMILAR(g.coefficients.precursor_intensity, 0.5)
+    TEST_REAL_SIMILAR(g.coefficients.precursor_charge, -0.1)
+    TEST_REAL_SIMILAR(g.coefficients.mass_ratio, -2.5)
+    TEST_REAL_SIMILAR(g.coefficients.fragment_iso_cos, 21.747494)
+  }
+  // Refused, with the key's path in the message.
+  TEST_EQUAL(contains(refineMessage(charCfg(R"("yield_gate": { "threshold": 0 })")),
+                      "identification.characterization.yield_gate.threshold must be > 0"), true)
+  TEST_EQUAL(contains(refineMessage(charCfg(R"("yield_gate": { "threshold": -1 })")),
+                      "identification.characterization.yield_gate.threshold must be > 0"), true)
+  TEST_EQUAL(contains(refineMessage(charCfg(R"("yield_gate": { "threshold": "1" })")),
+                      "identification.characterization.yield_gate.threshold must be a finite number"), true)
+  TEST_EQUAL(contains(refineMessage(charCfg(R"("yield_gate": { "intercept": true })")),
+                      "identification.characterization.yield_gate.intercept must be a finite number"), true)
+  TEST_EQUAL(contains(refineMessage(charCfg(R"("yield_gate": 1)")),
+                      "identification.characterization.yield_gate must be an object"), true)
+  {
+    const std::string msg = refineMessage(charCfg(R"("yield_gate": { "treshold": 1 })"));
+    TEST_EQUAL(contains(msg, "unknown key(s) in 'identification.characterization.yield_gate'"), true)
+    TEST_EQUAL(contains(msg, "treshold"), true)
+  }
+
+  // The quantification gate: the same block, its own path.
+  TEST_EQUAL(Config(q3Cfg(R"("scan": "ms3")")).quantification().ms3_yield_gate.has_value(), false)
+  TEST_EQUAL(Config(q3Cfg(R"("scan": "ms3", "ms3_yield_gate": null)")).quantification().ms3_yield_gate.has_value(), false)
+  {
+    Config c(q3Cfg(R"("scan": "ms3", "ms3_yield_gate": { "threshold": 0.5, "intercept": -29.0 })"));
+    TEST_EQUAL(c.quantification().ms3_yield_gate.has_value(), true)
+    TEST_REAL_SIMILAR(c.quantification().ms3_yield_gate->threshold, 0.5)
+    TEST_REAL_SIMILAR(c.quantification().ms3_yield_gate->coefficients.intercept, -29.0)
+    TEST_REAL_SIMILAR(c.quantification().ms3_yield_gate->coefficients.fragment_iso_cos, 21.747494)
+    // One gate does not set the other.
+    TEST_EQUAL(c.characterization().yield_gate.has_value(), false)
+  }
+  TEST_EQUAL(contains(refineMessage(q3Cfg(R"("scan": "ms3", "ms3_yield_gate": { "threshold": 0 })")),
+                      "quantification.ms3_yield_gate.threshold must be > 0"), true)
+  TEST_EQUAL(contains(refineMessage(q3Cfg(R"("scan": "ms3", "ms3_yield_gate": { "slope": 1 })")),
+                      "unknown key(s) in 'quantification.ms3_yield_gate'"), true)
+  // Set under scan ms2: accepted, and warned about, because no quantification MS3 exists for it to gate.
+  TEST_EQUAL(contains(loadAndCapture(quantCfg(R"("ms3_yield_gate": {})")),
+                      "[CONFIG-WARN] quantification.ms3_yield_gate is set but quantification.scan is \"ms2\""), true)
+  TEST_EQUAL(contains(loadAndCapture(q3Cfg(R"("scan": "ms3", "ms3_yield_gate": {})")), "ms3_yield_gate"), false)
+}
+END_SECTION
+
 END_TEST

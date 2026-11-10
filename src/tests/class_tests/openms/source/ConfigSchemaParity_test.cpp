@@ -327,6 +327,24 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   //     what stops the projection silently regressing.
   TEST_EQUAL(cfg.level(2).max_targets, j["identification"]["characterization"]["max_targets"].get<int>())
   TEST_EQUAL(cfg.level(2).min_charge, j["identification"]["characterization"]["min_fragment_charge"].get<int>())
+  // ADR-0069: both yield gate blocks, every key non-default in the reference and different between the two, so a dropped
+  // or crossed key fails here.
+  auto yieldGateMatches = [](const std::optional<YieldGateConfig>& g, const nlohmann::json& jg) {
+    TEST_EQUAL(g.has_value(), true)
+    TEST_EQUAL(jg.is_object(), true)
+    if (!g || !jg.is_object()) return;
+    TEST_REAL_SIMILAR(g->threshold, jg["threshold"].get<double>())
+    TEST_REAL_SIMILAR(g->coefficients.intercept, jg["intercept"].get<double>())
+    TEST_REAL_SIMILAR(g->coefficients.fragment_intensity, jg["fragment_intensity"].get<double>())
+    TEST_REAL_SIMILAR(g->coefficients.precursor_intensity, jg["precursor_intensity"].get<double>())
+    TEST_REAL_SIMILAR(g->coefficients.precursor_charge, jg["precursor_charge"].get<double>())
+    TEST_REAL_SIMILAR(g->coefficients.mass_ratio, jg["mass_ratio"].get<double>())
+    TEST_REAL_SIMILAR(g->coefficients.fragment_iso_cos, jg["fragment_iso_cos"].get<double>())
+  };
+  yieldGateMatches(cfg.characterization().yield_gate, j["identification"]["characterization"]["yield_gate"]);
+  yieldGateMatches(cfg.quantification().ms3_yield_gate, j["quantification"]["ms3_yield_gate"]);
+  TEST_NOT_EQUAL(j["identification"]["characterization"]["yield_gate"]["threshold"].get<double>(),
+                 j["quantification"]["ms3_yield_gate"]["threshold"].get<double>())
   {
     const std::string mode = j["identification"]["characterization"]["mode"].get<std::string>();
     const bool on = mode != "off";

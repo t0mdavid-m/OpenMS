@@ -473,6 +473,7 @@ set(analysis_executables_list
   FLASHIda_LoggingFields_test
   FLASHIda_LoggingFields2_test
   FLASHIda_ConsoleView_test
+  FLASHIda_Ms3YieldModel_test
   MS3FragmentMatcher_test
   MS3FragmentMatcher_identification_test
   FragmentAnalysis_test

@@ -48,12 +48,17 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms2Params.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms3YieldModel.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ProteoformTracker.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 #include <OpenMS/SYSTEM/File.h>
 
+#include "FLASHIda_EventCapture.h"
+
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -216,6 +221,7 @@ namespace
     int ion_index;
     double mass;
     std::vector<int> charges;   ///< one entry: a single-peak group (no envelope); more: makeEnvelope
+    double iso_cos = -1.0;      ///< ADR-0069: >= 0 sets the group's isotope cosine (the yield model's input); < 0 leaves it
   };
 
   /// Feed ONE winner MS2 scan carrying @p frags (the winner match claims each, pooled verbatim) and finalize. With
@@ -235,8 +241,10 @@ namespace
     m.proteoform_sequence = WINNER_SEQ;
     for (const GateFrag& g : frags)
     {
-      if (g.charges.size() == 1) d.push_back(makeSyntheticPeakGroup(g.mass / g.charges[0] + PROTON_MASS, g.mass, g.charges[0]));
-      else d.push_back(makeEnvelope(g.mass, g.charges));
+      PeakGroup pg = (g.charges.size() == 1) ? makeSyntheticPeakGroup(g.mass / g.charges[0] + PROTON_MASS, g.mass, g.charges[0])
+                                             : makeEnvelope(g.mass, g.charges);
+      if (g.iso_cos >= 0.0) pg.setIsotopeCosine(static_cast<float>(g.iso_cos));
+      d.push_back(pg);
       FragmentAnalysis::ProteoformMatch::FragmentMatch fm;
       fm.ion_type = g.ion_type;
       fm.ion_index = g.ion_index;
@@ -280,6 +288,65 @@ namespace
     for (const Ms3Target& t : plan)
       if (t.ion_type == ion_type && t.ion_index == ion_index) return true;
     return false;
+  }
+
+  // ---- ADR-0069: the yield gate -------------------------------------------------------------------------------
+  /// The dispatching MS2 of the yield sections: stage 0 of every MS3 (precursor intensity, charge, mass).
+  ScanCommand yieldCtx()
+  {
+    ScanCommand ctx = makeMs2Ctx();
+    ctx.mono_mass = 10000.0;
+    ctx.precursor_intensity = 5.0e5;
+    ctx.stages[0].charge_state = 10;
+    return ctx;
+  }
+
+  /// openGate() plus the yield gate @p yg against @p ctx.
+  Ms3PlanGate yieldGate(const YieldGateConfig& yg, const ScanCommand& ctx)
+  {
+    Ms3PlanGate g = openGate();
+    g.yield = &yg;
+    g.ms_ctx = &ctx;
+    return g;
+  }
+
+  /// @p frags with the fragments named in @p low at isotope cosine @p low_iso and the rest at 0.99.
+  std::vector<GateFrag> withIsoCos(std::vector<GateFrag> frags, const std::set<std::pair<std::string, int>>& low, double low_iso)
+  {
+    for (GateFrag& g : frags) g.iso_cos = low.count({g.ion_type, g.ion_index}) ? low_iso : 0.99;
+    return frags;
+  }
+
+  /// The predicted bond yield of @p g as the planner computes it: intensity 0 (fixture groups carry none), its mass,
+  /// isotope cosine and ion index, stage 0 from @p ctx.
+  double yieldOf(const GateFrag& g, const ScanCommand& ctx)
+  {
+    FragmentAnalysis::FragmentScores s1;
+    s1.mono_mass = g.mass;
+    s1.iso_cos = g.iso_cos;
+    s1.precursor_intensity = 0.0;
+    return predictBondYield(YieldCoefficients{}, yieldInputsOf(ctx, s1, g.ion_index)).e;
+  }
+
+  /// A threshold between the yield of @p frags' fragment @p low (set below) and the lowest yield of every other fragment.
+  double thresholdBetween(const std::vector<GateFrag>& frags, const std::pair<std::string, int>& low, const ScanCommand& ctx)
+  {
+    const std::vector<GateFrag> set = withIsoCos(frags, {low}, 0.85);
+    double low_e = 0.0, high_e = std::numeric_limits<double>::max();
+    for (const GateFrag& g : set)
+    {
+      if (g.ion_type == low.first && g.ion_index == low.second) low_e = yieldOf(g, ctx);
+      else high_e = std::min(high_e, yieldOf(g, ctx));
+    }
+    if (!(low_e < high_e)) return -1.0;   // the fixture does not separate them: a threshold that admits all fails the sections
+    return std::sqrt(low_e * high_e);
+  }
+
+  int countOf(const std::string& hay, const std::string& needle)
+  {
+    int n = 0;
+    for (size_t pos = hay.find(needle); pos != std::string::npos; pos = hay.find(needle, pos + needle.size())) ++n;
+    return n;
   }
 }
 
@@ -726,6 +793,251 @@ START_SECTION(gate_cap_counts_sent_cleavages_not_reacquisitions)
   TEST_EQUAL(none_new.size(), 2)
   TEST_EQUAL(planHas(none_new, "b", 6), true)
   TEST_EQUAL(planHas(none_new, "y", 6), true)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// ADR-0069: the yield gate in the mapped planner. Fixture PeakGroups carry no charge intensity (every I_frag clips to
+// 372), so a fragment's predicted bond yield is set through its isotope cosine (GateFrag::iso_cos; the model's
+// steepest input) and its ion index; every charge of one fragment then has the same yield. yieldCtx() is the
+// dispatching MS2 every MS3 inherits stage 0 from.
+/////////////////////////////////////////////////////////////
+
+// T9. A yield gate whose threshold every target clears changes nothing, ungoverned (a gate with no snapshot) and
+// governed (a snapshot with nothing sent), under each mapped objective.
+// FAILS UNDER: a yield walk that re-orders or re-anchors an admitted fragment, or drops one it should admit.
+START_SECTION(yield_gate_open_equals_no_gate)
+{
+  const std::vector<GateFrag> two_amb{{"b", 6, 700.0, {2}}, {"y", 6, 900.0, {2}}};
+  const ScanCommand ctx = yieldCtx();
+  YieldGateConfig open_yield;
+  open_yield.threshold = 1e-12;
+  for (const std::string mode : {"ambiguity", "coverage", "fragments"})
+  {
+    Config cfg{gateConfig(mode, 10)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    if (mode == "ambiguity") feedGateWinner(tracker, 141, two_amb, /*ambiguous=*/true);
+    else feedGateWinner(tracker, 141, FOUR_FRAGS);
+
+    const std::vector<Ms3Target> today = tracker.planNextScans(141);
+    TEST_EQUAL(today.size(), (mode == "ambiguity") ? 2u : 4u)   // non-vacuity
+    Ms3PlanGate ungoverned = yieldGate(open_yield, ctx);
+    TEST_EQUAL(keysOf(tracker.planNextScans(141, &ungoverned)) == keysOf(today), true)
+    Ms3RegistrySnapshot snap;
+    snap.found = true;
+    Ms3PlanGate governed = yieldGate(open_yield, ctx);
+    governed.snapshot = &snap;
+    Ms3PlanGate governed_only = openGate();
+    governed_only.snapshot = &snap;
+    TEST_EQUAL(keysOf(tracker.planNextScans(141, &governed)) == keysOf(tracker.planNextScans(141, &governed_only)), true)
+  }
+}
+END_SECTION
+
+// T10. A yield-refused fragment hands its place on: budget 2, the plan's first fragment set below the threshold, the
+// plan is the next two, and one refused line names it.
+// FAILS UNDER: a refusal applied after the budget is spent (the plan would hold one target), or a refused fragment
+// still taking its place.
+START_SECTION(yield_refused_strongest_hands_its_place_on)
+{
+  const ScanCommand ctx = yieldCtx();
+  // The plan order, learnt with every fragment at the same isotope cosine (the order is the intensity order, which the
+  // cosine does not touch).
+  std::vector<std::pair<std::string, int>> order;
+  {
+    Config cfg{gateConfig("fragments", 10)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    feedGateWinner(tracker, 142, withIsoCos(FOUR_FRAGS, {}, 0.99));
+    for (const Ms3Target& t : tracker.planNextScans(142)) order.emplace_back(t.ion_type, t.ion_index);
+  }
+  TEST_EQUAL(order.size(), 4)
+  ABORT_IF(order.size() != 4)
+
+  Config cfg{gateConfig("fragments", 2)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedGateWinner(tracker, 142, withIsoCos(FOUR_FRAGS, {order[0]}, 0.85));
+  const std::vector<Ms3Target> today = tracker.planNextScans(142);
+  TEST_EQUAL(today.size(), 2)
+  TEST_EQUAL(planHas(today, order[0].first, order[0].second), true)   // non-vacuity: ungated, it is planned
+
+  YieldGateConfig yg;
+  yg.threshold = thresholdBetween(FOUR_FRAGS, order[0], ctx);
+  Ms3PlanGate gate = yieldGate(yg, ctx);
+  std::vector<Ms3Target> gated;
+  std::string log;
+  {
+    EventCapture cap;
+    gated = tracker.planNextScans(142, &gate);
+    log = cap.str();
+  }
+  TEST_EQUAL(gated.size(), 2)   // the place is still filled ...
+  TEST_EQUAL(planHas(gated, order[0].first, order[0].second), false)   // ... not by the refused fragment ...
+  TEST_EQUAL(planHas(gated, order[1].first, order[1].second), true)    // ... but by the next two
+  TEST_EQUAL(planHas(gated, order[2].first, order[2].second), true)
+  const std::string refused = "[MS3-YIELD] gate=characterization precursor_id=142 ion=" + order[0].first
+                              + std::to_string(order[0].second) + " charge=2 verdict=refused";
+  TEST_EQUAL(countOf(log, "[MS3-YIELD]"), 1)
+  TEST_EQUAL(countOf(log, refused), 1)
+}
+END_SECTION
+
+// T11. Governed, a yield-refused fragment takes no cleavage slot: one slot (max_targets 1), the first fragment refused,
+// the slot goes to the second.
+// FAILS UNDER: the yield test placed after room.admit (the slot would be spent on the refused fragment: empty plan).
+START_SECTION(governed_yield_refusal_takes_no_cleavage_slot)
+{
+  const ScanCommand ctx = yieldCtx();
+  std::vector<std::pair<std::string, int>> order;
+  {
+    Config cfg{gateConfig("fragments", 10)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    feedGateWinner(tracker, 143, withIsoCos(FOUR_FRAGS, {}, 0.99));
+    for (const Ms3Target& t : tracker.planNextScans(143)) order.emplace_back(t.ion_type, t.ion_index);
+  }
+  ABORT_IF(order.size() != 4)
+
+  Config cfg{gateConfig("fragments", 10)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedGateWinner(tracker, 143, withIsoCos(FOUR_FRAGS, {order[0]}, 0.85));
+  Ms3RegistrySnapshot snap;
+  snap.found = true;
+  Ms3PlanGate slots_only = openGate();
+  slots_only.snapshot = &snap;
+  slots_only.max_targets = 1;
+  const std::vector<Ms3Target> one_slot = tracker.planNextScans(143, &slots_only);
+  TEST_EQUAL(one_slot.size(), 1)
+  ABORT_IF(one_slot.size() != 1)
+  TEST_EQUAL(one_slot[0].ion_type == order[0].first && one_slot[0].ion_index == order[0].second, true)   // non-vacuity
+
+  YieldGateConfig yg;
+  yg.threshold = thresholdBetween(FOUR_FRAGS, order[0], ctx);
+  Ms3PlanGate gate = yieldGate(yg, ctx);
+  gate.snapshot = &snap;
+  gate.max_targets = 1;
+  const std::vector<Ms3Target> gated = tracker.planNextScans(143, &gate);
+  TEST_EQUAL(gated.size(), 1)
+  ABORT_IF(gated.size() != 1)
+  TEST_EQUAL(gated[0].ion_type == order[1].first && gated[0].ion_index == order[1].second, true)
+}
+END_SECTION
+
+// T12. The yield walk runs on the charges the gate's other tests admitted, strongest first: b6 at 2+ and 3+, a charge
+// floor of 3, the yield admits 3+ and it anchors. Every charge refused: the fragment is refused, one line per charge
+// the walk tested (single mode tests until one passes, so here both).
+// FAILS UNDER: a walk over the unfiltered envelope (2+ would anchor), or a refusal that writes no line per charge.
+START_SECTION(yield_charge_walk_anchors_first_passing_charge)
+{
+  const ScanCommand ctx = yieldCtx();
+  Config cfg{gateConfig("fragments", 10)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedGateWinner(tracker, 144, withIsoCos({{"b", 6, 700.0, {2, 3}}}, {}, 0.99));
+  YieldGateConfig open_yield;
+  open_yield.threshold = 1e-12;
+  Ms3PlanGate gate = yieldGate(open_yield, ctx);
+  gate.charge_floor = 3;
+  const std::vector<Ms3Target> walked = tracker.planNextScans(144, &gate);
+  TEST_EQUAL(walked.size(), 1)
+  ABORT_IF(walked.size() != 1)
+  TEST_EQUAL(walked[0].frag_charge, 3)
+
+  YieldGateConfig closed;
+  closed.threshold = 1e9;
+  Ms3PlanGate shut = yieldGate(closed, ctx);
+  std::string log;
+  {
+    EventCapture cap;
+    TEST_EQUAL(tracker.planNextScans(144, &shut).size(), 0)
+    log = cap.str();
+  }
+  TEST_EQUAL(countOf(log, "[MS3-YIELD] gate=characterization precursor_id=144 ion=b6 charge=2 verdict=refused"), 1)
+  TEST_EQUAL(countOf(log, "[MS3-YIELD] gate=characterization precursor_id=144 ion=b6 charge=3 verdict=refused"), 1)
+}
+END_SECTION
+
+// T13. Separate tests every charge: b6 at 2+, 3+ and 4+ is three scans when the yield admits, none and three refused
+// lines when it refuses. Single mode, admitted, writes no line at all.
+// FAILS UNDER: a separate walk that stops at the first admitted charge (one scan), or a refused charge still acquired.
+START_SECTION(separate_acquires_only_passing_charges)
+{
+  const ScanCommand ctx = yieldCtx();
+  Config cfg{gateConfig("fragments", 10, "separate")};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedGateWinner(tracker, 145, withIsoCos({{"b", 6, 700.0, {2, 3, 4}}}, {}, 0.99));
+  YieldGateConfig open_yield;
+  open_yield.threshold = 1e-12;
+  Ms3PlanGate open = yieldGate(open_yield, ctx);
+  std::string log;
+  {
+    EventCapture cap;
+    TEST_EQUAL(tracker.planNextScans(145, &open).size(), 3)
+    log = cap.str();
+  }
+  TEST_EQUAL(countOf(log, "[MS3-YIELD]"), 0)   // admitted MS3 write no line: their E is the row's
+  YieldGateConfig closed;
+  closed.threshold = 1e9;
+  Ms3PlanGate shut = yieldGate(closed, ctx);
+  {
+    EventCapture cap;
+    TEST_EQUAL(tracker.planNextScans(145, &shut).size(), 0)
+    log = cap.str();
+  }
+  TEST_EQUAL(countOf(log, "verdict=refused"), 3)
+}
+END_SECTION
+
+// T14. Multiplexed notches are not yield-tested: the walk stops at the anchor (2+), and 3+ and 4+ still ride as
+// notches, exactly as without the yield gate.
+// FAILS UNDER: notches drawn from the yield-admitted charges only (the target would carry none).
+START_SECTION(multiplexed_notches_are_untested)
+{
+  const ScanCommand ctx = yieldCtx();
+  Config cfg{gateConfig("fragments", 10, "multiplexed")};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedGateWinner(tracker, 146, withIsoCos({{"b", 6, 700.0, {2, 3, 4}}}, {}, 0.99));
+  YieldGateConfig open_yield;
+  open_yield.threshold = 1e-12;
+  Ms3PlanGate gate = yieldGate(open_yield, ctx);
+  const std::vector<Ms3Target> plan = tracker.planNextScans(146, &gate);
+  TEST_EQUAL(plan.size(), 1)
+  ABORT_IF(plan.size() != 1)
+  TEST_EQUAL(plan[0].frag_charge, 2)
+  std::set<int> notches;
+  for (const NotchCandidate& n : plan[0].notches) notches.insert(n.charge);
+  TEST_EQUAL(notches == std::set<int>({3, 4}), true)
+}
+END_SECTION
+
+// T15. The ungoverned yield gate (no snapshot, no spectrum, the dispatch's charge floor, the budget as its room) moves
+// the charge floor into the walk: today a 2+ fragment takes the one place and dispatch then skips it below the floor;
+// with the gate the 3+ fragment takes the place.
+// FAILS UNDER: an ungoverned gate that ignores the floor (the 2+ fragment would still take the place).
+START_SECTION(ungoverned_gate_moves_floor_into_the_walk)
+{
+  const ScanCommand ctx = yieldCtx();
+  Config cfg{gateConfig("fragments", 1)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedGateWinner(tracker, 147, withIsoCos({{"b", 5, 550.0, {2}}, {"b", 6, 700.0, {3}}}, {}, 0.99));
+  const std::vector<Ms3Target> today = tracker.planNextScans(147);
+  TEST_EQUAL(today.size(), 1)
+  YieldGateConfig open_yield;
+  open_yield.threshold = 1e-12;
+  Ms3PlanGate gate = yieldGate(open_yield, ctx);
+  gate.charge_floor = 3;
+  gate.max_targets = 1;
+  const std::vector<Ms3Target> gated = tracker.planNextScans(147, &gate);
+  TEST_EQUAL(gated.size(), 1)
+  ABORT_IF(gated.size() != 1)
+  TEST_EQUAL(gated[0].frag_charge, 3)
+  TEST_EQUAL(planHas(gated, "b", 6), true)
 }
 END_SECTION
 

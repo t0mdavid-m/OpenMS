@@ -13,6 +13,8 @@
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIdaBridgeFunctions.h>  // the C export ProcessScan (ADR-0051)
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms3YieldModel.h>  // ADR-0069: the row's E recomputed
+#include "FLASHIda_EventCapture.h"
 
 #include "FLASHIda_TestHelpers.h"  // ground-truth harness: ScanData/loadTsvScans/AcqResult/runInterleaved/runFullCycle
 #include "FLASHIda_TestAccess.h"   // FLASHIdaTestAccess: push/queue/queueSize/explorationActive (private-state access)
@@ -4339,6 +4341,144 @@ START_SECTION(rescue_exploration_variants_buy_no_rescue)
   ABORT_IF(variants == 0)
   TEST_EQUAL(identification_scans, 0)   // the premise: this sweep emits no follow-up 'R' at MS2
   TEST_EQUAL(countOf(events.str(), "[RESCUE] "), 0)
+
+// ===== The MS3 yield gate (ADR-0069) end to end ==================================================================
+//
+// T18. The per-proteoform cytC recipe with identification.characterization.yield_gate at 25 expected bonds (today's
+// MS3 of this recipe are at E 7..44, median 28: the gate both admits and refuses). Every MS3 row's predicted_bond_yield
+// is at or above 25 and equals E recomputed from the row's own cells; every refused line's e is below 25; every other
+// row is -1.
+//
+// FAILS UNDER: a row whose E is not the decision value (recomputed from different inputs), a refused MS3 still
+// acquired, or the column written on a row no gate tested.
+START_SECTION(yield_gate_row_equals_decision)
+{
+  auto ms1 = loadTsvScans(ms1_cytc_tsv_path);
+  auto ms2 = loadTsvScans(ms2_cytc_fresh_tsv_path);
+  ABORT_IF(ms1.empty() || ms2.empty())
+  const std::string dir = freshLogDir("yield_gate_cytc");
+  nlohmann::json j = nlohmann::json::parse(ms3_mode1_json);
+  j["deconvolution"]["tqscore_threshold"] = 0.0;
+  j["identification"]["characterization"] = {{"mode", "fragments"}, {"max_targets", 3}, {"per_proteoform", true},
+                                             {"yield_gate", {{"threshold", 25.0}}}};
+  j["runtime"] = {{"log_dir", dir}};
+  const std::string cfg = j.dump();
+  std::string events;
+  std::vector<ScanCommand> ms3;
+  {
+    EventCapture cap;
+    {
+      FLASHIda ida(const_cast<char*>(cfg.c_str()));
+      ms3 = runInterleaved(&ida, ms1, ms2, nullptr, 4000).ms3_cmds;
+    }
+    events = cap.str();
+  }
+  TEST_EQUAL(ms3.empty(), false)   // non-vacuity: the gate admits
+  TEST_EQUAL(events.find("[MS3-YIELD] gate=characterization") != std::string::npos, true)   // ... and refuses
+
+  // Every refused line's e is below the threshold.
+  int refused = 0;
+  for (size_t pos = events.find("verdict=refused"); pos != std::string::npos; pos = events.find("verdict=refused", pos + 1))
+  {
+    const size_t e_at = events.find(" e=", pos);
+    ABORT_IF(e_at == std::string::npos)
+    TEST_EQUAL(std::stod(events.substr(e_at + 3)) < 25.0, true)
+    ++refused;
+  }
+  TEST_EQUAL(refused > 0, true)
+
+  // Every row: an MS3's E at or above 25 and equal to E recomputed from its own cells; anything else -1.
+  auto t = TSVFile::parse(dir + "/scan_commands.tsv");
+  ABORT_IF(t.colIndex("predicted_bond_yield") < 0)
+  int ms3_rows = 0;
+  for (const auto& row : t.rows)
+  {
+    const std::string pby = cell(t, row, "predicted_bond_yield");
+    if (cell(t, row, "ms_level") != "3")
+    {
+      TEST_EQUAL(pby, std::string("-1"))
+      continue;
+    }
+    ++ms3_rows;
+    auto pair = [&](const char* col) {
+      const std::string v = cell(t, row, col);
+      const size_t semi = v.find(';');
+      return std::make_pair(std::stod(v.substr(0, semi)), std::stod(v.substr(semi + 1)));
+    };
+    YieldInputs in;
+    in.i_prec = pair("precursor_intensity").first;
+    in.i_frag = pair("precursor_intensity").second;
+    in.m_prec = pair("mono_mass").first;
+    in.m_frag = pair("mono_mass").second;
+    in.iso_cos = pair("iso_cos").second;
+    const std::string charges = cell(t, row, "charge");
+    in.z_prec = std::stod(charges.substr(0, charges.find_first_of(";,")));
+    in.length = std::stoi(cell(t, row, "ion_index"));
+    const double e = std::stod(pby);
+    TEST_EQUAL(e >= 25.0, true)
+    // The cells print at the stream default (6 significant digits), so the recomputation agrees to a fraction of E.
+    TEST_EQUAL(std::abs(predictBondYield(YieldCoefficients{}, in).e - e) <= 1e-3 * e, true)
+  }
+  TEST_EQUAL(ms3_rows, static_cast<int>(ms3.size()))
+}
+END_SECTION
+
+// T19. The quantification MS3's yield gate on the iodoTMT fixture: ungated, the identification buys one 'Q' MS3, at a
+// predicted bond yield below 1. With quantification.ms3_yield_gate at 1 that fragment is refused (a refused line names
+// it) and any Q bought instead is at E >= 1; at 0.5 the same fragment is bought again and its row carries its E.
+//
+// FAILS UNDER: a quantification gate that is not applied (the ungated fragment bought at threshold 1), or one that
+// refuses at the wrong side of the threshold (not bought at 0.5).
+START_SECTION(quant_ms3_yield_refused_hands_on)
+{
+  auto ionOf = [](const ScanCommand& c) {
+    std::string ion;
+    decodeTrailingIonKey(c.scan_description, ion);
+    return ion;
+  };
+  auto rowE = [](const std::string& dir, const ScanCommand& c) {
+    auto t = TSVFile::parse(dir + "/scan_commands.tsv");
+    for (const auto& row : t.rows)
+      if (cell(t, row, "tracking_id") == ScanCommandQueue::encode(c.scan_id)) return std::stod(cell(t, row, "predicted_bond_yield"));
+    return -2.0;
+  };
+  auto withGate = [](const std::string& dir, double threshold) {
+    nlohmann::json j = nlohmann::json::parse(quantMs3Json(dir, "ms3", 10.0));
+    if (threshold > 0) j["quantification"]["ms3_yield_gate"] = {{"threshold", threshold}};
+    return j.dump();
+  };
+
+  const std::string d0 = freshLogDir("quant_ms3_yield_off");
+  const QuantMs3Run off = runQuantMs3(d0, withGate(d0, 0));
+  TEST_EQUAL(off.quant_ms3.size(), 1)
+  ABORT_IF(off.quant_ms3.size() != 1)
+  const std::string bought_ion = ionOf(off.quant_ms3[0]);
+  const double e_off = predictBondYield(YieldCoefficients{}, yieldInputsOf(off.quant_ms3[0])).e;
+  TEST_EQUAL(e_off < 1.0 && e_off > 0.5, true)   // the fixture sits between the two thresholds
+  TEST_REAL_SIMILAR(rowE(d0, off.quant_ms3[0]), -1.0)   // gate off: the row is -1
+
+  const std::string d1 = freshLogDir("quant_ms3_yield_1");
+  std::string log;
+  QuantMs3Run at1;
+  {
+    EventCapture cap;
+    at1 = runQuantMs3(d1, withGate(d1, 1.0));
+    log = cap.str();
+  }
+  TEST_EQUAL(log.find("[MS3-YIELD] gate=quantification") != std::string::npos, true)
+  TEST_EQUAL(log.find("ion=" + bought_ion) != std::string::npos, true)
+  for (const ScanCommand& c : at1.quant_ms3)
+  {
+    TEST_EQUAL(ionOf(c) == bought_ion, false)
+    TEST_EQUAL(rowE(d1, c) >= 1.0, true)
+  }
+
+  const std::string d2 = freshLogDir("quant_ms3_yield_half");
+  const QuantMs3Run half = runQuantMs3(d2, withGate(d2, 0.5));
+  TEST_EQUAL(half.quant_ms3.size(), 1)
+  ABORT_IF(half.quant_ms3.size() != 1)
+  TEST_EQUAL(ionOf(half.quant_ms3[0]), bought_ion)
+  TEST_EQUAL(std::abs(rowE(d2, half.quant_ms3[0]) - e_off) <= 1e-3, true)
 }
 END_SECTION
 

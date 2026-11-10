@@ -34,6 +34,8 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms2Params.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms3YieldModel.h>
+#include "FLASHIda_EventCapture.h"
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ProteoformTracker.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
@@ -1312,6 +1314,56 @@ START_SECTION(withdraw_unstamps_except_with_a_committed_sibling)
   const std::vector<Ms3Target> again = tracker.planNextScans(precursor_id);
   TEST_TRUE(targetAtMass(again, first[0].frag_mass) != nullptr)
   TEST_TRUE(targetAtMass(again, first[1].frag_mass) == nullptr)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// ADR-0069 T16. The yield gate in the exhaustive planner: a mass the match labels (b6, y6) has an ion index and is
+//     tested; a mass that matches no ion has none and is admitted untested, with one untested line each. A yield gate no
+//     mass can pass therefore leaves exactly the five unassigned masses, and the refused labelled masses are not stamped.
+//
+// FAILS UNDER: an unlabelled mass tested at length 0 (E = 0, refused: the plan would be empty), or a refused labelled
+// mass stamped into the monotone dispatch memory.
+/////////////////////////////////////////////////////////////
+START_SECTION(exhaustive_unlabelled_is_admitted_untested_labelled_is_gated)
+{
+  const int precursor_id = 69;
+  Config cfg{trackerConfig("exhaustive", 10, 0.0, 0)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedWinnerScan(tracker, precursor_id, 691, SEVEN_MASSES, TWO_FRAGS, "HCD");
+
+  const ScanCommand ctx = makeMs2Ctx();
+  YieldGateConfig closed;
+  closed.threshold = 1e9;
+  Ms3PlanGate gate;   // ungoverned: no snapshot, no spectrum
+  gate.max_targets = 10;
+  gate.yield = &closed;
+  gate.ms_ctx = &ctx;
+  std::vector<Ms3Target> plan;
+  std::string log;
+  {
+    EventCapture cap;
+    plan = tracker.planNextScans(precursor_id, &gate);
+    log = cap.str();
+  }
+  TEST_EQUAL(static_cast<int>(plan.size()), 5)
+  TEST_EQUAL(countUnassigned(plan), 5)
+  TEST_TRUE(targetForIon(plan, "b", 6) == nullptr)
+  TEST_TRUE(targetForIon(plan, "y", 6) == nullptr)
+  auto count = [&log](const std::string& needle) {
+    int n = 0;
+    for (size_t pos = log.find(needle); pos != std::string::npos; pos = log.find(needle, pos + 1)) ++n;
+    return n;
+  };
+  TEST_EQUAL(count("verdict=untested reason=no_ion_index"), 5)
+  TEST_EQUAL(count("[MS3-YIELD] gate=characterization precursor_id=69 ion=b6 charge=2 verdict=refused"), 1)
+  TEST_EQUAL(count("[MS3-YIELD] gate=characterization precursor_id=69 ion=y6 charge=2 verdict=refused"), 1)
+  const ProteoformModel* mdl = tracker.getModel(precursor_id);
+  ABORT_IF(mdl == nullptr)
+  TEST_EQUAL(dispatched(*mdl, MASS_B6), false)
+  TEST_EQUAL(dispatched(*mdl, MASS_Y6), false)
+  TEST_EQUAL(dispatched(*mdl, MASS_U1), true)
 }
 END_SECTION
 
