@@ -4472,6 +4472,16 @@ START_SECTION(quant_ms3_yield_refused_hands_on)
     TEST_EQUAL(ionOf(c) == bought_ion, false)
     TEST_EQUAL(rowE(d1, c) >= 1.0, true)
   }
+  // Nothing bought instead: the identification row says why -- the yield gate, not a missing labelled fragment.
+  if (at1.quant_ms3.empty())
+  {
+    auto idf = TSVFile::parse(d1 + "/identification.tsv");
+    int yield_refused_rows = 0;
+    for (const auto& row : idf.rows)
+      if (cell(idf, row, "ms_level") == "2" && cell(idf, row, "closed_out") == "1")
+        yield_refused_rows += (cell(idf, row, "quant_ms3") == "yield_refused") ? 1 : 0;
+    TEST_EQUAL(yield_refused_rows > 0, true)
+  }
 
   const std::string d2 = freshLogDir("quant_ms3_yield_half");
   const QuantMs3Run half = runQuantMs3(d2, withGate(d2, 0.5));
