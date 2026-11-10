@@ -1363,6 +1363,8 @@ START_SECTION(push_site_inventory)
     // ADR-0068: the rescue scan an identification that fell short buys, permanent, registered so a close-out withdraws it
     "finishRegularMS2_ | stampAndPush_(rescue, precursor_id);",
     "finishRegularMS2_ | queue_.registerRescue(rescue.scan_id, nominal);",
+    // ADR-0071: one Window scan per window of an identified MS2, permanent, observed and never acted upon
+    "finishRegularMS2_ | stampAndPush_(ws, precursor_id);",
     // the bought R, registered adjustable at the quant verdict
     "processScan | queue_.registerAdjustable(ident.scan_id, cons.q_covered_charges, cons.winner_survey_id,",
     // the MS1 family

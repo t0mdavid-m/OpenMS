@@ -25,6 +25,8 @@
 #include <fstream>
 #include <string>
 #include <cstring>
+#include <tuple>      // msnSequence (ADR-0071)
+#include <cmath>      // std::llround
 #include <vector>
 #include <map>
 #include <set>
@@ -1414,6 +1416,50 @@ namespace
   void feedMs2(FLASHIda& ida, ScanCommand c, const ScanData& s)
   {
     ida.processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 2, c.scan_description, 0.0, instrumentScanNumberOf(s));
+  }
+}
+
+// ===== The Window scan (ADR-0071), helpers at file scope =============================================================
+namespace
+{
+  /// closeOutCytcJson with no threshold (strict-inclusion cytC, re-acquired at every survey) and window_scan on (or
+  /// off, for the on/off comparison). @p multiplexed co-isolates the charge set as notches; @p reference and
+  /// @p etd_first as rescueCytcJson's.
+  std::string windowCytcJson(const std::string& dir, bool window_scan = true, bool multiplexed = false,
+                             const std::string& reference = "", bool etd_first = false)
+  {
+    nlohmann::json j = nlohmann::json::parse(closeOutCytcJson(dir, std::nullopt));
+    if (multiplexed) j["precursor_selection"]["precursor_charges"] = "multiplexed";
+    if (!reference.empty()) j["identification"]["reference"] = {{"sequence", reference}};
+    if (etd_first)
+    {
+      nlohmann::json& ms2 = j["ms_settings"]["ms2"];
+      ms2["activation"] = "ETD";
+      ms2["reaction_time"] = 12;
+      ms2.erase("collision_energy");
+    }
+    j["identification"]["window_scan"] = window_scan;
+    return j.dump();
+  }
+
+  /// Every stage-0 window (centre, width) of @p c: the anchor, then its notches.
+  std::vector<std::pair<double, double>> stage0Windows(const ScanCommand& c)
+  {
+    std::vector<std::pair<double, double>> w{{c.stages[0].precursor_mz, c.stages[0].isolation_width}};
+    const auto notches = notchesForStage(c, 0);
+    for (int k = 0; k < notches.second; ++k) w.emplace_back(notches.first[k].precursor_mz, notches.first[k].isolation_width);
+    return w;
+  }
+
+  /// The MS2/MS3 commands of a drive, as (level, stage-0 charge, stage-0 m/z x 1e4) -- the decisions a Window scan
+  /// must not move.
+  std::vector<std::tuple<int, int, long long>> msnSequence(const AcqResult& acq)
+  {
+    std::vector<std::tuple<int, int, long long>> s;
+    for (const auto& c : acq.all_cmds)
+      if (c.msn_level >= 2 && c.num_stages > 0)
+        s.emplace_back(c.msn_level, c.stages[0].charge_state, std::llround(c.stages[0].precursor_mz * 1e4));
+    return s;
   }
 }
 
@@ -4581,6 +4627,152 @@ START_SECTION(quant_ms3_yield_refused_hands_on)
   ABORT_IF(half.quant_ms3.size() != 1)
   TEST_EQUAL(ionOf(half.quant_ms3[0]), bought_ion)
   TEST_EQUAL(std::abs(rowE(d2, half.quant_ms3[0]) - e_off) <= 1e-3, true)
+}
+END_SECTION
+
+// ===== The Window scan (ADR-0071) ===================================================================================
+
+// Every identified 'R' buys one Window scan per window: a full MS1 at priority 0 whose range is that 'R''s commanded
+// window, at its CV, whose parent is that 'R'. Its own row names the 'R' and records that it bought nothing.
+START_SECTION(window_scan_one_per_identified_scan)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  const std::string dir = freshLogDir("window_single");
+  const std::string cfg = windowCytcJson(dir);
+  EventCapture events;
+  AcqResult acq;
+  {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    acq = runInterleaved(&ida, ms1, ms2);
+  }
+  ABORT_IF(acq.window_cmds.empty())
+  std::map<std::string, ScanCommand> ms2_by_id;
+  for (const auto& c : acq.ms2_cmds) ms2_by_id[ScanCommandQueue::encode(c.scan_id)] = c;
+  for (const auto& w : acq.window_cmds)
+  {
+    TEST_EQUAL(w.msn_level, 1)
+    TEST_EQUAL(w.priority, 0)
+    TEST_EQUAL(w.scan_description[3], 'W')
+    auto it = ms2_by_id.find(std::string(w.parent_scan_id));
+    TEST_EQUAL(it != ms2_by_id.end(), true)
+    if (it == ms2_by_id.end()) continue;
+    const ScanCommand& r = it->second;
+    TEST_EQUAL(windowsAtStage(r, 0), 1)   // single charge: one window, one Window scan
+    TEST_REAL_SIMILAR(w.first_mass, r.stages[0].precursor_mz - r.stages[0].isolation_width / 2.0)
+    TEST_REAL_SIMILAR(w.last_mass, r.stages[0].precursor_mz + r.stages[0].isolation_width / 2.0)
+    TEST_REAL_SIMILAR(w.faims_cv, r.faims_cv)
+  }
+  // One buy per identified 'R': its identification row exists, and the event says one window.
+  auto idf = TSVFile::parse(dir + "/identification.tsv");
+  int identified = 0;
+  for (const auto& row : idf.rows)
+    if (cell(idf, row, "ms_level") == "2") ++identified;
+  TEST_EQUAL(static_cast<int>(acq.window_cmds.size()), identified)
+  TEST_EQUAL(countOf(events.str(), "[WINDOW-SCAN] "), identified)
+  TEST_EQUAL(countOf(events.str(), " windows=1"), identified)
+  // The Window scan's own scan_results row names its 'R' and pushed nothing.
+  std::set<std::string> window_ids;
+  for (const auto& w : acq.window_cmds) window_ids.insert(ScanCommandQueue::encode(w.scan_id));
+  auto res = TSVFile::parse(dir + "/scan_results.tsv");
+  int window_rows = 0;
+  for (const auto& row : res.rows)
+  {
+    if (window_ids.count(cell(res, row, "tracking_id")) == 0) continue;
+    ++window_rows;
+    TEST_EQUAL(ms2_by_id.count(cell(res, row, "parent_tracking_id")), 1)
+    TEST_EQUAL(cell(res, row, "commands_pushed"), "0")
+    TEST_EQUAL(cell(res, row, "child_ids"), "")
+  }
+  TEST_EQUAL(window_rows, static_cast<int>(acq.window_cmds.size()))
+}
+END_SECTION
+
+// A multi-notch 'R' buys one Window scan per window it isolated -- the anchor and every notch -- each with that
+// window's own range.
+START_SECTION(window_scan_one_per_notch_under_multiplexed)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  const std::string dir = freshLogDir("window_multiplexed");
+  const std::string cfg = windowCytcJson(dir, true, true);
+  AcqResult acq;
+  {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    acq = runInterleaved(&ida, ms1, ms2);
+  }
+  std::map<std::string, ScanCommand> ms2_by_id;
+  for (const auto& c : acq.ms2_cmds) ms2_by_id[ScanCommandQueue::encode(c.scan_id)] = c;
+  std::map<std::string, std::vector<ScanCommand>> windows_of;   // 'R' id -> its Window scans
+  for (const auto& w : acq.window_cmds) windows_of[std::string(w.parent_scan_id)].push_back(w);
+  ABORT_IF(windows_of.empty())
+  int multi_window_triggers = 0;
+  for (const auto& [rid, ws] : windows_of)
+  {
+    auto it = ms2_by_id.find(rid);
+    TEST_EQUAL(it != ms2_by_id.end(), true)
+    if (it == ms2_by_id.end()) continue;
+    const auto expected = stage0Windows(it->second);
+    if (expected.size() > 1) ++multi_window_triggers;
+    TEST_EQUAL(ws.size(), expected.size())
+    for (const auto& [centre, width] : expected)
+    {
+      bool found = false;
+      for (const auto& w : ws)
+        found = found || (std::abs(w.first_mass - (centre - width / 2.0)) < 1e-6 && std::abs(w.last_mass - (centre + width / 2.0)) < 1e-6);
+      TEST_EQUAL(found, true)
+    }
+  }
+  TEST_EQUAL(multi_window_triggers > 0, true)   // non-vacuity: a notch-bearing 'R' bought Window scans
+}
+END_SECTION
+
+// An identification scan whose search found no proteoform buys none. An ETD identification scan of cytC's (HCD)
+// spectrum, searched as c/z against ubiquitin, finds none (the rescue tests' E2 setup).
+START_SECTION(window_scan_unidentified_buys_none)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  const std::string dir = freshLogDir("window_unidentified");
+  const std::string cfg = windowCytcJson(dir, true, false, kUbiquitin, /*etd_first*/ true);
+  EventCapture events;
+  AcqResult acq;
+  {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    acq = runInterleaved(&ida, ms1, ms2);
+  }
+  TEST_EQUAL(acq.window_cmds.size(), 0)
+  TEST_EQUAL(countOf(events.str(), "[WINDOW-SCAN] "), 0)
+  TEST_EQUAL(readCloseOut(dir).searched > 0, true)   // non-vacuity: the identification scans were searched
+}
+END_SECTION
+
+// A Window scan decides nothing: with it on, every MS2 and MS3 the run commands is the one it commands with it off,
+// in the same order, and the surveys are the same in number.
+START_SECTION(window_scan_decides_nothing)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  auto drive = [&](bool on, const std::string& tag) {
+    const std::string dir = freshLogDir(tag);
+    const std::string cfg = windowCytcJson(dir, on);
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    return runInterleaved(&ida, ms1, ms2);
+  };
+  const AcqResult off = drive(false, "window_off");
+  const AcqResult on = drive(true, "window_on");
+  ABORT_IF(on.window_cmds.empty())   // non-vacuity: Window scans were bought and answered
+  TEST_EQUAL(off.window_cmds.size(), 0)
+  TEST_EQUAL(msnSequence(on) == msnSequence(off), true)
+  TEST_EQUAL(on.ms1_cmds.size(), off.ms1_cmds.size())
 }
 END_SECTION
 

@@ -744,6 +744,23 @@ START_SECTION(per_proteoform_absent_is_off_and_only_a_boolean_parses)
 }
 END_SECTION
 
+// ADR-0071: identification.window_scan. Absent or null = false (every committed config); true and false parse; a
+// non-boolean is refused with a message naming the key.
+START_SECTION(window_scan_absent_is_off_and_only_a_boolean_parses)
+{
+  auto withWindowScan = [](const std::string& extra) {
+    return withIdentification(R"({ "reference": { "sequence": "PEPTIDEK" })" + extra + " }");
+  };
+  TEST_EQUAL(Config{withWindowScan("")}.identification().window_scan, false)
+  TEST_EQUAL(Config{withWindowScan(R"(, "window_scan": null)")}.identification().window_scan, false)
+  TEST_EQUAL(Config{withWindowScan(R"(, "window_scan": false)")}.identification().window_scan, false)
+  TEST_EQUAL(Config{withWindowScan(R"(, "window_scan": true)")}.identification().window_scan, true)
+  for (const std::string bad : {std::string("1"), std::string("\"yes\""), std::string("[true]")})
+    TEST_EQUAL(contains(loadError(withWindowScan(", \"window_scan\": " + bad)),
+                        "identification.window_scan must be true or false"), true)
+}
+END_SECTION
+
 // ADR-0061 d.13: "Every unset key takes FLASHTnT's default". An identification without flashtnt, with an
 // empty one and with a null one gives FLASHTnT's Param for every knob (ex:skip_precursor_inference aside,
 // ADR-0061's true), and authored values reach FLASHTnT under its own names.

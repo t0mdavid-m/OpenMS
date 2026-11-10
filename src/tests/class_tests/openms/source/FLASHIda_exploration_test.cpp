@@ -4952,7 +4952,8 @@ START_SECTION(roleName_matches_the_legacy_scan_type_strings)
   TEST_EQUAL(std::string(roleName(ScanRole::Identification)),     "recording")
   TEST_EQUAL(std::string(roleName(ScanRole::Quantification)),     "quantification")
   TEST_EQUAL(std::string(roleName(ScanRole::ExplorationVariant)), "exploration")
-  TEST_EQUAL(std::string(roleName(ScanRole::Monitor)),            "monitor")   // the only new value
+  TEST_EQUAL(std::string(roleName(ScanRole::Monitor)),            "monitor")   // new with ADR-0042
+  TEST_EQUAL(std::string(roleName(ScanRole::Window)),             "window")    // new with ADR-0071
 
   TEST_EQUAL(roleMarker(ScanRole::Survey),             'S')
   TEST_EQUAL(roleMarker(ScanRole::Agc),                'A')
@@ -4960,14 +4961,16 @@ START_SECTION(roleName_matches_the_legacy_scan_type_strings)
   TEST_EQUAL(roleMarker(ScanRole::Quantification),     'Q')
   TEST_EQUAL(roleMarker(ScanRole::ExplorationVariant), 'E')
   TEST_EQUAL(roleMarker(ScanRole::Monitor),            'M')
+  TEST_EQUAL(roleMarker(ScanRole::Window),             'W')
 
-  // AGC is the only role whose peaks the engine does not read; Monitor is the only other that drives
-  // no decision. Both are asserted as EXACT sets, so widening either has to be deliberate.
+  // AGC is the only role whose peaks the engine does not read; Monitor and Window (ADR-0071) are the only
+  // others that drive no decision. Both are asserted as EXACT sets, so widening either has to be deliberate.
   for (size_t i = 0; i < kScanRoleTraits.size(); ++i)
   {
     TEST_EQUAL(kScanRoleTraits[i].observes, kScanRoleTraits[i].role != ScanRole::Agc)
     TEST_EQUAL(kScanRoleTraits[i].decides,
-               !(kScanRoleTraits[i].role == ScanRole::Agc || kScanRoleTraits[i].role == ScanRole::Monitor))
+               !(kScanRoleTraits[i].role == ScanRole::Agc || kScanRoleTraits[i].role == ScanRole::Monitor
+                 || kScanRoleTraits[i].role == ScanRole::Window))
   }
 
   // An UNDECODABLE description must resolve as a survey does -- observes and decides both true.

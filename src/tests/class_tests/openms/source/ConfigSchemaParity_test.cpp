@@ -107,6 +107,8 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   TEST_REAL_SIMILAR(cfg.identification().fixed_mods.delta('C'), 329.226595)
   // --- identification.search_threads (ADR-0062: the search pool's size) ---
   TEST_EQUAL(cfg.identification().search_threads, j["identification"]["search_threads"].get<int>())
+  // --- identification.window_scan (ADR-0071: the Window scan) ---
+  TEST_EQUAL(cfg.identification().window_scan, j["identification"]["window_scan"].get<bool>())
 
   // --- ms_settings.ms2_quant, the quantification scan (ADR-0038) ---
   // Replaces the old quantification.follow_up_scan block. That key named the scan quantification
