@@ -308,6 +308,7 @@ namespace OpenMS
     10,                           // max_targets
     0,                            // min_charge (no filter)
     ExplorationMetric::None,      // exploration
+    SweepOrder::Ascending,        // sweep_order
     20.0, 40.0, 5.0,              // ce_min, ce_max, ce_step
     0.0, 0.0, 1.0,                // rt_min, rt_max, rt_step
     {},                           // activations
