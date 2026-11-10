@@ -115,6 +115,16 @@ namespace OpenMS
     Purity       ///< highest isolation purity
   };
 
+  /// exploration.order: when a sweep acquires its grid points. Ascending (the default): in grid order -- activations as
+  /// listed, then collision energy, then reaction time, ascending. Random: each triggered sweep acquires its whole grid
+  /// in its own reproducible random order, so no energy is always acquired first. Either way a tie in the sweep's
+  /// decision goes to the earlier grid position.
+  enum class SweepOrder
+  {
+    Ascending = 0,
+    Random
+  };
+
   /// Exploration metric: what to optimize during CE sweep (MS2+ only)
   enum class ExplorationMetric
   {
@@ -239,6 +249,7 @@ namespace OpenMS
     int min_charge = 0;  ///< Minimum charge for target selection (0 = no filter)
 
     ExplorationMetric exploration = ExplorationMetric::None;
+    SweepOrder sweep_order = SweepOrder::Ascending;   ///< exploration.order
     double ce_min = 20.0;
     double ce_max = 40.0;
     double ce_step = 5.0;

@@ -1281,7 +1281,7 @@ namespace OpenMS
       rejectUnknownKeys(e,
           {"metric", "ce_min", "ce_max", "ce_step", "overrides", "remaining_precursor_target",
            "reaction_time_min", "reaction_time_max", "reaction_time_step", "activations",
-           "tolerance_ppm", "monitor_ms1", "kinetic_model"},
+           "tolerance_ppm", "monitor_ms1", "kinetic_model", "order"},
           path + ".exploration");
 
       MSLevelConfig& cfg = levels_[level];
@@ -1299,6 +1299,21 @@ namespace OpenMS
         throw std::invalid_argument(
             "Config: " + path + ".exploration.metric must be one of \"none\", \"mass_count\", "
             "\"remaining_precursor\", \"fragment_count\", \"kinetic_model\"; got \"" + m + "\".");
+
+      // exploration.order: absent or null = ascending (every method before the key). Case-sensitive, never defaulted
+      // from an unknown value: a typo must not silently keep the confound the key exists to remove.
+      if (e.contains("order") && !e["order"].is_null())
+      {
+        if (!e["order"].is_string())
+          throw std::invalid_argument("Config: " + path + ".exploration.order must be \"ascending\" or \"random\"; got "
+                                      + e["order"].dump() + ".");
+        const std::string o = e["order"].get<std::string>();
+        if (o == "ascending") cfg.sweep_order = SweepOrder::Ascending;
+        else if (o == "random") cfg.sweep_order = SweepOrder::Random;
+        else
+          throw std::invalid_argument("Config: " + path + ".exploration.order must be \"ascending\" or \"random\"; got \""
+                                      + o + "\" (values are case-sensitive).");
+      }
 
       // ADR-0047 decision 6. The kinetic_model object is required iff the metric is kinetic_model. An
       // authored k2 nobody reads is the stomped-key shape (ADR-0040's snr_threshold), so the object
