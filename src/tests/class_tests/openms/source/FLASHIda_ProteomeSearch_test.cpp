@@ -38,6 +38,7 @@
 #include <OpenMS/KERNEL/MSExperiment.h>
 #include <OpenMS/METADATA/ProteinHit.h>
 
+#include "FLASHIda_TestAccess.h"   // FragmentAnalysisTestAccess (ADR-0067)
 #include "FLASHIda_TestHelpers.h"  // buildJsonWithLogDir
 
 #include <algorithm>
@@ -619,9 +620,9 @@ START_SECTION(authored_fixed_mod_identifies_the_itmt_fixture)
       const FixedModifications table = FixedModifications::fromNames(with_fixed.fixed_mod);
       const auto ions = FragmentAnalysis::getIonTypesForFragmentationMethod("CID");
       FragmentAnalysis::ProteoformMatch with_table, without_table;
-      std::vector<FragmentAnalysis::TagBasedFragmentMatch> m_with, m_without;
-      const int n_with = FragmentAnalysis::matchFromPrSM(best, ydfz, ds, ions, config.toleranceList()[1], with_table, m_with, table);
-      const int n_without = FragmentAnalysis::matchFromPrSM(best, ydfz, ds, ions, config.toleranceList()[1], without_table, m_without);
+      std::vector<FragmentAnalysisTestAccess::Match> m_with, m_without;
+      const int n_with = FragmentAnalysisTestAccess::matchFromPrSM(best, ydfz, ds, ions, config.toleranceList()[1], with_table, m_with, table);
+      const int n_without = FragmentAnalysisTestAccess::matchFromPrSM(best, ydfz, ds, ions, config.toleranceList()[1], without_table, m_without);
       std::cout << "[FIXED-MOD-ITMT] score " << best.getScore() << ", fragments matched with the table " << n_with << ", without "
                 << n_without << std::endl;
       TEST_EQUAL(n_with > n_without, true)  // the fragments that carry the label match only with the table

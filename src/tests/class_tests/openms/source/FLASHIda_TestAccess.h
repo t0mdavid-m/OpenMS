@@ -16,6 +16,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Exploration.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 
@@ -313,5 +314,18 @@ namespace OpenMS
     }
     // hasAnyBaseline / soleBaseline are gone with the baseline itself (ADR-0048): the precursor share
     // is referenced against the scan's own spectrum, so no group holds a reference intensity.
+  };
+  /// Reaches FragmentAnalysis's private PrSM re-match (matchFromPrSM) for the fixed-modification tests (ADR-0067).
+  struct FragmentAnalysisTestAccess
+  {
+    using Match = FragmentAnalysis::TagBasedFragmentMatch;
+
+    static inline int matchFromPrSM(const ProteinHit& hit, const String& protein_sequence, const DeconvolvedSpectrum& ms2,
+                                    const std::vector<std::string>& ion_types, double ppm_tolerance,
+                                    FragmentAnalysis::ProteoformMatch& result, std::vector<Match>& matches,
+                                    const FixedModifications& fixed_mods = FixedModifications::none())
+    {
+      return FragmentAnalysis::matchFromPrSM(hit, protein_sequence, ms2, ion_types, ppm_tolerance, result, matches, fixed_mods);
+    }
   };
 } // namespace OpenMS

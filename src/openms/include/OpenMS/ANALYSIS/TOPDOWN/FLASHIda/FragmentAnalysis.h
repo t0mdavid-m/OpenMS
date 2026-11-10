@@ -396,6 +396,7 @@ namespace OpenMS
                                   const SearchedPrSM* searched = nullptr);
 
   private:
+    friend struct FragmentAnalysisTestAccess; // tests only (FLASHIda_TestAccess.h)
     const Config& config_;
 
     /// Internal struct for fragment match results from tag-based matching
