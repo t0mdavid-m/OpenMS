@@ -38,6 +38,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/LogCell.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms3YieldModel.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanRole.h>
 
@@ -449,27 +450,31 @@ namespace OpenMS
     }
 
     std::string parent_id(cmd.parent_scan_id);
-    std::string ion_type;
-    int ion_index = 0;
-    if (cmd.msn_level == 3 && std::strlen(cmd.scan_description) > 4)
+    // The MS3's target ion, parsed off its scan_description by the one parser the yield model shares (Ms3YieldModel.h),
+    // so the row's ion_index is the L the yield gate decided with.
+    const std::pair<std::string, int> ion = ms3IonOf(cmd);
+    const std::string& ion_type = ion.first;
+    const int ion_index = ion.second;
+
+    // ADR-0069: predicted_bond_yield. Recomputed from this command's own logged values by the function the planner
+    // decided with (yieldInputsOf(ms3) == yieldInputsOf(ms_ctx, scores, ion): FLASHIda_Ms3YieldModel_test), under the
+    // gate of the MS3's kind -- 'Q' the quantification gate, any other MS3 the characterization gate. -1 on every row
+    // no yield gate tested: not an MS3, its gate unset, or a target with no ion index.
+    std::string predicted_bond_yield = "-1";
+    if (cmd.msn_level == 3)
     {
-      std::string desc(cmd.scan_description);
-      // rfind: the charge delimiter is the LAST '@'. The 3-char base-94 tracking id can itself contain '@'
-      // (0x40, e.g. id "!#@"); find() would lock onto the id's '@' and mis-parse the ion (logging the marker
-      // 'R' as ion_type + a mass digit as ion_index). The mass token has no '@', so rfind('@') is exactly the
-      // charge delimiter. (Matches the test-side decodeTrailingIon, which also uses rfind.)
-      auto at_pos = desc.rfind('@');
-      if (at_pos != std::string::npos)
+      const std::optional<ScanRole> role = roleOf(cmd);
+      const std::optional<YieldGateConfig>& yg = (role && *role == ScanRole::Quantification)
+                                                     ? config_.quantification().ms3_yield_gate
+                                                     : config_.characterization().yield_gate;
+      if (yg)
       {
-        size_t pos = at_pos + 1;
-        while (pos < desc.size() && (std::isdigit(desc[pos]) || desc[pos] == '-'))
-          pos++;
-        if (pos < desc.size() && std::isalpha(desc[pos]))
+        const YieldPrediction pred = predictBondYield(yg->coefficients, yieldInputsOf(cmd));
+        if (pred.tested)
         {
-          ion_type = std::string(1, desc[pos]);
-          pos++;
-          if (pos < desc.size())
-            ion_index = std::atoi(desc.c_str() + pos);
+          std::ostringstream os;
+          os << std::fixed << std::setprecision(4) << pred.e;
+          predicted_bond_yield = os.str();
         }
       }
     }
@@ -543,7 +548,7 @@ namespace OpenMS
                          << mz(cmd.last_mass) << "\t"
                          << quoteLogCell(decision_survey) << "\t"
                          << isolation_purity << "\t"
-                         << "-1" << "\t"                  // ADR-0069 predicted_bond_yield: no yield gate yet
+                         << predicted_bond_yield << "\t"  // ADR-0069: E the yield gate admitted it at, else -1
                          << cmd.enqueue_timestamp_ms << "\n";
     commands_tsv_stream_.flush();
   }
