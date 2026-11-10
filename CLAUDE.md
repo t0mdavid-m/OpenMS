@@ -69,6 +69,10 @@ departure from the plan goes back to the owner. Ambiguous cases count as source 
   governed MS3 is pushed only by `pushGovernedMs3_` through `replaceMs3Plan`; never `stampAndPush_` a
   governed command. `dequeue_` commits it under `queue_mutex_`; what a withdrawn, reconciled or expired
   item took is given back by `undoMs3Items_`, outside the queue lock. Off, the registry stays empty.
+- **A `yield_gate` block admits an MS3 only at a predicted bond yield ≥ its threshold** (ADR-0069), tested last
+  among a charge's tests and before the target takes a place or a slot. The row's `predicted_bond_yield` is
+  recomputed from the command (`Ms3YieldModel.h`), never stashed: keep the planner's inputs the ones `buildMS3`
+  copies, or the drift test fails.
 - **An MS2's MS3s are pushed by a search worker's apply**, not by `processScan` (ADR-0062): the
   "MS3 targeting" and "exploration MS2 return" push sites live in `finishRegularMS2_` and
   `finishVariantMS2_`. The pool exists only with an `identification` section, and `~FLASHIda` stops

@@ -304,6 +304,27 @@ pushGovernedMs3_                                                            --> 
   the cap. `FLASHIda_Replan_test` forces the gap commit through `beforeMs3Replan_`
   (`FLASHIdaTestAccess::onBeforeMs3Replan`).
 
+### An MS3 is admitted by its predicted bond yield (ADR-0069)
+
+With `identification.characterization.yield_gate` present (and, for the quantification `Q` MS3,
+`quantification.ms3_yield_gate`), a target is admitted only at a charge whose predicted bond yield
+E = p × (L − 1) reaches `threshold` (default 1). Absent, every plan is exactly as before.
+
+- **Where it lives.** `FLASHIda/YieldGateSettings.h` holds the config (threshold + six coefficients, core-5 defaults),
+  `FLASHIda/Ms3YieldModel.h` the pure model: `predictBondYield` (clip, logistic, × (L − 1); L ≤ 0 untested),
+  `yieldAdmits` (≥), `yieldInputsOf(ms_ctx, scores, ion)` for the planner and `yieldInputsOf(ms3)` for the row,
+  `ms3IonOf` (the one ion parser), `logYieldVerdict` (`[MS3-YIELD]`).
+- **The planner.** `Ms3PlanGate::yield` / `ms_ctx`; `yieldWalk` runs after `chargesOf` / `gatedRawCharges` and before
+  `CleavageRoom::admit`, in `add_target` and in the exhaustive and discriminating emit loops, so a refused target
+  takes no place and no slot. `dispatchFromModel` builds a snapshot-less gate for an ungoverned plan when the yield
+  gate is on (it then gains the isolatable and charge-floor tests in the walk). `dispatchQuant` walks
+  `labelledFragmentCharges` (SNR > 1, then yield).
+- **The row.** `writeScanCommandRow` recomputes `predicted_bond_yield` from the command under the gate of its role
+  (`Q` → quantification, any other MS3 → characterization); −1 otherwise. No map carries it: the planner's inputs are
+  what `buildMS3` copies into the command (`FLASHIda_Ms3YieldModel_test::row_inputs_equal_plan_inputs`).
+- ⚠️ **A discriminating round whose every record is yield-refused dispatches nothing and stays undecided**, as one the
+  cleavage cap fills: the yield test is in the emit loop, not the pool, so `dead_end` does not fire.
+
 ## `processScan` — five admission gates
 
 `FLASHIda.cpp:79-169`. Before any MS-level branching, a scan must clear all of these; each returns
