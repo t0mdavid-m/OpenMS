@@ -48,6 +48,7 @@
 #include <algorithm>
 #include <climits>
 #include <cmath>
+#include <cstring>   // std::strncpy, a Window scan's parent_scan_id (ADR-0071)
 #include <functional>
 #include <iomanip>
 #include <iostream>
@@ -249,7 +250,8 @@ FLASHIda::FLASHIda(char* arg) :
     // In the ctor BODY rather than the init list deliberately: it is conditional, and a null pointer
     // is what makes the feature free when off. Same toleranceList() as deconv_, so a monitor reading
     // is numerically comparable with a survey's.
-    if (config_.level(2).monitor_ms1_enabled || config_.level(3).monitor_ms1_enabled)
+    // ADR-0071: a Window scan returns down the same observing arm, so it needs the same deconvolver.
+    if (config_.level(2).monitor_ms1_enabled || config_.level(3).monitor_ms1_enabled || config_.identification().window_scan)
       monitor_deconv_ = std::make_unique<Deconvolution>(config_, config_.toleranceList());
 
     // The search pool (ADR-0062), only when MS2s are matched at all. Each worker sets OpenMP's team size
@@ -1124,6 +1126,43 @@ FLASHIda::FLASHIda(char* arg) :
                   << " n=" << config_.identification().rescue_scans.size() << " ids=" << ids << " trigger=" << parent_id_str;
     }
 
+    // ADR-0071: a searched identification scan whose search found a proteoform, at any score, buys one Window scan per
+    // window it isolated at stage 0 -- the anchor and each notch. A Window scan is an ordinary full MS1 from
+    // ms_settings.ms1 whose scan range is that window's commanded bounds: a tribrid's quadrupole transmits only a full
+    // MS1's range, so the trap fills from that window alone. It observes and decides nothing (its role does not decide,
+    // so its return takes ADR-0042's observing arm), it is not registered anywhere, so neither a survey nor a close-out
+    // withdraws it, and it is uncapped. "Found a proteoform" is the identification row's own test, below.
+    if (config_.identification().window_scan && !dropped && !is_quant_scan && parent_ctx.num_stages > 0
+        && !ms3_targeting.proteoform_match.proteoform_sequence.empty() && !ms3_targeting.proteoform_match.fragments.empty())
+    {
+      std::vector<std::pair<double, double>> windows;   // (centre, width): the anchor, then the notches
+      windows.emplace_back(parent_ctx.stages[0].precursor_mz, parent_ctx.stages[0].isolation_width);
+      const auto notches = notchesForStage(parent_ctx, 0);
+      for (int k = 0; k < notches.second; ++k)
+        windows.emplace_back(notches.first[k].precursor_mz, notches.first[k].isolation_width);
+      const std::string trigger = ScanCommandQueue::encode(parent_ctx.scan_id);
+      int bought = 0;
+      for (const auto& [centre, width] : windows)
+      {
+        if (centre <= 0.0 || width <= 0.0) continue;
+        ScanCommand ws = queue_.makeMS1();   // every parameter from ms_settings.ms1
+        ws.scan_id = queue_.nextTrackingId();
+        ws.first_mass = centre - width / 2.0;
+        ws.last_mass = centre + width / 2.0;
+        ws.priority = 0;
+        ws.faims_cv = parent_ctx.faims_cv;
+        std::strncpy(ws.parent_scan_id, trigger.c_str(), sizeof(ws.parent_scan_id) - 1);
+        ws.parent_scan_id[sizeof(ws.parent_scan_id) - 1] = '\0';
+        ScanCommandQueue::writeMs1Description(ws, ScanRole::Window);
+        stampAndPush_(ws, precursor_id);
+        child_ids.push_back(ScanCommandQueue::encode(ws.scan_id));
+        commands_pushed++;
+        ++bought;
+      }
+      if (bought > 0)
+        EventLine() << "[WINDOW-SCAN] precursor_id=" << precursor_id << " trigger=" << parent_id_str << " windows=" << bought;
+    }
+
     // Write MS2 identification row if proteoform was matched.
     // Gate on the actual match (proteoform_match), NOT on ms3_targeting.proteoform_sequence — the
     // latter is only set when found>0 (MS3 targets were selected), so an unambiguous ID that yields
@@ -1500,6 +1539,8 @@ FLASHIda::FLASHIda(char* arg) :
       // round to answering.
       if (!roleDecides(cmd_role))
       {
+        // ADR-0071: a Window scan's row names the identification scan whose window it read.
+        if (cmd_role == ScanRole::Window) results_row.parent_tracking_id = std::string(parent_ctx.parent_scan_id);
         if (monitor_deconv_)
           observeMonitoringMS1_(*monitor_deconv_, config_, mzs, ints, length, rt, faims_cv,
                                 results_row);
@@ -2183,8 +2224,8 @@ FLASHIda::FLASHIda(char* arg) :
     // stand in for one -- and that is character-for-character the ADR-0031 bug, where the idle path
     // called recordAGCTime() and the authored AGC interval silently stopped governing the cadence.
     // Here the victim would be scheduling.cycle_time: monitoring a long sweep would starve the very
-    // survey the cycle time exists to force. Inert for every command that exists today, since Monitor
-    // is the only non-AGC role with decides == false.
+    // survey the cycle time exists to force. Monitor and Window (ADR-0071) are the non-AGC roles with
+    // decides == false: neither resets the survey clock.
     if (out.msn_level == 1 && out.is_agc == 0 && roleDecides(roleOf(out)))
       queue_.recordMS1Time();
     // faims_cv already set at creation time (MS2 -> parent CV, CV-transition MS1 -> next CV)

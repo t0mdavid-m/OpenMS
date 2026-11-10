@@ -60,6 +60,7 @@ namespace OpenMS
     Identification,      ///< 'R' the MS2/MS3 acquired to sequence a proteoform
     Quantification,      ///< 'Q' the scan acquired to measure reporter ions: the MS2 screen (ADR-0038), or the MS3 on a labelled fragment (ADR-0064)
     ExplorationVariant,  ///< 'E' one point of a CE/reaction-time sweep
+    Window,              ///< 'W' an MS1 whose range is one window of an identified MS2; observed, never acted upon (ADR-0071)
     _Count
   };
 
@@ -76,16 +77,16 @@ namespace OpenMS
   /**
    * @brief The role table. Rows MUST be in enumerator order -- scanRoleTableIsTotal() asserts it.
    *
-   * `log_name` IS NOT A NAMING OPPORTUNITY. These six strings are the exact values
+   * `log_name` IS NOT A NAMING OPPORTUNITY. The first six strings are the exact values
    * IdaLogger::scanTypeFromDescription_ has always returned, and they are emitted into
    * scan_commands.tsv's `scan_type` column, which is a golden column. "recording" is a poor name for
    * an identification MS2 and it MUST NOT be improved here: renaming it revalues 28 golden files for
-   * no observable gain. Pinned by FLASHIda_exploration_test's
+   * no observable gain. "window" (ADR-0071) is new. Pinned by FLASHIda_exploration_test's
    * roleName_matches_the_legacy_scan_type_strings.
    *
-   * `observes` is false for exactly one row today, and `decides` for exactly two. Neither is a rich
-   * policy -- the point is that adding a seventh role cannot compile until someone has answered both
-   * questions for it.
+   * `observes` is false for exactly one row today, and `decides` for exactly three (Agc, Monitor, Window).
+   * Neither is a rich policy -- the point is that adding a role cannot compile until someone has answered
+   * both questions for it.
    */
   inline constexpr std::array<ScanRoleTraits, static_cast<size_t>(ScanRole::_Count)> kScanRoleTraits {{
     {ScanRole::Survey,             'S', "survey",         true,  true },
@@ -94,6 +95,7 @@ namespace OpenMS
     {ScanRole::Identification,     'R', "recording",      true,  true },
     {ScanRole::Quantification,     'Q', "quantification", true,  true },
     {ScanRole::ExplorationVariant, 'E', "exploration",    true,  true },
+    {ScanRole::Window,             'W', "window",         true,  false},  // ADR-0071
   }};
 
   /// Every enumerator has a row, at its own index, with a unique marker and a non-null name.

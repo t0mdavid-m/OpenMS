@@ -380,7 +380,7 @@ namespace OpenMS
   std::string IdaLogger::scanTypeFromDescription_(const ScanCommand& cmd)
   {
     // The six cases that used to sit here now live in ScanRole.h's traits table, which is the single
-    // decoder for scan_description[3] (ADR-0042). The strings are UNCHANGED and must stay so: this is
+    // decoder for scan_description[3] (ADR-0042); a seventh, "window" (ADR-0071), was added there. The strings are UNCHANGED and must stay so: this is
     // scan_commands.tsv's `scan_type` column, and renaming one revalues 28 golden files. Pinned by
     // FLASHIda_exploration_test::roleName_matches_the_legacy_scan_type_strings.
     //

@@ -450,6 +450,11 @@ namespace OpenMS
     /// close out. Authored: a finite number > 0, calibrated offline (real time carries no FDR).
     std::optional<double> threshold;
 
+    /// identification.window_scan (ADR-0071) -- every window of a searched 'R' whose search found a proteoform is read
+    /// out in its own full MS1 whose scan range is that window (a Window scan, observed and never acted upon). Absent or
+    /// null: false.
+    bool window_scan = false;
+
     /// ms_settings.ms2_rescue (ADR-0068, ADR-0070) -- the rescue set an identification scan that fell short of
     /// `threshold` (no proteoform, or a score below it) buys: one rescue scan per entry, in this order, once per
     /// precursor id. A non-empty list whose presence is the switch; held here because the identification decides it.

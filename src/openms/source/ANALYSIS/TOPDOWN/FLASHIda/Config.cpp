@@ -517,7 +517,8 @@ namespace OpenMS
       const auto& ident = config["identification"];
       if (!ident.is_object())
         throw std::invalid_argument("Config: identification must be an object.");
-      rejectUnknownKeys(ident, {"reference", "method", "flashtnt", "refine", "search_threads", "threshold", "characterization"},
+      rejectUnknownKeys(ident, {"reference", "method", "flashtnt", "refine", "search_threads", "threshold", "window_scan",
+                                "characterization"},
                         "identification");
 
       // An identification that searches nothing would be an inert block: refused rather than carried.
@@ -671,6 +672,15 @@ namespace OpenMS
               "species out, on FLASHTnT's scale); got " + th.dump() + ". Delete the key to identify without closing out "
               "(ADR-0061).");
         identification_.threshold = th.get<double>();
+      }
+
+      // ADR-0071: the Window scan. Absent or null = false; anything but a boolean is refused.
+      if (ident.contains("window_scan") && !ident["window_scan"].is_null())
+      {
+        if (!ident["window_scan"].is_boolean())
+          throw std::invalid_argument("Config: identification.window_scan must be true or false; got "
+                                      + ident["window_scan"].dump() + " (ADR-0071).");
+        identification_.window_scan = ident["window_scan"].get<bool>();
       }
 
       if (ident.contains("characterization") && !ident["characterization"].is_null())
