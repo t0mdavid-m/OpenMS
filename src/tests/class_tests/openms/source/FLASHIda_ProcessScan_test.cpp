@@ -1363,22 +1363,31 @@ namespace
     nlohmann::json j = nlohmann::json::parse(closeOutCytcJson(dir, threshold, "inclusion_cytc.txt", separate));
     if (!reference.empty()) j["identification"]["reference"] = {{"sequence", reference}};
     if (threads > 0) j["identification"]["search_threads"] = threads;
-    j["ms_settings"]["ms2_rescue"] = etdRescue();
+    j["ms_settings"]["ms2_rescue"] = nlohmann::json::array({etdRescue()});   // ADR-0070: a one-entry rescue set
     if (etd_first)
     {
       nlohmann::json& ms2 = j["ms_settings"]["ms2"];
       ms2["activation"] = "ETD";
       ms2["reaction_time"] = 12;
       ms2.erase("collision_energy");
-      j["ms_settings"]["ms2_rescue"] =
-          nlohmann::json::parse(R"({ "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 30, "resolution": 120000 })");
+      j["ms_settings"]["ms2_rescue"] = nlohmann::json::array(
+          {nlohmann::json::parse(R"({ "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 30, "resolution": 120000 })")});
     }
     return j.dump();
   }
 
-  bool activationIs(const ScanCommand& c, const std::string& activation)
+  /// rescueCytcJson with a two-entry rescue set (ADR-0070): ETD, then EThcD.
+  std::string rescueSetCytcJson(const std::string& dir, double threshold, bool separate = false)
   {
-    return c.num_stages > 0 && std::string(c.stages[0].activation_type) == activation;
+    nlohmann::json j = nlohmann::json::parse(rescueCytcJson(dir, threshold, separate));
+    j["ms_settings"]["ms2_rescue"].push_back(nlohmann::json::parse(
+        R"({ "analyzer": "Orbitrap", "activation": "EThcD", "reaction_time": 10, "collision_energy": 25, "resolution": 120000 })"));
+    return j.dump();
+  }
+
+  std::string activationOf(const ScanCommand& c)
+  {
+    return c.num_stages > 0 ? std::string(c.stages[0].activation_type) : std::string();
   }
 
   int countOf(const std::string& text, const std::string& needle)
@@ -1388,16 +1397,16 @@ namespace
     return n;
   }
 
-  /// The MS2s a drive sent, split into rescues (@p rescue_activation) and the identification scans that could
+  /// The MS2s a drive sent, split into rescues (any of @p rescue_activations) and the identification scans that could
   /// trigger one (every other MS2).
   struct RescueSplit
   {
     std::vector<ScanCommand> rescues, triggers;
   };
-  RescueSplit splitRescues(const AcqResult& acq, const std::string& rescue_activation = "ETD")
+  RescueSplit splitRescues(const AcqResult& acq, const std::set<std::string>& rescue_activations = {"ETD"})
   {
     RescueSplit s;
-    for (const auto& c : acq.ms2_cmds) (activationIs(c, rescue_activation) ? s.rescues : s.triggers).push_back(c);
+    for (const auto& c : acq.ms2_cmds) (rescue_activations.count(activationOf(c)) > 0 ? s.rescues : s.triggers).push_back(c);
     return s;
   }
 
@@ -4176,7 +4185,7 @@ START_SECTION(rescue_unidentified_scan_buys_a_rescue)
     FLASHIda ida(const_cast<char*>(cfg.c_str()));
     acq = runInterleaved(&ida, ms1, ms2);
   }
-  const RescueSplit s = splitRescues(acq, "HCD");
+  const RescueSplit s = splitRescues(acq, {"HCD"});
   ABORT_IF(s.triggers.empty())
   TEST_EQUAL(s.rescues.size(), s.triggers.size())
   const std::string ev = events.str();
@@ -4206,9 +4215,10 @@ START_SECTION(rescue_a_close_out_buys_no_rescue)
 }
 END_SECTION
 
-// Under `separate` a detection's charges are separate Precursors; the detection still buys one rescue, and the
-// rescue's own return buys none.
-START_SECTION(rescue_one_per_detection_under_separate_charges)
+// ADR-0070 d.3: under `separate` each charge of a detection is its own precursor id and buys its own set -- here a
+// one-entry set, so every HCD identification scan buys exactly one rescue -- and a rescue's own return buys none.
+// FAILS UNDER: ADR-0068's per-detection cap (one rescue for a survey's sibling charges together).
+START_SECTION(rescue_one_set_per_precursor_id_under_separate_charges)
 {
   auto ms1 = loadTsvScans(FI_MS1_CYTC);
   auto ms2 = loadTsvScans(FI_MS2_CYTC);
@@ -4222,24 +4232,69 @@ START_SECTION(rescue_one_per_detection_under_separate_charges)
     acq = runInterleaved(&ida, ms1, ms2);
   }
   const RescueSplit s = splitRescues(acq);
-  std::map<std::string, std::string> survey_of_trigger;   // trigger id -> the survey that selected it
-  std::map<std::string, int> triggers_per_survey, rescues_per_survey;
+  std::map<std::string, int> triggers_per_survey, rescues_per_trigger;
   for (const auto& t : s.triggers)
   {
-    survey_of_trigger[ScanCommandQueue::encode(t.scan_id)] = t.parent_scan_id;
     ++triggers_per_survey[t.parent_scan_id];
+    rescues_per_trigger[ScanCommandQueue::encode(t.scan_id)] = 0;
   }
   int max_triggers = 0;
   for (const auto& [sv, n] : triggers_per_survey) max_triggers = std::max(max_triggers, n);
   ABORT_IF(max_triggers < 2)   // non-vacuity: a detection with sibling charges
   for (const auto& r : s.rescues)
   {
-    auto it = survey_of_trigger.find(r.parent_scan_id);
-    TEST_EQUAL(it != survey_of_trigger.end(), true)   // bought by an HCD identification scan, never by a rescue
-    if (it != survey_of_trigger.end()) ++rescues_per_survey[it->second];
+    auto it = rescues_per_trigger.find(r.parent_scan_id);
+    TEST_EQUAL(it != rescues_per_trigger.end(), true)   // bought by an HCD identification scan, never by a rescue
+    if (it != rescues_per_trigger.end()) ++it->second;
   }
-  TEST_EQUAL(rescues_per_survey.size(), triggers_per_survey.size())
-  for (const auto& [sv, n] : rescues_per_survey) TEST_EQUAL(n, 1)
+  for (const auto& [trigger, n] : rescues_per_trigger) TEST_EQUAL(n, 1)
+}
+END_SECTION
+
+// ADR-0070 d.1/d.7: a shortfall buys the whole set at once -- one rescue per entry, ETD then EThcD, both priority 0
+// 'R's whose parent is the trigger -- written as ONE [RESCUE] event with n=2; neither rescue buys anything.
+// FAILS UNDER: one rescue per shortfall, a ladder (EThcD only after ETD returned), the set out of order, or one event
+// per scan.
+START_SECTION(rescue_a_set_buys_one_scan_per_entry_in_order)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  const std::string dir = freshLogDir("rescue_set");
+  const std::string cfg = rescueSetCytcJson(dir, 1e9);
+  EventCapture events;
+  AcqResult acq;
+  {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    acq = runInterleaved(&ida, ms1, ms2);
+  }
+  const RescueSplit s = splitRescues(acq, {"ETD", "EThcD"});
+  ABORT_IF(s.triggers.empty())
+  std::map<std::string, std::vector<ScanCommand>> children;   // trigger id -> its rescues
+  for (const auto& t : s.triggers) children[ScanCommandQueue::encode(t.scan_id)];
+  std::set<std::string> rescue_ids;
+  for (const auto& r : s.rescues)
+  {
+    rescue_ids.insert(ScanCommandQueue::encode(r.scan_id));
+    auto it = children.find(r.parent_scan_id);
+    TEST_EQUAL(it != children.end(), true)
+    if (it != children.end()) it->second.push_back(r);
+    TEST_EQUAL(r.priority, 0)
+    TEST_EQUAL(r.scan_description[3], 'R')
+  }
+  for (auto& [trigger, rs] : children)
+  {
+    TEST_EQUAL(rs.size(), 2)
+    if (rs.size() != 2) continue;
+    std::sort(rs.begin(), rs.end(), [](const ScanCommand& a, const ScanCommand& b) { return a.scan_id < b.scan_id; });
+    TEST_STRING_EQUAL(activationOf(rs[0]), "ETD")
+    TEST_STRING_EQUAL(activationOf(rs[1]), "EThcD")
+  }
+  for (const auto& c : acq.ms2_cmds) TEST_EQUAL(rescue_ids.count(std::string(c.parent_scan_id)), 0)   // depth one
+  const std::string ev = events.str();
+  TEST_EQUAL(countOf(ev, "[RESCUE] "), (int)s.triggers.size())
+  TEST_EQUAL(countOf(ev, " n=2 ids="), (int)s.triggers.size())
 }
 END_SECTION
 
@@ -4274,6 +4329,41 @@ START_SECTION(rescue_a_close_out_withdraws_the_waiting_rescue)
   TEST_EQUAL(countOf(ev, "[CLOSE-OUT]"), 1)
   TEST_EQUAL(countOf(ev, "[RESCUE-WITHDRAWN]"), 1)
   TEST_EQUAL(splitRescues(rest).rescues.size(), 0)
+}
+END_SECTION
+
+// ADR-0070 d.4: the same drive with a two-entry set -- z_a's shortfall buys ETD and EThcD, and z_b's close-out withdraws
+// both while they wait. FAILS UNDER: only the first scan of a set registered with the queue.
+START_SECTION(rescue_a_close_out_withdraws_the_whole_waiting_set)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  auto other = loadTsvScans(kItmtMs2);
+  ABORT_IF(ms1.empty() || ms2.empty() || other.empty())
+  ScanData junk = other[0];
+  junk.rt = ms2[0].rt;
+
+  const std::string dir = freshLogDir("rescue_withdraw_set");
+  const std::string cfg = rescueSetCytcJson(dir, 100.0, true);
+  EventCapture events;
+  AcqResult rest;
+  {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    const std::vector<ScanData> one_survey(ms1.begin(), ms1.begin() + 2);   // the first survey selects nothing; the second, cytC
+    AcqResult acq = runInterleaved(&ida, one_survey, {});
+    ABORT_IF(acq.ms2_cmds.size() < 2)
+    feedMs2(ida, acq.ms2_cmds[0], junk);
+    ida.waitForSearchIdle();
+    TEST_EQUAL(countOf(events.str(), "[RESCUE] "), 1)
+    TEST_EQUAL(countOf(events.str(), " n=2 ids="), 1)
+    feedMs2(ida, acq.ms2_cmds[1], ms2[0]);
+    ida.waitForSearchIdle();
+    rest = runInterleaved(&ida, {}, ms2);
+  }
+  const std::string ev = events.str();
+  TEST_EQUAL(countOf(ev, "[CLOSE-OUT]"), 1)
+  TEST_EQUAL(countOf(ev, "[RESCUE-WITHDRAWN]"), 2)
+  TEST_EQUAL(splitRescues(rest, {"ETD", "EThcD"}).rescues.size(), 0)
 }
 END_SECTION
 
@@ -4324,7 +4414,7 @@ START_SECTION(rescue_exploration_variants_buy_no_rescue)
 
   nlohmann::json j = nlohmann::json::parse(inclusionPinCytc(ms3SelectionOnlyConfig()));
   j["identification"]["threshold"] = 1e9;
-  j["ms_settings"]["ms2_rescue"] = etdRescue();
+  j["ms_settings"]["ms2_rescue"] = nlohmann::json::array({etdRescue()});
   const std::string cfg = j.dump();
   EventCapture events;
   AcqResult acq;

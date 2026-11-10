@@ -1730,16 +1730,18 @@ START_SECTION(identification_section_presence_switches_and_refusals)
 }
 END_SECTION
 
-// ---- ADR-0068: ms_settings.ms2_rescue -------------------------------------------------------------------------
-#define MS2_RESCUE R"(, "ms2_rescue": { "analyzer": "Orbitrap", "activation": "ETD", "reaction_time": 12 })"
+// ---- ADR-0068 / ADR-0070: ms_settings.ms2_rescue, a list of scan configs ----------------------------------------
+#define MS2_RESCUE R"(, "ms2_rescue": [ { "analyzer": "Orbitrap", "activation": "ETD", "reaction_time": 12 } ])"
+#define MS2_RESCUE_SET R"(, "ms2_rescue": [ { "analyzer": "Orbitrap", "activation": "ETD", "reaction_time": 12 }, { "analyzer": "Orbitrap", "activation": "EThcD", "reaction_time": 10, "collision_energy": 25 } ])"
 #define RESCUE_IDENT R"("identification": { "reference": { "sequence": "PEPTCIDEK" }, "threshold": 10 },)"
 
 START_SECTION(ms2_rescue_is_parsed_onto_identification)
 {
   Config c(cfgJson("", RESCUE_IDENT, MS2_RESCUE));
-  TEST_EQUAL(c.identification().has_rescue_scan, true)
-  TEST_STRING_EQUAL(c.identification().rescue_scan.activation, "ETD")
-  TEST_REAL_SIMILAR(c.identification().rescue_scan.reaction_time, 12.0)
+  TEST_EQUAL(c.identification().hasRescue(), true)
+  ABORT_IF(c.identification().rescue_scans.size() != 1)
+  TEST_STRING_EQUAL(c.identification().rescue_scans[0].activation, "ETD")
+  TEST_REAL_SIMILAR(c.identification().rescue_scans[0].reaction_time, 12.0)
   // Held on identification, never on the dispatch roster: ms_settings.ms2 stays the one unconditional MS2.
   TEST_EQUAL(c.level(2).scans.size(), 1)
   TEST_STRING_EQUAL(c.level(2).scans[0].activation, "HCD")
@@ -1749,7 +1751,67 @@ END_SECTION
 START_SECTION(ms2_rescue_absent_is_off)
 {
   Config c(cfgJson("", RESCUE_IDENT));
-  TEST_EQUAL(c.identification().has_rescue_scan, false)
+  TEST_EQUAL(c.identification().hasRescue(), false)
+}
+END_SECTION
+
+// ADR-0070 d.1: the set is kept in the order the method lists it.
+START_SECTION(ms2_rescue_entries_parse_in_order)
+{
+  Config c(cfgJson("", RESCUE_IDENT, MS2_RESCUE_SET));
+  ABORT_IF(c.identification().rescue_scans.size() != 2)
+  TEST_STRING_EQUAL(c.identification().rescue_scans[0].activation, "ETD")
+  TEST_STRING_EQUAL(c.identification().rescue_scans[1].activation, "EThcD")
+  TEST_REAL_SIMILAR(c.identification().rescue_scans[1].collision_energy, 25.0)
+  TEST_EQUAL(c.level(2).scans.size(), 1)   // still off the roster
+}
+END_SECTION
+
+// ADR-0070 d.2: ADR-0068's bare object is refused with the migration hint, not read as a one-entry set or as no rescue.
+START_SECTION(ms2_rescue_object_is_refused_with_a_hint)
+{
+  const std::string msg = refineMessage(cfgJson("", RESCUE_IDENT,
+      R"(, "ms2_rescue": { "analyzer": "Orbitrap", "activation": "ETD", "reaction_time": 12 })"));
+  TEST_EQUAL(contains(msg, "ms_settings.ms2_rescue"), true)
+  TEST_EQUAL(contains(msg, "wrap the object in [ ]"), true)
+}
+END_SECTION
+
+// ADR-0070 d.6: an empty list is not a switch-off; the key is omitted for that.
+START_SECTION(ms2_rescue_empty_is_refused)
+{
+  const std::string msg = refineMessage(cfgJson("", RESCUE_IDENT, R"(, "ms2_rescue": [])"));
+  TEST_EQUAL(contains(msg, "empty list"), true)
+  TEST_EQUAL(contains(msg, "Omit ms2_rescue"), true)
+}
+END_SECTION
+
+// ADR-0070 d.6: two identical entries are refused; an entry identical to ms_settings.ms2 is a legitimate method.
+START_SECTION(ms2_rescue_identical_entries_are_refused)
+{
+  const std::string etd = R"({ "analyzer": "Orbitrap", "activation": "ETD", "reaction_time": 12 })";
+  const std::string msg = refineMessage(cfgJson("", RESCUE_IDENT, ", \"ms2_rescue\": [ " + etd + ", " + etd + " ]"));
+  TEST_EQUAL(contains(msg, "entries 1 and 2 are the same scan"), true)
+  // the same as ms2 (cfgJson's HCD 29) loads
+  Config c(cfgJson("", RESCUE_IDENT,
+      R"(, "ms2_rescue": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 } ])"));
+  TEST_EQUAL(c.identification().rescue_scans.size(), 1)
+}
+END_SECTION
+
+// ADR-0070 d.5: with MS3 on and per_proteoform off, a set of more than one says that each rescue plans its own MS3.
+// FAILS UNDER: no warning, a warning for a one-entry set, or one when per_proteoform folds them into one plan.
+START_SECTION(ms2_rescue_set_without_per_proteoform_warns)
+{
+  auto ident = [](const std::string& per_proteoform) {
+    return std::string(R"("identification": { "reference": { "sequence": "PEPTCIDEK" }, "threshold": 10, )"
+                       R"("characterization": { "mode": "ambiguity")") + per_proteoform + " } },";
+  };
+  const std::string warn = "[CONFIG-WARN] ms_settings.ms2_rescue";
+  TEST_EQUAL(contains(loadAndCapture(cfgJson("", ident(""), MS2_RESCUE_SET + kMs3)), warn), true)
+  TEST_EQUAL(contains(loadAndCapture(cfgJson("", ident(""), MS2_RESCUE + kMs3)), warn), false)
+  TEST_EQUAL(contains(loadAndCapture(cfgJson("", ident(R"(, "per_proteoform": true)"), MS2_RESCUE_SET + kMs3)), warn), false)
+  TEST_EQUAL(contains(loadAndCapture(cfgJson("", RESCUE_IDENT, MS2_RESCUE_SET)), warn), false)   // no MS3 at all
 }
 END_SECTION
 
@@ -1766,6 +1828,7 @@ START_SECTION(ms2_rescue_without_identification_is_refused)
 }
 END_SECTION
 #undef RESCUE_IDENT
+#undef MS2_RESCUE_SET
 #undef MS2_RESCUE
 
 // ---------------------------------------------------------------------------------------------

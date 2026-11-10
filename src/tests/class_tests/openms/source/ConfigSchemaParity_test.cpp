@@ -152,13 +152,17 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
     TEST_EQUAL(q3.data_type, jq["data_type"].get<std::string>())
   }
 
-  // --- ms_settings.ms2_rescue, the scan an identification that falls short buys (ADR-0068) ---
-  // A bare slot held on identification_; the reference authors it (with identification.threshold, which it needs),
-  // every key non-default, so each pin proves the authored value crossed the bridge.
+  // --- ms_settings.ms2_rescue, the rescue set an identification that falls short buys (ADR-0068, ADR-0070) ---
+  // A list held on identification_; the reference authors two entries (with identification.threshold, which they
+  // need), every key non-default and distinct, so each pin proves the authored value crossed the bridge in order.
+  const auto& jrs = j["ms_settings"]["ms2_rescue"];
+  TEST_EQUAL(jrs.is_array(), true)
+  TEST_EQUAL(jrs.size() >= 2, true)   // non-vacuity: a set of more than one, so order is checked
+  TEST_EQUAL(cfg.identification().rescue_scans.size(), jrs.size())
+  for (size_t ri = 0; ri < jrs.size() && ri < cfg.identification().rescue_scans.size(); ++ri)
   {
-    const auto& rs = cfg.identification().rescue_scan;
-    const auto& jr = j["ms_settings"]["ms2_rescue"];
-    TEST_EQUAL(cfg.identification().has_rescue_scan, true)
+    const auto& rs = cfg.identification().rescue_scans[ri];
+    const auto& jr = jrs[ri];
     TEST_EQUAL(rs.analyzer, jr["analyzer"].get<std::string>())
     TEST_EQUAL(rs.activation, jr["activation"].get<std::string>())
     TEST_EQUAL(rs.resolution, jr["resolution"].get<int>())
