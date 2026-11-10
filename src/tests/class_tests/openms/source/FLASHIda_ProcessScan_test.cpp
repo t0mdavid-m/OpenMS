@@ -4341,6 +4341,8 @@ START_SECTION(rescue_exploration_variants_buy_no_rescue)
   ABORT_IF(variants == 0)
   TEST_EQUAL(identification_scans, 0)   // the premise: this sweep emits no follow-up 'R' at MS2
   TEST_EQUAL(countOf(events.str(), "[RESCUE] "), 0)
+}
+END_SECTION
 
 // ===== The MS3 yield gate (ADR-0069) end to end ==================================================================
 //
