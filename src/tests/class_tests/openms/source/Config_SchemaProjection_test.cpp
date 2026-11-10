@@ -1762,7 +1762,7 @@ START_SECTION(ms2_rescue_entries_parse_in_order)
   ABORT_IF(c.identification().rescue_scans.size() != 2)
   TEST_STRING_EQUAL(c.identification().rescue_scans[0].activation, "ETD")
   TEST_STRING_EQUAL(c.identification().rescue_scans[1].activation, "EThcD")
-  TEST_REAL_SIMILAR(c.identification().rescue_scans[1].collision_energy, 25.0)
+  TEST_EQUAL(c.identification().rescue_scans[1].collision_energy, 25)
   TEST_EQUAL(c.level(2).scans.size(), 1)   // still off the roster
 }
 END_SECTION
