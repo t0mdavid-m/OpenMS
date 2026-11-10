@@ -1354,17 +1354,30 @@ namespace
 
   /// closeOutCytcJson (strict-inclusion cytC, nothing but a close-out can bar it) plus an ETD rescue scan.
   /// @p reference replaces the cytC reference when given; @p threads sizes the search pool when > 0.
+  /// @p etd_first swaps the methods: the identification scan is ETD and the rescue HCD.
   std::string rescueCytcJson(const std::string& dir, double threshold, bool separate = false,
-                             const std::string& reference = "", int threads = 0)
+                             const std::string& reference = "", int threads = 0, bool etd_first = false)
   {
     nlohmann::json j = nlohmann::json::parse(closeOutCytcJson(dir, threshold, "inclusion_cytc.txt", separate));
     if (!reference.empty()) j["identification"]["reference"] = {{"sequence", reference}};
     if (threads > 0) j["identification"]["search_threads"] = threads;
     j["ms_settings"]["ms2_rescue"] = etdRescue();
+    if (etd_first)
+    {
+      nlohmann::json& ms2 = j["ms_settings"]["ms2"];
+      ms2["activation"] = "ETD";
+      ms2["reaction_time"] = 12;
+      ms2.erase("collision_energy");
+      j["ms_settings"]["ms2_rescue"] =
+          nlohmann::json::parse(R"({ "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 30, "resolution": 120000 })");
+    }
     return j.dump();
   }
 
-  bool isEtd(const ScanCommand& c) { return c.num_stages > 0 && std::string(c.stages[0].activation_type) == "ETD"; }
+  bool activationIs(const ScanCommand& c, const std::string& activation)
+  {
+    return c.num_stages > 0 && std::string(c.stages[0].activation_type) == activation;
+  }
 
   int countOf(const std::string& text, const std::string& needle)
   {
@@ -1373,15 +1386,16 @@ namespace
     return n;
   }
 
-  /// The MS2s a drive sent, split into rescues (ETD) and the identification scans that could trigger one (HCD).
+  /// The MS2s a drive sent, split into rescues (@p rescue_activation) and the identification scans that could
+  /// trigger one (every other MS2).
   struct RescueSplit
   {
     std::vector<ScanCommand> rescues, triggers;
   };
-  RescueSplit splitRescues(const AcqResult& acq)
+  RescueSplit splitRescues(const AcqResult& acq, const std::string& rescue_activation = "ETD")
   {
     RescueSplit s;
-    for (const auto& c : acq.ms2_cmds) (isEtd(c) ? s.rescues : s.triggers).push_back(c);
+    for (const auto& c : acq.ms2_cmds) (activationIs(c, rescue_activation) ? s.rescues : s.triggers).push_back(c);
     return s;
   }
 
@@ -4144,7 +4158,8 @@ START_SECTION(rescue_below_threshold_identification_buys_one_rescue)
 }
 END_SECTION
 
-// No proteoform at all is short too: cytC's spectrum searched against ubiquitin identifies nothing.
+// No proteoform at all is short too. An ETD identification scan of cytC's (HCD) spectrum, searched as c/z against
+// ubiquitin, finds no proteoform (an HCD search of the same spectrum does: a score-5 one); the rescue is HCD.
 START_SECTION(rescue_unidentified_scan_buys_a_rescue)
 {
   auto ms1 = loadTsvScans(FI_MS1_CYTC);
@@ -4152,14 +4167,14 @@ START_SECTION(rescue_unidentified_scan_buys_a_rescue)
   ABORT_IF(ms1.empty() || ms2.empty())
 
   const std::string dir = freshLogDir("rescue_unidentified");
-  const std::string cfg = rescueCytcJson(dir, 1e9, false, kUbiquitin);
+  const std::string cfg = rescueCytcJson(dir, 1e9, false, kUbiquitin, 0, /*etd_first*/ true);
   EventCapture events;
   AcqResult acq;
   {
     FLASHIda ida(const_cast<char*>(cfg.c_str()));
     acq = runInterleaved(&ida, ms1, ms2);
   }
-  const RescueSplit s = splitRescues(acq);
+  const RescueSplit s = splitRescues(acq, "HCD");
   ABORT_IF(s.triggers.empty())
   TEST_EQUAL(s.rescues.size(), s.triggers.size())
   const std::string ev = events.str();
@@ -4243,7 +4258,7 @@ START_SECTION(rescue_a_close_out_withdraws_the_waiting_rescue)
   AcqResult rest;
   {
     FLASHIda ida(const_cast<char*>(cfg.c_str()));
-    const std::vector<ScanData> one_survey(ms1.begin(), ms1.begin() + 1);
+    const std::vector<ScanData> one_survey(ms1.begin(), ms1.begin() + 2);   // the first survey selects nothing; the second, cytC
     AcqResult acq = runInterleaved(&ida, one_survey, {});   // the survey's MS2s go out and stay pending
     ABORT_IF(acq.ms2_cmds.size() < 2)
     feedMs2(ida, acq.ms2_cmds[0], junk);
@@ -4277,7 +4292,7 @@ START_SECTION(rescue_a_closed_out_species_buys_no_rescue)
   AcqResult rest;
   {
     FLASHIda ida(const_cast<char*>(cfg.c_str()));
-    const std::vector<ScanData> one_survey(ms1.begin(), ms1.begin() + 1);
+    const std::vector<ScanData> one_survey(ms1.begin(), ms1.begin() + 2);   // the first survey selects nothing; the second, cytC
     AcqResult acq = runInterleaved(&ida, one_survey, {});
     ABORT_IF(acq.ms2_cmds.size() < 2)
     SearchGate gate;
