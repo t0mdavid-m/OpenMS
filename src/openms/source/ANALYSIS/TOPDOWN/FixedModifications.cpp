@@ -28,6 +28,7 @@ namespace OpenMS
   FixedModifications FixedModifications::fromNames(const std::vector<std::string>& names)
   {
     FixedModifications table;
+    auto tables = std::make_shared<Tables>();
     for (const std::string& given : names)
     {
       const String name = String(given).trim();
@@ -48,7 +49,7 @@ namespace OpenMS
                                       "fixed_mod " + name + ": only a modification of a residue anywhere can be fixed (not a terminal one).", name);
       }
       const unsigned char u = (unsigned char)origin;
-      if (table.fixed_[u])
+      if (tables->fixed[u])
       {
         throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
                                       "fixed_mod: two fixed modifications of residue " + String(origin) + ".", name);
@@ -56,9 +57,9 @@ namespace OpenMS
       // the mass the FLASHTnT tool's ResidueDB overwrite gave the residue: its full weight plus the modification
       Residue residue(*ResidueDB::getInstance()->getResidue(u));
       residue.setMonoWeight(residue.getMonoWeight(Residue::Full) + mod->getDiffMonoMass());
-      table.fixed_[u] = true;
-      table.delta_[u] = mod->getDiffMonoMass();
-      table.modified_[u] = residue.getMonoWeight(Residue::Internal);
+      tables->fixed[u] = true;
+      tables->delta[u] = mod->getDiffMonoMass();
+      tables->modified[u] = residue.getMonoWeight(Residue::Internal);
       Entry entry;
       entry.residue = origin;
       entry.mass = mod->getDiffMonoMass();
@@ -67,6 +68,7 @@ namespace OpenMS
       entry.name = name;
       table.entries_.push_back(entry);
     }
+    if (! table.entries_.empty()) table.tables_ = std::move(tables);
     return table;
   }
 
@@ -115,13 +117,13 @@ namespace OpenMS
   double FixedModifications::mass(char c) const
   {
     const unsigned char u = (unsigned char)c;
-    if (fixed_[u]) return modified_[u];
+    if (tables_ && tables_->fixed[u]) return tables_->modified[u];
     return ResidueDB::getInstance()->getResidue(u)->getMonoWeight(Residue::Internal);
   }
 
   double FixedModifications::delta(char c) const
   {
-    return delta_[(unsigned char)c];
+    return tables_ ? tables_->delta[(unsigned char)c] : 0.0;
   }
 
   double FixedModifications::internalMass(const AASequence& seq) const
@@ -158,7 +160,8 @@ namespace OpenMS
 
   bool FixedModifications::operator==(const FixedModifications& other) const
   {
-    return fixed_ == other.fixed_ && delta_ == other.delta_;
+    if (! tables_ || ! other.tables_) return ! tables_ && ! other.tables_;  // null only when nothing is fixed
+    return tables_->fixed == other.tables_->fixed && tables_->delta == other.tables_->delta;
   }
 
   bool FixedModifications::operator!=(const FixedModifications& other) const

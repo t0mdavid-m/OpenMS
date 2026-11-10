@@ -13,6 +13,7 @@
 #include <OpenMS/OpenMSConfig.h>
 
 #include <array>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -88,9 +89,16 @@ namespace OpenMS
     bool operator!=(const FixedModifications& other) const;
 
   private:
-    std::array<bool, 256> fixed_ {};
-    std::array<double, 256> delta_ {};
-    std::array<double, 256> modified_ {};
+    /// the residue tables by one-letter code
+    struct Tables
+    {
+      std::array<bool, 256> fixed {};
+      std::array<double, 256> delta {};
+      std::array<double, 256> modified {};
+    };
+    /// Shared by copies and immutable once built; null when nothing is fixed. Held by pointer so the type stays small: every
+    /// Config and every algorithm instance holds one, and a test's main() holds many Configs on the stack.
+    std::shared_ptr<const Tables> tables_;
     std::vector<Entry> entries_;
   };
 } // namespace OpenMS
