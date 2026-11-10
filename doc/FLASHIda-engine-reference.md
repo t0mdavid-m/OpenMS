@@ -404,23 +404,25 @@ winner (`initiateNextLevel` inside `applyVariant`) still runs under the lock.
   `queue_mutex_` (the lock order holds: `analysis_mutex_` → `queue_mutex_`). `closed_out_` then skips another
   Precursor's later scan of the species inside `rt_window` (`closed_out_skip`, finished as a dropped search); the
   closing Precursor's own scans are still searched. A charge-named inclusion species is never closed out.
-- **A rescue scan is bought on the apply** (ADR-0068, `finishRegularMS2_`, right after the close-out verdict): with
-  `ms_settings.ms2_rescue` (`IdentificationConfig::rescue_scan`), a searched, non-Q MS2 that is short of the close-out
-  threshold (`!reachesThreshold_`: no proteoform, or a score below it) on a species not closed out
-  (`speciesClosedOut_`, no closing-Precursor exemption: a sibling charge may have closed it while this scan was
-  searched) buys `buildFollowUp(parent_ctx, rescue_scan, 'R')`, priority 0, at most once per **detection**.
-  Hazards:
-  - **A detection is not a precursor id.** Under `separate` each charge is its own precursor id, so the cap keys on
-    (selecting survey's tracking id, nominal mass). `noteDetection_` records it at both `allocPrecursorId_` sites
-    (only with the slot set); `rescueDetectionFree_` claims it. The rescue carries its trigger's precursor id, so its
-    own return finds the detection taken.
-  - **Register before the push.** `queue_.registerRescue(id, nominal)` goes into `rescue_`, which `closeOut`
-    withdraws while queued (`withdrawn_rescue_ids`, `[RESCUE-WITHDRAWN]`). `dequeue_` and `forgetQueued_` erase
-    it, so a sent rescue is never withdrawn. `replacePlan` never reads it. Both calls are rows of
-    `push_site_inventory`.
-  - **Its activation has its own prepared search**, the ion-set block in the constructor; an ETD rescue searched
-    on b/y would find nothing.
-  - **Events:** `[RESCUE] precursor_id=… nominal=… score=… reason=unidentified|below_threshold id=… trigger=…`.
+- **A rescue set is bought on the apply** (ADR-0068, ADR-0070, `finishRegularMS2_`, right after the close-out
+  verdict): with `ms_settings.ms2_rescue` (`IdentificationConfig::rescue_scans`, `hasRescue()`), a searched, non-Q
+  MS2 that is short of the close-out threshold (`!reachesThreshold_`: no proteoform, or a score below it) on a species
+  not closed out (`speciesClosedOut_`, no closing-Precursor exemption: a sibling charge may have closed it while this
+  scan was searched) buys `buildFollowUp(parent_ctx, entry, 'R')` for every entry, in order, all at priority 0, at
+  most once per **precursor id**. Hazards:
+  - **The cap is per precursor id** (ADR-0070 d.3; ADR-0068 capped per detection). Under `separate` each charge is its
+    own precursor id and buys its own set. `rescuePrecursorFree_` claims `rescued_precursors_`; every rescue carries
+    its trigger's precursor id, so its own return finds the id taken. Depth is one: no rescue buys anything.
+  - **Register before the push**, every scan of the set. `queue_.registerRescue(id, nominal)` goes into `rescue_`,
+    which `closeOut` withdraws while queued (`withdrawn_rescue_ids`, one `[RESCUE-WITHDRAWN]` per scan). `dequeue_`
+    and `forgetQueued_` erase it, so a sent rescue is never withdrawn. `replacePlan` never reads it. Both calls are
+    rows of `push_site_inventory`.
+  - **Every entry's activation has its own prepared search**, the ion-set block in the constructor; an ETD rescue
+    searched on b/y would find nothing.
+  - **Config:** a bare object (ADR-0068's shape), `[]` and two identical raw entries are refused; more than one entry
+    with MS3 on and `per_proteoform` off loads with a `[CONFIG-WARN]` (each rescue's identification plans its own MS3).
+  - **Events:** one per set, `[RESCUE] precursor_id=… nominal=… score=… reason=unidentified|below_threshold n=… ids=…
+    trigger=…` (`ids` space-separated: the id alphabet contains `;`).
 - **A sweep completes when its searches return**, not its scans. **Rows of searched MS2s are written in
   completion order** in production.
 - **A bounded backlog drops the oldest** (d.5): 4 waiting jobs per worker (`kSearchBacklogPerThread`,

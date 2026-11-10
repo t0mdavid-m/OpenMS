@@ -98,9 +98,9 @@ departure from the plan goes back to the owner. Ambiguous cases count as source 
   trap variants and `Q` scans stay inline. A sweep completes when its searches return; searched
   rows are written in completion order. A full backlog (4 per worker, provisional) drops the oldest
   waiting search (`[SEARCH-DROPPED]`): its scan identifies nothing.
-- **A rescue scan is capped per detection, not per precursor id** (ADR-0068): under `separate` each
-  charge is its own precursor id. It is registered with the queue before its push, so a close-out
-  can withdraw it while it waits.
+- **A shortfall buys a rescue set, one scan per `ms2_rescue` entry, once per precursor id** (ADR-0070,
+  amending ADR-0068's per-detection cap): under `separate` each charge buys its own. Every scan of the
+  set is registered with the queue before its push, so a close-out withdraws the ones still waiting.
 - **Quantification** (ADR-0038/0039/0056): `Q` is the scan measured; a verdict buys an ordinary `R`.
   `quantification.identify` decides which verdicts buy; `enriched_in` is evaluated on
   `condition_means`, **never on `fold_change`** (−1 is a sentinel for an absent condition).
