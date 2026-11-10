@@ -156,6 +156,23 @@ namespace
     std::string scan_id;
   };
 
+  // A Window scan's answer (ADR-0071): the survey spectrum @p s with only the peaks inside the command's scan range
+  // [@p lo, @p hi] -- what the tribrid's quadrupole transmits for a full MS1 of that range. Never fabricated: every
+  // peak is one of the survey's own.
+  inline ScanData windowSpectrum(const ScanData& s, double lo, double hi)
+  {
+    ScanData w;
+    w.rt = s.rt;
+    w.scan_id = s.scan_id;
+    for (size_t i = 0; i < s.mzs.size(); ++i)
+      if (s.mzs[i] >= lo && s.mzs[i] <= hi)
+      {
+        w.mzs.push_back(s.mzs[i]);
+        w.ints.push_back(s.ints[i]);
+      }
+    return w;
+  }
+
   // The INSTRUMENT scan number a fed spectrum claims, for processScan's trailing argument.
   //
   // Fixtures carry it in their "Spec scan=N" header, which loadTsvScans already parses into
@@ -326,6 +343,9 @@ namespace
     // not a survey and every existing assertion over ms1_cmds counts surveys. Empty in every mode that
     // does not enable monitor_ms1, which is all of them by default.
     std::vector<ScanCommand> monitor_cmds;
+    // Window scans (ADR-0071), in dequeue order. Kept out of ms1_cmds for monitor_cmds' reason. Empty unless
+    // identification.window_scan is on.
+    std::vector<ScanCommand> window_cmds;
     int total_dequeued = 0;
     // single_group_only bookkeeping (see runInterleaved): the processScan return of the first MS1 that
     // forms a group (== # commands it pushed), and the running sum of MS2-feed processScan returns. Both
@@ -410,6 +430,19 @@ namespace
         const ScanData& s = ms1_scans[ms1_fed > 0 ? ms1_fed - 1 : 0];
         ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt + rt_offset, 1,
                          cmd.scan_description, cmd.faims_cv, instrumentScanNumberOf(s));
+        ida->waitForSearchIdle();
+        cmd = ScanCommand{};
+        continue;
+      }
+      // WINDOW scan (ADR-0071): an MS1 whose scan range is one identified MS2's window. Like a monitor scan it is
+      // neither workload nor idleness and must be classified before the idle predicate, for the same two reasons.
+      // Its answer is the last survey cut to the command's range -- what the quadrupole transmits.
+      if (roleOf(cmd) == ScanRole::Window)
+      {
+        r.window_cmds.push_back(cmd);
+        const ScanData w = windowSpectrum(ms1_scans[ms1_fed > 0 ? ms1_fed - 1 : 0], cmd.first_mass, cmd.last_mass);
+        ida->processScan(w.mzs.data(), w.ints.data(), (int)w.mzs.size(), w.rt + rt_offset, 1,
+                         cmd.scan_description, cmd.faims_cv, instrumentScanNumberOf(w));
         ida->waitForSearchIdle();
         cmd = ScanCommand{};
         continue;
@@ -897,6 +930,16 @@ namespace
         const ScanData& s = scans[ms1_fed > 0 ? ms1_fed - 1 : 0];
         ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
                          cmd.scan_description, 0.0, instrumentScanNumberOf(s));
+        ida->waitForSearchIdle();
+        cmd = ScanCommand{};
+        continue;
+      }
+      // Window scan (ADR-0071): as runInterleaved's branch -- the last survey cut to the command's range.
+      if (roleOf(cmd) == ScanRole::Window)
+      {
+        const ScanData w = windowSpectrum(scans[ms1_fed > 0 ? ms1_fed - 1 : 0], cmd.first_mass, cmd.last_mass);
+        ida->processScan(w.mzs.data(), w.ints.data(), (int)w.mzs.size(), w.rt, 1,
+                         cmd.scan_description, 0.0, instrumentScanNumberOf(w));
         ida->waitForSearchIdle();
         cmd = ScanCommand{};
         continue;
