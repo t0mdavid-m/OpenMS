@@ -279,7 +279,8 @@ namespace OpenMS
       /// APPENDED last: the id rows are aggregate-initialised positionally up to flash_extender_score.
       bool closed_out = false;
       /// ADR-0064: what this identification bought at MS3 for quantification: "none" (nothing, or not a
-      /// quantification-MS3 run), "bought", "no_cysteine", "no_labelled_fragment". APPENDED last, as closed_out.
+      /// quantification-MS3 run), "bought", "no_cysteine", "no_labelled_fragment", "yield_refused" (ADR-0069: the
+      /// quantification yield gate refused every eligible fragment). APPENDED last, as closed_out.
       std::string quant_ms3 = "none";
     };
 

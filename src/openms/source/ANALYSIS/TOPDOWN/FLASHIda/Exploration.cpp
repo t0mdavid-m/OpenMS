@@ -1242,6 +1242,7 @@ namespace OpenMS
                                          t.stage1_scores.precursor_intensity);
     };
     const std::optional<YieldGateConfig>& yield_gate = config_.quantification().ms3_yield_gate;
+    bool yield_refused = false;   // ADR-0069: a fragment had an SNR-positive charge and the yield gate refused every one
     for (const Ms3Target& candidate : candidates)
     {
       if (static_cast<int>(out.commands.size()) >= n) break;
@@ -1276,7 +1277,11 @@ namespace OpenMS
                           *yield_gate, in, pred);
         }
         if (any_snr) ++eligible;   // eligible counts fragments with an SNR-positive charge, as without the gate
-        if (!bought) continue;
+        if (!bought)
+        {
+          yield_refused = yield_refused || any_snr;
+          continue;
+        }
       }
       const char ion_type = t.ion_type.empty() ? '\0' : t.ion_type[0];
       // Stage 0 is the identification scan's own isolation and activation (ADR-0003): no per-ion override.
@@ -1286,12 +1291,14 @@ namespace OpenMS
       cmd.window_snr = snr;
       out.commands.push_back(cmd);
     }
-    out.outcome = out.commands.empty() ? "no_labelled_fragment" : "bought";
+    // Nothing bought: yield_refused when the quantification yield gate refused an eligible fragment (ADR-0069), else no
+    // labelled fragment was eligible.
+    out.outcome = !out.commands.empty() ? "bought" : (yield_refused ? "yield_refused" : "no_labelled_fragment");
     {
       EventLine ev;
       ev << "[QUANT-MS3] precursor_id=" << precursor_id << " targets=" << out.commands.size()
          << " labelled=" << candidates.size() << " eligible=" << eligible << " budget=" << n;
-      if (out.commands.empty()) ev << " reason=no_labelled_fragment";
+      if (out.commands.empty()) ev << " reason=" << out.outcome;
     }
     return out;
   }

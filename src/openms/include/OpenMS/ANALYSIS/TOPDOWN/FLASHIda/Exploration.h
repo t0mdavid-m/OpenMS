@@ -438,7 +438,7 @@ namespace OpenMS
     struct QuantDispatch
     {
       std::vector<ScanCommand> commands;   ///< the quantification MS3s, most intense labelled fragment first
-      std::string outcome = "none";        ///< bought | no_cysteine | no_labelled_fragment (identification.tsv quant_ms3)
+      std::string outcome = "none";        ///< bought | no_cysteine | no_labelled_fragment | yield_refused (ADR-0069) (identification.tsv quant_ms3)
     };
 
     /// ADR-0064: the quantification MS3s an identification that closes out its species buys. Seeds the tracker model

@@ -227,7 +227,7 @@ namespace OpenMS
                                    // closed out, and the precursor mass the Extender inferred. -1 / 0 = none.
                                    << "protein\traw_score\tidentification_score\tclosed_out\tinferred_precursor_mass\t"
                                    // ADR-0064, APPENDED: what the identification bought at MS3 for quantification
-                                   // (none | bought | no_cysteine | no_labelled_fragment).
+                                   // (none | bought | no_cysteine | no_labelled_fragment | yield_refused).
                                    << "quant_ms3\n";
         identification_tsv_stream_.flush();
       }
