@@ -370,7 +370,8 @@ winner (`initiateNextLevel` inside `applyVariant`) still runs under the lock.
   ('C', any ion type, not full length), window SNR > 1 on the MS2, the most intense `ms3_targets`, `buildMS3` with
   `ms_settings.ms3_quant` and marker `'Q'`. It returns on the regular MS3 branch, is read by
   `Quantification::measure(..., 2, "ms3_quant")` (level 2: the extractor walks a one-spectrum experiment), and is never cached for annotation. The search fixes iodoTMT6plex on
-  every C (`ProteomeSearch`'s `FixedLabel`, FLASHTnT's per-entry fixed masses through `ProteoformDatabase::refresh()`).
+  every C as an entry of the fixed-modification table: `Config` appends `iodoTMT6plex (C)` to `flashtnt.fixed_mod` under
+  `readsAtMs3()` (ADR-0067 d.7), so FLASHTnT, every ladder, the MS3 matching, Refine and the logged ProForma carry it.
 - **The operator view** (ADR-0065 push 2): `PrecursorBoard board_` is fed at the drain's send, an MS2's return,
   the apply and the survey, under its own mutex (lock order `analysis_mutex_` -> board; the drain and the render
   thread hold no `analysis_mutex_`). `ConsoleView::start` returns null unless stdout is a VT-capable Windows
