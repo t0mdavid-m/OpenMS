@@ -423,6 +423,18 @@ winner (`initiateNextLevel` inside `applyVariant`) still runs under the lock.
     with MS3 on and `per_proteoform` off loads with a `[CONFIG-WARN]` (each rescue's identification plans its own MS3).
   - **Events:** one per set, `[RESCUE] precursor_id=… nominal=… score=… reason=unidentified|below_threshold n=… ids=…
     trigger=…` (`ids` space-separated: the id alphabet contains `;`).
+- **A Window scan is bought on the apply** (ADR-0071, `finishRegularMS2_`, after the rescue block): with
+  `identification.window_scan`, a searched, non-Q MS2 whose search found a proteoform (the identification row's own
+  test) buys, for each stage-0 window (the anchor, then `notchesForStage(parent_ctx, 0)`), a `makeMS1()` command whose
+  `first_mass`/`last_mass` are that window's commanded bounds, at priority 0, at the MS2's CV, with the MS2 as
+  `parent_scan_id`, role `'W'`, pushed with `stampAndPush_` under the MS2's precursor id. Hazards:
+  - **It decides nothing because its role does not.** `'W'` has `decides == false`, so ADR-0042's MS1 fork sends its
+    return to `observeMonitoringMS1_`, and the drain does not reset the survey clock for it. `monitor_deconv_` is built
+    when `window_scan` is on, as well as for monitor scans.
+  - **It is registered nowhere.** No survey replaces it and no close-out withdraws it; it is uncapped.
+  - **Every reader that treats "an MS1 that is not `'M'`" as a survey must also skip `'W'`:** both test harnesses (they
+    answer it with the last survey cut to the command's range) and the offline `FLASHIdaWrapper` MS1 path.
+  - **Events:** `[WINDOW-SCAN] precursor_id=… trigger=… windows=N`.
 - **A sweep completes when its searches return**, not its scans. **Rows of searched MS2s are written in
   completion order** in production.
 - **A bounded backlog drops the oldest** (d.5): 4 waiting jobs per worker (`kSearchBacklogPerThread`,
@@ -450,6 +462,7 @@ place — `FLASHIda/ScanRole.h`'s `constexpr` traits table (ADR-0042), which
 | `R` | `recording` | ✓ | ✓ | any data-acquiring MS2 *or* MS3, **and the identification scan a quantification verdict buys** |
 | `Q` | `quantification` | ✓ | ✓ | the quantification scan (ADR-0038) |
 | `E` | `exploration` | ✓ | ✓ | exploration variant |
+| `W` | `window` | ✓ | **✗** | Window scan: a full MS1 whose range is one window of an identified MS2; observed, never acted upon (ADR-0071) |
 
 The `scan_type` strings are a **golden column** and the table is now their only source — `"recording"`
 is a poor name for an identification MS2 and must stay. Pinned by

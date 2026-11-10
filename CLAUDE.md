@@ -86,7 +86,7 @@ departure from the plan goes back to the owner. Ambiguous cases count as source 
 - **Retention time is SECONDS here** (ADR-0051): the export converts the host's minutes; C++ tests
   pass seconds. `scan_results` `rt` and `ida.log` `RT` write minutes back.
 - **Scan description**: `{3-char base-94 id}{marker}{payload}`, at most 15 chars. The marker is
-  decoded only in `FLASHIda/ScanRole.h` (`S A M R Q E`; `C` retired with tag targeting, ADR-0061); its table is the source of the golden
+  decoded only in `FLASHIda/ScanRole.h` (`S A M R Q E W`; `C` retired with tag targeting, ADR-0061); its table is the source of the golden
   `scan_type` strings, and a new enumerator without a row fails to compile. **An undecodable
   description resolves as a survey**: do not "fail closed" there.
 - **The decision gates read the engine's own command (`parent_ctx`)**; only the observe gate reads
