@@ -2276,7 +2276,7 @@ namespace OpenMS
         site.mass_shift = mod.mass_shift;
         ptm_sites.push_back(site);
       }
-      r.proforma = config_.identification().fixed_mods.proformaPrefix() + FragmentAnalysis::toProForma(region_seq, ptm_sites); // ADR-0067
+      r.proforma = std::string(config_.identification().fixed_mods.proformaPrefix()) + FragmentAnalysis::toProForma(region_seq, ptm_sites); // ADR-0067
     }
 
     // --- protein: the accession the winner's MS2 match chose (ADR-0061 push 4b) ---

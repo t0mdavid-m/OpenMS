@@ -526,7 +526,7 @@ namespace OpenMS
     const std::string ms3_proteoform = MS3FragmentMatcher::fragmentProForma(
         config_.identification().proteinOr(proto_ctx.protein_sequence), proto_ctx, ion_type, frag_index);
     // ADR-0067: prefixed with the search's fixed modifications (ProForma global modifications; empty: none)
-    if (!ms3_proteoform.empty()) ms3_cmd_proteoform_[id] = config_.identification().fixed_mods.proformaPrefix() + ms3_proteoform;
+    if (!ms3_proteoform.empty()) ms3_cmd_proteoform_[id] = std::string(config_.identification().fixed_mods.proformaPrefix()) + ms3_proteoform;
     cmd.msn_level = 3;
     cmd.priority = priority;
     cmd.is_agc = 0;

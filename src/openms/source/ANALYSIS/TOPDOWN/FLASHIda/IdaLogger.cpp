@@ -840,7 +840,7 @@ namespace OpenMS
     // An MS2 match carries the FULL protein and its region separately: render the matched region (as the pooled log
     // and the MS3 rows do), not the whole reference. start_pos/end_pos keep their full-protein coordinates.
     // ADR-0067: prefixed with the search's fixed modifications as ProForma global modifications (empty: none).
-    std::string proforma = config_.identification().fixed_mods.proformaPrefix()
+    std::string proforma = std::string(config_.identification().fixed_mods.proformaPrefix())
         + ((ms_level != 3 && match_has_proteoform)
                ? FragmentAnalysis::regionProForma(match)
                : FragmentAnalysis::toProForma(id_render_seq, *eff_ptm_sites));
