@@ -308,10 +308,9 @@ FLASHIda::FLASHIda(char* arg) :
         const auto prepare_start = std::chrono::steady_clock::now();
         Param params = ProteomeSearch::parametersFor(ident.flashtnt);
         params.setValue("ion_type", ions);
-        // ADR-0064 d.3: a run that reads reporters at MS3 searches every cysteine as iodoTMT-labelled (fixed, per entry).
-        const std::optional<FixedLabel> label = config_.quantification().readsAtMs3()
-            ? std::optional<FixedLabel>(kIodoTmt6plexOnCys) : std::nullopt;
-        auto proteome = std::make_unique<ProteomeSearch>(reference, params, label);
+        // ADR-0064 d.3 / ADR-0067 d.7: a run that reads reporters at MS3 searches every cysteine as iodoTMT-labelled, an
+        // entry of identification.fixed_mods that Config added and parametersFor passed on.
+        auto proteome = std::make_unique<ProteomeSearch>(reference, params);
         if (proteome->reference().empty())
           throw std::invalid_argument("Config: identification.reference has no target entry; nothing could be identified (ADR-0061).");
         const auto prepare_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - prepare_start).count();

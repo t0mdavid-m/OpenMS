@@ -378,7 +378,8 @@ namespace OpenMS
     int max_length = 8;                      ///< tag:max_length
     bool allow_gap = false;                  ///< tag:allow_gap (a Param string "true"/"false")
     int max_aa_in_gap = 2;                   ///< tag:max_aa_in_gap
-    /// fixed_mod: the authored names (ADR-0067), passed verbatim to FLASHTnT and to the single-protein
+    /// fixed_mod: the authored names (ADR-0067) -- plus "iodoTMT6plex (C)" under quantification.scan ms3/both (ADR-0064,
+    /// ADR-0067 d.7) -- passed verbatim to FLASHTnT and to the single-protein
     /// matcher's Tagger and Extender (an empty list as the empty Param list, NOT their declared {""}).
     /// IdentificationConfig::fixed_mods is their table.
     std::vector<std::string> fixed_mod;
@@ -422,8 +423,9 @@ namespace OpenMS
     /// identification.flashtnt -- the matcher's tagger/extender tuning.
     FlashTnTSettings flashtnt;
 
-    /// The table of flashtnt.fixed_mod (ADR-0067), built at load: the residue masses every FLASHIda ladder,
-    /// MS3 match and logged ProForma reads. Empty when none is authored.
+    /// The table of flashtnt.fixed_mod (ADR-0067; iodoTMT6plex on C included under quantification.scan ms3/both), built at
+    /// load: the residue masses every FLASHIda ladder,
+    /// MS3 match and logged ProForma reads. Empty when none is authored and quantification does not read at MS3.
     FixedModifications fixed_mods;
 
     /// identification.search_threads (ADR-0062 d.1) -- the size of the search pool that matches MS2s

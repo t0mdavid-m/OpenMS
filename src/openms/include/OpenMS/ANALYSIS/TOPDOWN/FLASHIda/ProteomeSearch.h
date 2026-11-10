@@ -14,9 +14,7 @@
 #include <OpenMS/KERNEL/MSSpectrum.h>
 #include <OpenMS/METADATA/ProteinHit.h>
 
-#include <OpenMS/ANALYSIS/TOPDOWN/ProteoformDatabase.h>
 #include <memory>
-#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -25,20 +23,6 @@ namespace OpenMS
 {
   class DeconvolvedSpectrum;
   struct FlashTnTSettings;
-
-  /// A label fixed on every residue of one kind of every searched entry (ADR-0064), searched as FLASHTnT's per-entry
-  /// fixed masses -- never by rewriting ResidueDB, which every engine in the process shares.
-  struct FixedLabel
-  {
-    char residue = 'C';
-    double mass = 0;
-    String accession;
-    String name;
-  };
-
-  /// iodoTMT6plex on cysteine: Unimod 1342, mono 329.226595 (share/OpenMS/CHEMISTRY/unimod.xml). The one place the
-  /// quantification MS3's label is spelled (ADR-0064 d.3).
-  inline const FixedLabel kIodoTmt6plexOnCys{'C', 329.226595, "UNIMOD:1342", "iodoTMT6plex"};
 
   /**
    * @brief FLASHTnT's own search of one MS2 against the Protein reference (ADR-0061 d.3).
@@ -72,14 +56,9 @@ namespace OpenMS
     static Param parametersFor(const FlashTnTSettings& settings);
 
     /// @p reference: the Protein reference's entries (decoys are dropped); @p tnt_params: FLASHTnTAlgorithm's
-    ProteomeSearch(std::vector<FASTAFile::FASTAEntry> reference, const Param& tnt_params,
-                   const std::optional<FixedLabel>& label = std::nullopt);
-
-    /// the database the search was prepared from when a label is fixed (nullptr: FLASHTnT's identity database)
-    const ProteoformDatabase* labelledDatabase() const
-    {
-      return db_.get();
-    }
+    /// parameters (ProteomeSearch::parametersFor; fixed modifications, the iodoTMT label of quantification.scan ms3/both
+    /// included, are its fixed_mod, ADR-0067).
+    ProteomeSearch(std::vector<FASTAFile::FASTAEntry> reference, const Param& tnt_params);
 
     /// the entries dropped at load for FLASHTnT's decoy prefix
     Size decoysDropped() const
@@ -114,8 +93,6 @@ namespace OpenMS
     std::vector<FASTAFile::FASTAEntry> reference_;
     Param params_;
     Size decoys_dropped_ = 0;
-    /// ADR-0064: the labelled database; declared before prepared_, which points into it, so it is destroyed after it
-    std::unique_ptr<ProteoformDatabase> db_;
     std::shared_ptr<const FLASHTnTAlgorithm::PreparedDatabase> prepared_;
   };
 } // namespace OpenMS

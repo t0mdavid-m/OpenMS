@@ -53,6 +53,10 @@
 
 namespace
 {
+  // ADR-0064 d.3 (as amended by ADR-0067 d.7): iodoTMT6plex on cysteine (Unimod 1342, mono 329.226595), the label a run that
+  // reads reporters at MS3 fixes on every C. The one place it is spelled.
+  const char* const kQuantMs3Label = "iodoTMT6plex (C)";
+
   // Strict schema: throw naming every key in `obj` that is not in `allowed`. Dynamic objects
   // (e.g. exploration.overrides) are simply not validated (never passed here).
   void rejectUnknownKeys(const nlohmann::json& obj, const std::set<std::string>& allowed,
@@ -1403,6 +1407,21 @@ namespace OpenMS
     rejectUnknownKeys(rt_section, {"log_dir"}, "runtime");
     runtime_.log_dir = rt_section.value("log_dir", std::string{});
 
+    // ADR-0064 d.3 as amended by ADR-0067 d.7: reading reporters at MS3 fixes iodoTMT6plex on every C, as an entry of the
+    // fixed-modification table (so the search, every ladder, the MS3 matching, Refine and the logged ProForma all carry it).
+    // An authored fixed modification of C would be a second one on C, and is refused. Without identification, validate()
+    // refuses the run below.
+    if (quant_.readsAtMs3() && identification_.enabled())
+    {
+      if (identification_.fixed_mods.delta('C') != 0.0)
+        throw std::invalid_argument(
+            std::string("Config: identification.flashtnt.fixed_mod: a fixed modification of C cannot be combined with "
+                        "quantification.scan \"") + (quant_.scan == QuantScan::Ms3 ? "ms3" : "both")
+            + "\", which already fixes iodoTMT6plex on every C (ADR-0064, ADR-0067).");
+      identification_.flashtnt.fixed_mod.push_back(kQuantMs3Label);
+      identification_.fixed_mods = FixedModifications::fromNames(identification_.flashtnt.fixed_mod);
+    }
+
     validate();
   }
 
@@ -1526,15 +1545,6 @@ namespace OpenMS
               std::string("Config: quantification.scan is \"") + sc + "\" but quantification.labelling is \""
               + quant_.labelling + "\". The quantification MS3 targets iodoTMT on cysteine, a 6-plex reagent: labelling "
               "must be \"tmt6plex\" (ADR-0064).");
-        if (identification_.fixed_mods.delta('C') != 0.0)
-          throw std::invalid_argument(
-              std::string("Config: identification.flashtnt.fixed_mod: a fixed modification of C cannot be combined with "
-                          "quantification.scan \"") + sc + "\", which already fixes iodoTMT6plex on every C (ADR-0064, ADR-0067).");
-        if (identification_.method == AnnotationMethod::Refine)
-          throw std::invalid_argument(
-              std::string("Config: quantification.scan is \"") + sc + "\" but identification.method is \"refine\". "
-              "The iodoTMT label reaches only the FLASHTnT search (as a fixed mass on every cysteine); Refine's ladder "
-              "never sees it. Use identification.method \"flashtnt\" (ADR-0064).");
       }
       if (quant_.scan == QuantScan::Ms3)
       {
