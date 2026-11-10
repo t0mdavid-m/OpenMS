@@ -158,6 +158,8 @@ private `monitor_deconv_` (ADR-0042). **Do not merge the monitor engine into `de
   push 2): feed the board only with values the logs carry.
 - **A sweep is exactly its grid** (index arithmetic, top edge appended) and every pre-scan carries
   its **precursor share** (ADR-0048). The reaction-time floor (0.03 ms) still applies to swept ETD.
+  It is acquired in grid order unless `exploration.order` is `random` (one reproducible permutation per
+  sweep); a tie always breaks on `grid_position`, never on `variant_index` (the acquisition position).
 - **`kinetic_model`**: no variant wins; the follow-up is the fitted modeled maximum at every level
   (ADR-0047). The fit is the study's **lattice search**, not Levenberg-Marquardt. `k2` is never
   defaulted; one CE-swept activation per kinetic sweep; a failed fit aborts with no fallback.

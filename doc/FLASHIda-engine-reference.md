@@ -824,6 +824,13 @@ carry rt 0 (cosmetic — the zero-peak fixture has no retention time).
 
 ### A sweep is exactly its grid, and every pre-scan carries its precursor share (ADR-0048)
 
+**Sweep order.** `exploration.order` (per level, default `"ascending"`) decides only *when* the grid is acquired. Under
+`"random"` `initiate` permutes the whole variant list with `Exploration::sweepPermutation(n, kSweepSeed ^ group_id)`
+(splitmix64 Fisher–Yates, pinned to a literal in `FLASHIda_exploration_test`), so each triggered sweep has its own
+reproducible order across every activation and both axes. `variant_index` stays the acquisition position;
+`ExplorationVariant::grid_position` keeps the grid position, and the winner loop breaks a score tie on it, so the
+order never changes which pre-scan wins. Nothing is logged that was not before.
+
 `exploration.activations` is a **list**, and `buildVariants_` emits each activation's whole sweep as a
 contiguous block before starting the next — and **nothing else**. The per-activation CE-0 baseline
 of ADR-0029 is gone (superseded): no reference scan is synthesized under any metric, so
