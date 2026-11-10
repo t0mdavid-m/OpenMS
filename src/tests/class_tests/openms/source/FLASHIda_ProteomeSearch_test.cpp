@@ -482,96 +482,8 @@ START_SECTION(a_decoy_entry_is_dropped_at_load)
 }
 END_SECTION
 
-// ADR-0064 d.3: the iodoTMT label as FLASHTnT's per-entry fixed masses. The prepared database is built from a
-// ProteoformDatabase whose every entry carries +329.226595 on every cysteine -- and on nothing else.
-START_SECTION(label_puts_the_fixed_mass_on_every_cysteine)
-{
-  const std::string ydfz = "MTTYDRNRNAITTGSRVMVSGTGHTGKILSIDTEGLTAEQIRRGKTVVVEGCEEKLAPLDLIRLGMN";   // C at 51 (0-based)
-  const std::string two = "MKCAQCHTVEKGGKHKTGPNLHGLFGRK";                                            // C at 2 and 5
-  const std::string none = "MAKLHDYYKDEVVKKLMTEFNYNSVMQVPRVEK";                                       // no C
-  std::vector<FASTAFile::FASTAEntry> ref;
-  ref.emplace_back("sp|P64463|YDFZ_ECOLI", "", ydfz);
-  ref.emplace_back("two_cys", "", two);
-  ref.emplace_back("no_cys", "", none);
-
-  ProteomeSearch unlabelled(ref, params);
-  TEST_EQUAL(unlabelled.labelledDatabase() == nullptr, true)   // today's search: FLASHTnT's own identity database
-
-  ProteomeSearch labelled(ref, params, kIodoTmt6plexOnCys);
-  const ProteoformDatabase* db = labelled.labelledDatabase();
-  TEST_EQUAL(db != nullptr, true)
-  if (db != nullptr)
-  {
-    TEST_EQUAL(db->hasFixedModifications(), true)
-    TEST_EQUAL(db->isIdentity(), false)   // fixed masses make it a by-entry database
-    TEST_EQUAL(db->entries.size(), ref.size())
-    const auto& fm = db->fixedMasses();
-    TEST_EQUAL(fm.size(), ref.size())
-    for (Size e = 0; e < ref.size() && e < fm.size(); ++e)
-    {
-      std::vector<int> expected;
-      for (int i = 0; i < (int)ref[e].sequence.size(); ++i) if (ref[e].sequence[i] == 'C') expected.push_back(i);
-      TEST_EQUAL(fm[e].size(), expected.size())
-      for (Size k = 0; k < fm[e].size() && k < expected.size(); ++k)
-      {
-        TEST_EQUAL(fm[e][k].first, expected[k])
-        TEST_REAL_SIMILAR(fm[e][k].second, 329.226595)
-      }
-    }
-  }
-  TEST_REAL_SIMILAR(kIodoTmt6plexOnCys.mass, 329.226595)   // Unimod 1342, share/OpenMS/CHEMISTRY/unimod.xml
-  TEST_EQUAL(kIodoTmt6plexOnCys.residue, 'C')
-  TEST_STRING_EQUAL(kIodoTmt6plexOnCys.accession, "UNIMOD:1342")
-}
-END_SECTION
-
-// ADR-0064: the labelled search identifies a real iodoTMT proteoform. The fixture is scan 1325 of a real E. coli
-// iodoTMT run (CID 28, z=10 at m/z 761.5118), which TopPIC identified as YdfZ (P64463, Met retained,
-// iodoTMT6plex on C52, E 5.4e-37). Deconvolved as the engine does, at TopPIC's precursor mass.
-START_SECTION(labelled_search_identifies_the_itmt_fixture)
-{
-  const auto scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_itmt_ydfz_cid28_scan1325.txt");
-  TEST_EQUAL(scans.size(), 1)
-  if (!scans.empty())
-  {
-    Config config(buildJsonWithLogDir(""));
-    Deconvolution deconv(config, config.toleranceList());
-    const ScanData& sd = scans[0];
-    deconv.deconvolveMSn(sd.mzs.data(), sd.ints.data(), (int)sd.mzs.size(), sd.rt, 7600.99053, 10);
-    const DeconvolvedSpectrum ds = deconv.storedMS2();
-    TEST_EQUAL(ds.empty(), false)
-    MSSpectrum raw;
-    for (Size i = 0; i < sd.mzs.size(); ++i) raw.emplace_back(Peak1D(sd.mzs[i], sd.ints[i]));
-    raw.setRT(sd.rt);
-    raw.setMSLevel(2);
-
-    std::vector<FASTAFile::FASTAEntry> ref;
-    ref.emplace_back("sp|P64463|YDFZ_ECOLI", "", "MTTYDRNRNAITTGSRVMVSGTGHTGKILSIDTEGLTAEQIRRGKTVVVEGCEEKLAPLDLIRLGMN");
-    ProteomeSearch search(ref, params, kIodoTmt6plexOnCys);
-    ProteomeSearch::Worker worker(search);
-    const auto hits = worker.search(ds, config.toleranceList()[1], raw, 1325);
-    std::cout << "[ITMT-FIXTURE] hits=" << hits.size();
-    if (!hits.empty()) std::cout << " score=" << hits[0].getScore() << " accession=" << hits[0].getAccession();
-    std::cout << std::endl;
-    TEST_EQUAL(hits.empty(), false)
-    if (!hits.empty())
-    {
-      TEST_STRING_EQUAL(hits[0].getAccession(), "sp|P64463|YDFZ_ECOLI")
-      // The label reaches the PrSM as a modification of 329.2266 on the cysteine (0- or 1-based start 51/52).
-      bool labelled_c = false;
-      if (hits[0].metaValueExists("Modifications") && hits[0].metaValueExists("ModificationStarts"))
-      {
-        const DoubleList masses = hits[0].getMetaValue("Modifications");
-        const IntList starts = hits[0].getMetaValue("ModificationStarts");
-        for (Size i = 0; i < masses.size() && i < starts.size(); ++i)
-          if (std::fabs(masses[i] - 329.226595) < 0.01 && (starts[i] == 51 || starts[i] == 52)) labelled_c = true;
-      }
-      TEST_EQUAL(labelled_c, true)
-    }
-  }
-}
-END_SECTION
-
+// The fixture is scan 1325 of a real E. coli iodoTMT run (CID 28, z=10 at m/z 761.5118), which TopPIC identified as YdfZ
+// (P64463, Met retained, iodoTMT6plex on C52, E 5.4e-37), deconvolved as the engine does at TopPIC's precursor mass.
 // ADR-0067 push 2: an authored identification.flashtnt.fixed_mod reaches the real-time search through parametersFor,
 // with no label. The iodoTMT YdfZ scan is identified with iodoTMT6plex fixed on its cysteine as a residue mass (never a
 // PrSM modification), and matchFromPrSM, given the table, matches the fragments that carry it.
@@ -600,10 +512,6 @@ START_SECTION(authored_fixed_mod_identifies_the_itmt_fixture)
       ProteomeSearch::Worker worker(search);
       return worker.search(ds, config.toleranceList()[1], raw, 1325);
     };
-    {
-      ProteomeSearch unlabelled(ref, ProteomeSearch::parametersFor(with_fixed));
-      TEST_EQUAL(unlabelled.labelledDatabase() == nullptr, true)  // no per-entry label: the table alone
-    }
     const auto hits = searchWith(with_fixed);
     TEST_EQUAL(hits.empty(), false)
     if (! hits.empty())

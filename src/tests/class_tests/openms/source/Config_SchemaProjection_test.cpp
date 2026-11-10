@@ -1358,9 +1358,10 @@ START_SECTION(quantification_ms3_structural_rejections)
         Config(cfgJson("", std::string(IDENT_TH) + QUANT_ON(R"({ "enabled": true, "labelling": "tmt10plex", )"
                        R"("conditions": [ { "name": "a", "channels": ["126","127N"] }, { "name": "b", "channels": ["130C","131"] } ], )"
                        + std::string(sc) + R"( })"), std::string(MS2_QUANT) + MS3_QUANT)))
-    // Refine never sees the fixed label.
-    TEST_EXCEPTION(std::invalid_argument,
-        Config(q3Cfg(sc, R"("identification": { "reference": { "sequence": "PEPTCIDEK" }, "threshold": 10, "method": "refine" },)")))
+    // ADR-0067 d.7: the label is an entry of the fixed-modification table, which Refine reads too, so Refine is allowed.
+    Config refine(q3Cfg(sc, R"("identification": { "reference": { "sequence": "PEPTCIDEK" }, "threshold": 10, "method": "refine" },)"));
+    TEST_EQUAL(refine.identification().method == AnnotationMethod::Refine, true)
+    TEST_REAL_SIMILAR(refine.identification().fixed_mods.delta('C'), 329.226595)
   }
   // ms3: no verdict buys anything, so identify / enriched_in are refused (non-default = authored).
   TEST_EXCEPTION(std::invalid_argument, Config(q3Cfg(R"("scan": "ms3", "identify": "all")")))
@@ -1403,6 +1404,36 @@ START_SECTION(fixed_mod_on_c_is_refused_under_the_ms3_label)
   }
   Config ms2(q3Cfg(R"("scan": "ms2")", fixed_c));
   TEST_REAL_SIMILAR(ms2.identification().fixed_mods.delta('C'), 57.021464)
+}
+END_SECTION
+
+// ADR-0067 d.7: under quantification.scan ms3/both the iodoTMT label (ADR-0064) is an entry of the fixed-modification table,
+// added by Config: flashtnt.fixed_mod carries "iodoTMT6plex (C)" (so FLASHTnT and the Tagger/Extender get it) and fixed_mods
+// fixes it on C, beside any authored fixed modification of another residue. Under ms2, or with quantification off, it is absent.
+START_SECTION(the_ms3_label_is_a_table_entry)
+{
+  auto hasLabel = [](const Config& c) {
+    const auto& fm = c.identification().flashtnt.fixed_mod;
+    return std::find(fm.begin(), fm.end(), std::string("iodoTMT6plex (C)")) != fm.end();
+  };
+  const std::string fixed_m =
+      R"JSON("identification": { "reference": { "sequence": "PEPTCIDEK" }, "threshold": 10, "flashtnt": { "fixed_mod": ["Oxidation (M)"] } },)JSON";
+  for (const char* sc : {R"("scan": "ms3")", R"("scan": "both")"})
+  {
+    Config label(q3Cfg(sc));
+    TEST_EQUAL(hasLabel(label), true)
+    TEST_REAL_SIMILAR(label.identification().fixed_mods.delta('C'), 329.226595)
+    Config both(q3Cfg(sc, fixed_m));
+    TEST_EQUAL(hasLabel(both), true)
+    TEST_REAL_SIMILAR(both.identification().fixed_mods.delta('C'), 329.226595)
+    TEST_REAL_SIMILAR(both.identification().fixed_mods.delta('M'), 15.994915)
+  }
+  Config ms2(q3Cfg(R"("scan": "ms2")"));
+  TEST_EQUAL(hasLabel(ms2), false)
+  TEST_EQUAL(ms2.identification().fixed_mods.delta('C'), 0.0)
+  Config off(cfgJson("", std::string(IDENT_TH) + QUANT_ON(R"({ "enabled": false, "scan": "ms3" })"), ""));
+  TEST_EQUAL(hasLabel(off), false)
+  TEST_EQUAL(off.identification().fixed_mods.delta('C'), 0.0)
 }
 END_SECTION
 
