@@ -24,6 +24,7 @@ set(sources_list_h
         FLASHIda/IdaLogger.h
         FLASHIda/LogCell.h
         FLASHIda/MS3FragmentMatcher.h
+        FLASHIda/Ms3YieldModel.h
         FLASHIda/PrecursorBoard.h
         FLASHIda/PrecursorSelection.h
         FLASHIda/ProteomeSearch.h
@@ -33,6 +34,7 @@ set(sources_list_h
         FLASHIda/ScanCommandQueue.h
         FLASHIda/ScanRole.h
         FLASHIda/SearchPool.h
+        FLASHIda/YieldGateSettings.h
         FLASHIdaBridgeFunctions.h
         FLASHGappedTaggerAlgorithm.h
         FLASHTaggerAlgorithm.h
