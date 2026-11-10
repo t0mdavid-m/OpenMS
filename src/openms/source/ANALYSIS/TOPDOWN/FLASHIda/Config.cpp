@@ -1147,11 +1147,29 @@ namespace OpenMS
       quant_.ms3_quant_scan = parseNamedScan(ms_settings["ms3_quant"], "ms_settings.ms3_quant");
       quant_.has_ms3_quant_scan = true;
     }
-    // ADR-0068: the rescue scan, a bare slot whose presence is the switch; held on identification_, which decides it.
-    if (ms_settings.contains("ms2_rescue") && ms_settings["ms2_rescue"].is_object())
+    // ADR-0068/0070: the rescue set, a list of scan configs whose presence is the switch; held on identification_, which
+    // decides it. A bare object (ADR-0068's shape), an empty list and two identical entries are refused. ToCppJson emits
+    // every key of every entry, so two equal raw objects are two equal scans.
+    if (ms_settings.contains("ms2_rescue") && !ms_settings["ms2_rescue"].is_null())
     {
-      identification_.rescue_scan = parseNamedScan(ms_settings["ms2_rescue"], "ms_settings.ms2_rescue");
-      identification_.has_rescue_scan = true;
+      const auto& rescue = ms_settings["ms2_rescue"];
+      if (!rescue.is_array())
+        throw std::invalid_argument(
+            "Config: ms_settings.ms2_rescue is a list of scan configs: wrap the object in [ ] (ADR-0070). Got "
+            + std::string(rescue.type_name()) + ".");
+      if (rescue.empty())
+        throw std::invalid_argument(
+            "Config: ms_settings.ms2_rescue is an empty list. Omit ms2_rescue to switch the rescue off (ADR-0070).");
+      for (size_t i = 0; i < rescue.size(); ++i)
+      {
+        for (size_t k = 0; k < i; ++k)
+          if (rescue[k] == rescue[i])
+            throw std::invalid_argument("Config: ms_settings.ms2_rescue entries " + std::to_string(k + 1) + " and "
+                                        + std::to_string(i + 1) + " are the same scan; a rescue set tries each method "
+                                        "once (ADR-0070).");
+        identification_.rescue_scans.push_back(
+            parseNamedScan(rescue[i], "ms_settings.ms2_rescue[" + std::to_string(i) + "]"));
+      }
     }
 
     // additional_ms2: user-authored KEYS, so they cannot be allowlisted -- validated as identifiers
@@ -1573,11 +1591,19 @@ namespace OpenMS
     // which a misconfigured screen is discovered.
     // ADR-0068: a rescue scan is bought by an identification that falls short of the close-out threshold, so it
     // needs identification with a reference and a threshold.
-    if (identification_.has_rescue_scan && (!identification_.enabled() || !identification_.threshold.has_value()))
+    if (identification_.hasRescue() && (!identification_.enabled() || !identification_.threshold.has_value()))
       throw std::invalid_argument(
           "Config: ms_settings.ms2_rescue is set but identification.threshold is not set. A rescue scan is bought when "
           "an identification scan finds no proteoform or one scoring below the close-out threshold, so it needs "
           "identification with a reference and a threshold (ADR-0068).");
+    // ADR-0070 d.5: several rescues of one precursor each plan their own MS3 unless per_proteoform folds them into one
+    // live plan. Allowed, and said once at load.
+    if (identification_.rescue_scans.size() > 1 && characterization_.mode != CharacterizationMode::Off
+        && !characterization_.per_proteoform)
+      EventLine(EventLevel::Warn) << "[CONFIG-WARN] ms_settings.ms2_rescue lists " << identification_.rescue_scans.size()
+                                  << " rescue scans and identification.characterization.per_proteoform is off: each "
+                                     "rescue's identification plans its own MS3, so one precursor can plan up to "
+                                  << identification_.rescue_scans.size() + 1 << " MS3 batches (ADR-0070).";
 
     if (quant_.enabled)
     {
