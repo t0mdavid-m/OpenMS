@@ -291,7 +291,7 @@ namespace
   // Find the LAST '@', skip the run of fragment-charge digits after it, require an ion_type char in
   // {a,b,c,x,y,z}, then an all-digit ion_index >= 1. Returns false on the no-ion form {id}R{mass}k@{charge}
   // (nothing after the charge digits) -- tolerated by callers. On success, ion_key = ion_type + ion_index
-  // (e.g. "b44"). Kept identical, byte-for-byte, to decodeTrailingIon in FLASHIda_LoggingFields_test.cpp.
+  // (e.g. "b44"). Kept identical, byte-for-byte, to decodeTrailingIon in FLASHIda_LoggingFields_TestHelpers.h.
   // [ION-DECODE C#<->C++ — see docs/kb/test-harness] byte-for-byte twin of C# DecodeIonFromScanDescription
   inline bool decodeTrailingIonKey(const std::string& d, std::string& ion_key)
   {
