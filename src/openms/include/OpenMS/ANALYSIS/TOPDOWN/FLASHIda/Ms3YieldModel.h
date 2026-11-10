@@ -46,14 +46,20 @@ namespace OpenMS
     double e = -1;        ///< the predicted bond yield, p * (L - 1)
   };
 
-  /// The training range each input is clipped to before the model reads it (MS3_gate_spec.md section 2).
-  struct OPENMS_DLLAPI YieldClipRanges
+  /// The training range each input is clipped to before the model reads it (MS3_gate_spec.md section 2). Header
+  /// constants only, so not dll-exported (MSVC refuses a second declarator on a member of an exported class, C2487).
+  struct YieldClipRanges
   {
-    static constexpr double kFragIntensityMin = 372.0, kFragIntensityMax = 5.0e6;
-    static constexpr double kPrecIntensityMin = 6.8e3, kPrecIntensityMax = 8.4e7;
-    static constexpr double kPrecChargeMin = 4.0, kPrecChargeMax = 49.0;
-    static constexpr double kMassRatioMin = 0.011, kMassRatioMax = 1.0;
-    static constexpr double kIsoCosMin = 0.85, kIsoCosMax = 1.0005;
+    static constexpr double kFragIntensityMin = 372.0;
+    static constexpr double kFragIntensityMax = 5.0e6;
+    static constexpr double kPrecIntensityMin = 6.8e3;
+    static constexpr double kPrecIntensityMax = 8.4e7;
+    static constexpr double kPrecChargeMin = 4.0;
+    static constexpr double kPrecChargeMax = 49.0;
+    static constexpr double kMassRatioMin = 0.011;
+    static constexpr double kMassRatioMax = 1.0;
+    static constexpr double kIsoCosMin = 0.85;
+    static constexpr double kIsoCosMax = 1.0005;
   };
 
   /// The prediction for @p in. A non-finite input (or a mass ratio with a non-positive precursor mass) clips to its
