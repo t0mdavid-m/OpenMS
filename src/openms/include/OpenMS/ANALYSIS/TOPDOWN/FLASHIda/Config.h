@@ -38,6 +38,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/RefineSettings.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FixedModifications.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/YieldGateSettings.h>
 #include <OpenMS/DATASTRUCTURES/ListUtils.h>
 
 #include <cstdint>
@@ -591,6 +592,11 @@ namespace OpenMS
     /// unsent MS3s, a sent MS3 commits its fragment, a sent fragment is re-acquired only at >= 2x its sent intensity,
     /// at most max_targets distinct cleavages per proteoform per run, and only window SNR > 1 candidates.
     bool per_proteoform = false;
+
+    /// characterization.yield_gate (ADR-0069). Unset: no yield gate, every plan exactly as before. Set: every
+    /// characterization MS3 plan, governed or not, in every mode, admits a target only when its predicted bond yield
+    /// reaches the threshold; a refused target hands its place on.
+    std::optional<YieldGateConfig> yield_gate;
   };
 
   /// Isobaric quantification configuration (ADR-0038).
@@ -622,6 +628,9 @@ namespace OpenMS
     /// ADR-0064. How many quantification MS3s one identification buys (the most intense eligible labelled
     /// fragments). Read only under scan ms3 / both.
     int ms3_targets = 1;
+    /// ADR-0069. The quantification MS3's own yield gate (its scans use ms_settings.ms3_quant, so its own coefficients).
+    /// Unset: no gate. Read only under scan ms3 / both.
+    std::optional<YieldGateConfig> ms3_yield_gate;
     /// Enabled and screening at MS2 ('Q' rostered, verdict buys 'R'): scan ms2 or both.
     bool screensAtMs2() const { return enabled && scan != QuantScan::Ms3; }
     /// Enabled and reading reporters at MS3 on a labelled fragment: scan ms3 or both.

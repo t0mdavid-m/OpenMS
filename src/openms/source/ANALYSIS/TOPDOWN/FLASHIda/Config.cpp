@@ -74,6 +74,38 @@ namespace
         ". Keys are case-sensitive snake_case; see FlashIDA/test-data/config_schema_reference.json.");
   }
 
+  // ADR-0069: one MS3 yield gate block (identification.characterization.yield_gate, quantification.ms3_yield_gate).
+  // Every key is optional and null-tolerant (ToCppJson emits nulls); a present one must be a finite number, and the
+  // threshold above 0. Absent keys keep YieldGateConfig's defaults: threshold 1, the core-5 coefficients.
+  OpenMS::YieldGateConfig parseYieldGate(const nlohmann::json& j, const std::string& path)
+  {
+    if (!j.is_object())
+      throw std::invalid_argument("Config: " + path + " must be an object; got " + j.dump() + " (ADR-0069).");
+    rejectUnknownKeys(j,
+        {"threshold", "intercept", "fragment_intensity", "precursor_intensity", "precursor_charge", "mass_ratio",
+         "fragment_iso_cos"},
+        path);
+    OpenMS::YieldGateConfig g;
+    auto read = [&](const char* key, double& into) {
+      if (!j.contains(key) || j[key].is_null()) return;
+      if (!j[key].is_number() || !std::isfinite(j[key].get<double>()))
+        throw std::invalid_argument("Config: " + path + "." + key + " must be a finite number; got " + j[key].dump()
+                                    + " (ADR-0069).");
+      into = j[key].get<double>();
+    };
+    read("threshold", g.threshold);
+    read("intercept", g.coefficients.intercept);
+    read("fragment_intensity", g.coefficients.fragment_intensity);
+    read("precursor_intensity", g.coefficients.precursor_intensity);
+    read("precursor_charge", g.coefficients.precursor_charge);
+    read("mass_ratio", g.coefficients.mass_ratio);
+    read("fragment_iso_cos", g.coefficients.fragment_iso_cos);
+    if (!(g.threshold > 0.0))
+      throw std::invalid_argument("Config: " + path + ".threshold must be > 0 expected bonds; got " + j["threshold"].dump()
+                                  + ". Delete the block to switch the gate off (ADR-0069).");
+    return g;
+  }
+
   // Shared parse for the two charge-acquisition keys (precursor_selection.precursor_charges and
   // characterization.fragment_charges). One helper because the value sets are identical and must
   // stay identical -- two hand-written if/else chains is how "Coverage" once silently meant
@@ -692,7 +724,7 @@ namespace OpenMS
             "Config: identification.characterization.refine moved to identification.refine (ADR-0061).");
       rejectUnknownKeys(charact,
           {"mode", "max_targets", "min_fragment_charge", "min_target_mass", "fragment_charges", "per_proteoform",
-           "exploration"},
+           "exploration", "yield_gate"},
           "identification.characterization");
 
       // Hard-rejected, not defaulted. The old parse was
@@ -759,6 +791,9 @@ namespace OpenMS
                                       + charact["per_proteoform"].dump() + " (ADR-0066).");
         characterization_.per_proteoform = charact["per_proteoform"].get<bool>();
       }
+      // ADR-0069: the characterization MS3 yield gate. Absent or null = no gate, today's plan exactly.
+      if (charact.contains("yield_gate") && !charact["yield_gate"].is_null())
+        characterization_.yield_gate = parseYieldGate(charact["yield_gate"], "identification.characterization.yield_gate");
     }
 
     // --- quantification (ADR-0038) ---
@@ -788,7 +823,8 @@ namespace OpenMS
          "test", "p_value_threshold", "empty_condition", "scan_normalize", "aggregate",
          "min_usable_scans",  // ADR-0056
          "channel_normalization",  // ADR-0057
-         "scan", "ms3_targets"},  // ADR-0064
+         "scan", "ms3_targets",  // ADR-0064
+         "ms3_yield_gate"},  // ADR-0069
         "quantification");
     quant_.enabled = quant.value("enabled", false);
     quant_.labelling = quant.value("labelling", std::string("tmt6plex"));
@@ -805,6 +841,9 @@ namespace OpenMS
                                     "quantification MS3s one identification buys (ADR-0064).");
       quant_.ms3_targets = quant["ms3_targets"].get<int>();
     }
+    // ADR-0069: the quantification MS3's own yield gate. Absent or null = no gate.
+    if (quant.contains("ms3_yield_gate") && !quant["ms3_yield_gate"].is_null())
+      quant_.ms3_yield_gate = parseYieldGate(quant["ms3_yield_gate"], "quantification.ms3_yield_gate");
     {
       const std::string sc = nullableString(quant, "scan", "ms2");
       if (sc == "ms2")       quant_.scan = QuantScan::Ms2;
@@ -1563,6 +1602,9 @@ namespace OpenMS
     if (quant_.enabled && quant_.scan == QuantScan::Ms2 && (quant_.ms3_targets != 1 || quant_.has_ms3_quant_scan))
       EventLine(EventLevel::Warn) << "[CONFIG-WARN] quantification.ms3_targets / ms_settings.ms3_quant are set but "
                                      "quantification.scan is \"ms2\", which reads neither (ADR-0064).";
+    if (quant_.enabled && quant_.scan == QuantScan::Ms2 && quant_.ms3_yield_gate)
+      EventLine(EventLevel::Warn) << "[CONFIG-WARN] quantification.ms3_yield_gate is set but quantification.scan is "
+                                     "\"ms2\", which acquires no quantification MS3 for it to gate (ADR-0069).";
 
     if (quant_.enabled)
     {
