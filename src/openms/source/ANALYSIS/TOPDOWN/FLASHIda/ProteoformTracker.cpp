@@ -36,6 +36,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms3YieldModel.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>  // getNominalMass (read-only) for the pooled nominal_mass column
 
 #include <algorithm>
@@ -285,6 +286,45 @@ namespace OpenMS
         return true;
       }
     };
+
+    // ADR-0069: the yield walk. @p charges are a target's admitted charges, strongest first; each is tested at its own
+    // stage-1 scores against the dispatching MS2 (gate.ms_ctx) and the ion index. Returns the charges the yield gate
+    // admits, in order: under `separate` every charge is tested (each is its own scan), otherwise the walk stops at the
+    // first admitted one, which anchors the MS3. Every refused charge writes an [MS3-YIELD] refused line. A target with
+    // no ion index is not tested: one untested line, and every charge comes back.
+    inline const FragmentAnalysis::FragmentScores& scoresOf(const FragmentObservation* o) { return o->stage1_scores; }
+    inline const FragmentAnalysis::FragmentScores& scoresOf(const ChargeRecord& c) { return c.stage1_scores; }
+    inline int chargeOf(const FragmentObservation* o) { return o->frag_charge; }
+    inline int chargeOf(const ChargeRecord& c) { return c.charge; }
+
+    template <typename Obs>
+    std::vector<Obs> yieldWalk(const Ms3PlanGate& gate, int precursor_id, const std::string& ion_type, int ion_index,
+                               const std::vector<Obs>& charges, bool test_every_charge)
+    {
+      if (gate.yield == nullptr || gate.ms_ctx == nullptr || charges.empty()) return charges;
+      const YieldGateConfig& yg = *gate.yield;
+      if (ion_index <= 0)
+      {
+        const YieldInputs in = yieldInputsOf(*gate.ms_ctx, scoresOf(charges.front()), ion_index);
+        logYieldVerdict("characterization", precursor_id, ion_type, ion_index, chargeOf(charges.front()), "untested", yg,
+                        in, predictBondYield(yg.coefficients, in));
+        return charges;
+      }
+      std::vector<Obs> admitted;
+      for (const Obs& o : charges)
+      {
+        const YieldInputs in = yieldInputsOf(*gate.ms_ctx, scoresOf(o), ion_index);
+        const YieldPrediction pred = predictBondYield(yg.coefficients, in);
+        if (yieldAdmits(yg, pred))
+        {
+          admitted.push_back(o);
+          if (!test_every_charge) break;
+        }
+        else
+          logYieldVerdict("characterization", precursor_id, ion_type, ion_index, chargeOf(o), "refused", yg, in, pred);
+      }
+      return admitted;
+    }
 
   } // anonymous namespace
 
@@ -655,6 +695,44 @@ namespace OpenMS
     return out;
   }
 
+  std::vector<Ms3Target> ProteoformTracker::labelledFragmentCharges(int precursor_id, const std::string& ion_type,
+                                                                   int ion_index) const
+  {
+    auto it = models_.find(precursor_id);
+    if (it == models_.end()) return {};
+    auto fit = it->second.fragments.find(FragmentKey{ion_type, ion_index});
+    if (fit == it->second.fragments.end()) return {};
+    const MappedFragment& f = fit->second;
+    // best_ms2 first, then the other charges in charge order; a stable intensity sort keeps that order on a tie
+    // (the order planNextScans' chargesOf walks a fragment's charges in).
+    std::vector<const FragmentObservation*> cands;
+    if (f.best_ms2.has_value()) cands.push_back(&(*f.best_ms2));
+    std::vector<const FragmentObservation*> others;
+    for (const auto& kv : f.ms2_by_charge)
+      if (!f.best_ms2.has_value() || kv.first != f.best_ms2->frag_charge) others.push_back(&kv.second);
+    std::sort(others.begin(), others.end(),
+              [](const FragmentObservation* a, const FragmentObservation* b) { return a->frag_charge < b->frag_charge; });
+    cands.insert(cands.end(), others.begin(), others.end());
+    std::stable_sort(cands.begin(), cands.end(),
+                     [](const FragmentObservation* a, const FragmentObservation* b) { return a->intensity > b->intensity; });
+    std::vector<Ms3Target> out;
+    for (const FragmentObservation* o : cands)
+    {
+      if (o->frag_mz <= 0.0 || o->frag_charge == 0) continue;   // no backing peak to isolate
+      Ms3Target t;
+      t.ion_type = f.ion_type;
+      t.ion_index = f.ion_index;
+      t.frag_mz = o->frag_mz;
+      t.frag_charge = o->frag_charge;
+      t.frag_mass = o->observed_mass;
+      t.iso_width = o->iso_width;
+      t.stage0_params = o->params;
+      t.stage1_scores = o->stage1_scores;
+      out.push_back(std::move(t));
+    }
+    return out;
+  }
+
   std::vector<Ms3Target> ProteoformTracker::planNextScans(int precursor_id, const Ms3PlanGate* gate)
   {
     // "This run fired no MS3" resolves to one of TEN causes below (seven return sites; the last one
@@ -771,10 +849,24 @@ namespace OpenMS
     // max_targets - |sent|; once they are used a new one is SKIPPED -- `true`, not "budget full", so the callers go on
     // to the next candidate (a re-acquisition of a sent cleavage still fits).
     CleavageRoom room(gate != nullptr ? *gate : Ms3PlanGate{});
+    // ADR-0069: the yield gate's verdict per fragment, made once (a fragment can be offered by several ambiguity lists):
+    // the charges it admits, strongest first; empty = refused. Tested after the gate's other per-charge tests and
+    // BEFORE room.admit, so a refused fragment takes no budget place and no cleavage slot.
+    const bool yield_on = gate != nullptr && gate->yield != nullptr;
+    const bool separate_charges = config_.characterization().fragment_charges == ChargeAcquisitionMode::Separate;
+    std::map<FragmentKey, std::vector<const FragmentObservation*>> yield_pass;
+    auto yieldPassOf = [&](const MappedFragment& f) -> const std::vector<const FragmentObservation*>& {
+      const FragmentKey key{f.ion_type, f.ion_index};
+      auto cached = yield_pass.find(key);
+      if (cached != yield_pass.end()) return cached->second;
+      return yield_pass.emplace(key, yieldWalk(*gate, precursor_id, f.ion_type, f.ion_index, chargesOf(f), separate_charges))
+          .first->second;
+    };
     auto add_target = [&](const MappedFragment* f) -> bool {
       if (f == nullptr || !f->best_ms2.has_value()) return false;
       const FragmentKey key{f->ion_type, f->ion_index};
       if (chosen.count(key)) return false;
+      if (yield_on && yieldPassOf(*f).empty()) return true;   // yield-refused: the next candidate takes the place
       if (gate != nullptr && !room.admit(key)) return true;
       chosen.insert(key);
       targets.push_back(f);
@@ -938,7 +1030,11 @@ namespace OpenMS
       // only; ungoverned, the anchor is best_ms2 and the candidates are every charge the fragment was seen at.
       const std::vector<const FragmentObservation*>* gated = (gate != nullptr) ? &chargesOf(*f) : nullptr;
       if (gated != nullptr && gated->empty()) continue;   // unreachable: such a fragment never enters a pool
-      const FragmentObservation* anchor = (gated != nullptr) ? gated->front() : &(*f->best_ms2);
+      // ADR-0069: with the yield gate on, the anchor is the first charge it admitted, and separate acquires only the
+      // charges it admitted; multiplexed notches still come from `gated` and are not yield-tested.
+      const std::vector<const FragmentObservation*>* acquire = yield_on ? &yieldPassOf(*f) : gated;
+      if (acquire != nullptr && acquire->empty()) continue;   // unreachable: add_target refused it
+      const FragmentObservation* anchor = (acquire != nullptr) ? acquire->front() : &(*f->best_ms2);
 
       // The acquisition charge set, chosen ONCE for both on-modes: anchor (best_ms2, i.e. the most
       // intense charge) plus the SNR-positive rest, most intense first, capped at a 10-plex.
@@ -975,9 +1071,9 @@ namespace OpenMS
       {
         for (const NotchCandidate& n : extra_charges)
         {
-          if (gated != nullptr)
+          if (acquire != nullptr)
           {
-            for (const FragmentObservation* o : *gated)
+            for (const FragmentObservation* o : *acquire)
               if (o->frag_charge == n.charge) { obs_list.push_back(o); break; }
             continue;
           }
@@ -1150,12 +1246,22 @@ namespace OpenMS
     for (const PoolEntry& e : pool)
     {
       if (species_selected >= budget) break;
-      // Capped (ADR-0066): a new cleavage with no room left is skipped -- not emitted, not stamped.
-      if (gate != nullptr && !room.admit(e.cleavage)) continue;
       const PeakRecord& pr = *e.peak;
       const std::pair<std::string, int> label = labelFor(pr);
+      // ADR-0069: yield-refused -- before the cap, so it takes no slot; not emitted, not stamped. A mass that matches no
+      // ion (label index 0) is admitted untested.
+      std::vector<ChargeRecord> yield_admitted;
+      if (gate != nullptr && gate->yield != nullptr)
+      {
+        yield_admitted = yieldWalk(*gate, precursor_id, label.first, label.second, e.charges,
+                                   config_.characterization().fragment_charges == ChargeAcquisitionMode::Separate);
+        if (yield_admitted.empty()) continue;
+      }
+      // Capped (ADR-0066): a new cleavage with no room left is skipped -- not emitted, not stamped.
+      if (gate != nullptr && !room.admit(e.cleavage)) continue;
 
-      emitRawMassTarget_(m, pr, label.first, label.second, "exhaustive", out, gate != nullptr ? &e.charges : nullptr);
+      emitRawMassTarget_(m, pr, label.first, label.second, "exhaustive", out, gate != nullptr ? &e.charges : nullptr,
+                         (gate != nullptr && gate->yield != nullptr) ? &yield_admitted : nullptr);
 
       // Stamped only now: after every filter, and after the mass has actually become a target. The set
       // is monotone and dispatched-but-never-returned counts as done, so a stamp made any earlier is a
@@ -1177,7 +1283,8 @@ namespace OpenMS
 
   void ProteoformTracker::emitRawMassTarget_(const ProteoformModel& m, const PeakRecord& pr, const std::string& ion_type,
                                              int ion_index, const char* mode_name, std::vector<Ms3Target>& out,
-                                             const std::vector<ChargeRecord>* charges) const
+                                             const std::vector<ChargeRecord>* charges,
+                                             const std::vector<ChargeRecord>* acquire) const
   {
     const ChargeAcquisitionMode charge_mode = config_.characterization().fragment_charges;
     const double snr_threshold = config_.targeting().snr_threshold;
@@ -1186,7 +1293,9 @@ namespace OpenMS
     // come from these only. Otherwise the representative charge anchors and the whole envelope is the candidate set.
     const bool gated = (charges != nullptr && !charges->empty());
     const std::vector<ChargeRecord>& envelope = gated ? *charges : pr.by_charge;
-    const int anchor_charge = gated ? charges->front().charge : pr.charge;
+    // ADR-0069: the yield gate's admitted charges anchor and are what separate acquires; the notches stay `envelope`.
+    const std::vector<ChargeRecord>* anchors = (acquire != nullptr && !acquire->empty()) ? acquire : (gated ? charges : nullptr);
+    const int anchor_charge = (anchors != nullptr) ? anchors->front().charge : pr.charge;
 
     // The acquisition charge set, chosen ONCE for both on-modes from the peak's own envelope: anchor
     // plus the SNR-positive rest, most intense first, capped at a 10-plex. One selectNotches call for
@@ -1226,15 +1335,16 @@ namespace OpenMS
       out.push_back(std::move(t));
     };
 
-    if (gated)
-      emitTarget(charges->front().mz, charges->front().charge, charges->front().iso_width, charges->front().stage1_scores);
+    if (anchors != nullptr)
+      emitTarget(anchors->front().mz, anchors->front().charge, anchors->front().iso_width, anchors->front().stage1_scores);
     else
       emitTarget(pr.mz, pr.charge, pr.iso_width, pr.stage1_scores);
     if (charge_mode == ChargeAcquisitionMode::Separate)
     {
+      const std::vector<ChargeRecord>& members = (acquire != nullptr && !acquire->empty()) ? *acquire : envelope;
       for (const NotchCandidate& n : extra_charges)
       {
-        for (const ChargeRecord& cr : envelope)
+        for (const ChargeRecord& cr : members)
           if (cr.charge == n.charge) { emitTarget(cr.mz, cr.charge, cr.iso_width, cr.stage1_scores); break; }
       }
     }
@@ -1318,10 +1428,21 @@ namespace OpenMS
     {
       if (species_selected >= budget) break;
       if (m.dispatched_nominal_masses.count(e.nominal) > 0) continue; // a second record of a species stamped above
-      // Capped (ADR-0066): a new cleavage with no room left is skipped -- not dispatched, not stamped.
-      if (gate != nullptr && !room.admit(e.cleavage)) continue;
       DiscriminatingRecord& rec = *e.rec;
       const PeakRecord& pr = m.winner_peaks[rec.peak_index];
+      // ADR-0069: yield-refused -- before the cap, so it takes no slot; not dispatched, not stamped. Tested at the winner
+      // path's ion; a mass only the second path explains has no ion index and is admitted untested.
+      std::vector<ChargeRecord> yield_admitted;
+      if (gate != nullptr && gate->yield != nullptr)
+      {
+        const std::optional<Refine::Path::Ion>& yion = rec.target.ion_a;
+        yield_admitted = yieldWalk(*gate, precursor_id, yion ? std::string(1, yion->type) : std::string(kUnassignedIonType),
+                                   yion ? yion->index : 0, e.charges,
+                                   config_.characterization().fragment_charges == ChargeAcquisitionMode::Separate);
+        if (yield_admitted.empty()) continue;
+      }
+      // Capped (ADR-0066): a new cleavage with no room left is skipped -- not dispatched, not stamped.
+      if (gate != nullptr && !room.admit(e.cleavage)) continue;
       // Labelled with the winner path's ion only. A mass only the second path explains goes out unassigned ('u'/0, as
       // planExhaustive_ labels a mass with no ion identity), so the generic MS3 return path does not match and fold
       // path b's claim against the winner's (path a's) context; recordDiscriminatingScan still finds the record by mass
@@ -1330,7 +1451,8 @@ namespace OpenMS
       const std::string ion_type = ion ? std::string(1, ion->type) : std::string(kUnassignedIonType);
       const int ion_index = ion ? ion->index : 0;
 
-      emitRawMassTarget_(m, pr, ion_type, ion_index, "discriminating", out, gate != nullptr ? &e.charges : nullptr);
+      emitRawMassTarget_(m, pr, ion_type, ion_index, "discriminating", out, gate != nullptr ? &e.charges : nullptr,
+                         (gate != nullptr && gate->yield != nullptr) ? &yield_admitted : nullptr);
 
       rec.dispatched = true;
       m.dispatched_nominal_masses.insert(e.nominal);

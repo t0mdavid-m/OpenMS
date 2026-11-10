@@ -35,6 +35,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Exploration.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms3YieldModel.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 
@@ -1233,16 +1234,50 @@ namespace OpenMS
     const MS3FragmentMatcher::ProteoformContext proto_ctx = tracker.buildWinnerProteoformContext(precursor_id);
     const MSSpectrum& source = result.getOriginalSpectrum();
     int eligible = 0;
-    for (const Ms3Target& t : candidates)
+    // Window SNR > 1 (ADR-0064 d.4, fixed): the fragment's own signal outweighs the rest of the window it would be
+    // isolated in, read on this MS2 with buildMS3's floored width -- the formula the characterization MS3 logs.
+    auto windowSnrOf = [&source](const Ms3Target& t) {
+      const double width = std::max(t.iso_width, 2.0);
+      return FragmentAnalysis::windowSnr(source, t.frag_mz - width / 2.0, t.frag_mz + width / 2.0,
+                                         t.stage1_scores.precursor_intensity);
+    };
+    const std::optional<YieldGateConfig>& yield_gate = config_.quantification().ms3_yield_gate;
+    for (const Ms3Target& candidate : candidates)
     {
       if (static_cast<int>(out.commands.size()) >= n) break;
-      // Window SNR > 1 (ADR-0064 d.4, fixed): the fragment's own signal outweighs the rest of the window it would be
-      // isolated in, read on this MS2 with buildMS3's floored width -- the formula the characterization MS3 logs.
-      const double width = std::max(t.iso_width, 2.0);
-      const double snr = FragmentAnalysis::windowSnr(source, t.frag_mz - width / 2.0, t.frag_mz + width / 2.0,
-                                                     t.stage1_scores.precursor_intensity);
-      if (!(snr > 1.0)) continue;
-      ++eligible;
+      Ms3Target t = candidate;
+      double snr = 0.0;
+      if (!yield_gate)
+      {
+        snr = windowSnrOf(t);
+        if (!(snr > 1.0)) continue;
+        ++eligible;
+      }
+      else
+      {
+        // ADR-0069: the fragment's charges strongest first, each through the SNR test and then the yield test; the first
+        // to pass both buys the MS3. None: the fragment is refused and the next one takes its place.
+        bool bought = false, any_snr = false;
+        for (const Ms3Target& c : tracker.labelledFragmentCharges(precursor_id, candidate.ion_type, candidate.ion_index))
+        {
+          const double s = windowSnrOf(c);
+          if (!(s > 1.0)) continue;
+          any_snr = true;
+          const YieldInputs in = yieldInputsOf(ms_ctx, c.stage1_scores, c.ion_index);
+          const YieldPrediction pred = predictBondYield(yield_gate->coefficients, in);
+          if (yieldAdmits(*yield_gate, pred))
+          {
+            t = c;
+            snr = s;
+            bought = true;
+            break;
+          }
+          logYieldVerdict("quantification", precursor_id, c.ion_type, c.ion_index, std::abs(c.frag_charge), "refused",
+                          *yield_gate, in, pred);
+        }
+        if (any_snr) ++eligible;   // eligible counts fragments with an SNR-positive charge, as without the gate
+        if (!bought) continue;
+      }
       const char ion_type = t.ion_type.empty() ? '\0' : t.ion_type[0];
       // Stage 0 is the identification scan's own isolation and activation (ADR-0003): no per-ion override.
       ScanCommand cmd = queue.buildMS3(ms_ctx, quant_scan, t.frag_mz, std::abs(t.frag_charge), t.iso_width, ms_ctx.scan_id,
@@ -1307,8 +1342,21 @@ namespace OpenMS
         gate.charge_floor = charge_floor;
         gate.max_targets = config_.characterization().max_targets;
       }
+      // ADR-0069: the yield gate, governed or not. Ungoverned, the gate has no snapshot and no spectrum, so the plan gains
+      // only the isolatable / charge-floor tests in the charge walk (the skips below then never fire) and the yield test.
+      const bool yield_gated = config_.characterization().yield_gate.has_value();
+      if (yield_gated)
+      {
+        gate.yield = &*config_.characterization().yield_gate;
+        gate.ms_ctx = ms_ctx;   // stage 0 of every MS3 buildMS3 makes below
+        if (!gov)
+        {
+          gate.charge_floor = charge_floor;
+          gate.max_targets = config_.characterization().max_targets;
+        }
+      }
 
-      auto targets = tracker->planNextScans(precursor_id, gov ? &gate : nullptr);
+      auto targets = tracker->planNextScans(precursor_id, (gov || yield_gated) ? &gate : nullptr);
 
       // A raw-mass plan (exhaustive, or a discriminating round still undecided after planning) stamped each target's
       // nominal mass; its items carry it so a withdrawal can give it back. A mapped plan stamps nothing.

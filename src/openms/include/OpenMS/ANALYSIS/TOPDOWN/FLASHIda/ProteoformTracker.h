@@ -295,6 +295,12 @@ namespace OpenMS
   /// snr_min over the dispatching MS2 in the window buildMS3 commands (max(iso_width, 2.0) Th, so the planning number
   /// IS the later ScanCommand::window_snr), and ms3Admits -- and a fragment with no such charge never enters a pool.
   /// Null: no gate, today's plan exactly.
+  ///
+  /// ADR-0069 adds the yield gate: with `yield` set, a target walks its admitted charges strongest first and is admitted
+  /// on the first whose predicted bond yield (from `ms_ctx`, the charge's stage-1 scores and the ion index) reaches the
+  /// threshold -- after every test above, and before the target takes a budget place or a cleavage slot, so a refused
+  /// target hands its place on. An ungoverned plan with the yield gate on is handed a gate with no snapshot and no
+  /// spectrum: it gains the isolatable and charge-floor tests in the walk, and nothing else.
   struct Ms3PlanGate
   {
     const Ms3RegistrySnapshot* snapshot = nullptr;   ///< the proteoform's sent fragments (null: nothing sent)
@@ -302,6 +308,8 @@ namespace OpenMS
     int charge_floor = 0;                            ///< characterization.min_fragment_charge (0: none)
     double snr_min = 1.0;                            ///< a charge's window SNR must be strictly above this
     int max_targets = 0;                             ///< distinct cleavages per proteoform per run
+    const YieldGateConfig* yield = nullptr;          ///< ADR-0069 characterization.yield_gate (null: no yield test)
+    const ScanCommand* ms_ctx = nullptr;             ///< ADR-0069 the dispatching MS2 command: stage 0 of every MS3
   };
 
   /**
@@ -391,6 +399,11 @@ namespace OpenMS
     /// least one @p residue -- as single-charge Ms3Targets from best_ms2, most intense first. Empty with no identified
     /// model. @p has_residue (optional) receives whether the model's region contains @p residue at all.
     std::vector<Ms3Target> labelledFragments(int precursor_id, char residue, bool* has_residue = nullptr) const;
+
+    /// ADR-0069: every isolatable charge of the mapped fragment (@p ion_type, @p ion_index) of @p precursor_id's model,
+    /// strongest MS2 intensity first, each as a single-charge Ms3Target built as labelledFragments builds best_ms2's
+    /// (best_ms2 first on a tie). The quantification MS3's yield walk. Empty if the model or the fragment is unknown.
+    std::vector<Ms3Target> labelledFragmentCharges(int precursor_id, const std::string& ion_type, int ion_index) const;
 
     /// MS3 return under refine: pool pieces for the record whose mass matches @p fragment_mass; returns true when the
     /// round is complete (every dispatched record returned) and the decision has not fired yet.
@@ -533,9 +546,13 @@ namespace OpenMS
     /// m.winner_params. Appends to @p out. @p mode_name only labels selectNotches' diagnostics.
     /// @p charges (a governed plan, ADR-0066): the mass's admitted charges, strongest first -- the first anchors and the
     /// notches come from these only. nullptr: the peak's representative charge and its whole envelope, as before.
+    /// @p acquire (ADR-0069, the yield gate on): the admitted charges the yield gate also admitted, strongest first --
+    /// the first anchors and separate acquires only these, while multiplexed notches still come from @p charges.
+    /// nullptr: @p charges anchors and separate acquires from it, as before.
     void emitRawMassTarget_(const ProteoformModel& m, const PeakRecord& pr, const std::string& ion_type, int ion_index,
                             const char* mode_name, std::vector<Ms3Target>& out,
-                            const std::vector<ChargeRecord>* charges = nullptr) const;
+                            const std::vector<ChargeRecord>* charges = nullptr,
+                            const std::vector<ChargeRecord>* acquire = nullptr) const;
 
     const Config& config_;
     IdaLogger& logger_;
