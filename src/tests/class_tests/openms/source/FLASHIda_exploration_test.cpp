@@ -30,6 +30,7 @@
 #include <vector>
 #include <algorithm>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <sstream>
 #include <set>
@@ -1173,7 +1174,8 @@ namespace
                        const std::string& metric = "mass_count",
                        const std::string& ms2_activation = "HCD",
                        int ms2_collision_energy = 35,
-                       const std::string& overrides = "")
+                       const std::string& overrides = "",
+                       const std::string& order = "")   // exploration.order; "" = absent
   {
     std::ostringstream os;
     os << R"({
@@ -1186,7 +1188,8 @@ namespace
       "ce_min": )" << ce_min << R"(, "ce_max": )" << (ce_min + 20.0) << R"(, "ce_step": 10.0,
       "reaction_time_min": )" << rt_min << R"(, "reaction_time_max": )" << (rt_min + 20.0)
        << R"(, "reaction_time_step": 10.0,
-      "activations": [)" << activations << R"(])" << overrides << R"(
+      "activations": [)" << activations << R"(])" << overrides
+       << (order.empty() ? std::string() : ", \"order\": \"" + order + "\"") << R"(
     }
   },
   "identification": { "reference": { "sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" }, "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 } },
@@ -1256,14 +1259,16 @@ namespace
   }
 
   /// A CE-only sweep config with an explicit range: ce_min..ce_max in steps of ce_step (ADR-0047 d.8).
-  std::string sweepCfgRange(const std::string& activations, double ce_min, double ce_max, double ce_step)
+  std::string sweepCfgRange(const std::string& activations, double ce_min, double ce_max, double ce_step,
+                            const std::string& order = "")   // exploration.order; "" = absent
   {
     return std::string(R"({
       "deconvolution": { "tol": [10, 10, 10] },
       "precursor_selection": { "rank_by": "qscore", "max_precursors": 3,
         "exploration": { "metric": "mass_count", "ce_min": )") + std::to_string(ce_min)
         + R"(, "ce_max": )" + std::to_string(ce_max) + R"(, "ce_step": )" + std::to_string(ce_step)
-        + R"(, "activations": [)" + activations + R"(] } },
+        + R"(, "activations": [)" + activations + R"(])"
+        + (order.empty() ? std::string() : ", \"order\": \"" + order + "\"") + R"( } },
       "ms_settings": { "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
                        "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 } } })";
   }
@@ -5243,4 +5248,177 @@ START_SECTION(search_a_sweep_completes_when_its_searches_return_not_its_scans)
   TEST_EQUAL(parked.rows == free_.rows, true)                      // same scores, same winner
 }
 END_SECTION
+/////////////////////////////////////////////////////////////
+// exploration.order: a sweep's GRID position (where a pre-scan sits in the authored grid) and its ACQUISITION
+// position (when it is acquired; the logged variant_index). "ascending" acquires in grid order, as every sweep did;
+// "random" gives each triggered sweep its own reproducible order of its whole grid, and a tie in the decision still
+// goes to the earlier grid position.
+/////////////////////////////////////////////////////////////
+
+// T2. The permutation primitive: a pure function of (n, seed), always a permutation, and pinned to a literal so a
+// change of algorithm or standard library cannot silently reorder every random sweep.
+// FAILS UNDER: std::shuffle (implementation-defined), a non-permutation, or a seed that is not the only input.
+START_SECTION(sweep_permutation_is_a_reproducible_permutation)
+{
+  for (int n = 0; n <= 12; ++n)
+  {
+    for (uint64_t seed : {uint64_t(0), uint64_t(1), Exploration::kSweepSeed, Exploration::kSweepSeed ^ 7ULL})
+    {
+      const std::vector<int> p = Exploration::sweepPermutation(n, seed);
+      TEST_EQUAL(static_cast<int>(p.size()), n)
+      std::vector<int> sorted = p;
+      std::sort(sorted.begin(), sorted.end());
+      for (int i = 0; i < n; ++i) TEST_EQUAL(sorted[i], i)
+      TEST_EQUAL(p == Exploration::sweepPermutation(n, seed), true)
+    }
+  }
+  const std::vector<int> pinned = Exploration::sweepPermutation(5, Exploration::kSweepSeed ^ 1ULL);
+  TEST_EQUAL(pinned == std::vector<int>({2, 0, 3, 1, 4}), true)
+}
+END_SECTION
+
+// T3. Under "random", every sweep acquires exactly its grid, numbered 0..n-1 in acquisition order, each variant
+// knowing its grid position; and the order differs between sweeps, so the lowest energy is not always first.
+// FAILS UNDER: a shuffle that drops or repeats a grid point, a variant_index that is not the acquisition position, a
+// grid_position lost in the shuffle, or one order for every sweep.
+START_SECTION(random_order_acquires_the_whole_grid_in_a_new_order_per_sweep)
+{
+  Config cfg{sweepCfgRange(R"("HCD")", 20.0, 40.0, 5.0, "random")};
+  TEST_EQUAL(cfg.level(2).sweep_order == SweepOrder::Random, true)
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+  const std::vector<double> grid{20, 25, 30, 35, 40};
+
+  std::set<std::vector<int>> orders;
+  int first_is_lowest = 0;
+  for (int g = 1; g <= 30; ++g)
+  {
+    auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+    auto cmds = exploration.initiate(2, pg, 3, queue);
+    TEST_EQUAL(static_cast<int>(cmds.size()), 5)
+    const auto group = ExplorationTestAccess::group(exploration, g);
+    const auto& vs = group.variants;
+    ABORT_IF(vs.size() != 5)
+    std::vector<double> ces;
+    std::vector<int> order;
+    for (int i = 0; i < 5; ++i)
+    {
+      TEST_EQUAL(vs[i].variant_index, i)                                       // the acquisition position
+      TEST_REAL_SIMILAR(vs[i].collision_energy, grid[vs[i].grid_position])     // the grid position is the energy's rank
+      TEST_EQUAL(cmds[i].stages[0].collision_energy, vs[i].collision_energy)   // commanded in this order
+      ces.push_back(vs[i].collision_energy);
+      order.push_back(vs[i].grid_position);
+    }
+    std::sort(ces.begin(), ces.end());
+    TEST_EQUAL(ces == grid, true)                                               // exactly the grid, once each
+    orders.insert(order);
+    first_is_lowest += (order.front() == 0) ? 1 : 0;
+  }
+  TEST_EQUAL(orders.size() >= 2u, true)
+  TEST_EQUAL(first_is_lowest < 30, true)
+}
+END_SECTION
+
+// T4. One permutation over the whole sweep: across activations and both axes, not within each activation's block.
+// FAILS UNDER: a shuffle per activation block (CID would always be acquired first), or a lost cross-product point.
+START_SECTION(random_order_shuffles_across_activations_and_axes)
+{
+  Config asc{sweepCfg(R"("CID", "HCD", "ETD")", 15.0, 5.0)};
+  ScanCommandQueue qa(asc);
+  FragmentAnalysis fa(asc);
+  Exploration ea(asc, fa);
+  auto pga = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  ea.initiate(2, pga, 3, qa);
+  using Key = std::tuple<std::string, double, double>;
+  std::multiset<Key> grid;
+  for (const auto& v : ExplorationTestAccess::group(ea, 1).variants) grid.insert(Key{v.activation_type, v.collision_energy, v.reaction_time});
+  TEST_EQUAL(grid.size(), 9u)
+
+  Config rnd{sweepCfg(R"("CID", "HCD", "ETD")", 15.0, 5.0, "mass_count", "HCD", 35, "", "random")};
+  ScanCommandQueue qr(rnd);
+  FragmentAnalysis fr(rnd);
+  Exploration er(rnd, fr);
+  int first_not_cid = 0;
+  for (int g = 1; g <= 30; ++g)
+  {
+    auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+    er.initiate(2, pg, 3, qr);
+    const auto& vs = ExplorationTestAccess::group(er, g).variants;
+    std::multiset<Key> got;
+    for (const auto& v : vs) got.insert(Key{v.activation_type, v.collision_energy, v.reaction_time});
+    TEST_EQUAL(got == grid, true)
+    first_not_cid += (!vs.empty() && vs.front().activation_type != "CID") ? 1 : 0;
+  }
+  TEST_EQUAL(first_not_cid > 0, true)
+}
+END_SECTION
+
+// T5. "ascending", authored or absent, is the grid order every sweep had: nothing moves.
+// FAILS UNDER: a default of random, or a grid_position that is not the vector order under ascending.
+START_SECTION(ascending_order_is_todays_grid_order)
+{
+  for (const std::string order : {"", "ascending"})
+  {
+    Config cfg{sweepCfgRange(R"("HCD")", 20.0, 40.0, 5.0, order)};
+    TEST_EQUAL(cfg.level(2).sweep_order == SweepOrder::Ascending, true)
+    ScanCommandQueue queue(cfg);
+    FragmentAnalysis fragments(cfg);
+    Exploration exploration(cfg, fragments);
+    auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+    auto cmds = exploration.initiate(2, pg, 3, queue);
+    const auto& vs = ExplorationTestAccess::group(exploration, 1).variants;
+    ABORT_IF(vs.size() != 5)
+    for (int i = 0; i < 5; ++i)
+    {
+      TEST_EQUAL(vs[i].grid_position, i)
+      TEST_EQUAL(vs[i].variant_index, i)
+      TEST_REAL_SIMILAR(vs[i].collision_energy, 20.0 + 5.0 * i)
+    }
+  }
+}
+END_SECTION
+
+// T6. A tie goes to the earliest grid position whatever the acquisition order; a strict maximum still wins wherever
+// it sits. Every variant scores the same mass_count (three peak groups), then one variant gets a fourth.
+// FAILS UNDER: the old strict > on the vector order (the first-ACQUIRED variant would win the tie), or a tie rule
+// that overrides a higher score.
+START_SECTION(a_tie_goes_to_the_earliest_grid_position)
+{
+  auto runSweep = [](int group, const std::function<int(const Exploration::ExplorationVariant&)>& peaks) {
+    Config cfg{sweepCfgRange(R"("HCD")", 20.0, 40.0, 5.0, "random")};
+    ScanCommandQueue queue(cfg);
+    FragmentAnalysis fragments(cfg);
+    Exploration exploration(cfg, fragments);
+    std::vector<ScanCommand> cmds;
+    for (int g = 1; g <= group; ++g)   // groups before `group` only advance the id, so this sweep is group `group`
+    {
+      auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+      cmds = exploration.initiate(2, pg, 3, queue);
+    }
+    const auto vs = ExplorationTestAccess::group(exploration, group).variants;
+    Exploration::FeedResultInfo last;
+    for (size_t i = 0; i < cmds.size(); ++i)
+    {
+      DeconvolvedSpectrum ds = makeSyntheticDeconv(static_cast<int>(i) + 1, peaks(vs[i]));
+      const int tid = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
+      last = ExplorationTestAccess::feedResult(exploration, tid, ds, static_cast<double>(i), queue);
+    }
+    std::map<std::string, double> ce_of;
+    for (const auto& v : vs) ce_of[v.tracking_id] = v.collision_energy;
+    const auto it = ce_of.find(last.group.winner_tracking_id);
+    return std::make_pair(it == ce_of.end() ? -1.0 : it->second, vs.empty() ? -1 : vs.front().grid_position);
+  };
+  // A group whose first-acquired variant is NOT the lowest energy, so the old rule would crown a different one.
+  int g = 1;
+  while (g <= 30 && Exploration::sweepPermutation(5, Exploration::kSweepSeed ^ static_cast<uint64_t>(g)).front() == 0) ++g;
+  ABORT_IF(g > 30)
+  const auto tie = runSweep(g, [](const Exploration::ExplorationVariant&) { return 3; });
+  TEST_EQUAL(tie.second != 0, true)          // non-vacuity: the lowest energy was not acquired first
+  TEST_REAL_SIMILAR(tie.first, 20.0)         // ... and still wins the tie
+  const auto strict = runSweep(g, [](const Exploration::ExplorationVariant& v) { return v.collision_energy == 35.0 ? 4 : 3; });
+  TEST_REAL_SIMILAR(strict.first, 35.0)
+}
+END_SECTION
+
 END_TEST

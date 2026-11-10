@@ -1847,4 +1847,49 @@ START_SECTION(yield_gate_parses_defaults_and_rejects)
 }
 END_SECTION
 
+// ---------------------------------------------------------------------------------------------
+// exploration.order: when a sweep acquires its grid points. Absent or null: ascending, the grid order every sweep had.
+// "random": each triggered sweep in its own reproducible order. Set per level, in each level's own block; anything else
+// throws naming the path (a typo must not silently keep the energy confounded with sweep position).
+START_SECTION(exploration_order_parses_and_rejects)
+{
+  const std::string ms3 = R"(, "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25 })";
+  auto both = [&ms3](const std::string& ms2_order, const std::string& ms3_order) {
+    auto blk = [](const std::string& order) {
+      return std::string(R"("exploration": { "metric": "mass_count", "ce_min": 20, "ce_max": 40, "ce_step": 10, "activations": ["HCD"])")
+             + (order.empty() ? std::string() : ", \"order\": " + order) + " }";
+    };
+    return cfgJson(", " + blk(ms2_order),
+                   R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "fragments", )"
+                       + std::string(R"("exploration": { "metric": "mass_count", "ce_min": 20, "ce_max": 40, "ce_step": 10, "activations": ["CID"])")
+                       + (ms3_order.empty() ? std::string() : ", \"order\": " + ms3_order) + " } } },",
+                   ms3);
+  };
+  {
+    Config c(both("", ""));
+    TEST_EQUAL(c.level(2).sweep_order == SweepOrder::Ascending, true)
+    TEST_EQUAL(c.level(3).sweep_order == SweepOrder::Ascending, true)
+  }
+  {
+    Config c(both("null", "\"ascending\""));
+    TEST_EQUAL(c.level(2).sweep_order == SweepOrder::Ascending, true)
+    TEST_EQUAL(c.level(3).sweep_order == SweepOrder::Ascending, true)
+  }
+  {
+    Config c(both("\"random\"", ""));   // per level: MS2 random, MS3 left ascending
+    TEST_EQUAL(c.level(2).sweep_order == SweepOrder::Random, true)
+    TEST_EQUAL(c.level(3).sweep_order == SweepOrder::Ascending, true)
+  }
+  {
+    Config c(both("", "\"random\""));
+    TEST_EQUAL(c.level(2).sweep_order == SweepOrder::Ascending, true)
+    TEST_EQUAL(c.level(3).sweep_order == SweepOrder::Random, true)
+  }
+  for (const std::string bad : {"\"Random\"", "\"shuffle\"", "1", "true"})
+    TEST_EQUAL(contains(refineMessage(both(bad, "")), "precursor_selection.exploration.order must be \"ascending\" or \"random\""), true)
+  TEST_EQUAL(contains(refineMessage(both("", "\"shuffle\"")),
+                      "identification.characterization.exploration.order must be \"ascending\" or \"random\""), true)
+}
+END_SECTION
+
 END_TEST

@@ -326,6 +326,11 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   //     floor are AUTHORED in characterization but READ off level 2. Pinning both sides here is
   //     what stops the projection silently regressing.
   TEST_EQUAL(cfg.level(2).max_targets, j["identification"]["characterization"]["max_targets"].get<int>())
+  // exploration.order, non-default ("random") in both of the reference's exploration blocks.
+  TEST_EQUAL(j["precursor_selection"]["exploration"]["order"].get<std::string>(), "random")
+  TEST_EQUAL(j["identification"]["characterization"]["exploration"]["order"].get<std::string>(), "random")
+  TEST_EQUAL(cfg.level(2).sweep_order == SweepOrder::Random, true)
+  TEST_EQUAL(cfg.level(3).sweep_order == SweepOrder::Random, true)
   TEST_EQUAL(cfg.level(2).min_charge, j["identification"]["characterization"]["min_fragment_charge"].get<int>())
   // ADR-0069: both yield gate blocks, every key non-default in the reference and different between the two, so a dropped
   // or crossed key fails here.
