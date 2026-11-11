@@ -1115,6 +1115,13 @@ the caller's responsibility.
 | `identification.tsv` | 49 | per-scan MS2/MS3 identification leaf (32→34: `tag_count` beside `flash_extender_score`, `fragment_qscores` inside the aligned fragment-mass table; →41 ADR-0049's Refine block `annotation_score`/`total_shift`/`second_total_shift`/`second_score`/`cut`/`n_levels`/`precursor_mass_difference`, **appended**, valued on the regular AND the exploration self-identification MS2 rows under `refine` and sentinel-valued everywhere else — `-1`, empty, empty, `-1`, `-1`, `-1`, empty. A real score of −1 is told from the sentinel by a non-empty `total_shift`; `flash_extender_score` and `tag_count` stay −1 under `refine`; →46 ADR-0061 push 4b's `protein`/`raw_score`/`identification_score`/`closed_out`/`inferred_precursor_mass` after that block on every row, only `protein` valued until push 4c; →47 ADR-0064's `quant_ms3`; →49 ADR-0074's `bond_coverage`/`explained_signal`, appended last, `-1.0000` where the row has no annotated PrSM) |
 | `pooled_identification.tsv` | 20 | per-precursor cumulative proteoform trajectory (→20 ADR-0061 push 4b's `protein`, the accession the model's winner chose) |
 
+- **An MS3 row's `ms2_fragments` / `ms2_fragment_masses` are in the Proteoform frame** (`CONTEXT.md`): the
+  equivalent ion is labelled and weighed over the proteoform's own residues, `[region_start, region_end)`,
+  as an MS2 row of that proteoform would. `FragmentMatch::equiv_frame_index` is the logged label, set by
+  `calibrateAndScore`; `equiv_index` (counted over the reference protein) is the pooling key and is never
+  written. A b sub-fragment of a b precursor therefore reads the same label and mass in `ms3_fragments` and
+  `ms2_fragments`, on any region. The pooled model finds an MS3 fragment's peak by its measured mass and
+  pools the adjusted one.
 - **`ida.log`'s two identifiers are different quantities and neither substitutes for the other**
   (ADR-0035). `MS1 Scan#` is the **instrument's** scan number, arriving as a trailing `int` on
   `processScan` and used for nothing else; `Access ID` on the same line is the base-94 **tracking
