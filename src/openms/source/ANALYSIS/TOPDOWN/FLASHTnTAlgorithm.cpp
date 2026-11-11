@@ -108,7 +108,7 @@ UInt tntKey(const char* name)
   static const std::unordered_map<std::string, UInt> keys = [] {
     auto& registry = MetaInfoInterface::metaRegistry();
     std::unordered_map<std::string, UInt> k;
-    for (const char* n : {"BlindModCount", "DeconvMassInfo", "DecoyPrecursor", "EndPosition", "ExtensionScore", "FDRClass", "FastaIndex", "GivenMass", "Index", "MS3MatchedSubIons", "MS3OnlyBonds", "MS3Scans", "MS3Score", "Mass", "MassLostToFeatureOwner", "ModificationEnds", "ModificationStarts", "Modifications", "PrSMIndices", "ProteinQvalue", "ProteoformIndex", "ProteoformMassByFragmentMass", "RT", "RawCoverage", "RawFragmentHypotheses", "RawMatchedFragments", "RawScore", "Representative", "Scan", "StartPosition", "TagIndices", "proqvalue", "qvalue"})
+    for (const char* n : {"BlindModCount", "DeconvMassInfo", "DecoyPrecursor", "EndPosition", "ExtensionScore", "FDRClass", "FastaIndex", "GivenMass", "Index", "MS3MatchedSubIons", "MS3OnlyBonds", "MS3Scans", "MS3Score", "MS3Bonus", "Mass", "MassLostToFeatureOwner", "ModificationEnds", "ModificationStarts", "Modifications", "PrSMIndices", "ProteinQvalue", "ProteoformIndex", "ProteoformMassByFragmentMass", "RT", "RawCoverage", "RawFragmentHypotheses", "RawMatchedFragments", "RawScore", "Representative", "Scan", "StartPosition", "TagIndices", "proqvalue", "qvalue"})
       k.emplace(n, registry.registerName(n));
     return k;
   }();
@@ -494,6 +494,12 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "another modification). The masses the earlier PrSMs matched are still removed. Shuffled decoys do not model the "
                      "remaining fragments of a protein that is in the spectrum, so the q-values of the residual classes are optimistic with it.");
   defaults_.setValidStrings("chimeric_same_protein", {"true", "false"});
+  defaults_.setValue("ms3_score_weight", 8.0,
+                     "Weight of the MS3 evidence (MS3Score: the sub-ions of the PrSM's fragments matched in the MS3 spectra of its scan) in the combined "
+                     "score, added for every candidate PrSM before the spectrum's PrSM is chosen and before the FDR (needs -in_raw and MS3 spectra). "
+                     "A bonus: a PrSM without MS3 evidence loses nothing. 0: the MS3 spectra do not change the score.",
+                     {"advanced"});
+  defaults_.setMinFloat("ms3_score_weight", 0.0);
   // raw-spectrum annotation (FLASHAnnotator's defaults, terminal fragments only): only its tolerance is a parameter
   const auto aparam = FLASHAnnotatorAlgorithm().getDefaults();
   defaults_.setValue("raw:tol", aparam.getValue("tol"), aparam.getDescription("tol"));
@@ -675,6 +681,7 @@ void FLASHTnTAlgorithm::updateMembers_()
   one_proteoform_per_feature_ = param_.getValue("one_proteoform_per_feature").toString() == "true";
   chimeric_rounds_ = param_.getValue("chimeric_rounds");
   chimeric_same_protein_ = param_.getValue("chimeric_same_protein").toString() == "true";
+  ms3_score_weight_ = param_.getValue("ms3_score_weight");
   pro_fdr_ = param_.getValue("pro_fdr");
   keep_decoy_ = param_.getValue("keep_decoy").toString() == "true";
   keep_underdetermined_ = param_.getValue("discard_underdetermined").toString() == "false";
@@ -3607,6 +3614,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         for (const auto& hit : stage_hits) scans.insert((int)hit.getMetaValue("Scan"));
         loadRawSpectra_(scans);
         annotateOnRawSpectra_(stage_hits);
+        annotateMS3_(stage_hits, true);
         dropOpenTerminusShifts(stage_hits);
         if (const char* trace_file = std::getenv("FLASH_TRACE_FEATURES"))
         {
@@ -3971,7 +3979,11 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           }
         }
         const Size all_prsms = round_hits.size();
-        if (raw_loader_ && ! round_hits.empty()) annotateOnRawSpectra_(round_hits);
+        if (raw_loader_ && ! round_hits.empty())
+        {
+          annotateOnRawSpectra_(round_hits);
+          annotateMS3_(round_hits, true);
+        }
         if (! multiple_hits_per_spec_) keepBestPerSpectrum_(round_hits, " (chimeric round " + StringUtils::toStr(round) + ")", raw_loader_ ? "combined score" : "score");
         Size targets = 0, decoys = 0;
         for (auto& h : round_hits)
@@ -5018,7 +5030,7 @@ namespace
   }
 } // namespace
 
-void FLASHTnTAlgorithm::annotateMS3_(std::vector<ProteinHit>& hits)
+void FLASHTnTAlgorithm::annotateMS3_(std::vector<ProteinHit>& hits, bool before_choice)
 {
   // An MS3 spectrum fragmented one fragment of its parent MS2 spectrum. Under a PrSM, that fragment (its precursor identity) is a fragment of
   // the proteoform at the MS3 precursor mass (the MS2 ion types, the raw tolerance, +-1 isotope above 5 kDa), and the MS3 spectrum is the
@@ -5031,6 +5043,7 @@ void FLASHTnTAlgorithm::annotateMS3_(std::vector<ProteinHit>& hits)
   // one bond of the proteoform.
   ms3_rows_.clear();
   if (! raw_loader_ || ms3_scans_of_.empty()) return;
+  if (before_choice && ms3_score_weight_ <= 0) return;
   std::set<int> scans;
   for (const auto& hit : hits)
   {
@@ -5226,6 +5239,7 @@ void FLASHTnTAlgorithm::annotateMS3_(std::vector<ProteinHit>& hits)
     ms3_bonds[id.hit].insert(bonds.begin(), bonds.end());
   }
 
+  if (before_choice) ms3_of_hits.clear(); // no rows for the candidates
   for (const auto& [h, ms3_scan] : ms3_of_hits)
   {
     MS3Row row;
@@ -5271,6 +5285,16 @@ void FLASHTnTAlgorithm::annotateMS3_(std::vector<ProteinHit>& hits)
       matched += (int)pool.matched.size();
       if (pool.hypotheses > 0 && p > 0 && p < 1) score += std::max(0.0, FLASHAnnotatorAlgorithm::binomialTailScore(pool.hypotheses, (int)pool.matched.size(), p));
     }
+    if (before_choice)
+    {
+      // a bonus on the combined score, for targets and decoys alike: MS3Score is the chance of the matched sub-ions, as the raw score is of
+      // the fragments. Cytochrome c infusion, PrSMs of spectra with MS3: true > 0 in 31 of 32 and 32 of 53, false at most 3.9.
+      hit.setMetaValue(tntKey("MS3Score"), score);
+      hit.setMetaValue(tntKey("MS3Bonus"), ms3_score_weight_ * score);
+      hit.setScore(hit.getScore() + ms3_score_weight_ * score);
+      with_evidence += score > 0 ? 1 : 0;
+      continue;
+    }
     int only = 0;
     for (int b : ms3_bonds[h]) only += ms2_bonds[h].count(b) == 0 ? 1 : 0;
     hit.setMetaValue(tntKey("MS3Score"), score);
@@ -5284,6 +5308,11 @@ void FLASHTnTAlgorithm::annotateMS3_(std::vector<ProteinHit>& hits)
       hit.setMetaValue(tntKey("RawCoverage"), 100.0 * (double)all.size() / (double)(L - 1));
       with_evidence++;
     }
+  }
+  if (before_choice)
+  {
+    OPENMS_LOG_INFO << "MS3 bonus: " << with_evidence << " of " << hits.size() << " candidate PrSMs with MS3 evidence" << std::endl;
+    return;
   }
   OPENMS_LOG_INFO << "MS3 evidence: " << ms3_rows_.size() << " MS3 spectra of " << hits.size() << " PrSMs, " << best.size() << " with a precursor identity; "
                   << with_evidence << " PrSMs with MS3-covered bonds" << std::endl;
@@ -5729,27 +5758,38 @@ void FLASHTnTAlgorithm::applyLearnedScoring_(std::vector<ProteinHit>& hits, cons
     Size best = unique.front();
     for (Size i : unique)
       if (choice[i] > choice[best]) best = i;
-    double other = std::numeric_limits<double>::lowest(), other_protein = std::numeric_limits<double>::lowest();
-    for (Size i : unique)
-    {
-      if (i == best) continue;
-      other = std::max(other, hits[i].getScore());
-      if (hits[i].getAccession() != hits[best].getAccession()) other_protein = std::max(other_protein, hits[i].getScore());
-    }
-    auto& f = features[best];
-    f["n_cand"] = std::log1p((double)unique.size());
-    f["gap1"] = hits[best].getScore() - (other == std::numeric_limits<double>::lowest() ? 0.0 : other);
-    f["gap_oth"] = hits[best].getScore() - (other_protein == std::numeric_limits<double>::lowest() ? 0.0 : other_protein);
-    std::vector<double> x;
-    for (const auto& name : model.conf_features)
-    {
-      const auto it = f.find(name);
-      x.push_back(it == f.end() ? 0.0 : it->second);
-    }
+    // the confidence from the scores as they are, or with every candidate's MS3 bonus (annotateMS3_) taken off
+    bool any_bonus = false;
+    const auto ms3_bonus = [&](Size i) { return (double)hits[i].getMetaValue(tntKey("MS3Bonus"), 0.0); };
+    for (Size i : unique) any_bonus = any_bonus || ms3_bonus(i) > 0;
+    const auto confidence_of = [&](bool with_bonus) {
+      const auto score_of = [&](Size i) { return hits[i].getScore() - (with_bonus ? 0.0 : ms3_bonus(i)); };
+      double other = std::numeric_limits<double>::lowest(), other_protein = std::numeric_limits<double>::lowest();
+      for (Size i : unique)
+      {
+        if (i == best) continue;
+        other = std::max(other, score_of(i));
+        if (hits[i].getAccession() != hits[best].getAccession()) other_protein = std::max(other_protein, score_of(i));
+      }
+      auto f = features[best];
+      f["score"] = score_of(best);
+      f["n_cand"] = std::log1p((double)unique.size());
+      f["gap1"] = score_of(best) - (other == std::numeric_limits<double>::lowest() ? 0.0 : other);
+      f["gap_oth"] = score_of(best) - (other_protein == std::numeric_limits<double>::lowest() ? 0.0 : other_protein);
+      std::vector<double> x;
+      for (const auto& name : model.conf_features)
+      {
+        const auto it = f.find(name);
+        x.push_back(it == f.end() ? 0.0 : it->second);
+      }
+      return model.confidence(x);
+    };
     auto& hit = hits[best];
     hit.setMetaValue("CombinedScore", hit.getScore());
     hit.setMetaValue("ChoiceScore", choice[best]);
-    double confidence = model.confidence(x);
+    // the MS3 bonus never lowers the confidence: the trees are not monotone in the score
+    double confidence = confidence_of(true);
+    if (any_bonus) confidence = std::max(confidence, confidence_of(false));
     // the free shift's multiple-testing burden (shift_penalty): a determined PrSM with a blind shift could have fit any of the protein's windows
     // within max_mod_mass of its mass; uncapped, unlike the raw score's. Held-out seed 2 (0.5): shuffled-entrapment proteoforms 1.33 -> 1.19 %,
     // foreign 1.41 -> 1.29 %, for under 1 % of the proteoforms (emulated on the class's proteoform q-values)

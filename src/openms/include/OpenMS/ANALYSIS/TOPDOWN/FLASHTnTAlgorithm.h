@@ -169,7 +169,9 @@ private:
   void annotateOnRawSpectra_(std::vector<ProteinHit>& hits) const;
   /// the MS3 evidence of every hit of @p hits with MS3 spectra (ADR-0001), on the raw MS3 spectra: meta values MS3Score, MS3MatchedSubIons,
   /// MS3OnlyBonds and RawCoverage (MS2 and MS3 bonds); one MS3Row per MS3 spectrum into ms3_rows_. The score is not changed.
-  void annotateMS3_(std::vector<ProteinHit>& hits);
+  /// With @p before_choice (the candidates, before one PrSM per spectrum is chosen): only MS3Score and MS3Bonus = ms3_score_weight_ * MS3Score
+  /// are set, and the bonus is added to the score; no rows, no coverage.
+  void annotateMS3_(std::vector<ProteinHit>& hits, bool before_choice = false);
   /// the rows of annotateMS3_
   std::vector<MS3Row> ms3_rows_;
   /// the raw evidence of the PrSMs of each proteoform combined (meta values CombinedPrSMs, CombinedCoverage, CombinedCoverageChance on its
@@ -217,6 +219,8 @@ private:
   int chimeric_rounds_ = 0;
   /// residual rounds may propose the protein of the spectrum's earlier best PrSMs again (a second proteoform of the same protein)
   bool chimeric_same_protein_ = false;
+  /// weight of MS3Score in the combined score (a bonus: a PrSM without MS3 evidence loses nothing); 0: the MS3 spectra do not change the score
+  double ms3_score_weight_ = 8.0;
   /// candidates from gapped tags: off, fallback (spectra without sequence-tag candidates), both, only
   std::string gapped_mode_ = "fallback";
   /// candidates from terminal ladders (residue sums from an intact protein terminus) in every spectrum
