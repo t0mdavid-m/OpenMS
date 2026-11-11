@@ -4793,6 +4793,50 @@ START_SECTION(kinetic_model_ms3_reads_the_stage1_window_and_follows_up)
 }
 END_SECTION
 
+START_SECTION(an_ms3_prescan_publishes_no_identification_before_its_sweep_is_scored)
+{
+  // The same real b32 CID sweep, now with the cytC proteoform on the group, so the per-variant matcher (the
+  // whole-protein MS2 matcher) has a protein and DOES match these spectra. Its match is in no MS3 frame (no
+  // equivalent ion, no adjusted mass): published, it became an identification.tsv row reading "0;0;0" /
+  // "0.0000" (hardware runs of 2026-11-11; the 9 MS3 rows of the exploration_kinetic_ms3 golden). An MS3
+  // variant's identification is the calibrated re-score's alone, and under a measuring metric there is none
+  // (ADR-0020): the follow-up scan carries it.
+  const std::map<int, std::string> b32 = {
+    {15, "450"}, {17, "451"}, {19, "452"}, {21, "453"}, {23, "455"}, {25, "456"}, {27, "457"},
+    {29, "458"}, {31, "459"}, {33, "460"}, {35, "461"}, {37, "462"}, {39, "463"}};
+  Config cfg{kineticMs3Cfg(15.0, 39.0, 2.0)};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  MS3FragmentMatcher::ProteoformContext cytc;
+  cytc.protein_sequence = "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
+  cytc.region_start = 0;
+  cytc.region_end = static_cast<int>(cytc.protein_sequence.size());
+
+  ScanCommand ms2_ctx = queue.buildMS2(makeSyntheticPeakGroup(1027.3131, 12315.67, 12), 12, cfg.level(2).scans[0], 2, 0);
+  PeakGroup frag_pg = makeSyntheticPeakGroup(1027.6311, 4106.49, 4);
+  auto cmds = exploration.initiate(3, frag_pg, 4, queue, nullptr, &ms2_ctx, 'b', 32, cytc);
+  ABORT_IF(cmds.size() != 13)
+
+  int matcher_hits = 0;   // pre-scans the per-variant matcher matched: the control that this section bites
+  for (size_t i = 0; i < cmds.size(); ++i)
+  {
+    const int ce = static_cast<int>(std::lround(cmds[i].stages[1].collision_energy));
+    ABORT_IF(b32.find(ce) == b32.end())
+    auto scans = loadTsvScans(std::string("../../FlashIDA/test-data/spectra/")
+                              + "ms3_cytc3_b32_ce" + std::to_string(ce) + "_scan" + b32.at(ce) + ".txt");
+    ABORT_IF(scans.empty())
+    const auto& d = scans[0];
+    auto info = exploration.feedResult(cmds[i].scan_id, d.mzs.data(), d.ints.data(), static_cast<int>(d.mzs.size()), d.rt, queue);
+    if (info.metric.fragment_count > 0) ++matcher_hits;
+    TEST_EQUAL(info.identification.result.fragments.empty(), true)   // nothing for FLASHIda.cpp to write as a row
+    TEST_EQUAL(info.identification.additional_rows.empty(), true)
+  }
+  TEST_EQUAL(matcher_hits >= 1, true)
+}
+END_SECTION
+
 /////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////
 
