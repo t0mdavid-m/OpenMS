@@ -95,7 +95,10 @@ is airtight:
 > `a_factor_shifts_the_ratio_and_leaves_the_reported_channels_raw` and
 > `emptiness_is_judged_on_the_raw_value` pin both.
 
-⚠️ **Four owner-approved edits sit inside the boundary.** The first is `PeakGroup::updateSNR_` (`fix(TOPDOWN)`
+⚠️ **Five owner-approved edits sit inside the boundary.** The fifth (ADR-0074 d.10, 2026-11-11) is one appended field,
+`FLASHAnnotatorAlgorithm::Result::explained_intensity`: the intensity of the peaks `annotateOne_` already flags in
+`terminal_peaks` (every peak of an accepted terminal envelope), summed once, so envelopes that share peaks, as z, z+1 and
+z+2 do, are not counted twice. No existing value changes. The first is `PeakGroup::updateSNR_` (`fix(TOPDOWN)`
 `9721595ca4`, 2026-10-26, on top of the FDmerge merge `d0954cf37b`). FDmerge's `updateChargeRange_` passes
 over up to two weak charges, so a charge with **no peak** can now sit inside a PeakGroup's range. With
 no signal and no noise, the two `1e-6` regularisers cancel and that charge scores SNR **exactly 1.0**,
@@ -917,9 +920,37 @@ The trap check admits both share-based metrics; the multiplexed rejection covers
 measured k₂ is HCD's (LOPO 0.0364–0.0390, all-in 0.0388); the MS3 golden's CID value is a
 **placeholder**, and no kinetic sweep has yet run on hardware.
 
+### The annotator metrics: raw_score, bond_coverage, explained_signal (ADR-0074)
+
+Three `ExplorationMetric` values, appended (`RawScore` 5, `BondCoverage` 6, `ExplainedSignal` 7; the number is the logged
+`exploration_metric`), read from `FLASHAnnotatorAlgorithm`'s **terminal** fragments of one PrSM in the pre-scan's raw
+spectrum. `FLASHIda/AnnotatorMetrics` holds the pure functions; `isAnnotatorMetric()` is the predicate. They are reading
+metrics.
+
+- **MS2.** A variant is scored on its own best PrSM. `raw_score` is the hit's `RawScore` (before FLASHTnT's blind-shift
+  penalty, so the decision value is the logged `raw_score`) and `bond_coverage` its `RawCoverage / 100`; both are copied in
+  `FragmentAnalysis::matchSearched_`, for every searched MS2, sweep or not. `explained_signal` needs envelopes FLASHTnT does
+  not expose, so under that metric alone the variant's search job (`FLASHIda.cpp`, no lock held) calls
+  `AnnotatorMetrics::annotateSearched` with a per-thread annotator (`t_annotators`) and stores the value on
+  `SearchedPrSM::explained_signal`. FLASHTnT annotates all PrSMs of a spectrum in one call and pools the chance rate over
+  them, so a second annotation of the best PrSM alone need not reproduce `RawScore`: the engine never re-derives it at MS2.
+- **MS3.** `computeExplorationScore_` returns `-1.0` at arrival. When the group completes, the `FragmentCount` batch runs
+  unchanged for the variants' `identification_result` (and the extra identification rows), then every received, non-trap
+  variant's raw peaks (`ExplorationVariant::result.getOriginalSpectrum()`) are annotated against
+  `AnnotatorMetrics::ms3TargetPrSM`: the target's subsequence with the proteoform's modifications inside it, fragment charges
+  capped at the target's charge, the ion types of the variant's own MS3 activation, tolerance `level(3).tolerance_ppm`. A y
+  target is a truncated chain; a b target carries `−18.010565` Da on its last residue, which the annotator adds to every
+  suffix ion and no prefix ion (the MS3 matcher's `yb`; its `ya` has no annotator counterpart and is not counted). All three
+  values land on the variant's `identification_result`; the configured one becomes its score.
+- **Unscored is `-1.0`, never 0**: a dropped search, a variant that identified nothing, a c/z/a/x MS3 target
+  (`isAnnotatableMs3Precursor`), an MS3 group with no identified proteoform. A group with no scored variant ends
+  `[EXPL-ABORT] reason=no-winner`. (`fragment_count` scores such a sweep 0 and crowns the first grid point; that is unchanged.)
+- **Load**: each needs an `identification` section; an `IonTrap` override is refused, as under a counting metric.
+- A variant with no matcher fragment writes no identification row, so its three values are logged only when it matched.
+
 ### Reading vs measuring exploration metrics — the MS3 evidence rule (ADR-0020)
 
-**Only `FragmentCount` identifies its own MS3 pre-scans.** It scores a variant *by* matching it, so
+**`FragmentCount` and the annotator metrics (above) identify their own MS3 pre-scans.** For `FragmentCount`: It scores a variant *by* matching it, so
 `ProteoformTracker::scoreCalibratedVariants` — the only matcher that works on an MS3 spectrum, since
 it is seeded with the proteoform context and the parent ion index — runs inside a
 `metric == FragmentCount` guard in `Exploration.cpp`. `MassCount`, `RemainingPrecursor` and

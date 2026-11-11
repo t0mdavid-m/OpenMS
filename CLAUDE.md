@@ -15,7 +15,7 @@ the self-hosted runners (ADR-0050). This repo is a **public** fork.
 Headers in `src/openms/include/OpenMS/ANALYSIS/TOPDOWN/`, sources in
 `src/openms/source/ANALYSIS/TOPDOWN/` (**no** `OpenMS/` segment). `FLASHIda.cpp` and
 `FLASHIdaBridgeFunctions.cpp` sit in `TOPDOWN/`; the runtime helpers in `TOPDOWN/FLASHIda/`:
-`Config`, `Deconvolution`, `Exploration`, `FAIMS`, `FragmentAnalysis`, `IdaLogger`, `KineticModel`,
+`AnnotatorMetrics`, `Config`, `Deconvolution`, `Exploration`, `FAIMS`, `FragmentAnalysis`, `IdaLogger`, `KineticModel`,
 `MS3FragmentMatcher`, `Ms2Params`, `PrecursorSelection`, `ProteoformTracker`, `ProteomeSearch`, `Quantification`,
 `Refine`, `ScanCommand`, `ScanCommandQueue`, `ScanRole`, `SearchPool`, plus the offline `ScanCommandJoin`.
 `sources.cmake` is not a reliable header inventory; glob the directory.
@@ -32,14 +32,16 @@ Every change under `src/` (engine, bridge, tests, `.cmake`) needs the owner's ap
 written; an approved plan that names the files and describes the change **is** that approval. A
 departure from the plan goes back to the owner. Ambiguous cases count as source changes.
 
-- **Four owner-approved edits sit inside the boundary**: `PeakGroup::updateSNR_` (`9721595ca4`, a
+- **Five owner-approved edits sit inside the boundary**: `PeakGroup::updateSNR_` (`9721595ca4`, a
   charge with no signal has SNR 0), `FLASHTnTAlgorithm`'s **prepared database** (ADR-0061 d.3):
   `prepareDatabase()` holds `run()`'s database side moved as it was, and `setPreparedDatabase()` makes
   `run()` reuse it read-only, and `FLASHTnTAlgorithm.cpp:1131` `if (! prepared_) setLogType(CMD);` (d.3 as
   amended for push 4c: a prepared `run()` keeps its caller's log type), and **ADR-0067's fixed modifications**: every residue mass
   in FLASHTnT and FLASHAnnotator (Tagger, GappedTagger, Extender, `FLASHTnTAlgorithm`, Annotator, MassLadder, `ProteoformDatabase`,
   `FLASHTnTFile`) is read from a `FixedModifications` table (`fixed_mod`), never from `ResidueDB` directly; an empty table reads
-  `ResidueDB` live. Everything else in FLASHDeconv/FLASHTnT is exactly as Kyowon's FDmerge has it.
+  `ResidueDB` live, and **ADR-0074's `FLASHAnnotatorAlgorithm::Result::explained_intensity`**: one appended field, the
+  peaks of accepted terminal envelopes summed once in `annotateOne_`. Everything else in FLASHDeconv/FLASHTnT is exactly as
+  Kyowon's FDmerge has it.
 - **A prepared `run()` must never write the shared state**: it binds the mass ladders `const` and skips
   `preparePrecursorWindows`/`clearPrecursorWindows` (an unlisted precursor mass is swept: the same
   windows). `run()` keeps its results until `releaseResults()`, and FLASHTnTAlgorithm's copy
@@ -166,10 +168,17 @@ private `monitor_deconv_` (ADR-0042). **Do not merge the monitor engine into `de
 - **`kinetic_model`**: no variant wins; the follow-up is the fitted modeled maximum at every level
   (ADR-0047). The fit is the study's **lattice search**, not Levenberg-Marquardt. `k2` is never
   defaulted; one CE-swept activation per kinetic sweep; a failed fit aborts with no fallback.
-- **Only `fragment_count` identifies MS3 pre-scans** (ADR-0020); a measuring metric at MS3 always
-  emits a production scan. Use `isMeasuringMetric()`, never `== FragmentCount`.
+- **`fragment_count` and the three annotator metrics are reading metrics** (ADR-0020, ADR-0074): their MS3
+  pre-scans are identified and the winner is its own evidence; a measuring metric at MS3 always emits a
+  production scan. Use `isMeasuringMetric()` / `isAnnotatorMetric()`, never `== FragmentCount`.
+- **`raw_score`, `bond_coverage`, `explained_signal` are read from the annotator** (ADR-0074, `AnnotatorMetrics`),
+  terminal fragments only. MS2: the search's `RawScore` / `RawCoverage` of the variant's own PrSM, and under
+  `explained_signal` the search worker's own annotation (no lock). MS3: every variant annotated at group
+  completion against the target fragment as a chain (a b target carries −18.010565 Da on its last residue; ion
+  types from the variant's activation). No PrSM (dropped search, nothing identified, a non-b/y target) is
+  `-1.0`, never 0. A new enumerator needs its own `case` in `computeExplorationScore_`: the `default` is `MassCount`.
 - **A trap pre-scan is measured, never identified** (ADR-0045): decided from the command's own
-  `analyzer`; only `remaining_precursor` may score a trap sweep.
+  `analyzer`; only a share-based metric (`remaining_precursor`, `kinetic_model`) may decide a trap sweep.
 
 ## Config (`FLASHIda/Config.cpp`)
 
