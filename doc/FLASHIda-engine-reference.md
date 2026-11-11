@@ -319,11 +319,20 @@ E = p × (L − 1) reaches `threshold` (default 1). Absent, every plan is exactl
   takes no place and no slot. `dispatchFromModel` builds a snapshot-less gate for an ungoverned plan when the yield
   gate is on (it then gains the isolatable and charge-floor tests in the walk). `dispatchQuant` walks
   `labelledFragmentCharges` (SNR > 1, then yield).
+- **The ranking** (amended 2026-11-11). `YieldGateConfig::rank_by` is `Yield` by default. Mapped plans sort through
+  `rankCandidates` (intensity, then every verdict made, then a stable sort by the anchor's E, refused last), used
+  for each candidate list and for the final dispatch order; raw-mass plans evaluate every pool entry and call
+  `rankPoolByYield` (tested by E, then untested, then refused, stable); `dispatchQuant` collects the buyable
+  fragments and takes the first n by E. `Intensity` runs the code path the gate had. `yieldWalk` returns the
+  anchor's E and whether the test ran through two optional out-parameters.
+- **`characterization.order`.** `Ms3SendOrder::Random` permutes the vector `planNextScans` returned, in
+  `dispatchFromModel`, with `sweepPermutation(n, kSweepSeed ^ ms_ctx->scan_id)`. The planner never sees it.
 - **The row.** `writeScanCommandRow` recomputes `predicted_bond_yield` from the command under the gate of its role
   (`Q` → quantification, any other MS3 → characterization); −1 otherwise. No map carries it: the planner's inputs are
   what `buildMS3` copies into the command (`FLASHIda_Ms3YieldModel_test::row_inputs_equal_plan_inputs`).
 - ⚠️ **A discriminating round whose every record is yield-refused dispatches nothing and stays undecided**, as one the
-  cleavage cap fills: the yield test is in the emit loop, not the pool, so `dead_end` does not fire.
+  cleavage cap fills: a refused record stays in the pool (ranked last under `rank_by: yield`) and is skipped in the
+  emit loop, so `dead_end` does not fire.
 
 ## `processScan` — five admission gates
 

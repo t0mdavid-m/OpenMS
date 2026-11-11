@@ -70,7 +70,10 @@ departure from the plan goes back to the owner. Ambiguous cases count as source 
   governed command. `dequeue_` commits it under `queue_mutex_`; what a withdrawn, reconciled or expired
   item took is given back by `undoMs3Items_`, outside the queue lock. Off, the registry stays empty.
 - **A `yield_gate` block admits an MS3 only at a predicted bond yield ≥ its threshold** (ADR-0069), tested last
-  among a charge's tests and before the target takes a place or a slot. The row's `predicted_bond_yield` is
+  among a charge's tests and before the target takes a place or a slot. Under `rank_by: yield` (the default) every
+  planner ranks its candidates by that yield (`rankCandidates`, `rankPoolByYield`, `dispatchQuant`'s buyable list),
+  untested targets after tested ones; `intensity` is the strongest-first walk. `characterization.order: random`
+  permutes only the returned plan, in `dispatchFromModel`. The row's `predicted_bond_yield` is
   recomputed from the command (`Ms3YieldModel.h`), never stashed: keep the planner's inputs the ones `buildMS3`
   copies, or the drift test fails.
 - **An MS2's MS3s are pushed by a search worker's apply**, not by `processScan` (ADR-0062): the
