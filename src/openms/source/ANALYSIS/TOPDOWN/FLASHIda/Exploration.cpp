@@ -572,7 +572,11 @@ namespace OpenMS
     info.metric.exploration_metric = static_cast<int>(group.exploration_metric);
     info.identification.matched_protein = frag.matched_protein;
     info.identification.proteoform_sequence = frag.proteoform_sequence;
-    info.identification.result = frag;
+    // MS2 only. At MS3 `frag` is the whole-protein MS2 matcher's match of a sub-fragment spectrum: it has no
+    // equivalent ion and no adjusted mass, so as an identification row it read "0;0;0" / "0.0000". An MS3
+    // variant's identification is the calibrated re-score's alone (below, fragment_count); a measuring metric
+    // identifies no pre-scan (ADR-0020), and a variant of a dropped sweep is never scored.
+    if (group.msn_level == 2) info.identification.result = frag;
 
     // Stage this MS2 variant into the ProteoformTracker for pooling (MS3 evidence folds via foldMs3,
     // not here). A measured-only (trap) variant is never pooled (ADR-0045), nor one whose search the
