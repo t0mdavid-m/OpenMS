@@ -373,6 +373,17 @@ namespace OpenMS
     /// record not dispatched. nullptr: byte-identical to the plan without the argument.
     std::vector<Ms3Target> planNextScans(int precursor_id, const Ms3PlanGate* gate = nullptr);
 
+    /// ADR-0073. The interleaved send order of one plan. Targets are indexed in ranked order (0 = sent first under
+    /// "ranked"). @p groups_of[i]: the groups target i belongs to, as indices into @p served. @p served[g]: the
+    /// fragments already sent for group g. @p counted[i]: target i is already among them, so sending it again serves
+    /// nobody (empty = none). Returns the ranked indices in send order.
+    ///
+    /// Each turn takes the target whose least-served group has the lowest count, the higher-ranked on a tie: the next
+    /// target of the group served least so far, and of the group whose next target ranks higher when groups are tied.
+    /// A target counts for every one of its groups. A target in no group goes after every grouped one.
+    static std::vector<size_t> interleavedOrder(const std::vector<std::vector<int>>& groups_of, std::vector<int> served,
+                                                const std::vector<bool>& counted = {});
+
     /// What withdrawMs3 left the model with.
     enum class Ms3Withdrawal
     {
@@ -539,6 +550,14 @@ namespace OpenMS
      * dispatched and stamps its nominal mass. @p gate: as planExhaustive_'s.
      */
     std::vector<Ms3Target> planDiscriminating_(ProteoformModel& m, int precursor_id, int budget, const Ms3PlanGate* gate);
+
+    /// ADR-0073. Reorders the ranked plan @p targets into the interleaved send order (interleavedOrder). The groups are
+    /// the two termini (a/b/c, x/y/z), or under @p obj Ambiguity the ambiguous modifications of @p m, a fragment
+    /// belonging to every one it contains. @p ws, @p L: the region frame of planNextScans. @p snap (a governed plan,
+    /// else null): the counts start from the proteoform's sent cleavages, each tested against the same groups from its
+    /// key alone (it need not be a fragment of this identification), and a target among them does not count again.
+    void interleaveTargets_(std::vector<const MappedFragment*>& targets, const ProteoformModel& m,
+                            CharacterizationObjective obj, int ws, int L, const Ms3RegistrySnapshot* snap) const;
 
     /// The emit step planExhaustive_ and planDiscriminating_ share: the MS3 target(s) of ONE raw winner-scan mass @p pr
     /// labelled (@p ion_type, @p ion_index), with characterization.fragment_charges' handling (single: one target;

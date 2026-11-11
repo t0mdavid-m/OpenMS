@@ -140,6 +140,16 @@ namespace OpenMS
       if (f.ion_type.empty() || f.ion_index <= 0) return false;
       return (f.cover_start <= rs && f.cover_end >= re);
     }
+    // ADR-0073: the terminus an ion type's fragments keep. 0 = N-terminal (a, b, c), 1 = C-terminal (x, y, z), -1 = neither
+    // (an unassigned raw mass). The letter test mapScanOntoModel_ sets is_prefix by.
+    inline int terminusOf(const std::string& ion_type)
+    {
+      if (ion_type.empty()) return -1;
+      const char ic = ion_type[0];
+      if (ic == 'a' || ic == 'b' || ic == 'c') return 0;
+      if (ic == 'x' || ic == 'y' || ic == 'z') return 1;
+      return -1;
+    }
     // The label an exhaustive-mode target carries when no mapped fragment claims its mass (ADR-0023
     // decision 5). An IN-ENGINE SENTINEL ONLY: paired with ion_index 0 it takes buildMS3's no-ion
     // branch, so it never reaches the wire and logs as an empty ion_type (D-f). Its whole job is to
@@ -1042,6 +1052,10 @@ namespace OpenMS
     // The plan's ranking within the chosen set (the executor dispatches in this order): strongest best-MS2 first, or
     // highest predicted bond yield first under rank_by yield.
     rankCandidates(targets);
+    // ADR-0073: the same targets, sent in turns between groups. The emit loop below sends `targets` in this order and
+    // keeps a fragment's charges together, so under separate a fragment takes one turn.
+    if (config_.characterization().send_order == Ms3SendOrder::Interleaved)
+      interleaveTargets_(targets, m, obj, ws, L, gate != nullptr ? gate->snapshot : nullptr);
 
     // --- 2) Emit Ms3Targets, budget-bounded ---------------------------------------------------------
     // Single (default): one target per fragment from best_ms2 — byte-identical to the pre-mode build.
@@ -1156,6 +1170,104 @@ namespace OpenMS
               << " budget=" << budget
               << " objective=" << objectiveName(obj);
     return out;
+  }
+
+  std::vector<size_t> ProteoformTracker::interleavedOrder(const std::vector<std::vector<int>>& groups_of, std::vector<int> served,
+                                                          const std::vector<bool>& counted)
+  {
+    const size_t n = groups_of.size();
+    const int n_groups = static_cast<int>(served.size());
+    // A target's key: the count of its least-served group. A target in no group sorts after every grouped one.
+    auto keyOf = [&](size_t i) {
+      int key = std::numeric_limits<int>::max();
+      for (int g : groups_of[i])
+        if (g >= 0 && g < n_groups) key = std::min(key, served[g]);
+      return key;
+    };
+    std::vector<size_t> order;
+    order.reserve(n);
+    std::vector<bool> placed(n, false);
+    for (size_t turn = 0; turn < n; ++turn)
+    {
+      size_t next = n;
+      int next_key = 0;
+      for (size_t i = 0; i < n; ++i)
+      {
+        if (placed[i]) continue;
+        const int key = keyOf(i);
+        if (next == n || key < next_key)   // strictly lower: a tie stays with the higher-ranked target
+        {
+          next = i;
+          next_key = key;
+        }
+      }
+      placed[next] = true;
+      order.push_back(next);
+      if (next < counted.size() && counted[next]) continue;   // already among the sent: it serves nobody again
+      for (int g : groups_of[next])
+        if (g >= 0 && g < n_groups) ++served[g];
+    }
+    return order;
+  }
+
+  void ProteoformTracker::interleaveTargets_(std::vector<const MappedFragment*>& targets, const ProteoformModel& m,
+                                             CharacterizationObjective obj, int ws, int L,
+                                             const Ms3RegistrySnapshot* snap) const
+  {
+    if (targets.size() < 2) return;
+
+    // The groups. Ambiguity: one per ambiguous modification, as its region-frame range (the conversion planNextScans
+    // chose the containers by). Coverage and fragments: the two termini.
+    const bool by_modification = (obj == CharacterizationObjective::Ambiguity);
+    std::vector<std::pair<int, int>> ranges;
+    if (by_modification)
+      for (const ModificationState& mod : m.modifications)
+        if (mod.candidate_start < mod.candidate_end) ranges.emplace_back(mod.candidate_start - ws, mod.candidate_end - ws);
+    std::vector<int> served(by_modification ? ranges.size() : 2, 0);
+
+    // The groups of a sent cleavage, from its key alone: the proteoform may have sent it under an earlier
+    // identification, so it need not be in m.fragments. Its cover is the one upsertMappedObservation_ gives the ion.
+    auto groupsOfCleavage = [&](const Ms3Cleavage& c) {
+      std::vector<int> groups;
+      const int terminus = terminusOf(c.first);
+      if (terminus < 0 || c.second <= 0) return groups;   // an unassigned raw mass belongs to no group
+      if (!by_modification)
+      {
+        groups.push_back(terminus);
+        return groups;
+      }
+      const int cover_start = (terminus == 0) ? 1 : (L - c.second + 1);
+      const int cover_end = (terminus == 0) ? c.second : L;
+      for (size_t g = 0; g < ranges.size(); ++g)
+        if (cover_start <= ranges[g].first && cover_end >= ranges[g].second) groups.push_back(static_cast<int>(g));
+      return groups;
+    };
+    if (snap != nullptr)
+      for (const auto& kv : snap->sent)
+        for (int g : groupsOfCleavage(kv.first)) ++served[g];
+
+    std::vector<std::vector<int>> groups_of;
+    std::vector<bool> counted;
+    groups_of.reserve(targets.size());
+    counted.reserve(targets.size());
+    for (const MappedFragment* f : targets)
+    {
+      std::vector<int> groups;
+      if (by_modification)
+      {
+        for (size_t g = 0; g < ranges.size(); ++g)
+          if (fragmentContains(*f, ranges[g].first, ranges[g].second)) groups.push_back(static_cast<int>(g));
+      }
+      else if (const int terminus = terminusOf(f->ion_type); terminus >= 0)
+        groups.push_back(terminus);
+      groups_of.push_back(std::move(groups));
+      counted.push_back(snap != nullptr && snap->sent.count(Ms3Cleavage{f->ion_type, f->ion_index}) > 0);
+    }
+
+    std::vector<const MappedFragment*> in_send_order;
+    in_send_order.reserve(targets.size());
+    for (size_t i : interleavedOrder(groups_of, std::move(served), counted)) in_send_order.push_back(targets[i]);
+    targets.swap(in_send_order);
   }
 
   std::vector<Ms3Target> ProteoformTracker::planExhaustive_(ProteoformModel& m, int precursor_id, int budget,

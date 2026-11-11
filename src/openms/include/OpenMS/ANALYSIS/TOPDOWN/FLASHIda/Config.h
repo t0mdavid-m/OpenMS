@@ -126,11 +126,14 @@ namespace OpenMS
   };
 
   /// identification.characterization.order: the order the MS3 of one plan are sent in. Ranked: the planner's own
-  /// order. Random: one reproducible permutation per dispatch. It never changes which MS3 a plan holds.
+  /// order. Random: one reproducible permutation per dispatch. Interleaved (ADR-0073): the plan's fragments take turns
+  /// between groups (the two termini; under ambiguity the ambiguous modifications), each turn going to the group served
+  /// least so far; refused at load under exhaustive and discriminating. It never changes which MS3 a plan holds.
   enum class Ms3SendOrder
   {
     Ranked = 0,
-    Random
+    Random,
+    Interleaved
   };
 
   /// Exploration metric: what to optimize during CE sweep (MS2+ only)

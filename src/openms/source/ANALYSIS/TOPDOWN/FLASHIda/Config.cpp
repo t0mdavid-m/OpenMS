@@ -822,14 +822,26 @@ namespace OpenMS
       if (charact.contains("order") && !charact["order"].is_null())
       {
         if (!charact["order"].is_string())
-          throw std::invalid_argument("Config: identification.characterization.order must be \"ranked\" or \"random\"; got "
-                                      + charact["order"].dump() + ".");
+          throw std::invalid_argument(
+              "Config: identification.characterization.order must be \"ranked\", \"random\" or \"interleaved\"; got "
+              + charact["order"].dump() + ".");
         const std::string o = charact["order"].get<std::string>();
         if (o == "ranked") characterization_.send_order = Ms3SendOrder::Ranked;
         else if (o == "random") characterization_.send_order = Ms3SendOrder::Random;
+        else if (o == "interleaved")
+        {
+          // ADR-0073 decision 6: refused, not accepted and sent ranked, where the mode has no groups to take turns.
+          if (characterization_.objective == CharacterizationObjective::Exhaustive
+              || characterization_.objective == CharacterizationObjective::Discriminating)
+            throw std::invalid_argument(
+                "Config: identification.characterization.order \"interleaved\" takes turns between groups, which only "
+                "the modes \"ambiguity\", \"coverage\" and \"fragments\" have; got mode \"" + m + "\" (ADR-0073).");
+          characterization_.send_order = Ms3SendOrder::Interleaved;
+        }
         else
-          throw std::invalid_argument("Config: identification.characterization.order must be \"ranked\" or \"random\"; got \""
-                                      + o + "\" (values are case-sensitive).");
+          throw std::invalid_argument(
+              "Config: identification.characterization.order must be \"ranked\", \"random\" or \"interleaved\"; got \""
+              + o + "\" (values are case-sensitive).");
       }
     }
 
