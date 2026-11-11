@@ -141,6 +141,12 @@ namespace OpenMS
       /// close-out reads whatever the method (d.5): equal to identification_score under flashtnt; under refine
       /// identification_score is the path score + raw_term instead. -1 = not searched.
       double search_identification_score = -1;
+
+      /// ADR-0074, APPEND-ONLY. Logged on identification.tsv. bond_coverage: bonds covered by a terminal envelope the
+      /// annotator accepts in the raw spectrum, over L - 1, as a FRACTION (the search's RawCoverage / 100). explained_signal:
+      /// raw intensity of the peaks of accepted terminal envelopes, each peak once, over the centroided scan's. -1 = none.
+      double bond_coverage = -1;
+      double explained_signal = -1;
     };
 
     /// Deconvolution scores of a selected MS2 fragment, copied into the stage-1 (fragment)

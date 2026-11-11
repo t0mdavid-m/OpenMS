@@ -1136,8 +1136,8 @@ START_SECTION(identification_refine_columns_are_sentinels_under_flashtnt)
     if (!line.empty() && line.back() == '\r') line.pop_back();
     if (line.empty()) continue;
     ++n_rows;
-    // 47 columns = 46 tabs, whatever the row type (ADR-0064: + quant_ms3)
-    TEST_EQUAL(std::count(line.begin(), line.end(), '\t'), 46)
+    // 49 columns = 48 tabs, whatever the row type (ADR-0064: + quant_ms3; ADR-0074: + bond_coverage, explained_signal)
+    TEST_EQUAL(std::count(line.begin(), line.end(), '\t'), 48)
     const std::vector<std::string> f = split_all(line);
     ABORT_IF(f.size() != header.size())
     for (size_t k = 0; k < sentinels.size(); ++k) TEST_EQUAL(f[sentinel_idx[k]], sentinels[k].second)
@@ -1199,13 +1199,14 @@ START_SECTION(identification_refine_columns_carry_the_candidates)
     return s.size() >= tail.size() && s.compare(s.size() - tail.size(), tail.size(), tail) == 0;
   };
   // tic_coverage, then the seven
-  // (ADR-0061 push 4b: then its five; a hand-built row chose no protein, so protein is empty; ADR-0064: then quant_ms3)
+  // (ADR-0061 push 4b: then its five; a hand-built row chose no protein, so protein is empty; ADR-0064: then quant_ms3;
+  // ADR-0074: then bond_coverage and explained_signal, -1 on a hand-built match)
   TEST_TRUE(endsWith(header, "\ttic_coverage\tannotation_score\ttotal_shift\tsecond_total_shift\tsecond_score\tcut\tn_levels\tprecursor_mass_difference"
-                             "\tprotein\traw_score\tidentification_score\tclosed_out\tinferred_precursor_mass\tquant_ms3"))
-  TEST_EQUAL(std::count(two.begin(), two.end(), '\t'), 46)
-  TEST_EQUAL(std::count(one.begin(), one.end(), '\t'), 46)
-  TEST_TRUE(endsWith(two, "\t0.5000\t61\t526.1400\t655.1900\t46\t5\t5\t-0.9800\t\t-1.0000\t-1.0000\t0\t-1.0000\tnone"))
-  TEST_TRUE(endsWith(one, "\t0.5000\t61\t526.1400\t\t-1\t5\t5\t-0.9800\t\t-1.0000\t-1.0000\t0\t-1.0000\tnone"))
+                             "\tprotein\traw_score\tidentification_score\tclosed_out\tinferred_precursor_mass\tquant_ms3\tbond_coverage\texplained_signal"))
+  TEST_EQUAL(std::count(two.begin(), two.end(), '\t'), 48)
+  TEST_EQUAL(std::count(one.begin(), one.end(), '\t'), 48)
+  TEST_TRUE(endsWith(two, "\t0.5000\t61\t526.1400\t655.1900\t46\t5\t5\t-0.9800\t\t-1.0000\t-1.0000\t0\t-1.0000\tnone\t-1.0000\t-1.0000"))
+  TEST_TRUE(endsWith(one, "\t0.5000\t61\t526.1400\t\t-1\t5\t5\t-0.9800\t\t-1.0000\t-1.0000\t0\t-1.0000\tnone\t-1.0000\t-1.0000"))
 }
 END_SECTION
 
@@ -1357,6 +1358,50 @@ START_SECTION(new_columns_carry_their_values)
     TEST_EQUAL(row.size(), pooled.headers.size())
     TEST_EQUAL(cell(pooled, row, "protein"), accession)
   }
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §BC -- identification.tsv : bond_coverage and explained_signal (ADR-0074)
+//
+// The search's FLASHTnT annotates every PrSM on the MS2's raw spectrum and puts RawCoverage (a percentage) on the
+// hit; the engine logs it as bond_coverage, a FRACTION, on the scan's own MS2 row. explained_signal is computed only
+// for a sweep under that metric, so it is -1 on every row of this regular run. An MS3 row is a fragment match, never
+// a search PrSM: both are -1. The §S4B drive.
+START_SECTION(bond_coverage_is_logged_on_a_searched_ms2)
+{
+  auto manifest = buildMs3IonManifest("../../FlashIDA/test-data/spectra");
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  auto ms2 = loadTsvScans(CYTC_MS2);
+  ABORT_IF(manifest.empty() || ms1.empty() || ms2.empty())
+
+  const std::string dir = freshLogDir("lf_bc");
+  std::string json = buildJsonWithLogDir(dir, true, "HCD", 50);
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+  runFullCycle(&ida, ms1, ms2, &manifest);
+
+  auto idf = TSVFile::parse(dir + "/identification.tsv");
+  int n_ms2_self = 0, n_ms3_id = 0;
+  for (const auto& row : idf.rows)
+  {
+    TEST_EQUAL(row.size(), idf.headers.size())
+    TEST_EQUAL(cell(idf, row, "explained_signal"), std::string("-1.0000"))
+    const int lvl = std::atoi(cell(idf, row, "ms_level").c_str());
+    if (lvl == 2 && toD(cell(idf, row, "flash_extender_score")) >= 0.0)   // the scan's own match (-1 = re-matched)
+    {
+      ++n_ms2_self;
+      const double coverage = toD(cell(idf, row, "bond_coverage"));
+      TEST_TRUE(coverage > 0.0)
+      TEST_TRUE(coverage <= 1.0)
+    }
+    else if (lvl == 3)
+    {
+      ++n_ms3_id;
+      TEST_EQUAL(cell(idf, row, "bond_coverage"), std::string("-1.0000"))
+    }
+  }
+  TEST_TRUE(n_ms2_self > 0)
+  TEST_TRUE(n_ms3_id > 0)
 }
 END_SECTION
 

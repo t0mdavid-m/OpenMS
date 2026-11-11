@@ -228,7 +228,10 @@ namespace OpenMS
                                    << "protein\traw_score\tidentification_score\tclosed_out\tinferred_precursor_mass\t"
                                    // ADR-0064, APPENDED: what the identification bought at MS3 for quantification
                                    // (none | bought | no_cysteine | no_labelled_fragment | yield_refused).
-                                   << "quant_ms3\n";
+                                   << "quant_ms3\t"
+                                   // ADR-0074, APPENDED: the annotator's bond coverage and explained signal of the row's PrSM,
+                                   // both fractions. -1 = none.
+                                   << "bond_coverage\texplained_signal\n";
         identification_tsv_stream_.flush();
       }
     }
@@ -977,7 +980,9 @@ namespace OpenMS
         << std::fixed << std::setprecision(4) << match.identification_score << "\t"
         << (row.closed_out ? 1 : 0) << "\t"
         << std::fixed << std::setprecision(4) << match.inferred_precursor_mass << "\t"
-        << row.quant_ms3 << "\n";  // ADR-0064
+        << row.quant_ms3 << "\t"  // ADR-0064
+        << std::fixed << std::setprecision(4) << match.bond_coverage << "\t"      // ADR-0074
+        << std::fixed << std::setprecision(4) << match.explained_signal << "\n";  // ADR-0074
     };
     // ADR-0049: Refine's candidate record. The three doubles re-establish std::fixed + setprecision(4)
     // themselves (the stream's float convention) rather than inheriting whatever the last field left sticky.

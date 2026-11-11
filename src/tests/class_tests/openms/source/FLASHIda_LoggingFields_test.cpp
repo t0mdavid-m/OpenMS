@@ -116,7 +116,8 @@ START_SECTION(schema_column_counts)
   // this count and i.headers.back() move. Sentinel-valued under characterization.method flashtnt.
   // ADR-0061 push 4b: + protein/raw_score/identification_score/closed_out/inferred_precursor_mass, appended
   // after precursor_mass_difference (41 -> 46). ADR-0064: + quant_ms3, appended last (46 -> 47).
-  TEST_EQUAL(i.headers.size(), 47)
+  // ADR-0074: + bond_coverage/explained_signal, appended last (47 -> 49).
+  TEST_EQUAL(i.headers.size(), 49)
 
   // Spot-check exact header identities / order at the boundaries that matter for parsing.
   // NOTE: the four log streams were reordered for human legibility (LOG_COLUMN_ORDER_REFERENCE.md);
@@ -153,7 +154,7 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(r.colIndex("fragment_count"), 14)
   TEST_EQUAL(r.colIndex("tic_coverage"), 15)
   TEST_EQUAL(i.headers.front(), std::string("tracking_id"))      // reordered: identification now leads with tracking_id
-  TEST_EQUAL(i.headers.back(), std::string("quant_ms3"))        // ADR-0064: appended after the ADR-0061 push 4b block
+  TEST_EQUAL(i.headers.back(), std::string("explained_signal")) // ADR-0074: appended after quant_ms3 (ADR-0064)
   // ADR-0061 push 4b: the block after the refine record, pinned as a contiguous run.
   TEST_EQUAL(i.colIndex("protein"), 41)
   TEST_EQUAL(i.colIndex("raw_score"), 42)
@@ -161,6 +162,8 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(i.colIndex("closed_out"), 44)
   TEST_EQUAL(i.colIndex("inferred_precursor_mass"), 45)
   TEST_EQUAL(i.colIndex("quant_ms3"), 46)
+  TEST_EQUAL(i.colIndex("bond_coverage"), 47)                   // ADR-0074
+  TEST_EQUAL(i.colIndex("explained_signal"), 48)
   TEST_EQUAL(i.colIndex("annotation_score"), 34)                // the refine block, pinned as a contiguous run
   TEST_EQUAL(i.colIndex("total_shift"), 35)
   TEST_EQUAL(i.colIndex("second_total_shift"), 36)

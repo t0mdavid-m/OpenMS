@@ -847,6 +847,9 @@ namespace
     }
     result.raw_term = raw_term;
     result.raw_score = hit.metaValueExists("RawScore") ? static_cast<double>(hit.getMetaValue("RawScore")) : -1.0;
+    // ADR-0074: the annotator's terminal bond coverage of the same PrSM, a percentage on the hit, a fraction here
+    const double raw_coverage = hit.metaValueExists("RawCoverage") ? static_cast<double>(hit.getMetaValue("RawCoverage")) : -1.0;
+    result.bond_coverage = raw_coverage >= 0.0 ? raw_coverage / 100.0 : -1.0;
     const bool inferred = hit.metaValueExists("ProteoformMassByFragmentMass") && hit.metaValueExists("Mass")
                           && static_cast<int>(hit.getMetaValue("ProteoformMassByFragmentMass")) == 1;
     result.inferred_precursor_mass = inferred ? static_cast<double>(hit.getMetaValue("Mass")) : -1.0;
