@@ -223,7 +223,8 @@ END_SECTION
 /////////////////////////////////////////////////////////////
 // T6: computeEquivalentIon - truncated proteoform
 //     Protein "ACDEFGHIJ" (P=9), proteoform [2,7)="DEFGH",
-//     b3 precursor, b2 fragment -> equiv b4 (start=2+2), offset > 0
+//     b3 precursor, b2 fragment -> equiv b4 (start=2+2) in the reference frame; its MASS is the
+//     proteoform's own b2 (Proteoform frame, CONTEXT.md), so the offset is 0
 /////////////////////////////////////////////////////////////
 
 START_SECTION(computeEquivalentIon_truncated_proteoform)
@@ -255,12 +256,10 @@ START_SECTION(computeEquivalentIon_truncated_proteoform)
   TEST_EQUAL(equiv_type, "b")
   TEST_EQUAL(equiv_index, 4)
 
-  // theo_equiv = prefix[4] + shift(b)=0 = mA + mC + mD + mE
-  // ms3_theo = mD + mE
-  // offset = (mA + mC + mD + mE) - (mD + mE) = mA + mC
-  double expected_offset = resMass('A') + resMass('C');
-  TEST_REAL_SIMILAR(mass_offset, expected_offset)
-  TEST_TRUE(mass_offset > 0.0)
+  // The equivalent ion's mass sums the proteoform's own residues only: theo_equiv = prefix[4] - prefix[2]
+  // = mD + mE = ms3_theo. A and C lie before the region start: they are in no ion of this proteoform (an
+  // excised Met is the real case), so the offset is 0, not mA + mC.
+  TEST_REAL_SIMILAR(mass_offset + 1.0, 1.0)
 }
 END_SECTION
 
@@ -394,18 +393,20 @@ START_SECTION(calibrateAndScore_ppm_frame_projection_same_dir_b)
     if (fm.ion_type == "b" && fm.ion_index == 2)
     {
       found = true;
-      // Same-direction b: equiv b(start + 2) = b5, offset > 0.
+      // Same-direction b: equiv b(start + 2) = b5 over the reference, b2 in the proteoform frame.
       TEST_EQUAL(fm.equiv_type, "b")
       TEST_EQUAL(fm.equiv_index, 5)
+      TEST_EQUAL(fm.equiv_frame_index, 2)
       // PPM-honest: the MS2-frame residual EQUALS the sub-frame measured +10 ppm (fails under Da-additive).
       TEST_REAL_SIMILAR(fm.diff_ppm, kPpm)
       // Multiplicative: adjusted = equivalent theoretical * (1 + 10 ppm).
       TEST_REAL_SIMILAR(fm.adjusted_mass, fm.theoretical_mass * (1.0 + kPpm * 1e-6))
       // diff_da is the equiv-frame projected Da residual (theoretical * (ratio - 1)), larger than the raw sub-frame Da.
       TEST_REAL_SIMILAR(fm.diff_da, fm.theoretical_mass * (kPpm * 1e-6))
-      // fm.theoretical_mass is the full equivalent (b5) theoretical = prefix[5].
-      double theo_b5 = resMass('A') + resMass('C') + resMass('D') + resMass('E') + resMass('F');
-      TEST_REAL_SIMILAR(fm.theoretical_mass, theo_b5)
+      // fm.theoretical_mass is the proteoform's own b2 = E + F: nothing of A, C, D (before the region start).
+      TEST_REAL_SIMILAR(fm.theoretical_mass, theo_b2)
+      // A b sub-fragment of a b precursor IS that ion of the proteoform: adjusted == measured.
+      TEST_REAL_SIMILAR(fm.adjusted_mass, fm.observed_mass)
       break;
     }
   }
@@ -468,16 +469,18 @@ START_SECTION(calibrateAndScore_ppm_frame_projection_complement_flip_yb)
     if (fm.ion_type == "yb" && fm.ion_index == 2)
     {
       found = true;
-      // Complement flip: yb2 (suffix) maps to the prefix equivalent b7 (covers absolute [0,6]).
+      // Complement flip: yb2 (suffix) maps to the prefix equivalent b7 over the reference (covers absolute
+      // [0,6]) = b4 of the proteoform "EFGHIKLM".
       TEST_EQUAL(fm.equiv_type, "b")
       TEST_EQUAL(fm.equiv_index, 7)
+      TEST_EQUAL(fm.equiv_frame_index, 4)
       // Invariant survives equiv_ambiguous (+phospho) != md.ambiguous_included (0): diff_ppm == sub-frame +10 ppm.
       TEST_REAL_SIMILAR(fm.diff_ppm, kPpm)
       TEST_REAL_SIMILAR(fm.adjusted_mass, fm.theoretical_mass * (1.0 + kPpm * 1e-6))
-      // Q3: the WHOLE mod-inclusive equivalent theoretical = b7 backbone (prefix[7]) + the ambiguous phospho.
-      double prefix7 = resMass('A') + resMass('C') + resMass('D') + resMass('E')
-                     + resMass('F') + resMass('G') + resMass('H');
-      TEST_REAL_SIMILAR(fm.theoretical_mass, prefix7 + kPtm)
+      // Q3: the WHOLE mod-inclusive equivalent theoretical = the proteoform's b4 backbone (E F G H; A, C, D
+      // lie before the region start) + the ambiguous phospho.
+      double frame_b4 = resMass('E') + resMass('F') + resMass('G') + resMass('H');
+      TEST_REAL_SIMILAR(fm.theoretical_mass, frame_b4 + kPtm)
       break;
     }
   }
@@ -534,8 +537,70 @@ START_SECTION(calibrateAndScore_ppm_frame_projection_cross_map_y)
       // Cross map: prefix b from a y-precursor -> y equivalent, index = P - end + N - idx = 10 - 8 + 4 - 2 = 4.
       TEST_EQUAL(fm.equiv_type, "y")
       TEST_EQUAL(fm.equiv_index, 4)
+      TEST_EQUAL(fm.equiv_frame_index, 2)   // y2 of the proteoform "CDEFGHI": K, L are past the region end
       TEST_REAL_SIMILAR(fm.diff_ppm, kPpm)
       TEST_REAL_SIMILAR(fm.adjusted_mass, fm.theoretical_mass * (1.0 + kPpm * 1e-6))
+      break;
+    }
+  }
+  TEST_TRUE(found)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// T11: Proteoform frame at the C-terminus -- a proteoform clipped at BOTH ends, y sub-fragment of a
+//      y precursor. The equivalent ion's mass stops at the region end: residues past it (K, L) are in no
+//      ion of this proteoform, exactly as residues before the region start are in none (T6, T8).
+/////////////////////////////////////////////////////////////
+
+START_SECTION(calibrateAndScore_clipped_c_terminus_y)
+{
+  // protein indices: A0 C1 D2 E3 F4 G5 H6 I7 K8 L9  (P = 10)
+  std::string protein = "ACDEFGHIKL";
+  MS3FragmentMatcher::ProteoformContext ctx;
+  ctx.region_start = 1;                  // proteoform "CDEFGHI": K, L clipped at the C-terminus
+  ctx.region_end = 8;
+
+  char frag_type = 'y';
+  int frag_index = 4;                    // y4 precursor -> subseq = protein[4:8] = "FGHI"
+  std::string subseq = MS3FragmentMatcher::extractSubsequence(protein, ctx, frag_type, frag_index);
+  TEST_EQUAL(subseq, "FGHI")
+
+  const double water = 18.010565;
+  double theo_y1 = resMass('I') + water;
+  double theo_y2 = resMass('H') + resMass('I') + water;
+  double theo_y3 = resMass('G') + resMass('H') + resMass('I') + water;
+
+  const double kPpm = 10.0;
+  DeconvolvedSpectrum ds(0);
+  auto addPeak = [&](double m) { PeakGroup pg(1, 1, true); pg.setMonoisotopicMass(m); ds.push_back(pg); };
+  addPeak(theo_y1);                          // 0 ppm
+  addPeak(theo_y2 * (1.0 + kPpm * 1e-6));    // +10 ppm (target)
+  addPeak(theo_y3);                          // 0 ppm
+
+  std::vector<const DeconvolvedSpectrum*> variants = {&ds};
+  std::vector<FragmentAnalysis::ProteoformMatch> detailed;
+  MS3FragmentMatcher::calibrateAndScore(
+    variants, protein, ctx, frag_type, frag_index,
+    MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 50.0, &detailed);
+
+  TEST_EQUAL(detailed.size(), 1)
+  TEST_REAL_SIMILAR(detailed[0].correction_factor, 1.0)
+
+  bool found = false;
+  for (const auto& fm : detailed[0].fragments)
+  {
+    if (fm.ion_type == "y" && fm.ion_index == 2)
+    {
+      found = true;
+      // Same direction: y2 of the sub-fragment is y2 of the proteoform; over the reference it is y(P - end + 2) = y4.
+      TEST_EQUAL(fm.equiv_type, "y")
+      TEST_EQUAL(fm.equiv_index, 4)
+      TEST_EQUAL(fm.equiv_frame_index, 2)
+      // H + I + water: nothing of K, L (past the region end).
+      TEST_REAL_SIMILAR(fm.theoretical_mass, theo_y2)
+      TEST_REAL_SIMILAR(fm.adjusted_mass, fm.observed_mass)
+      TEST_REAL_SIMILAR(fm.diff_ppm, kPpm)
       break;
     }
   }

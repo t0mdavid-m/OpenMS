@@ -882,7 +882,8 @@ namespace OpenMS
       for (size_t i = 0; i < match.fragments.size(); ++i)
       {
         if (i > 0) { ms2_frags << ";"; ms2_masses << ";"; }
-        ms2_frags << match.fragments[i].equiv_type << match.fragments[i].equiv_index;
+        // Proteoform frame (CONTEXT.md): the label an MS2 row of this proteoform gives the same ion.
+        ms2_frags << match.fragments[i].equiv_type << match.fragments[i].equiv_frame_index;
         ms2_masses << match.fragments[i].adjusted_mass;
       }
     }

@@ -97,9 +97,10 @@ namespace OpenMS
         std::string ion_type;       ///< "b", "y", "a" (MS2); "b", "y", "yb", "ya", "a" (MS3 local)
         int ion_index = 0;          ///< 1-based, proteoform-space (MS2) or subsequence-space (MS3)
         double observed_mass = 0.0; ///< Deconvolved mass (calibrated for MS3)
-        std::string equiv_type;     ///< MS3 only: full-protein equivalent ion type ("b"/"y")
-        int equiv_index = 0;        ///< MS3 only: full-protein equivalent ion index
-        double adjusted_mass = 0.0; ///< MS3 only: offset-adjusted to full-protein
+        std::string equiv_type;     ///< MS3 only: equivalent ion type ("b"/"y")
+        int equiv_index = 0;        ///< MS3 only: equivalent ion index counted over the REFERENCE protein (the pooling key; never logged)
+        int equiv_frame_index = 0;  ///< MS3 only: the same ion's index in the Proteoform frame (CONTEXT.md): counted from the proteoform's own first / last residue. What identification.tsv writes.
+        double adjusted_mass = 0.0; ///< MS3 only: the measured mass re-expressed in the Proteoform frame (the mass an MS2 of this proteoform shows for the equivalent ion)
         double theoretical_mass = 0.0; ///< MS3 only: mass the proteoform predicts for the equivalent ion (mod-inclusive) = offset + md.theoretical_mass + ambiguous_included
         double diff_da = 0.0;          ///< MS3 only: adjusted_mass - theoretical_mass (Da)
         double diff_ppm = 0.0;         ///< MS3 only: diff_da / theoretical_mass * 1e6

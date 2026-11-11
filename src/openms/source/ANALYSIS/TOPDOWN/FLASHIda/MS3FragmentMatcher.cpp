@@ -479,17 +479,23 @@ namespace OpenMS
       }
     }
 
+    // The equivalent ion's mass is in the PROTEOFORM frame (CONTEXT.md): it sums the proteoform's own residues,
+    // [region_start, region_end), and nothing of the reference outside them. equiv_index stays the reference-
+    // protein index (the pooling key); only the mass stops at the region's ends. Summing from residue 0 gave
+    // every prefix ion of a Met-excised proteoform the Met's 131.04 Da, which no MS2 of that proteoform shows.
+    const int frame_start = std::max(start, 0);
+    const int frame_end = (end < 0 || end > P) ? P : end;
     double equiv_shift = getIonShift(equiv_type);
     double theo_equiv = 0.0;
     if (equiv_type == "b" || equiv_type == "a")
     {
-      if (equiv_index >= 0 && equiv_index <= P)
-        theo_equiv = protein_prefix_masses[equiv_index] + equiv_shift;
+      if (equiv_index >= frame_start && equiv_index <= P)
+        theo_equiv = (protein_prefix_masses[equiv_index] - protein_prefix_masses[frame_start]) + equiv_shift;
     }
     else if (equiv_type == "y")
     {
-      if (equiv_index >= 0 && equiv_index <= P)
-        theo_equiv = (protein_prefix_masses[P] - protein_prefix_masses[P - equiv_index]) + equiv_shift;
+      if (equiv_index >= 0 && equiv_index <= P && P - equiv_index <= frame_end)
+        theo_equiv = (protein_prefix_masses[frame_end] - protein_prefix_masses[P - equiv_index]) + equiv_shift;
     }
 
     mass_offset = theo_equiv - ms3_theoretical_mass;
@@ -680,6 +686,17 @@ namespace OpenMS
                                md.ion_type, md.position, md.theoretical_mass,
                                protein_prefix,
                                fm.equiv_type, fm.equiv_index, offset);
+          // The label the log writes: the equivalent ion counted over the proteoform's own residues (an MS2 row
+          // of the same proteoform numbers it the same way). Set here, against the context this scan was scored
+          // on, not re-derived by the writer from its render context.
+          if (!fm.equiv_type.empty())
+          {
+            const int ref_len = static_cast<int>(protein_sequence.size());
+            const int frame_start = std::max(ctx.region_start, 0);
+            const int frame_end = (ctx.region_end < 0 || ctx.region_end > ref_len) ? ref_len : ctx.region_end;
+            fm.equiv_frame_index = isPrefixIonType(fm.equiv_type) ? (fm.equiv_index - frame_start)
+                                                                  : (fm.equiv_index - (ref_len - frame_end));
+          }
           // measured -> MS2 (full-protein) frame WITH mods: fold in ONLY the ambiguous PTM mass the
           // EQUIVALENT ion actually covers (the bare-backbone FIX added md.ambiguous_included, but that is
           // the SUB-FRAME ion's covered mods -- for a complement-flipped map, e.g. suffix yb69 -> prefix b1,
