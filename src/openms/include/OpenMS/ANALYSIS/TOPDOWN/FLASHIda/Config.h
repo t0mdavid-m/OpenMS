@@ -125,6 +125,14 @@ namespace OpenMS
     Random
   };
 
+  /// identification.characterization.order: the order the MS3 of one plan are sent in. Ranked: the planner's own
+  /// order. Random: one reproducible permutation per dispatch. It never changes which MS3 a plan holds.
+  enum class Ms3SendOrder
+  {
+    Ranked = 0,
+    Random
+  };
+
   /// Exploration metric: what to optimize during CE sweep (MS2+ only)
   enum class ExplorationMetric
   {
@@ -616,6 +624,10 @@ namespace OpenMS
     /// characterization MS3 plan, governed or not, in every mode, admits a target only when its predicted bond yield
     /// reaches the threshold; a refused target hands its place on.
     std::optional<YieldGateConfig> yield_gate;
+
+    /// characterization.order. Ranked (default): a plan's MS3 are sent in the planner's order. Random: in one
+    /// reproducible permutation per dispatch; the plan itself is the same.
+    Ms3SendOrder send_order = Ms3SendOrder::Ranked;
   };
 
   /// Isobaric quantification configuration (ADR-0038).

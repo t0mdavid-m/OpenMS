@@ -1727,6 +1727,22 @@ START_SECTION(identification_section_presence_switches_and_refusals)
     TEST_EQUAL(contains(msg, "identification.search_threads"), true)
     TEST_EQUAL(contains(msg, "ADR-0062"), true)
   }
+
+  // characterization.order: absent and null are ranked; "random" parses; anything else is refused, case included.
+  {
+    const std::string ms3 = R"(, "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 35 })";
+    auto ordered = [&ms3](const std::string& order) {
+      return cfgJson("", R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "fragments")"
+                             + (order.empty() ? std::string() : R"(, "order": )" + order) + " } },", ms3);
+    };
+    TEST_EQUAL((int)Config(ordered("")).characterization().send_order, (int)Ms3SendOrder::Ranked)
+    TEST_EQUAL((int)Config(ordered("null")).characterization().send_order, (int)Ms3SendOrder::Ranked)
+    TEST_EQUAL((int)Config(ordered("\"ranked\"")).characterization().send_order, (int)Ms3SendOrder::Ranked)
+    TEST_EQUAL((int)Config(ordered("\"random\"")).characterization().send_order, (int)Ms3SendOrder::Random)
+    for (const std::string bad : {"\"Random\"", "1"})
+      TEST_EQUAL(contains(refineMessage(ordered(bad)),
+                          "identification.characterization.order must be \"ranked\" or \"random\""), true)
+  }
 }
 END_SECTION
 
@@ -1857,7 +1873,16 @@ START_SECTION(yield_gate_parses_defaults_and_rejects)
     TEST_REAL_SIMILAR(g.coefficients.precursor_charge, -0.105683)
     TEST_REAL_SIMILAR(g.coefficients.mass_ratio, -2.766660)
     TEST_REAL_SIMILAR(g.coefficients.fragment_iso_cos, 21.747494)
+    TEST_EQUAL((int)g.rank_by, (int)YieldRank::Yield)
   }
+  // rank_by: null is yield; "intensity" parses; anything else is refused, case included.
+  TEST_EQUAL((int)Config(charCfg(R"("yield_gate": { "rank_by": null })")).characterization().yield_gate->rank_by, (int)YieldRank::Yield)
+  TEST_EQUAL((int)Config(charCfg(R"("yield_gate": { "rank_by": "yield" })")).characterization().yield_gate->rank_by, (int)YieldRank::Yield)
+  TEST_EQUAL((int)Config(charCfg(R"("yield_gate": { "rank_by": "intensity" })")).characterization().yield_gate->rank_by,
+             (int)YieldRank::Intensity)
+  for (const std::string bad : {"\"Intensity\"", "\"e\"", "1"})
+    TEST_EQUAL(contains(refineMessage(charCfg(R"("yield_gate": { "rank_by": )" + bad + " }")),
+                        "identification.characterization.yield_gate.rank_by must be \"yield\" or \"intensity\""), true)
   // Authored: every key reaches the struct; a null key keeps its default.
   {
     Config c(charCfg(R"("yield_gate": { "threshold": 6, "intercept": -30.0, "fragment_intensity": 1.5, "precursor_intensity": 0.5, "precursor_charge": -0.1, "mass_ratio": -2.5, "fragment_iso_cos": null })"));
@@ -1898,7 +1923,12 @@ START_SECTION(yield_gate_parses_defaults_and_rejects)
     TEST_REAL_SIMILAR(c.quantification().ms3_yield_gate->coefficients.fragment_iso_cos, 21.747494)
     // One gate does not set the other.
     TEST_EQUAL(c.characterization().yield_gate.has_value(), false)
+    TEST_EQUAL((int)c.quantification().ms3_yield_gate->rank_by, (int)YieldRank::Yield)
   }
+  TEST_EQUAL((int)Config(q3Cfg(R"("scan": "ms3", "ms3_yield_gate": { "rank_by": "intensity" })")).quantification().ms3_yield_gate->rank_by,
+             (int)YieldRank::Intensity)
+  TEST_EQUAL(contains(refineMessage(q3Cfg(R"("scan": "ms3", "ms3_yield_gate": { "rank_by": "Intensity" })")),
+                      "quantification.ms3_yield_gate.rank_by must be \"yield\" or \"intensity\""), true)
   TEST_EQUAL(contains(refineMessage(q3Cfg(R"("scan": "ms3", "ms3_yield_gate": { "threshold": 0 })")),
                       "quantification.ms3_yield_gate.threshold must be > 0"), true)
   TEST_EQUAL(contains(refineMessage(q3Cfg(R"("scan": "ms3", "ms3_yield_gate": { "slope": 1 })")),

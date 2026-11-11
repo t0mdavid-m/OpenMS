@@ -83,7 +83,7 @@ namespace
       throw std::invalid_argument("Config: " + path + " must be an object; got " + j.dump() + " (ADR-0069).");
     rejectUnknownKeys(j,
         {"threshold", "intercept", "fragment_intensity", "precursor_intensity", "precursor_charge", "mass_ratio",
-         "fragment_iso_cos"},
+         "fragment_iso_cos", "rank_by"},
         path);
     OpenMS::YieldGateConfig g;
     auto read = [&](const char* key, double& into) {
@@ -103,6 +103,19 @@ namespace
     if (!(g.threshold > 0.0))
       throw std::invalid_argument("Config: " + path + ".threshold must be > 0 expected bonds; got " + j["threshold"].dump()
                                   + ". Delete the block to switch the gate off (ADR-0069).");
+    // rank_by: absent or null = yield. Case-sensitive and never defaulted from an unknown value, as exploration.order.
+    if (j.contains("rank_by") && !j["rank_by"].is_null())
+    {
+      if (!j["rank_by"].is_string())
+        throw std::invalid_argument("Config: " + path + ".rank_by must be \"yield\" or \"intensity\"; got "
+                                    + j["rank_by"].dump() + " (ADR-0069).");
+      const std::string r = j["rank_by"].get<std::string>();
+      if (r == "yield") g.rank_by = OpenMS::YieldRank::Yield;
+      else if (r == "intensity") g.rank_by = OpenMS::YieldRank::Intensity;
+      else
+        throw std::invalid_argument("Config: " + path + ".rank_by must be \"yield\" or \"intensity\"; got \"" + r
+                                    + "\" (values are case-sensitive; ADR-0069).");
+    }
     return g;
   }
 
@@ -735,7 +748,7 @@ namespace OpenMS
             "Config: identification.characterization.refine moved to identification.refine (ADR-0061).");
       rejectUnknownKeys(charact,
           {"mode", "max_targets", "min_fragment_charge", "min_target_mass", "fragment_charges", "per_proteoform",
-           "exploration", "yield_gate"},
+           "exploration", "yield_gate", "order"},
           "identification.characterization");
 
       // Hard-rejected, not defaulted. The old parse was
@@ -805,6 +818,19 @@ namespace OpenMS
       // ADR-0069: the characterization MS3 yield gate. Absent or null = no gate, today's plan exactly.
       if (charact.contains("yield_gate") && !charact["yield_gate"].is_null())
         characterization_.yield_gate = parseYieldGate(charact["yield_gate"], "identification.characterization.yield_gate");
+      // order: absent or null = ranked. Case-sensitive, never defaulted from an unknown value.
+      if (charact.contains("order") && !charact["order"].is_null())
+      {
+        if (!charact["order"].is_string())
+          throw std::invalid_argument("Config: identification.characterization.order must be \"ranked\" or \"random\"; got "
+                                      + charact["order"].dump() + ".");
+        const std::string o = charact["order"].get<std::string>();
+        if (o == "ranked") characterization_.send_order = Ms3SendOrder::Ranked;
+        else if (o == "random") characterization_.send_order = Ms3SendOrder::Random;
+        else
+          throw std::invalid_argument("Config: identification.characterization.order must be \"ranked\" or \"random\"; got \""
+                                      + o + "\" (values are case-sensitive).");
+      }
     }
 
     // --- quantification (ADR-0038) ---
