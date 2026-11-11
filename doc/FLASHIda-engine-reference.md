@@ -786,7 +786,11 @@ went out as `ETD;HCD`. What ETD changes is the targets' **ion type** (c/z), and 
 (`[DISCRIMINATING] … decided=kept reason=no_annotatable_pieces`, no `[MS3-DECIDE]`, no pooled row):
 with no MS3 confirmation the recount degenerates to an MS2-only ranking that can flip the winner. The
 whole-protein matcher an MS3 *exploration variant* also runs (`computeFragmentMatch_`) never reads the
-precursor class and is left alone — its full-protein ions are right whatever the precursor was.
+precursor class and is left alone — its full-protein ions are right whatever the precursor was. Its match
+feeds the variant's provisional `fragment_count` score only: at MS3 it is never published as an
+identification (`feedResultImpl_` assigns `identification.result` for an MS2 group only), because it carries
+no equivalent ion and no adjusted mass. An MS3 variant's `identification.tsv` row is the calibrated
+re-score's; a measuring-metric pre-scan and a variant of a dropped sweep have none.
 `ETciD` (one spelling, PSI-MS MS:1003182) joins both `needsCollisionEnergy` and `needsReactionTime`.
 **No ETD→MS3 has run on hardware**; whether the instrument takes `ReactionTime "7;0"` is open.
 
