@@ -488,6 +488,12 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "and MatchedMasses, the masses on the path. Without the option, results are unchanged.");
   defaults_.setMinInt("chimeric_rounds", 0);
   defaults_.setMaxInt("chimeric_rounds", max_chimeric_rounds);
+  defaults_.setValue("chimeric_same_protein", "false",
+                     "Residual search (chimeric_rounds): the proteins of the spectrum's earlier best PrSMs and their target-decoy partners stay "
+                     "candidates, so a second proteoform of the same protein can be reported in the spectrum (e.g. a co-isolated form with "
+                     "another modification). The masses the earlier PrSMs matched are still removed. Shuffled decoys do not model the "
+                     "remaining fragments of a protein that is in the spectrum, so the q-values of the residual classes are optimistic with it.");
+  defaults_.setValidStrings("chimeric_same_protein", {"true", "false"});
   // raw-spectrum annotation (FLASHAnnotator's defaults, terminal fragments only): only its tolerance is a parameter
   const auto aparam = FLASHAnnotatorAlgorithm().getDefaults();
   defaults_.setValue("raw:tol", aparam.getValue("tol"), aparam.getDescription("tol"));
@@ -668,6 +674,7 @@ void FLASHTnTAlgorithm::updateMembers_()
   decoy_precursor_ = param_.getValue("decoy_precursor").toString() == "true";
   one_proteoform_per_feature_ = param_.getValue("one_proteoform_per_feature").toString() == "true";
   chimeric_rounds_ = param_.getValue("chimeric_rounds");
+  chimeric_same_protein_ = param_.getValue("chimeric_same_protein").toString() == "true";
   pro_fdr_ = param_.getValue("pro_fdr");
   keep_decoy_ = param_.getValue("keep_decoy").toString() == "true";
   keep_underdetermined_ = param_.getValue("discard_underdetermined").toString() == "false";
@@ -3802,7 +3809,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           removed_count[d] += all.size() - kept.size();
           removed_total += all.size() - kept.size();
           // the protein of the best PrSM and its target-decoy partner are not proposed again in this spectrum; in native mode, where every
-          // kept candidate's PrSM is reported, none of the proteins reported in the spectrum (one PrSM per protein)
+          // kept candidate's PrSM is reported, none of the proteins reported in the spectrum (one PrSM per protein). With
+          // chimeric_same_protein, no protein is excluded
           std::vector<Size> reported {(Size)(int)best_hit.getMetaValue(mi_fasta_index)};
           if (native_)
           {
@@ -3813,7 +3821,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
               if (it != spectrum_of_scan.end() && it->second == d && h.metaValueExists(mi_fasta_index)) reported.push_back((Size)(int)h.getMetaValue(mi_fasta_index));
             }
           }
-          for (Size fasta_index : reported) addProteinEntries(fasta_index, excluded[d]);
+          if (! chimeric_same_protein_) { for (Size fasta_index : reported) addProteinEntries(fasta_index, excluded[d]); }
           // the residual: no precursor mass, and of the original spectrum only what the search reads (retention time, MS level)
           DeconvolvedSpectrum res(dspecs[d].getScanNumber());
           MSSpectrum original;

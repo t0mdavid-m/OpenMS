@@ -215,6 +215,8 @@ private:
   void applyLearnedScoring_(std::vector<ProteinHit>& hits, const std::map<int, const MSSpectrum*>& spectra) const;
   /// residual search rounds of chimeric spectra after the first search (0: off)
   int chimeric_rounds_ = 0;
+  /// residual rounds may propose the protein of the spectrum's earlier best PrSMs again (a second proteoform of the same protein)
+  bool chimeric_same_protein_ = false;
   /// candidates from gapped tags: off, fallback (spectra without sequence-tag candidates), both, only
   std::string gapped_mode_ = "fallback";
   /// candidates from terminal ladders (residue sums from an intact protein terminus) in every spectrum
