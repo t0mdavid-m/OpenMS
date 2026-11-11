@@ -1314,7 +1314,7 @@ namespace OpenMS
         const MappedFragment& f = kv.second;
         double mapped_mass = 0.0;
         if (f.best_ms2.has_value()) mapped_mass = f.best_ms2->observed_mass;
-        else if (f.best_ms3.has_value()) mapped_mass = f.best_ms3->observed_mass;   // also MS2-frame
+        else if (f.best_ms3.has_value()) mapped_mass = f.best_ms3->observed_mass;   // adjusted: also the proteoform frame
         else continue;
         if (mapped_mass <= 0.0) continue;
         const double diff = std::abs(mapped_mass - pr.mono_mass);
@@ -1998,17 +1998,23 @@ namespace OpenMS
       std::string type;
       int idx = 0;
       double obs_mass = 0.0;
+      // The mass this fragment has IN ITS OWN SCAN, which is what ps.peaks holds: for an MS3 the measured
+      // sub-fragment mass, not the adjusted (proteoform-frame) one the model pools. Searching the scan for the
+      // adjusted mass finds a flipped ion's peak never, and took the nearest unrelated peak's intensity.
+      double lookup_mass = 0.0;
       if (ps.ms_level == 3)
       {
         type = fm.equiv_type;       // already full-protein b/y
         idx = fm.equiv_index;       // already full-protein index
         obs_mass = fm.adjusted_mass;
+        lookup_mass = fm.observed_mass;
       }
       else
       {
         type = fm.ion_type;         // region-relative
         idx = fm.ion_index;         // region-relative 1-based
         obs_mass = fm.observed_mass;
+        lookup_mass = fm.observed_mass;
       }
       if (type.empty() || idx <= 0) continue;
 
@@ -2048,8 +2054,8 @@ namespace OpenMS
         bool within_tol = false;
         for (const PeakRecord& pr : ps.peaks)
         {
-          const double diff = std::abs(pr.mono_mass - obs_mass);
-          const double tol_abs = obs_mass * tol_ppm * 1e-6;
+          const double diff = std::abs(pr.mono_mass - lookup_mass);
+          const double tol_abs = lookup_mass * tol_ppm * 1e-6;
           const bool in_tol = (diff <= tol_abs);
           // Prefer the closest in-tolerance entry; fall back to the closest overall.
           if (in_tol && !within_tol)

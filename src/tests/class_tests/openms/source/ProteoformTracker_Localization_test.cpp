@@ -108,8 +108,9 @@ namespace
   }
 
   // A single-fragment MS3 ProteoformMatch. mapScanOntoModel_'s ms_level == 3 branch reads equiv_type /
-  // equiv_index / adjusted_mass and copies includes_ptm onto the FragmentObservation. adjusted_mass is a
-  // dummy: Pass B uses includes_ptm + cover_* only, never the mass. score = -1 (foldMs3 never re-picks).
+  // equiv_index / adjusted_mass (and observed_mass, to find the fragment's own peak) and copies includes_ptm
+  // onto the FragmentObservation. adjusted_mass is a dummy and observed_mass stays 0 (the closest-peak
+  // fallback then takes the scan's only peak): Pass B uses includes_ptm + cover_* only, never the mass. score = -1 (foldMs3 never re-picks).
   FragmentAnalysis::ProteoformMatch makeMatchMs3(const std::string& equiv_type, int equiv_index,
                                                  double adjusted_mass, bool includes_ptm,
                                                  bool is_complement_flip = false)

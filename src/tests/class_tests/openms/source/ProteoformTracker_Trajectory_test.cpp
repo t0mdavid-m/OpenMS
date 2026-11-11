@@ -109,12 +109,13 @@ namespace
     return m;
   }
 
-  // A single-fragment MS3 ProteoformMatch. mapScanOntoModel_'s ms_level == 3 branch
-  // (ProteoformTracker.cpp:558-563) reads the MS3 fields equiv_type / equiv_index / adjusted_mass (NOT
-  // ion_type / ion_index / observed_mass), so we set ONLY those. score = -1 and proteoform_sequence = ""
-  // because foldMs3 never re-picks a winner: the model already carries the winner sequence, and
-  // mapScanOntoModel_ uses the MODEL's sequence (m.proteoform_sequence), not the match's.
-  FragmentAnalysis::ProteoformMatch makeMatchMs3(const std::string& equiv_type, int equiv_index, double adjusted_mass)
+  // A single-fragment MS3 ProteoformMatch. mapScanOntoModel_'s ms_level == 3 branch keys the fragment on
+  // equiv_type / equiv_index, pools adjusted_mass, and finds the fragment's own peak in the scan by
+  // observed_mass (the measured sub-fragment mass: what the scan's peak list holds). score = -1 and
+  // proteoform_sequence = "" because foldMs3 never re-picks a winner: the model already carries the winner
+  // sequence, and mapScanOntoModel_ uses the MODEL's sequence (m.proteoform_sequence), not the match's.
+  FragmentAnalysis::ProteoformMatch makeMatchMs3(const std::string& equiv_type, int equiv_index, double adjusted_mass,
+                                                 double observed_mass)
   {
     FragmentAnalysis::ProteoformMatch m;
     m.score = -1.0;              // not a winner candidate (foldMs3 folds onto the existing baseline)
@@ -124,7 +125,8 @@ namespace
     FragmentAnalysis::ProteoformMatch::FragmentMatch fm;
     fm.equiv_type = equiv_type;       // MS3: full-protein equivalent ion type ("b"/"y")
     fm.equiv_index = equiv_index;     // MS3: full-protein equivalent ion index
-    fm.adjusted_mass = adjusted_mass; // MS3: offset-adjusted-to-full-protein mass
+    fm.adjusted_mass = adjusted_mass; // MS3: the measured mass re-expressed in the proteoform frame
+    fm.observed_mass = observed_mass; // MS3: the measured sub-fragment mass, as it stands in the MS3 scan
     m.fragments.push_back(fm);
     return m;
   }
@@ -522,7 +524,7 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   {
     DeconvolvedSpectrum d201(201);
     d201.push_back(makeSyntheticPeakGroup(350.0 / 2.0 + 1.0, 350.0, 2));
-    tracker.feedScan(precursor_id, 3, ms3_params, 201, d201, makeMatchMs3("b", 3, 350.0), -1.0, ms2_ctx);
+    tracker.feedScan(precursor_id, 3, ms3_params, 201, d201, makeMatchMs3("b", 3, 350.0, 350.0), -1.0, ms2_ctx);
     tracker.foldMs3(precursor_id, "b3", "AAB");
   }
 
@@ -541,7 +543,7 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   {
     DeconvolvedSpectrum d202(202);
     d202.push_back(makeSyntheticPeakGroup(450.0 / 2.0 + 1.0, 450.0, 2));
-    tracker.feedScan(precursor_id, 3, ms3_params, 202, d202, makeMatchMs3("y", 3, 450.0), -1.0, ms2_ctx);
+    tracker.feedScan(precursor_id, 3, ms3_params, 202, d202, makeMatchMs3("y", 3, 450.0, 450.0), -1.0, ms2_ctx);
     tracker.foldMs3(precursor_id, "y3", "AAC");
   }
 
@@ -635,6 +637,70 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   const double cov2 = std::stod(rows[2][CI_COV]);
   TEST_TRUE(cov1 >= cov0)
   TEST_TRUE(cov2 >= cov1)
+}
+END_SECTION
+
+START_SECTION(ms3_flipped_ion_takes_its_own_peak)
+{
+  // A flipped MS3 ion (a suffix sub-fragment of a b precursor, mapped to a prefix equivalent) has two masses:
+  // the measured one, which is the peak in the MS3 scan, and the adjusted one, which is the equivalent ion's
+  // mass in the proteoform frame and the mass the model pools. The fragment's own peak is found by the
+  // MEASURED mass. Searched by the adjusted mass it is never in tolerance, and the closest-overall fallback
+  // handed the fragment the m/z, charge and intensity of whatever unrelated peak lay nearest.
+  const int precursor_id = 8;
+  const std::string log_dir = "testlogs/pt_trajectory_flip";
+  File::removeDirRecursively(log_dir);
+  File::makeDir(log_dir);
+  std::string cfg_json = std::string(R"({
+    "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 1, "max_charge": 50, "min_mass": 100, "max_mass": 50000, "tol": [10, 10, 10] },
+    "precursor_selection": { "rt_window": 180, "targeting": "none", "consider_all_charges": false, "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 3 },
+    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+    "faims": { "cv_values": [], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 100, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
+      "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25, "resolution": 120000 }
+    },
+    "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
+    "files": { "target_logs": [], "inclusion_list": "" },
+    "identification": { "reference": { "sequence": "PEPTIDEK" }, "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 }, "characterization": { "mode": "coverage", "max_targets": 10 } },
+    "runtime": { "log_dir": ")") + log_dir + R"(" } })";
+
+  Config cfg{cfg_json};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  ScanCommand ms2_ctx = makeMs2Ctx();
+
+  Ms2Params p;
+  p.collision_energy = 29.0;
+  p.activation_type = "HCD";
+  p.reaction_time = 0.0;
+  DeconvolvedSpectrum d101(101);
+  d101.push_back(makeSyntheticPeakGroup(700.0 / 2.0 + 1.0, 700.0, 2));
+  tracker.feedScan(precursor_id, 2, p, 101, d101, makeMatch("b", 6, 700.0), 1.0, ms2_ctx);
+  tracker.finalizeMS2(precursor_id);
+
+  // The MS3 scan: the fragment's own peak at its measured mass 620 (3+), and an unrelated peak at 352 (2+)
+  // that happens to lie next to the fragment's ADJUSTED mass 350.
+  DeconvolvedSpectrum d201(201);
+  d201.push_back(makeEnvelope(620.0, {3}));
+  d201.push_back(makeEnvelope(352.0, {2}));
+  tracker.feedScan(precursor_id, 3, p, 201, d201, makeMatchMs3("b", 3, 350.0, 620.0), -1.0, ms2_ctx);
+  tracker.foldMs3(precursor_id, "b6", "AAB");
+
+  const ProteoformModel* mdl = tracker.getModel(precursor_id);
+  TEST_TRUE(mdl != nullptr)
+  ABORT_IF(mdl == nullptr)
+  auto it = mdl->fragments.find(FragmentKey{"b", 3});
+  TEST_TRUE(it != mdl->fragments.end())
+  ABORT_IF(it == mdl->fragments.end())
+  TEST_TRUE(it->second.best_ms3.has_value())
+  ABORT_IF(!it->second.best_ms3.has_value())
+  const FragmentObservation& o = *it->second.best_ms3;
+  TEST_EQUAL(o.frag_charge, 3)                              // its own peak (was 2: the peak nearest 350)
+  TEST_REAL_SIMILAR(o.frag_mz, (620.0 + 0.5 * ISOTOPE_STEP) / 3.0 + PROTON_MASS)   // the centre of its two 3+ isotopes
+  TEST_REAL_SIMILAR(o.measured_mass, 620.0)
+  TEST_REAL_SIMILAR(o.observed_mass, 350.0)                 // the model still pools the adjusted mass
 }
 END_SECTION
 
