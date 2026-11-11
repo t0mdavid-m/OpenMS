@@ -123,6 +123,11 @@ namespace OpenMS
                              // row no yield gate tested (MS1, MS2, an MS3 with its gate off or no ion index). Same
                              // gap as above, for the same reason.
                              << "predicted_bond_yield\t"
+                             // ADR-0072: the command's maximum injection time (ms), as sent: for a multiplexed scan
+                             // the scan's configured max_it shared across its stage-0 windows. 0 = unset (the
+                             // instrument method's own maximum applies), a real value, as in first_mass. Same gap
+                             // as above, for the same reason.
+                             << "max_it\t"
                              << "enqueue_ts\n";
         commands_tsv_stream_.flush();
       }
@@ -552,6 +557,7 @@ namespace OpenMS
                          << quoteLogCell(decision_survey) << "\t"
                          << isolation_purity << "\t"
                          << predicted_bond_yield << "\t"  // ADR-0069: E the yield gate admitted it at, else -1
+                         << mz(cmd.max_it) << "\t"        // ADR-0072: the value sent (a multiplexed scan's share); 0 = unset
                          << cmd.enqueue_timestamp_ms << "\n";
     commands_tsv_stream_.flush();
   }

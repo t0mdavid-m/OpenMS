@@ -67,13 +67,14 @@ START_SECTION(schema_column_counts)
   auto r = TSVFile::parse(dir + "/scan_results.tsv");
   auto i = TSVFile::parse(dir + "/identification.tsv");
 
-  TEST_EQUAL(c.headers.size(), 37)   // E6: + scan_description; P5: + precursor_id; + ms3_proteoform (wide MS3 fragment); ADR-0012: + faims_enabled;
+  TEST_EQUAL(c.headers.size(), 38)   // E6: + scan_description; P5: + precursor_id; + ms3_proteoform (wide MS3 fragment); ADR-0012: + faims_enabled;
                                      // ADR-0026 d6: + first_mass/last_mass (32 -> 34). Inserted between faims_enabled and
                                      // enqueue_ts, so every c.colIndex pinned below and c.headers.back() are unchanged --
                                      // that they still pass IS the proof the insertion point was the only admissible one.
                                      // Survey re-planning: + decision_survey_id/isolation_purity (34 -> 36), in the same
                                      // gap before enqueue_ts and for the same reason.
                                      // ADR-0069: + predicted_bond_yield (36 -> 37), in the same gap, for the same reason.
+                                     // ADR-0072: + max_it (37 -> 38), in the same gap, for the same reason.
   // E5: + ms_level; F5: + winner_tracking_id; slim-down: -5 id-payload cols (34->29); per-charge
   // deconv output replaced 4 columns (masses/intensities/min_charge/max_charge) with 3
   // (masses/charges/intensities), min and max being derivable from the charge list (29->28); then
@@ -136,6 +137,7 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(c.colIndex("decision_survey_id"), 33)
   TEST_EQUAL(c.colIndex("isolation_purity"), 34)
   TEST_EQUAL(c.colIndex("predicted_bond_yield"), 35)          // ADR-0069: -1 on every row until a yield gate tests it
+  TEST_EQUAL(c.colIndex("max_it"), 36)                        // ADR-0072: the max_it sent; enqueue_ts stays last
   TEST_EQUAL(r.headers.front(), std::string("tracking_id"))
   TEST_EQUAL(r.colIndex("ms_level"), 1)
   TEST_EQUAL(r.headers.back(), std::string("search_ms"))      // ADR-0061 push 4b: the search block follows the kinetic one
@@ -214,6 +216,7 @@ START_SECTION(commands_ms2_columns)
   bool found = false;
   bool tid_ok = true, type_ok = true, act_ok = true, ce_ok = true, qsc_ok = true;
   bool snr_ok = true, ppm_ok = true, pint_ok = true, parent_ok = true, ion_ok = true, nosemi = true, pby_ok = true;
+  bool maxit_ok = true;
   for (const auto& row : t.rows)
   {
     if (lvl >= (int)row.size() || row[lvl] != "2") continue;
@@ -229,6 +232,7 @@ START_SECTION(commands_ms2_columns)
     parent_ok = parent_ok && isTrackingId(cell(t, row, "parent_tracking_id"));  // == its MS1
     ion_ok    = ion_ok    && cell(t, row, "ion_type").empty() && (cell(t, row, "ion_index") == "0");
     pby_ok    = pby_ok    && (cell(t, row, "predicted_bond_yield") == "-1");  // ADR-0069: no yield gate tests an MS2
+    maxit_ok  = maxit_ok  && (cell(t, row, "max_it") == "0.0000");            // ADR-0072: this config's ms2 sets none
     nosemi    = nosemi    && (cell(t, row, "charge").find(';') == std::string::npos)
                          && (cell(t, row, "qscore").find(';') == std::string::npos);  // single stage
     TEST_TRUE(inMass(toD(cell(t, row, "mono_mass"))))
@@ -241,6 +245,7 @@ START_SECTION(commands_ms2_columns)
   TEST_TRUE(tid_ok)  TEST_TRUE(type_ok)  TEST_TRUE(act_ok)  TEST_TRUE(ce_ok)
   TEST_TRUE(qsc_ok)  TEST_TRUE(snr_ok)   TEST_TRUE(ppm_ok)  TEST_TRUE(pint_ok)
   TEST_TRUE(parent_ok) TEST_TRUE(ion_ok) TEST_TRUE(nosemi) TEST_TRUE(pby_ok)
+  TEST_TRUE(maxit_ok)
 }
 END_SECTION
 
@@ -413,13 +418,15 @@ START_SECTION(commands_ms1_agc_stageless)
   int lvl = t.colIndex("ms_level");
   ABORT_IF(lvl < 0)
 
-  bool found = false, type_ok = true, act_ok = true, zero_ok = true, parent_ok = true, ion_ok = true;
+  bool found = false, type_ok = true, act_ok = true, zero_ok = true, parent_ok = true, ion_ok = true, maxit_ok = true;
   for (const auto& row : t.rows)
   {
     if (lvl >= (int)row.size() || row[lvl] != "1") continue;
     found = true;
     std::string st = cell(t, row, "scan_type");
     type_ok = type_ok && (st == "survey" || st == "agc");
+    // ADR-0072: the max_it sent -- ms_settings.ms1's 246 on a survey, makeAGC's fixed 1 on the prescan
+    maxit_ok = maxit_ok && (cell(t, row, "max_it") == (st == "agc" ? "1.0000" : "246.0000"));
     act_ok  = act_ok  && (cell(t, row, "activation") == "none");
     // stage-less placeholders: per-stage numerics literal "0", scoring scalars "0"
     zero_ok = zero_ok && (cell(t, row, "charge") == "0") && (cell(t, row, "precursor_mz") == "0")
@@ -431,6 +438,7 @@ START_SECTION(commands_ms1_agc_stageless)
   }
   TEST_TRUE(found)
   TEST_TRUE(type_ok)  TEST_TRUE(act_ok)  TEST_TRUE(zero_ok)  TEST_TRUE(parent_ok)  TEST_TRUE(ion_ok)
+  TEST_TRUE(maxit_ok)
 }
 END_SECTION
 
