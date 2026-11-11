@@ -194,7 +194,7 @@ private `monitor_deconv_` (ADR-0042). **Do not merge the monitor engine into `de
 ## Logging (`FLASHIda/IdaLogger.cpp`)
 
 Five streams in `runtime.log_dir` (empty = nothing opens; the host creates the directory):
-`ida.log` (free text, decision record), `scan_commands.tsv` (37 columns, one row per dequeued
+`ida.log` (free text, decision record), `scan_commands.tsv` (38 columns, one row per dequeued
 command; what FLASHDeconv reads), `scan_results.tsv` (56), `identification.tsv` (49),
 `pooled_identification.tsv` (20). `IdaLogger` serialises each stream itself.
 
@@ -232,6 +232,10 @@ keep reading pre-2026-09 run folders. The FLASHDeconv side is inside the boundar
   (exempts a sibling) are authored and inert by default (ADR-0040).
 - `separate` and `multiplexed` read **one** `selectNotches` call and differ only in scan count
   (ADR-0021). **Fan out at the emit loop, never in the candidate loop.**
+- **A command's `max_it` is its scan config's divided by `windowsAtStage(cmd, 0)`** (`sharedMaxIt_` in
+  `ScanCommandQueue.cpp`, ADR-0072): the instrument applies `MaxIT` to each fill. Assign it after the
+  stage-0 notches are written, from the scan config, never from another command; a builder that rewrites a
+  copied command's notches reassigns it (`reisolate`). Stage-1 notches never divide.
 - An inclusion row's authored charge set restricts, never extends, and re-keys exclusion to
   `(nominal mass, charge)` for those species only (ADR-0028).
 - MS3 needs the fragment's whole envelope (`PeakRecord::by_charge`).
