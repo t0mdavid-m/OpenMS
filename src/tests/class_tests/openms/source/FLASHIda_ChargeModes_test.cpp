@@ -488,6 +488,52 @@ START_SECTION(separate_and_multiplexed_acquire_the_same_charge_set)
 }
 END_SECTION
 
+// ADR-0072: the instrument applies MaxIT to every fill of a multiplexed isolation, so the configured max_it is
+// the budget of the whole scan. Every MS2 the engine hands out -- through admission, the queue, a re-plan's
+// re-isolation and the drain -- carries its share: max_it x stage-0 windows is the configured value, whatever
+// the window count. "separate" isolates one window per command and spends the whole budget on it.
+START_SECTION(multiplexed_run_spends_one_max_it_per_scan)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+
+  // The fixture's ms2 block sets no max_it (0 = the instrument method's own, which nothing shares).
+  auto withMs2MaxIt = [](std::string cfg) {
+    const std::string from = "\"collision_energy\": 29,";
+    const size_t at = cfg.find(from);
+    if (at != std::string::npos) cfg.replace(at, from.size(), from + " \"max_it\": 120,");
+    return cfg;
+  };
+  const std::string mux_cfg = withMs2MaxIt(cfgFor("multiplexed"));
+  const std::string sep_cfg = withMs2MaxIt(cfgFor("separate"));
+  ABORT_IF(mux_cfg.find("\"max_it\": 120") == std::string::npos)
+  ABORT_IF(sep_cfg.find("\"max_it\": 120") == std::string::npos)
+
+  FLASHIda mux_ida(const_cast<char*>(mux_cfg.c_str()));
+  FLASHIda sep_ida(const_cast<char*>(sep_cfg.c_str()));
+  AcqResult mux = runMode(mux_ida, scans);
+  AcqResult sep = runMode(sep_ida, scans);
+
+  TEST_EQUAL(mux.ms2_cmds.size() > 0, true)
+  TEST_EQUAL(sep.ms2_cmds.size() > 0, true)
+
+  int multi_window = 0;
+  for (const auto& c : mux.ms2_cmds)
+  {
+    const int windows = windowsAtStage(c, 0);
+    if (windows >= 2) ++multi_window;
+    TEST_REAL_SIMILAR(c.max_it * windows, 120.0)
+  }
+  TEST_EQUAL(multi_window > 0, true)  // non-vacuity: with one window everywhere nothing was shared
+
+  for (const auto& c : sep.ms2_cmds)
+  {
+    TEST_EQUAL(windowsAtStage(c, 0), 1)
+    TEST_REAL_SIMILAR(c.max_it, 120.0)
+  }
+}
+END_SECTION
+
 // CM-03: the default mode's within-survey invariant -- a mass is acquired at exactly ONE charge.
 // Guards the other direction: a fan-out that fires regardless of mode would spend the whole budget
 // on one proteoform's charge states and never fragment P2 or P3.

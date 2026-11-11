@@ -84,6 +84,38 @@ namespace
 }
 )";
 
+  // ---- ADR-0072: a scan's max_it shared across its stage-0 windows ----------------------------------
+
+  /// The minimal config under precursor_charges @p mode.
+  std::string configWithChargeMode(const std::string& mode)
+  {
+    std::string s(minimal_config);
+    const std::string from = "\"rank_by\": \"qscore\",";
+    s.replace(s.find(from), from.size(), from + " \"precursor_charges\": \"" + mode + "\",");
+    return s;
+  }
+
+  /// One species at charges 12..16, three isotopes each, so every charge has a measured m/z range.
+  PeakGroup fiveChargeSpecies()
+  {
+    const double mass = 12351.3933;
+    PeakGroup pg(12, 16, true);
+    pg.setMonoisotopicMass(mass);
+    for (int z = 12; z <= 16; ++z)
+    {
+      for (int iso = 0; iso < 3; ++iso)
+      {
+        FLASHHelperClasses::LogMzPeak lp;
+        lp.mz = (mass + iso * 1.003355) / z + 1.007276;
+        lp.abs_charge = z;
+        lp.isotopeIndex = iso;
+        lp.intensity = 1000.0f * z;
+        pg.push_back(lp);
+      }
+    }
+    return pg;
+  }
+
   // ---- Survey re-planning: plan units built by hand -------------------------------------------------
 
   /// The minimal config with scan_timeout at @p ms, for the expiry section.
@@ -1023,6 +1055,7 @@ START_SECTION(reisolate_matches_buildMS2_geometry)
   ScanConfig sc;
   sc.collision_energy = 29;
   sc.activation = "HCD";
+  sc.max_it = 120;   // ADR-0072: the scan's budget; r's two windows get 60 each
 
   // The command to re-isolate: another charge with another notch set, as a bought R a survey ago would be.
   const std::vector<int> old_set = {13, 15};
@@ -1052,7 +1085,108 @@ START_SECTION(reisolate_matches_buildMS2_geometry)
     TEST_EQUAL(std::string(got.scan_description).substr(0, 3), ScanCommandQueue::encode(r.scan_id))
     TEST_REAL_SIMILAR(got.mono_mass, expected.mono_mass)
     TEST_REAL_SIMILAR(got.precursor_intensity, expected.precursor_intensity)
+    // ADR-0072: the same budget over the new windows -- 40 for three, 120 for one -- and not r's share of 60.
+    TEST_REAL_SIMILAR(got.max_it, expected.max_it)
   }
+}
+END_SECTION
+
+// ADR-0072: the instrument applies MaxIT to every fill of a multiplexed isolation, so a configured max_it is the
+// budget of the whole scan and each stage-0 window gets an equal share of it.
+START_SECTION(multiplexed_ms2_shares_max_it_across_its_windows)
+{
+  Config cfg{configWithChargeMode("multiplexed")};
+  ScanCommandQueue q(cfg);
+  const PeakGroup pg = fiveChargeSpecies();
+  ScanConfig sc;
+  sc.collision_energy = 29;
+  sc.activation = "HCD";
+  sc.max_it = 120;
+
+  for (const std::vector<int>& set : std::vector<std::vector<int>>{{13}, {13, 15}, {14, 12, 16}, {12, 13, 14, 15, 16}})
+  {
+    const ScanCommand cmd = q.buildMS2(pg, set.front(), sc, 0, 0, &set, 'R');
+    TEST_EQUAL(windowsAtStage(cmd, 0), static_cast<int>(set.size()))
+    TEST_REAL_SIMILAR(cmd.max_it, 120.0 / set.size())   // 120, 60, 40, 24
+  }
+
+  // Control: the same charge set under "separate" is one window per command, at the whole budget.
+  Config sep_cfg{configWithChargeMode("separate")};
+  ScanCommandQueue sep_q(sep_cfg);
+  const std::vector<int> set = {14, 12, 16};
+  const ScanCommand one = sep_q.buildMS2(pg, 14, sc, 0, 0, &set, 'R');
+  TEST_EQUAL(windowsAtStage(one, 0), 1)
+  TEST_REAL_SIMILAR(one.max_it, 120.0)
+}
+END_SECTION
+
+// An MS3 replays its parent MS2's stage-0 windows, one fill each, so they share the MS3's max_it. Its own
+// stage-1 notches (the fragment's other charges, co-isolated in one fill) do not divide anything.
+START_SECTION(ms3_shares_max_it_across_replayed_precursor_windows_only)
+{
+  Config cfg{configWithChargeMode("multiplexed")};
+  ScanCommandQueue q(cfg);
+  const PeakGroup pg = fiveChargeSpecies();
+  ScanConfig sc;
+  sc.collision_energy = 29;
+  sc.activation = "HCD";
+  sc.max_it = 120;
+  const std::vector<int> three = {14, 12, 16};
+  const std::vector<int> single = {14};
+  const ScanCommand ctx3 = q.buildMS2(pg, 14, sc, 0, 0, &three, 'R');
+  const ScanCommand ctx1 = q.buildMS2(pg, 14, sc, 0, 0, &single, 'R');
+  ABORT_IF(windowsAtStage(ctx3, 0) != 3)
+  ABORT_IF(windowsAtStage(ctx1, 0) != 1)
+
+  ScanConfig ms3;
+  ms3.activation = "CID";
+  ms3.collision_energy = 35;
+  ms3.max_it = 300;
+  const std::vector<NotchCandidate> s1 = {{3, 400.5, 2.0, 8.0, 1.0e6}, {4, 300.6, 2.0, 7.0, 1.0e6}};
+
+  const ScanCommand a = q.buildMS3(ctx3, ms3, 600.0, 2, 2.0, ctx3.scan_id);
+  TEST_EQUAL(windowsAtStage(a, 0), 3)
+  TEST_REAL_SIMILAR(a.max_it, 100.0)
+
+  const ScanCommand b = q.buildMS3(ctx3, ms3, 600.0, 2, 2.0, ctx3.scan_id, '\0', 0, 1, {}, nullptr, {}, &s1);
+  ABORT_IF(b.stage1_notch_count != 2)   // or "stage 1 does not divide" is tested on a command with no stage-1 notch
+  TEST_REAL_SIMILAR(b.max_it, 100.0)
+
+  const ScanCommand c = q.buildMS3(ctx1, ms3, 600.0, 2, 2.0, ctx1.scan_id, '\0', 0, 1, {}, nullptr, {}, &s1);
+  ABORT_IF(c.stage1_notch_count != 2)
+  TEST_REAL_SIMILAR(c.max_it, 300.0)
+
+  // An MS3 sweep's production MS3 is built from the winning MS3: the budget comes from the config again, so
+  // it is shared once, not shared a second time from b's share.
+  const ScanCommand d = q.buildMS3(b, ms3, 600.0, 2, 2.0, b.scan_id);
+  TEST_EQUAL(windowsAtStage(d, 0), 3)
+  TEST_REAL_SIMILAR(d.max_it, 100.0)
+}
+END_SECTION
+
+// A follow-up (a rescue scan, an exploration winner's follow-up) keeps the windows of the command it follows and
+// brings its own scan config: its own max_it is what the inherited windows share.
+START_SECTION(follow_up_shares_its_own_max_it_across_the_inherited_windows)
+{
+  Config cfg{configWithChargeMode("multiplexed")};
+  ScanCommandQueue q(cfg);
+  const PeakGroup pg = fiveChargeSpecies();
+  ScanConfig sc;
+  sc.collision_energy = 29;
+  sc.activation = "HCD";
+  sc.max_it = 120;
+  const std::vector<int> three = {14, 12, 16};
+  const ScanCommand ctx = q.buildMS2(pg, 14, sc, 0, 0, &three, 'R');
+  ABORT_IF(windowsAtStage(ctx, 0) != 3)
+  TEST_REAL_SIMILAR(ctx.max_it, 40.0)
+
+  ScanConfig fu;
+  fu.collision_energy = 35;
+  fu.activation = "HCD";
+  fu.max_it = 60;
+  const ScanCommand f = q.buildFollowUp(ctx, fu, 'R');
+  TEST_EQUAL(windowsAtStage(f, 0), 3)
+  TEST_REAL_SIMILAR(f.max_it, 20.0)   // not 60 (unshared), not 40 (ctx's share), not 13.3 (ctx's share, shared again)
 }
 END_SECTION
 

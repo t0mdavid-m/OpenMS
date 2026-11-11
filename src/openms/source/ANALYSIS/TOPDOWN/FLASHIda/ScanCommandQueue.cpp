@@ -226,6 +226,21 @@ namespace OpenMS
     cmd.hcd_energy_s1 = cmd.num_stages > 1 ? static_cast<int32_t>(std::lround(cmd.stages[1].collision_energy)) : 0;
   }
 
+  /// A scan's injection-time budget, shared across its stage-0 windows (ADR-0072).
+  ///
+  /// The instrument applies MaxIT to every fill of a multiplexed isolation, so a command that isolates N
+  /// windows at stage 0 (the anchor plus its notches) and carried the configured max_it could inject for N
+  /// times that. A configured max_it is the budget of the whole scan: each window gets an equal share.
+  /// Stage 1's notches (an MS3's co-isolated fragment charges) are one simultaneous fill and do not count.
+  ///
+  /// Called by a builder once the command's stage-0 notches are written, with the value from the scan
+  /// config -- never with another command's max_it, which is already a share. 0 (unset: the instrument
+  /// method's own maximum applies, per window) stays 0.
+  static double sharedMaxIt_(double scan_budget, const ScanCommand& cmd)
+  {
+    return scan_budget / std::max(1, windowsAtStage(cmd, 0));
+  }
+
   // --- MS2 isolation geometry, shared by buildMS2 and reisolate ---
   //
   // Factored out of buildMS2 byte for byte, so a bought R a newer survey re-isolates (reisolate) carries
@@ -298,6 +313,10 @@ namespace OpenMS
     }
     for (int j = 0; j < MAX_NOTCHES_PER_STAGE; ++j) cmd.notches[j] = Notch{};
     writeNotchesForStage(cmd, 0, notches);
+
+    // The window count may have changed, and r.max_it is r's share. There is no scan config here, so the
+    // scan's budget is recovered from the old command and shared again over the new windows (ADR-0072).
+    cmd.max_it = sharedMaxIt_(r.max_it * windowsAtStage(r, 0), cmd);
 
     // What the window now isolates is described from the PeakGroup it was measured on, exactly as buildMS2
     // describes it: the scan_description's mass token and @z, and the precursor fields every log reads.
@@ -409,8 +428,8 @@ namespace OpenMS
     // acquired at ms2[0]'s AGC target and max IT -- and an exploration override of either key
     // was inert at level 2. buildMS3 and buildFollowUp never had this; buildMS2 was the outlier.
     // A ScanConfig fully determines its scan's instrument parameters (ADR-0009).
+    // max_it is assigned after the notch block below: it is shared across the windows (ADR-0072).
     cmd.agc_target = scan_config.agc_target;
-    cmd.max_it = scan_config.max_it;
 
     // New scan parameters from MS2 config
     cmd.microscans = scan_config.microscans;
@@ -469,6 +488,7 @@ namespace OpenMS
       }
       writeNotchesForStage(cmd, 0, notches);
     }
+    cmd.max_it = sharedMaxIt_(scan_config.max_it, cmd);
 
     // Scan description: {3-char ID}R{mass_kDa}k@{charge}  (adaptive-precision mass token)
     std::string id_str = encode(id);
@@ -536,7 +556,7 @@ namespace OpenMS
     cmd.first_mass = ms3_config.first_mass;
     cmd.last_mass = ms3_config.last_mass;
 
-    cmd.max_it = ms3_config.max_it;
+    // max_it is assigned after stage 0's inherited notches below: it is shared across them (ADR-0072).
     cmd.agc_target = ms3_config.agc_target;
     cmd.orbitrap_resolution = ms3_config.resolution;
     std::strncpy(cmd.analyzer, ms3_config.analyzer.c_str(), sizeof(cmd.analyzer) - 1);
@@ -597,6 +617,8 @@ namespace OpenMS
         writeNotchesForStage(cmd, 0, inherited);
       }
     }
+    // The replay of the precursor fills once per stage-0 window; stage 1's notches below are one fill.
+    cmd.max_it = sharedMaxIt_(ms3_config.max_it, cmd);
 
     // Stage 1: Fragment target
     cmd.stages[1].precursor_mz = frag_mz;
@@ -686,7 +708,9 @@ namespace OpenMS
     cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
     cmd.orbitrap_resolution = follow_up_config.resolution;
     cmd.agc_target = follow_up_config.agc_target;
-    cmd.max_it = follow_up_config.max_it;
+    // The follow-up's own budget over the windows it inherited with `cmd = ctx` (ADR-0072). From the
+    // config, never from ctx.max_it: that is already ctx's share.
+    cmd.max_it = sharedMaxIt_(follow_up_config.max_it, cmd);
     cmd.first_mass = follow_up_config.first_mass;
     cmd.last_mass = follow_up_config.last_mass;
     cmd.microscans = follow_up_config.microscans;
