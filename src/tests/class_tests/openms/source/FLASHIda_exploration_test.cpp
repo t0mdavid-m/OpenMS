@@ -24,6 +24,7 @@
 
 #include "FLASHIda_TestHelpers.h"  // ground-truth harness: ScanData/loadTsvScans/TSVFile/AcqResult/runInterleaved/runFullCycle/ExplResult/driveOneExplorationGroup/inclusionPinCytc
 #include "FLASHIda_TestAccess.h"   // ExplorationTestAccess::feedResult/group (private-state access)
+#include "FLASHIda_EventCapture.h" // [EXPL-ABORT] on an unscored annotator sweep (ADR-0074)
 
 #include <chrono>
 #include <thread>
@@ -1339,6 +1340,110 @@ namespace
     return false;
   }
 }
+
+// ---------------------------------------------------------------------------------------------------------
+// ADR-0074: the annotator exploration metrics (raw_score, bond_coverage, explained_signal).
+// ---------------------------------------------------------------------------------------------------------
+namespace
+{
+  /// horse cytochrome c without its initiator Met: the proteoform the b32 MS3 fixtures were acquired on
+  const std::string kAnnotatorCytc =
+    "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
+
+  /// An MS3 sweep under @p metric on that sequence: CID 15..39 step 2, the grid of the b32 fixtures.
+  /// @p overrides is spliced into the exploration block (lead with a comma).
+  std::string annotatorMs3Cfg(const std::string& metric, const std::string& overrides = "")
+  {
+    return std::string(R"({
+      "deconvolution": { "tol": [10, 10, 10] },
+      "precursor_selection": { "rank_by": "qscore", "max_precursors": 3 },
+      "identification": { "reference": { "sequence": ")") + kAnnotatorCytc
+        + R"(" }, "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 }, "characterization": { "mode": "ambiguity", "max_targets": 3,
+        "exploration": { "metric": ")" + metric + R"(", "ce_min": 15.0, "ce_max": 39.0, "ce_step": 2.0, "activations": ["CID"])"
+        + overrides + R"( } } },
+      "ms_settings": { "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
+                       "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 },
+                       "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25,
+                                "first_mass": 200, "last_mass": 2000 } } })";
+  }
+
+  /// The proteoform the cytC b32 target was cut from, as exploration_kinetic_ms3's identification golden renders it:
+  /// N-terminal acetylation and the heme on C14..V20.
+  MS3FragmentMatcher::ProteoformContext annotatorCytcContext()
+  {
+    MS3FragmentMatcher::ProteoformContext ctx;
+    ctx.region_start = 0;
+    ctx.region_end = static_cast<int>(kAnnotatorCytc.size());
+    ctx.protein_sequence = kAnnotatorCytc;
+    FragmentAnalysis::PTMSite acetyl;
+    acetyl.start_position = acetyl.end_position = acetyl.position = 1;
+    acetyl.mass_shift = 42.010565;
+    FragmentAnalysis::PTMSite heme;
+    heme.start_position = 14;
+    heme.end_position = 20;
+    heme.position = 17;
+    heme.mass_shift = 615.1659;
+    ctx.ptm_sites = {acetyl, heme};
+    return ctx;
+  }
+
+  struct AnnotatorSweep
+  {
+    std::vector<ScanCommand> cmds;
+    Exploration::FeedResultInfo last;                    ///< the feed that completed the group
+    /// encoded tracking id -> the match of every variant that left an identification row (the completing one included)
+    std::map<std::string, FragmentAnalysis::ProteoformMatch> matches;
+    int fed = 0;
+    int active_after = -1;
+    long long completion_ms = -1;                        ///< wall time of the completing feed (the batch runs in it)
+    std::string events;
+  };
+
+  /// The real b32 CID sweep of 2026-07-08 (kinetic_model_ms3_reads_the_stage1_window_and_follows_up's fixtures),
+  /// initiated on a target of class @p ion with proteoform context @p ctx and fed through the public feedResult,
+  /// raw peaks and all.
+  AnnotatorSweep runB32AnnotatorSweep(const std::string& cfg_json, char ion, const MS3FragmentMatcher::ProteoformContext& ctx)
+  {
+    const std::map<int, std::string> b32 = {
+      {15, "450"}, {17, "451"}, {19, "452"}, {21, "453"}, {23, "455"}, {25, "456"}, {27, "457"},
+      {29, "458"}, {31, "459"}, {33, "460"}, {35, "461"}, {37, "462"}, {39, "463"}};
+    AnnotatorSweep s;
+    EventCapture events;
+    Config cfg{cfg_json};
+    ScanCommandQueue queue(cfg);
+    FragmentAnalysis fragments(cfg);
+    Exploration exploration(cfg, fragments);
+    ScanCommand ms2_ctx = queue.buildMS2(makeSyntheticPeakGroup(1027.3131, 12315.67, 12), 12, cfg.level(2).scans[0], 2, 0);
+    PeakGroup frag_pg = makeSyntheticPeakGroup(1027.6311, 4106.49, 4);
+    s.cmds = exploration.initiate(3, frag_pg, 4, queue, nullptr, &ms2_ctx, ion, 32, ctx);
+    for (size_t i = 0; i < s.cmds.size(); ++i)
+    {
+      const int ce = static_cast<int>(std::lround(s.cmds[i].stages[1].collision_energy));
+      if (b32.find(ce) == b32.end()) return s;
+      auto scans = loadTsvScans(std::string("../../FlashIDA/test-data/spectra/")
+                                + "ms3_cytc3_b32_ce" + std::to_string(ce) + "_scan" + b32.at(ce) + ".txt");
+      if (scans.empty()) return s;
+      const auto& d = scans[0];
+      const auto t0 = std::chrono::steady_clock::now();
+      s.last = exploration.feedResult(s.cmds[i].scan_id, d.mzs.data(), d.ints.data(), static_cast<int>(d.mzs.size()), d.rt, queue);
+      s.completion_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+      ++s.fed;
+    }
+    if (!s.cmds.empty()) s.matches[ScanCommandQueue::encode(s.cmds.back().scan_id)] = s.last.identification.result;
+    for (const auto& row : s.last.identification.additional_rows) s.matches[row.tracking_id] = row.identification_result;
+    s.active_after = exploration.activeGroupCount();
+    s.events = events.str();
+    return s;
+  }
+
+  /// the pre-scan energy of the variant whose encoded id is @p encoded; -1 if none
+  double annotatorSweepEnergy(const AnnotatorSweep& s, const std::string& encoded)
+  {
+    for (const auto& c : s.cmds)
+      if (ScanCommandQueue::encode(c.scan_id) == encoded) return c.stages[1].collision_energy;
+    return -1.0;
+  }
+} // anonymous namespace
 
 START_TEST(FLASHIda_exploration, "$Id$")
 
@@ -5421,6 +5526,273 @@ START_SECTION(a_tie_goes_to_the_earliest_grid_position)
   TEST_REAL_SIMILAR(tie.first, 20.0)         // ... and still wins the tie
   const auto strict = runSweep(g, [](const Exploration::ExplorationVariant& v) { return v.collision_energy == 35.0 ? 4 : 3; });
   TEST_REAL_SIMILAR(strict.first, 35.0)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// ADR-0074: a sweep can be decided by the annotator. raw_score, bond_coverage and explained_signal are READING
+// metrics read from FLASHAnnotatorAlgorithm's terminal fragments of one PrSM in the pre-scan's raw spectrum: at MS2
+// the pre-scan's own best match (the search's values), at MS3 the target fragment as a chain of its own, annotated
+// when the sweep completes.
+/////////////////////////////////////////////////////////////
+
+START_SECTION(annotator_metrics_require_an_identification_section)
+{
+  // ADR-0074 d.8, the fragment_count rule's twin: the identification section is removed WHOLE (blanking the
+  // sequence would be refused for that reason and never reach this rule).
+  for (const std::string metric : {"raw_score", "bond_coverage", "explained_signal"})
+  {
+    std::string with_reference = std::string(exploration_config);
+    const auto pos = with_reference.find("\"mass_count\"");
+    ABORT_IF(pos == std::string::npos)
+    with_reference.replace(pos, 12, "\"" + metric + "\"");
+
+    Config ok{with_reference};   // the control: with its reference the metric loads
+    TEST_EQUAL(isAnnotatorMetric(ok.level(2).exploration), true)
+    TEST_EQUAL(isMeasuringMetric(ok.level(2).exploration), false)   // a reading metric
+
+    std::string without = with_reference;
+    const auto a = without.find("\"identification\"");
+    const auto b = without.find("\"ms_settings\"", a);
+    ABORT_IF(a == std::string::npos || b == std::string::npos)
+    without.erase(a, b - a);
+    TEST_EXCEPTION(std::invalid_argument, Config cfg{without})
+  }
+}
+END_SECTION
+
+START_SECTION(annotator_metrics_refuse_a_trap_override)
+{
+  // A trap pre-scan is measured, never identified (ADR-0045): there is no PrSM and nothing to annotate. Refused
+  // at load at both levels, as under a counting metric; an Orbitrap override is fine.
+  const std::string trap = R"(, "overrides": { "analyzer": "IonTrap" })";
+  auto sweep = [](const std::string& metric, const std::string& ov) {
+    return R"("exploration": { "metric": ")" + metric + R"(", "ce_min": 20.0, "ce_max": 40.0, "ce_step": 5.0)" + ov + R"( })";
+  };
+  for (const std::string metric : {"raw_score", "bond_coverage", "explained_signal"})
+  {
+    Config ok_orbi{sweepProbe(", " + sweep(metric, sweep_overrides), "", false, true)};
+    TEST_EQUAL(isAnnotatorMetric(ok_orbi.level(2).exploration), true)
+    TEST_EXCEPTION(std::invalid_argument, Config(sweepProbe(", " + sweep(metric, trap), "", false, true)))
+    TEST_EXCEPTION(std::invalid_argument, Config(sweepProbe("", ms3_on + sweep(metric, trap), true)))
+  }
+}
+END_SECTION
+
+// The real b32 CID sweep, 13 pre-scans at CID 15..39, decided by the annotator's score of each pre-scan's raw peaks
+// against the target as a chain of its own (a b target: its water loss on the last residue).
+//
+// FAILS UNDER: the score left at the matcher's count (the completing score would not be its raw_score); the batch
+// skipped (every score -1, no winner); every variant annotated to the same value (the fixtures differ by energy).
+START_SECTION(ms3_raw_score_sweep_is_decided_from_the_raw_peaks)
+{
+  const AnnotatorSweep s = runB32AnnotatorSweep(annotatorMs3Cfg("raw_score"), 'b', annotatorCytcContext());
+  TEST_EQUAL(static_cast<int>(s.cmds.size()), 13)
+  TEST_EQUAL(s.fed, 13)
+  ABORT_IF(s.fed != 13)
+  TEST_EQUAL(s.active_after, 0)
+  TEST_EQUAL(s.last.metric.exploration_metric, static_cast<int>(ExplorationMetric::RawScore))
+  TEST_EQUAL(s.last.kinetic.energy_source, std::string("measured"))
+  // B6 of the plan: the completing feed holds the whole batch (13 annotations + the matcher batch) under the lock
+  STATUS("ADR-0074 MS3 annotator batch: completing feed took " << s.completion_ms << " ms for 13 variants")
+  std::cerr << "ADR-0074 MS3 annotator batch: completing feed took " << s.completion_ms << " ms for 13 variants" << std::endl;
+
+  // the completing variant's score is its own annotation's raw score
+  TEST_TRUE(s.last.metric.score >= 0.0)
+  TEST_REAL_SIMILAR(s.last.metric.score, s.last.identification.result.raw_score)
+
+  // every variant that left a row carries the three values; they differ across energies
+  TEST_TRUE(s.matches.size() >= 2)
+  double lo = 1e300, hi = -1e300;
+  bool matched_evidence = false;
+  for (const auto& [id, m] : s.matches)
+  {
+    TEST_TRUE(m.raw_score >= 0.0)
+    TEST_TRUE(m.bond_coverage >= 0.0 && m.bond_coverage <= 1.0)
+    TEST_TRUE(m.explained_signal >= 0.0 && m.explained_signal <= 1.0)
+    lo = std::min(lo, m.raw_score);
+    hi = std::max(hi, m.raw_score);
+    matched_evidence = matched_evidence || !m.fragments.empty();
+  }
+  TEST_TRUE(hi > lo)
+  TEST_TRUE(hi > 0.0)
+  TEST_TRUE(matched_evidence)   // the matcher batch still ran: the winner is its own evidence (d.6)
+
+  // the winner is the highest raw score
+  const std::string winner = s.last.group.winner_tracking_id;
+  TEST_EQUAL(winner.empty(), false)
+  const auto w = s.matches.find(winner);
+  TEST_TRUE(w != s.matches.end())
+  if (w != s.matches.end())
+  {
+    TEST_REAL_SIMILAR(w->second.raw_score, hi)
+  }
+}
+END_SECTION
+
+START_SECTION(ms3_annotator_metric_does_not_reacquire_without_overrides)
+{
+  // ADR-0074 d.6: a reading metric. The pre-scans are full Orbitrap scans and the winner is its own evidence, so a
+  // decided sweep buys no follow-up MS3 (ADR-0020's other side, as for fragment_count).
+  for (const std::string metric : {"raw_score", "bond_coverage", "explained_signal"})
+  {
+    Config probe{annotatorMs3Cfg(metric)};
+    TEST_EQUAL(probe.level(3).overrides.empty(), true)
+    TEST_EQUAL(isMeasuringMetric(probe.level(3).exploration), false)
+
+    const AnnotatorSweep s = runB32AnnotatorSweep(annotatorMs3Cfg(metric), 'b', annotatorCytcContext());
+    ABORT_IF(s.fed != 13)
+    TEST_EQUAL(s.last.group.winner_tracking_id.empty(), false)   // non-vacuity: the sweep WAS decided
+    TEST_TRUE(s.last.metric.score >= 0.0)
+    TEST_EQUAL(static_cast<int>(s.last.commands.size()), 0)
+    TEST_EQUAL(static_cast<int>(s.last.ms2_context_cache.size()), 0)
+    TEST_EQUAL(s.active_after, 0)
+  }
+}
+END_SECTION
+
+START_SECTION(ms3_annotator_metric_follows_up_under_overrides)
+{
+  // Pre-scans that ran under overrides were degraded, so the sweep is closed by a production MS3 at the winner's
+  // energy, whatever the metric (the existing dispatch gate).
+  const AnnotatorSweep s = runB32AnnotatorSweep(annotatorMs3Cfg("raw_score", R"(, "overrides": { "analyzer": "Orbitrap" })"), 'b',
+                                               annotatorCytcContext());
+  ABORT_IF(s.fed != 13)
+  const std::string winner = s.last.group.winner_tracking_id;
+  TEST_EQUAL(winner.empty(), false)
+  TEST_EQUAL(static_cast<int>(s.last.commands.size()), 1)
+  ABORT_IF(s.last.commands.empty() || winner.empty())
+  TEST_EQUAL(s.last.commands[0].msn_level, 3)
+  TEST_EQUAL(std::string(s.last.commands[0].scan_description)[3], 'R')
+  const double winner_ce = annotatorSweepEnergy(s, winner);
+  TEST_TRUE(winner_ce >= 15.0)
+  TEST_REAL_SIMILAR(s.last.commands[0].stages[1].collision_energy, winner_ce)
+}
+END_SECTION
+
+START_SECTION(ms3_annotator_sweep_on_a_c_ion_is_unscored_and_aborts)
+{
+  // ADR-0074 d.7 + ADR-0054: only a b or y target is annotated. On a c target every pre-scan stays unscored, so no
+  // pre-scan can win; the same fixtures on the b target (above) do decide. fragment_count on a c ion scores 0 and
+  // crowns the first grid point (ms3_sweep_on_a_c_ion_keeps_its_configured_metric); this metric records no winner.
+  const AnnotatorSweep s = runB32AnnotatorSweep(annotatorMs3Cfg("raw_score"), 'c', annotatorCytcContext());
+  ABORT_IF(s.fed != 13)
+  TEST_REAL_SIMILAR(s.last.metric.score, -1.0)
+  TEST_EQUAL(s.last.group.winner_tracking_id.empty(), true)
+  TEST_EQUAL(s.last.kinetic.energy_source, std::string("none"))
+  TEST_EQUAL(static_cast<int>(s.last.commands.size()), 0)
+  TEST_EQUAL(s.active_after, 0)
+  TEST_TRUE(s.events.find("[EXPL-ABORT]") != std::string::npos)
+  TEST_TRUE(s.events.find("reason=no-winner") != std::string::npos)
+}
+END_SECTION
+
+START_SECTION(ms3_annotator_sweep_without_an_identified_protein_is_unscored)
+{
+  // d.7's other arm: with no identified proteoform there is no chain to hand the annotator.
+  const AnnotatorSweep s = runB32AnnotatorSweep(annotatorMs3Cfg("raw_score"), 'b', MS3FragmentMatcher::ProteoformContext());
+  ABORT_IF(s.fed != 13)
+  TEST_REAL_SIMILAR(s.last.metric.score, -1.0)
+  TEST_EQUAL(s.last.group.winner_tracking_id.empty(), true)
+  TEST_EQUAL(static_cast<int>(s.last.commands.size()), 0)
+  TEST_TRUE(s.events.find("reason=no-winner") != std::string::npos)
+}
+END_SECTION
+
+START_SECTION(a_dropped_search_is_unscored_under_an_annotator_metric)
+{
+  // ADR-0062 d.5 for the annotator metrics: a variant whose search the backlog dropped has no PrSM, so it has no
+  // value to compete with. Under mass_count the same dropped variant is scored from what was read under the lock.
+  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+  ABORT_IF(ms2_scans.empty())
+  const auto& d = ms2_scans[0];
+  auto droppedScore = [&](const std::string& metric) {
+    std::string cfg_str = std::string(exploration_config);
+    const auto pos = cfg_str.find("\"mass_count\"");
+    if (pos != std::string::npos) cfg_str.replace(pos, 12, "\"" + metric + "\"");
+    Config cfg{cfg_str};
+    ScanCommandQueue queue(cfg);
+    FragmentAnalysis fragments(cfg);
+    Exploration exploration(cfg, fragments);
+    auto cmds = exploration.initiate(2, makeSyntheticPeakGroup(800.0, 2400.0, 3), 3, queue);
+    if (cmds.empty()) return -2.0;
+    const Exploration::VariantInput in = exploration.prepareVariant(cmds[0].scan_id, d.mzs.data(), d.ints.data(),
+                                                                    static_cast<int>(d.mzs.size()), d.rt);
+    return exploration.applyVariant(in, nullptr, true, queue, nullptr, 0).metric.score;
+  };
+  TEST_TRUE(droppedScore("mass_count") >= 0.0)   // the control: a dropped variant is still scored there
+  TEST_REAL_SIMILAR(droppedScore("raw_score"), -1.0)
+  TEST_REAL_SIMILAR(droppedScore("bond_coverage"), -1.0)
+  TEST_REAL_SIMILAR(droppedScore("explained_signal"), -1.0)
+}
+END_SECTION
+
+// MS2, the whole engine: a 20..40 sweep on cytC where only the CE-30 pre-scan is fragmented (the rich scan57; the
+// others get the unfragmented CE-0 spectrum). Each pre-scan's exploration_score is the value on ITS OWN
+// identification row -- the search's raw_score or bond_coverage, the worker's explained_signal -- a pre-scan that
+// identified nothing is unscored, and the winner is the highest.
+START_SECTION(ms2_annotator_metrics_read_the_variants_own_prsm)
+{
+  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  auto rich = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+  auto poor = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_ce0.txt");
+  ABORT_IF(ms1_scans.empty() || rich.empty() || poor.empty())
+  std::map<int, ScanData> ce_map{{20, poor[0]}, {25, poor[0]}, {30, rich[0]}, {35, poor[0]}, {40, poor[0]}};
+  const std::map<std::string, std::vector<ScanData>> no_ms3_fixtures;
+  const int budget = 256 + 64 * static_cast<int>(ms1_scans.size() + 1);
+
+  const std::vector<std::pair<std::string, ExplorationMetric>> metrics = {
+    {"raw_score", ExplorationMetric::RawScore}, {"bond_coverage", ExplorationMetric::BondCoverage},
+    {"explained_signal", ExplorationMetric::ExplainedSignal}};
+  for (const auto& [metric, code] : metrics)
+  {
+    std::string base = std::string(exploration_config);
+    const auto pos = base.find("\"mass_count\"");
+    ABORT_IF(pos == std::string::npos)
+    base.replace(pos, 12, "\"" + metric + "\"");
+    const std::string log_dir = freshLogDir("annotator_ms2_" + metric);
+    const std::string cfg = injectRuntime(base, log_dir);
+    {
+      FLASHIda ida(const_cast<char*>(cfg.c_str()));
+      runInterleaved(&ida, ms1_scans, std::vector<ScanData>{rich[0]}, &no_ms3_fixtures, budget, /*single_group_only=*/true, 0.0, &ce_map);
+    }
+
+    const TSVFile results = TSVFile::parse(log_dir + "/scan_results.tsv");
+    const TSVFile idf = TSVFile::parse(log_dir + "/identification.tsv");
+    // tracking id -> the value on the variant's OWN identification row (flash_extender_score >= 0)
+    std::map<std::string, double> own;
+    for (const auto& row : idf.rows)
+      if (cell(idf, row, "ms_level") == "2" && toD(cell(idf, row, "flash_extender_score")) >= 0.0)
+        own[cell(idf, row, "tracking_id")] = toD(cell(idf, row, metric));
+
+    int n_rows = 0, n_scored = 0;
+    std::string winner, best_id;
+    double best = -1.0;
+    for (const auto& row : results.rows)
+    {
+      if (cell(results, row, "ms_level") != "2" || cell(results, row, "exploration_metric") != std::to_string(static_cast<int>(code))) continue;
+      ++n_rows;
+      const std::string id = cell(results, row, "tracking_id");
+      const double score = toD(cell(results, row, "exploration_score"));
+      const auto it = own.find(id);
+      if (it != own.end() && it->second >= 0.0)
+      {
+        ++n_scored;
+        TEST_TRUE(std::fabs(score - it->second) <= std::max(1e-3, 1e-4 * std::max(std::fabs(score), std::fabs(it->second))))
+      }
+      else
+      {
+        TEST_REAL_SIMILAR(score, -1.0)   // nothing identified: unscored, never 0
+      }
+      if (score > best) { best = score; best_id = id; }
+      if (!cell(results, row, "winner_tracking_id").empty()) winner = cell(results, row, "winner_tracking_id");
+    }
+    TEST_EQUAL(n_rows, 5)
+    TEST_TRUE(n_scored >= 1)
+    TEST_TRUE(best >= 0.0)
+    TEST_EQUAL(winner.empty(), false)
+    TEST_EQUAL(winner, best_id)
+  }
 }
 END_SECTION
 

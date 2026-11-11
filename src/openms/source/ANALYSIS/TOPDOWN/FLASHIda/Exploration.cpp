@@ -33,6 +33,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Exploration.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/AnnotatorMetrics.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms3YieldModel.h>
@@ -530,8 +531,8 @@ namespace OpenMS
       // ADR-0062 d.5: the backlog dropped this variant's search, so it has no match. A count it never took
       // must not compete, so fragment_count leaves it unscored (-1.0, which never wins); every other metric
       // scores from what was read under the lock, as for any variant. It is not pooled (below).
-      v.score = (group.exploration_metric == ExplorationMetric::FragmentCount)
-                  ? -1.0
+      v.score = (group.exploration_metric == ExplorationMetric::FragmentCount || isAnnotatorMetric(group.exploration_metric))
+                  ? -1.0   // ADR-0074: an annotator metric reads the PrSM the dropped search never made
                   : computeExplorationScore_(group.exploration_metric, msn_deconv, group, v.precursor_share,
                                              &frag, v.activation_type, &no_match);
     }
@@ -677,8 +678,11 @@ namespace OpenMS
                                     [](const ExplorationVariant& x){ return x.received; });
     if (!all_received) return info;
 
-    // MS3 FragmentCount: batch re-score with calibrated subsequence matching
-    if (group.exploration_metric == ExplorationMetric::FragmentCount && group.msn_level >= 3)
+    // MS3 FragmentCount: batch re-score with calibrated subsequence matching. An annotator metric (ADR-0074 d.3, d.6)
+    // runs the same batch for the variants' identification -- it is a reading metric, the winner is its own
+    // evidence -- and is then scored by the annotator below, not by the match count.
+    const bool annotator_metric = isAnnotatorMetric(group.exploration_metric);
+    if ((group.exploration_metric == ExplorationMetric::FragmentCount || annotator_metric) && group.msn_level >= 3)
     {
       std::vector<const DeconvolvedSpectrum*> variant_spectra;
       for (auto& var : group.variants)
@@ -706,10 +710,44 @@ namespace OpenMS
 
       for (size_t vi = 0; vi < calibrated_scores.size(); ++vi)
       {
-        group.variants[vi].score = calibrated_scores[vi];
+        if (!annotator_metric) group.variants[vi].score = calibrated_scores[vi];
         group.variants[vi].fragment_count = static_cast<int>(calibrated_scores[vi]);
         if (vi < detailed_results.size())
           group.variants[vi].identification_result = detailed_results[vi];
+      }
+
+      if (annotator_metric)
+      {
+        // ADR-0074 d.3-d.5, d.7: every variant's raw peaks annotated against the target fragment as a chain of its
+        // own (a b target carries its water loss), with the ion types of the variant's own MS3 activation. No PrSM
+        // (a c/z/a/x target, or no identified protein): every variant keeps -1.0 and the group ends no-winner.
+        FLASHAnnotatorAlgorithm::PrSM target;
+        if (AnnotatorMetrics::ms3TargetPrSM(config_.identification().proteinOr(score_ctx.protein_sequence), score_ctx,
+                                            group.fragment_ion_type, group.fragment_ion_index, group.precursor_charge, target))
+        {
+          FLASHAnnotatorAlgorithm annotator;
+          std::string annotator_activation;
+          bool annotator_set = false;
+          for (auto& var : group.variants)
+          {
+            if (!var.received || var.measured_only) continue;
+            if (!annotator_set || var.activation_type != annotator_activation)
+            {
+              annotator.setParameters(AnnotatorMetrics::parameters(FragmentAnalysis::getIonTypesForFragmentationMethod(var.activation_type),
+                                                                   config_.identification().flashtnt.fixed_mod,
+                                                                   config_.level(group.msn_level).tolerance_ppm));
+              annotator_activation = var.activation_type;
+              annotator_set = true;
+            }
+            const AnnotatorMetrics::Values values = AnnotatorMetrics::annotate(annotator, var.result.getOriginalSpectrum(), target);
+            var.identification_result.raw_score = values.raw_score;
+            var.identification_result.bond_coverage = values.bond_coverage;
+            var.identification_result.explained_signal = values.explained_signal;
+            var.score = group.exploration_metric == ExplorationMetric::RawScore ? values.raw_score
+                        : group.exploration_metric == ExplorationMetric::BondCoverage ? values.bond_coverage
+                        : values.explained_signal;
+          }
+        }
       }
 
       // Re-populate identification_result after batch re-scoring updated it
@@ -1731,6 +1769,14 @@ namespace OpenMS
         // ADR-0047: no pre-scan is scored; the group is decided by the fit at completion. -1.0 is "not
         // scored", so the winner loop never crowns one.
         return -1.0;
+      // ADR-0074: at MS2 the values the search's annotator put on the variant's own PrSM (-1.0 without one, so a
+      // variant that identified nothing cannot win); at MS3 -1.0 here, scored by the annotator when the group completes.
+      case ExplorationMetric::RawScore:
+        return ms3 ? -1.0 : fmr.raw_score;
+      case ExplorationMetric::BondCoverage:
+        return ms3 ? -1.0 : fmr.bond_coverage;
+      case ExplorationMetric::ExplainedSignal:
+        return ms3 ? -1.0 : fmr.explained_signal;
       default:
         return computeMassCount_(spec);
     }

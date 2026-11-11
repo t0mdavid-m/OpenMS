@@ -1985,4 +1985,29 @@ START_SECTION(exploration_order_parses_and_rejects)
 }
 END_SECTION
 
+// ADR-0074: the three annotator metrics are values of exploration.metric, appended to the enum (the number is the
+// logged exploration_metric), and reading metrics. A near-miss spelling is refused like every other.
+START_SECTION(annotator_metrics_parse)
+{
+  const std::string ident = R"("identification": { "reference": { "sequence": "PEPTIDEK" } },)";
+  auto sweep = [](const std::string& metric) {
+    return R"(, "exploration": { "metric": ")" + metric + R"(", "ce_min": 20.0, "ce_max": 40.0, "ce_step": 5.0 })";
+  };
+  Config raw(cfgJson(sweep("raw_score"), ident));
+  TEST_EQUAL(static_cast<int>(raw.level(2).exploration), 5)
+  Config coverage(cfgJson(sweep("bond_coverage"), ident));
+  TEST_EQUAL(static_cast<int>(coverage.level(2).exploration), 6)
+  Config signal(cfgJson(sweep("explained_signal"), ident));
+  TEST_EQUAL(static_cast<int>(signal.level(2).exploration), 7)
+  for (const Config* c : {&raw, &coverage, &signal})
+  {
+    TEST_EQUAL(isAnnotatorMetric(c->level(2).exploration), true)
+    TEST_EQUAL(isMeasuringMetric(c->level(2).exploration), false)
+  }
+  TEST_EQUAL(isAnnotatorMetric(ExplorationMetric::FragmentCount), false)
+  TEST_EXCEPTION(std::invalid_argument, Config(cfgJson(sweep("rawscore"), ident)))
+  TEST_EXCEPTION(std::invalid_argument, Config(cfgJson(sweep("raw_score"))))   // no identification section (d.8)
+}
+END_SECTION
+
 END_TEST

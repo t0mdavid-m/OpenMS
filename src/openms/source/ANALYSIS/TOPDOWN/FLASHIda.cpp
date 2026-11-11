@@ -34,6 +34,7 @@
 
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/AnnotatorMetrics.h>   // the worker's own annotation under explained_signal (ADR-0074)
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/KineticModel.h>   // precursorShare on the regular MSn rows (ADR-0048)
@@ -143,6 +144,10 @@ namespace OpenMS
     /// exits inside SearchPool::stop(). One set per pool thread, so a Worker (its FLASHTnTAlgorithm, Tagger, Extender,
     /// Annotator) is never shared.
     thread_local std::map<std::vector<std::string>, std::unique_ptr<ProteomeSearch::Worker>> t_search_workers;
+
+    /// This search thread's annotators for exploration.metric explained_signal (ADR-0074 d.2), one per ion-type set,
+    /// built at first use with the Param FLASHTnT hands its own annotator. Never shared: annotate() caches its isotope table.
+    thread_local std::map<std::vector<std::string>, std::unique_ptr<FLASHAnnotatorAlgorithm>> t_annotators;
 
     /// FLASHTnT's per-process INFO stream loses std::cout once (ADR-0061 push 4c): run() prints about 15 INFO lines
     /// per MS2. The engine itself logs nothing per scan through INFO.
@@ -1605,6 +1610,21 @@ FLASHIda::FLASHIda(char* arg) :
             // from without searching again.
             job->input.prsm = searchProteome(proteomes_, job->input.activation_type, job->input.deconv,
                                              config_.level(2).exploration_tolerance_ppm, job->instrument_scan_number);
+            // ADR-0074 d.2: FLASHTnT exposes no envelopes on its hit, so under explained_signal the worker annotates the
+            // variant's best PrSM itself, on the same raw peaks, with no lock held. raw_score and bond_coverage stay the
+            // search's own values.
+            if (config_.level(2).exploration == ExplorationMetric::ExplainedSignal && job->input.prsm && job->input.prsm->found)
+            {
+              const std::vector<std::string> ions = FragmentAnalysis::getIonTypesForFragmentationMethod(job->input.activation_type);
+              std::unique_ptr<FLASHAnnotatorAlgorithm>& annotator = t_annotators[ions];
+              if (!annotator)
+              {
+                annotator = std::make_unique<FLASHAnnotatorAlgorithm>();
+                annotator->setParameters(AnnotatorMetrics::parameters(ions, config_.identification().flashtnt.fixed_mod));
+              }
+              job->input.prsm->explained_signal =
+                AnnotatorMetrics::annotateSearched(*annotator, job->input.deconv.getOriginalSpectrum(), *job->input.prsm).explained_signal;
+            }
             job->match = exploration_.searchVariant(job->input);
             job->timing.finished = std::chrono::steady_clock::now();
           };

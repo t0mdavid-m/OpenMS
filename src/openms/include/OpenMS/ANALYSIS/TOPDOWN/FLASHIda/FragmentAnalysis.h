@@ -165,6 +165,9 @@ namespace OpenMS
     /// it converts the PrSM (matchFromPrSM), or under identification.method refine runs Refine on its protein.
     struct SearchedPrSM
     {
+      /// ADR-0074: the annotator's explained signal of this PrSM in the MS2's raw spectrum, set by the search worker
+      /// only for a sweep under exploration.metric explained_signal (AnnotatorMetrics::annotateSearched). -1 = none.
+      double explained_signal = -1;
       bool found = false;             ///< the search reported a PrSM; false = the MS2 identified nothing
       ProteinHit hit;                 ///< the best PrSM (FLASHTnT's rank: score, then coverage)
       std::string protein_sequence;   ///< its reference entry's sequence (never the hit's: run() rewrites it)

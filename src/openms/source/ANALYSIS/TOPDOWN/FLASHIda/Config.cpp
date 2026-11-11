@@ -1350,10 +1350,14 @@ namespace OpenMS
       else if (m == "remaining_precursor") cfg.exploration = ExplorationMetric::RemainingPrecursor;
       else if (m == "fragment_count") cfg.exploration = ExplorationMetric::FragmentCount;
       else if (m == "kinetic_model") cfg.exploration = ExplorationMetric::KineticModel;
+      else if (m == "raw_score") cfg.exploration = ExplorationMetric::RawScore;
+      else if (m == "bond_coverage") cfg.exploration = ExplorationMetric::BondCoverage;
+      else if (m == "explained_signal") cfg.exploration = ExplorationMetric::ExplainedSignal;
       else
         throw std::invalid_argument(
             "Config: " + path + ".exploration.metric must be one of \"none\", \"mass_count\", "
-            "\"remaining_precursor\", \"fragment_count\", \"kinetic_model\"; got \"" + m + "\".");
+            "\"remaining_precursor\", \"fragment_count\", \"kinetic_model\", \"raw_score\", \"bond_coverage\", "
+            "\"explained_signal\"; got \"" + m + "\".");
 
       // exploration.order: absent or null = ascending (every method before the key). Case-sensitive, never defaulted
       // from an unknown value: a typo must not silently keep the confound the key exists to remove.
@@ -1828,6 +1832,11 @@ namespace OpenMS
         throw std::invalid_argument(
             "ExplorationMetric::FragmentCount at level " + std::to_string(lvl) +
             " requires an identification section with a reference (ADR-0061).");
+      // ADR-0074 d.8: an annotator metric scores a pre-scan on a PrSM, so it needs the reference too
+      if (isAnnotatorMetric(cfg.exploration) && !identification_.enabled())
+        throw std::invalid_argument(
+            "Exploration metric \"raw_score\", \"bond_coverage\" or \"explained_signal\" at level " + std::to_string(lvl) +
+            " requires an identification section with a reference (ADR-0061, ADR-0074).");
     }
 
     // --- identification.method / refine (ADR-0049) ----------------------------------------------
@@ -1916,8 +1925,9 @@ namespace OpenMS
             sect + ".exploration.overrides.analyzer is \"IonTrap\" but " + sect + ".exploration.metric is not "
             "a share-based metric (\"remaining_precursor\" or \"kinetic_model\"). A trap pre-scan is measured, "
             "never identified -- it is not deconvolved or matched -- so a metric that counts masses or fragments "
-            "scores every variant 0 and the first grid point always wins. Use a share-based metric, or an "
-            "Orbitrap override (ADR-0045, ADR-0047).");
+            "scores every variant 0 and the first grid point always wins, and a metric read from the annotator "
+            "(\"raw_score\", \"bond_coverage\", \"explained_signal\") scores none. Use a share-based metric, or an "
+            "Orbitrap override (ADR-0045, ADR-0047, ADR-0074).");
     }
 
     // Level-matched multiplexing (ADR-0026 decision 4, re-grounded by ADR-0044, extended to the Kinetic

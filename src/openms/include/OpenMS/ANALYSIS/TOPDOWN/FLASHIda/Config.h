@@ -140,8 +140,14 @@ namespace OpenMS
     MassCount,           ///< Optimize for most deconvolved masses
     RemainingPrecursor,  ///< Score each pre-scan's precursor SHARE against remaining_precursor_target (ADR-0048)
     FragmentCount,       ///< Optimize for most fragment ions
-    KineticModel         ///< ADR-0047: fit the Kinetic Model to the pre-scans' precursor shares and acquire the
+    KineticModel,        ///< ADR-0047: fit the Kinetic Model to the pre-scans' precursor shares and acquire the
                          ///< follow-up at the MODELED MAXIMUM -- no pre-scan wins; logged as 4
+    // ADR-0074, APPENDED (the number is logged as exploration_metric): read from FLASHAnnotatorAlgorithm's terminal
+    // fragments of one PrSM in the pre-scan's raw spectrum. At MS2 the PrSM is the pre-scan's own best match; at MS3
+    // it is the target fragment as a chain of its own (AnnotatorMetrics).
+    RawScore,            ///< the annotator's score; logged as 5
+    BondCoverage,        ///< bonds covered by an accepted terminal envelope over L - 1, a fraction; logged as 6
+    ExplainedSignal      ///< raw intensity of the peaks of accepted terminal envelopes over the scan's; logged as 7
   };
 
   /**
@@ -149,9 +155,9 @@ namespace OpenMS
 
     A **measuring** metric (MassCount, RemainingPrecursor, KineticModel) scores a variant from peak
     or intensity counts alone, so it never produces a ProteoformMatch and its pre-scans leave no
-    identification behind. FragmentCount is the sole **reading** metric: it matches every
-    variant against the proteoform in order to score it, so identification is a side effect of
-    scoring.
+    identification behind. FragmentCount and the three annotator metrics (RawScore, BondCoverage,
+    ExplainedSignal, ADR-0074) are **reading** metrics: every variant is matched against the
+    proteoform in order to score it, so identification is a side effect of scoring.
 
     At MS3 the distinction decides whether an exploration group produces any evidence at all,
     which is why a measuring MS3 sweep must always be closed by a production scan
@@ -165,6 +171,14 @@ namespace OpenMS
   {
     return metric == ExplorationMetric::MassCount || metric == ExplorationMetric::RemainingPrecursor
         || metric == ExplorationMetric::KineticModel;
+  }
+
+  /// True for the metrics read from FLASHAnnotatorAlgorithm (ADR-0074). Reading metrics: a pre-scan with nothing
+  /// identified, or whose search was dropped, is unscored (-1.0) and cannot win.
+  inline bool isAnnotatorMetric(ExplorationMetric metric)
+  {
+    return metric == ExplorationMetric::RawScore || metric == ExplorationMetric::BondCoverage
+        || metric == ExplorationMetric::ExplainedSignal;
   }
 
   /**
