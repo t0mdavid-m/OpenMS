@@ -4861,4 +4861,103 @@ START_SECTION(ms3_random_send_order_permutes_the_plan)
 }
 END_SECTION
 
+// characterization.order "interleaved" (ADR-0073): the MS3 of one plan are sent in turns between the two termini; the
+// plan itself is the ranked one. The cytC recipe at a budget of six, under coverage and under fragments, two runs
+// each: ranked and interleaved. No MS3 is fed back, so both runs make the same plans. Per dispatching MS2 the
+// interleaved run sends the ranked run's MS3, merged from its N-terminal and its C-terminal fragments: the terminus
+// that has sent fewer goes next, and on a tie the one whose next fragment came first in the ranked run. The merge is
+// written out here for two lists; it is not the engine's code.
+//
+// FAILS UNDER: a ranked send (no plan is sent in another order), interleaving the choice instead of the send (a plan's
+// ions would differ), or turns that do not start with the ranked run's first fragment.
+START_SECTION(ms3_interleaved_send_order_takes_turns_between_the_termini)
+{
+  auto ms1 = loadTsvScans(ms1_cytc_tsv_path);
+  auto ms2 = loadTsvScans(ms2_cytc_fresh_tsv_path);
+  ABORT_IF(ms1.empty() || ms2.empty())
+  auto run = [&](const std::string& mode, const char* order, const std::string& tag) {
+    nlohmann::json j = nlohmann::json::parse(ms3_mode1_json);
+    j["deconvolution"]["tqscore_threshold"] = 0.0;
+    j["identification"]["characterization"] = {{"mode", mode}, {"max_targets", 6}};
+    if (order != nullptr) j["identification"]["characterization"]["order"] = order;
+    j["runtime"] = {{"log_dir", freshLogDir(tag)}};
+    const std::string cfg = j.dump();
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    return runInterleaved(&ida, ms1, ms2, nullptr, 4000).ms3_cmds;
+  };
+
+  // Parent tracking id -> the MS3 ion keys it dispatched, in dequeue order. An MS3 without an ion is counted.
+  int undecoded = 0;
+  auto groups = [&undecoded](const std::vector<ScanCommand>& cmds) {
+    std::map<std::string, std::vector<std::string>> g;
+    for (const ScanCommand& c : cmds)
+    {
+      std::string ion;
+      if (!decodeTrailingIonKey(c.scan_description, ion)) ++undecoded;
+      g[std::string(c.parent_scan_id)].push_back(ion);
+    }
+    return g;
+  };
+  auto isNTerminal = [](const std::string& ion) { return !ion.empty() && (ion[0] == 'a' || ion[0] == 'b' || ion[0] == 'c'); };
+  // The interleaved order of one ranked plan: two lists of ranked positions, the one that has sent fewer goes next.
+  auto takingTurns = [&isNTerminal](const std::vector<std::string>& ranked_ions) {
+    std::vector<size_t> n_list, c_list;
+    for (size_t k = 0; k < ranked_ions.size(); ++k)
+    {
+      if (isNTerminal(ranked_ions[k])) n_list.push_back(k);
+      else c_list.push_back(k);
+    }
+    std::vector<std::string> out;
+    size_t n_sent = 0, c_sent = 0;
+    while (n_sent < n_list.size() || c_sent < c_list.size())
+    {
+      bool take_n = false;
+      if (n_sent == n_list.size()) take_n = false;
+      else if (c_sent == c_list.size()) take_n = true;
+      else if (n_sent != c_sent) take_n = n_sent < c_sent;
+      else take_n = n_list[n_sent] < c_list[c_sent];
+      if (take_n) out.push_back(ranked_ions[n_list[n_sent++]]);
+      else out.push_back(ranked_ions[c_list[c_sent++]]);
+    }
+    return out;
+  };
+
+  for (const std::string mode : {"coverage", "fragments"})
+  {
+    const std::vector<ScanCommand> ranked = run(mode, nullptr, "ms3_interleaved_" + mode + "_ranked");
+    const std::vector<ScanCommand> interleaved = run(mode, "interleaved", "ms3_interleaved_" + mode + "_interleaved");
+    TEST_EQUAL(ranked.empty(), false)
+    TEST_EQUAL(interleaved.size(), ranked.size())
+
+    undecoded = 0;
+    const std::map<std::string, std::vector<std::string>> a = groups(ranked);
+    const std::map<std::string, std::vector<std::string>> b = groups(interleaved);
+    TEST_EQUAL(undecoded, 0)   // every MS3 of these two modes names its fragment
+    TEST_EQUAL(a.size(), b.size())
+    int both_termini = 0, reordered = 0;
+    for (const auto& entry : a)
+    {
+      const std::vector<std::string>& ions = entry.second;
+      const auto it = b.find(entry.first);
+      TEST_EQUAL(it != b.end(), true)
+      if (it == b.end()) continue;
+      const std::vector<std::string>& sent = it->second;
+      // The same plan: the same ions, whatever the order.
+      TEST_EQUAL(std::multiset<std::string>(sent.begin(), sent.end()) == std::multiset<std::string>(ions.begin(), ions.end()), true)
+      TEST_EQUAL(sent == takingTurns(ions), true)
+      if (!ions.empty() && !sent.empty()) TEST_STRING_EQUAL(sent.front(), ions.front())
+      size_t n_terminal = 0;
+      for (const std::string& ion : ions)
+        if (isNTerminal(ion)) ++n_terminal;
+      if (n_terminal > 0 && n_terminal < ions.size()) ++both_termini;
+      if (sent != ions) ++reordered;
+    }
+    std::cout << "[ms3_interleaved_send_order] mode=" << mode << " ms3=" << ranked.size() << " plans=" << a.size()
+              << " both_termini=" << both_termini << " reordered=" << reordered << std::endl;
+    TEST_EQUAL(both_termini > 0, true)   // non-vacuity: at least one plan holds both termini
+    TEST_EQUAL(reordered > 0, true)      // non-vacuity: at least one plan is sent in another order
+  }
+}
+END_SECTION
+
 END_TEST

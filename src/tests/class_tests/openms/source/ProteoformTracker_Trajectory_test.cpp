@@ -167,9 +167,11 @@ namespace
   // driven through the snapshot: a sent intensity of 0 admits a re-acquisition at 0, a sent intensity of 1 refuses it.
 
   /// The tracker config with characterization's objective and budget as parameters (no log folder: nothing is read).
-  std::string gateConfig(const std::string& mode, int max_targets, const std::string& fragment_charges = "")
+  /// @p order writes characterization.order (ADR-0073); empty leaves the key out, which is "ranked".
+  std::string gateConfig(const std::string& mode, int max_targets, const std::string& fragment_charges = "", const std::string& order = "")
   {
     const std::string charges = fragment_charges.empty() ? std::string() : ", \"fragment_charges\": \"" + fragment_charges + "\"";
+    const std::string send_order = order.empty() ? std::string() : ", \"order\": \"" + order + "\"";
     return std::string(R"JSON({
     "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 1, "max_charge": 50, "min_mass": 100, "max_mass": 50000, "tol": [10, 10, 10] },
     "precursor_selection": { "rt_window": 180, "targeting": "none", "consider_all_charges": false, "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 3 },
@@ -183,7 +185,7 @@ namespace
     "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
     "files": { "target_logs": [], "inclusion_list": "" },
     "identification": { "reference": { "sequence": "PEPTIDEK" }, "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 },
-      "characterization": { "mode": ")JSON") + mode + "\", \"max_targets\": " + std::to_string(max_targets) + charges + " } } }";
+      "characterization": { "mode": ")JSON") + mode + "\", \"max_targets\": " + std::to_string(max_targets) + charges + send_order + " } } }";
   }
 
   const double PROTON_MASS = 1.00728;
@@ -226,7 +228,10 @@ namespace
 
   /// Feed ONE winner MS2 scan carrying @p frags (the winner match claims each, pooled verbatim) and finalize. With
   /// @p ambiguous the match carries one modification on residues 4..5, which b5, b6 and y6 contain and nothing brackets.
-  void feedGateWinner(ProteoformTracker& tracker, int precursor_id, const std::vector<GateFrag>& frags, bool ambiguous = false)
+  /// ADR-0073: every entry of @p sites is a residue range (first..last) that becomes one more modification, each with
+  /// its own mass shift.
+  void feedGateWinner(ProteoformTracker& tracker, int precursor_id, const std::vector<GateFrag>& frags, bool ambiguous = false,
+                      const std::vector<std::pair<int, int>>& sites = {})
   {
     Ms2Params p;
     p.collision_energy = 29.0;
@@ -258,6 +263,15 @@ namespace
       site.end_position = 5;
       site.position = 4;
       site.mass_shift = 42.0106;
+      m.ptm_sites.push_back(site);
+    }
+    for (size_t i = 0; i < sites.size(); ++i)
+    {
+      FragmentAnalysis::PTMSite site;
+      site.start_position = sites[i].first;
+      site.end_position = sites[i].second;
+      site.position = sites[i].first;
+      site.mass_shift = 42.0106 + 37.9557 * static_cast<double>(i);   // acetyl, then phospho: one shift per modification
       m.ptm_sites.push_back(site);
     }
     tracker.feedScan(precursor_id, 2, p, 301, d, m, 1.0, makeMs2Ctx());
@@ -347,6 +361,71 @@ namespace
     int n = 0;
     for (size_t pos = hay.find(needle); pos != std::string::npos; pos = hay.find(needle, pos + needle.size())) ++n;
     return n;
+  }
+
+  // ---- ADR-0073: the interleaved send order -------------------------------------------------------------------
+  /// @p frags with the masses and isotope cosines that make the list order the ranked order under a yield gate that
+  /// ranks by yield: a place down the list is 1500 Da heavier and 0.0375 lower in isotope cosine, and both lower the
+  /// predicted yield. (The model clips the cosine to [0.85, 1.0005], so the cosine alone cannot separate five places.)
+  std::vector<GateFrag> rankedFrags(std::vector<GateFrag> frags)
+  {
+    for (size_t i = 0; i < frags.size(); ++i)
+    {
+      frags[i].mass = 1000.0 + 1500.0 * static_cast<double>(i);
+      frags[i].iso_cos = 1.0 - 0.0375 * static_cast<double>(i);
+    }
+    return frags;
+  }
+
+  /// rankedFrags' claim: the predicted yields of @p frags fall strictly down the list and none is zero.
+  bool yieldsFall(const std::vector<GateFrag>& frags, const ScanCommand& ctx)
+  {
+    if (frags.empty() || !(yieldOf(frags.back(), ctx) > 0.0)) return false;
+    for (size_t i = 1; i < frags.size(); ++i)
+      if (!(yieldOf(frags[i - 1], ctx) > yieldOf(frags[i], ctx))) return false;
+    return true;
+  }
+
+  /// A send order as text, "0 3 1 4 2", so a failed comparison prints both orders.
+  std::string orderText(const std::vector<size_t>& order)
+  {
+    std::string out;
+    for (size_t i : order) out += (out.empty() ? "" : " ") + std::to_string(i);
+    return out;
+  }
+
+  /// A plan's ions in send order as text, "y6 b3 y5", one entry per target (under separate, one per charge).
+  std::string ionsText(const std::vector<Ms3Target>& plan)
+  {
+    std::string out;
+    for (const Ms3Target& t : plan) out += (out.empty() ? "" : " ") + t.ion_type + std::to_string(t.ion_index);
+    return out;
+  }
+
+  /// One planner fixture of the interleaved sections: what is planned, on which modifications, behind which snapshot.
+  struct SendOrderCase
+  {
+    std::string mode;
+    int budget = 10;
+    std::string fragment_charges;
+    std::vector<std::pair<int, int>> sites;          ///< the ambiguous modifications (residue ranges)
+    const Ms3RegistrySnapshot* snapshot = nullptr;   ///< the proteoform's sent fragments (null: not governed)
+  };
+
+  /// The plan of @p frags under @p c with characterization.order @p order ("" = ranked), on a fresh tracker, behind a
+  /// yield gate every fragment clears (half the lowest yield) that ranks by yield.
+  std::vector<Ms3Target> planInSendOrder(const SendOrderCase& c, const std::string& order, int precursor_id,
+                                         const std::vector<GateFrag>& frags, const ScanCommand& ctx)
+  {
+    Config cfg{gateConfig(c.mode, c.budget, c.fragment_charges, order)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    feedGateWinner(tracker, precursor_id, frags, /*ambiguous=*/false, c.sites);
+    YieldGateConfig by_yield;
+    by_yield.threshold = yieldOf(frags.back(), ctx) / 2.0;
+    Ms3PlanGate gate = yieldGate(by_yield, ctx);
+    gate.snapshot = c.snapshot;
+    return tracker.planNextScans(precursor_id, &gate);
   }
 }
 
@@ -1182,6 +1261,277 @@ START_SECTION(yield_rank_ambiguity_orders_each_modification_by_yield)
   TEST_EQUAL(strongest.size(), 1)
   ABORT_IF(strongest.size() != 1)
   TEST_EQUAL(strongest[0].ion_type == order[0].first && strongest[0].ion_index == order[0].second, true)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// ADR-0073. The interleaved send order: the rule alone, ProteoformTracker::interleavedOrder. Targets are indexed in
+// ranked order (0 is sent first under "ranked"); each turn goes to the group that has had the fewest fragments, and a
+// tie to the higher-ranked target.
+/////////////////////////////////////////////////////////////
+
+// Two groups of three and two targets, nothing sent.
+// FAILS UNDER: a ranked send (0 1 2 3 4).
+START_SECTION(interleaved_order_alternates_two_groups)
+{
+  const int n_term = 0, c_term = 1;
+  const std::vector<std::vector<int>> groups_of{{c_term}, {c_term}, {c_term}, {n_term}, {n_term}};
+  TEST_STRING_EQUAL(orderText(ProteoformTracker::interleavedOrder(groups_of, {0, 0})), "0 3 1 4 2")
+}
+END_SECTION
+
+// A group with one target: once it is sent, the other group sends the rest in ranked order.
+// FAILS UNDER: a turn kept for a group that has nothing left.
+START_SECTION(interleaved_order_runs_out_of_a_group)
+{
+  const int n_term = 0, c_term = 1;
+  const std::vector<std::vector<int>> groups_of{{c_term}, {c_term}, {c_term}, {n_term}};
+  TEST_STRING_EQUAL(orderText(ProteoformTracker::interleavedOrder(groups_of, {0, 0})), "0 3 1 2")
+}
+END_SECTION
+
+// One group: the interleaved order is the ranked order.
+// FAILS UNDER: any reordering inside a group.
+START_SECTION(interleaved_order_of_one_group_is_ranked)
+{
+  const std::vector<std::vector<int>> groups_of{{0}, {0}, {0}};
+  TEST_STRING_EQUAL(orderText(ProteoformTracker::interleavedOrder(groups_of, std::vector<int>(1, 0))), "0 1 2")
+}
+END_SECTION
+
+// A target in two groups counts for both: target 2 serves A and B, so after it A has had two and B one, the next
+// turn is B's (3), and the tie at two each goes to the higher-ranked target (1).
+// FAILS UNDER: one owner per target (0 2 1 3 4).
+START_SECTION(interleaved_order_counts_a_shared_target_for_each_group)
+{
+  const int mod_a = 0, mod_b = 1;
+  const std::vector<std::vector<int>> groups_of{{mod_a}, {mod_a}, {mod_a, mod_b}, {mod_b}, {mod_b}};
+  TEST_STRING_EQUAL(orderText(ProteoformTracker::interleavedOrder(groups_of, {0, 0})), "0 2 3 1 4")
+}
+END_SECTION
+
+// The counts start from what was already sent: the C-terminal group has had one, so the N-terminal one goes first.
+// FAILS UNDER: counts that start at zero (0 3 1 4 2).
+START_SECTION(interleaved_order_starts_from_served)
+{
+  const int n_term = 0, c_term = 1;
+  const std::vector<std::vector<int>> groups_of{{c_term}, {c_term}, {c_term}, {n_term}, {n_term}};
+  std::vector<int> served(2, 0);
+  served[c_term] = 1;
+  TEST_STRING_EQUAL(orderText(ProteoformTracker::interleavedOrder(groups_of, served)), "3 0 4 1 2")
+}
+END_SECTION
+
+// A target that is already among the sent takes its turn and serves nobody a second time: after target 0 the
+// C-terminal group has still had one, so its next target (1) goes before the N-terminal group's second (4).
+// FAILS UNDER: a re-acquisition counted twice (3 0 4 1 2).
+START_SECTION(interleaved_order_does_not_count_a_counted_target)
+{
+  const int n_term = 0, c_term = 1;
+  const std::vector<std::vector<int>> groups_of{{c_term}, {c_term}, {c_term}, {n_term}, {n_term}};
+  std::vector<int> served(2, 0);
+  served[c_term] = 1;
+  const std::vector<bool> counted{true, false, false, false, false};
+  TEST_STRING_EQUAL(orderText(ProteoformTracker::interleavedOrder(groups_of, served, counted)), "3 0 1 4 2")
+}
+END_SECTION
+
+// A target in no group goes after every grouped one, however high it ranks.
+// FAILS UNDER: a groupless target treated as the least served (0 1 2).
+START_SECTION(interleaved_order_puts_a_groupless_target_last)
+{
+  const int n_term = 0, c_term = 1;
+  const std::vector<std::vector<int>> groups_of{std::vector<int>(), {c_term}, {n_term}};
+  TEST_STRING_EQUAL(orderText(ProteoformTracker::interleavedOrder(groups_of, {0, 0})), "1 2 0")
+}
+END_SECTION
+
+// Three groups: every group has had one before any has two.
+// FAILS UNDER: a two-group shortcut.
+START_SECTION(interleaved_order_of_three_groups)
+{
+  const int mod_a = 0, mod_b = 1, mod_c = 2;
+  const std::vector<std::vector<int>> groups_of{{mod_a}, {mod_a}, {mod_b}, {mod_c}};
+  TEST_STRING_EQUAL(orderText(ProteoformTracker::interleavedOrder(groups_of, {0, 0, 0})), "0 2 3 1")
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// ADR-0073. The interleaved send order in the planner, on PEPTIDEK (L = 8). Every section plans one fixture twice,
+// characterization.order absent ("ranked") and "interleaved", behind a yield gate every fragment clears; rankedFrags
+// makes the ranked order the list order, which each section asserts first. The two plans hold the same targets
+// (decision 1); only the order differs.
+/////////////////////////////////////////////////////////////
+
+// Three C-terminal fragments ranked above two N-terminal ones: ranked sends a terminus out before the other starts,
+// interleaved takes turns from the first fragment on. Under fragments and under coverage (each of the five holds an
+// unwitnessed bond: 1, 5 and 7 are witnessed by no fragment).
+// FAILS UNDER: planNextScans without the interleave call; groups that are not the two termini.
+START_SECTION(interleaved_alternates_the_termini)
+{
+  const ScanCommand ctx = yieldCtx();
+  const std::vector<GateFrag> frags = rankedFrags({{"y", 6, 0.0, {2}}, {"y", 5, 0.0, {2}}, {"y", 4, 0.0, {2}}, {"b", 3, 0.0, {2}}, {"b", 6, 0.0, {2}}});
+  TEST_EQUAL(yieldsFall(frags, ctx), true)
+  ABORT_IF(!yieldsFall(frags, ctx))
+  for (const std::string mode : {"fragments", "coverage"})
+  {
+    SendOrderCase fixture;
+    fixture.mode = mode;
+    const std::vector<Ms3Target> ranked = planInSendOrder(fixture, "", 150, frags, ctx);
+    const std::vector<Ms3Target> interleaved = planInSendOrder(fixture, "interleaved", 150, frags, ctx);
+    TEST_STRING_EQUAL(ionsText(ranked), "y6 y5 y4 b3 b6")   // precondition: the imposed rank
+    ABORT_IF(ionsText(ranked) != "y6 y5 y4 b3 b6")
+    TEST_EQUAL(keysOf(ranked) == keysOf(interleaved), true)   // the same plan
+    TEST_STRING_EQUAL(ionsText(interleaved), "y6 b3 y5 b6 y4")
+  }
+}
+END_SECTION
+
+// The order never changes what is planned: a budget of three takes the three highest-ranked fragments, all
+// C-terminal, under both orders, and one group is sent in ranked order.
+// FAILS UNDER: interleaving the choice instead of the send (b3 would take y4's place).
+START_SECTION(interleaved_never_changes_the_plan)
+{
+  const ScanCommand ctx = yieldCtx();
+  const std::vector<GateFrag> frags = rankedFrags({{"y", 6, 0.0, {2}}, {"y", 5, 0.0, {2}}, {"y", 4, 0.0, {2}}, {"b", 3, 0.0, {2}}, {"b", 6, 0.0, {2}}});
+  TEST_EQUAL(yieldsFall(frags, ctx), true)
+  ABORT_IF(!yieldsFall(frags, ctx))
+  SendOrderCase fixture;
+  fixture.mode = "fragments";
+  fixture.budget = 3;
+  const std::vector<Ms3Target> ranked = planInSendOrder(fixture, "", 151, frags, ctx);
+  const std::vector<Ms3Target> interleaved = planInSendOrder(fixture, "interleaved", 151, frags, ctx);
+  TEST_STRING_EQUAL(ionsText(ranked), "y6 y5 y4")   // precondition: the imposed rank, cut at the budget
+  ABORT_IF(ionsText(ranked) != "y6 y5 y4")
+  TEST_EQUAL(keysOf(ranked) == keysOf(interleaved), true)
+  TEST_STRING_EQUAL(ionsText(interleaved), "y6 y5 y4")
+}
+END_SECTION
+
+// Ambiguity: modification A on residues 2..3, B on 5..6. b3 and b4 contain A, y4 and y5 contain B, b7 contains both
+// and counts for both; no fragment brackets either range, so nothing narrows before the plan. After b3 and b7, A has
+// had two and B one: y4 is next, then the tie at two each goes to the higher-ranked b4.
+// FAILS UNDER: one owner per container, or the order the round-robin chose the containers in (both: b3 b7 b4 y4 y5).
+START_SECTION(interleaved_counts_a_container_of_two_modifications_for_both)
+{
+  const ScanCommand ctx = yieldCtx();
+  const std::vector<GateFrag> frags = rankedFrags({{"b", 3, 0.0, {2}}, {"b", 4, 0.0, {2}}, {"b", 7, 0.0, {2}}, {"y", 4, 0.0, {2}}, {"y", 5, 0.0, {2}}});
+  TEST_EQUAL(yieldsFall(frags, ctx), true)
+  ABORT_IF(!yieldsFall(frags, ctx))
+  SendOrderCase fixture;
+  fixture.mode = "ambiguity";
+  fixture.sites = {{2, 3}, {5, 6}};
+  const std::vector<Ms3Target> ranked = planInSendOrder(fixture, "", 152, frags, ctx);
+  const std::vector<Ms3Target> interleaved = planInSendOrder(fixture, "interleaved", 152, frags, ctx);
+  TEST_STRING_EQUAL(ionsText(ranked), "b3 b4 b7 y4 y5")   // precondition: the imposed rank
+  ABORT_IF(ionsText(ranked) != "b3 b4 b7 y4 y5")
+  TEST_EQUAL(keysOf(ranked) == keysOf(interleaved), true)
+  TEST_STRING_EQUAL(ionsText(interleaved), "b3 b7 y4 b4 y5")
+}
+END_SECTION
+
+// A governed plan (per_proteoform) continues from the fragments the proteoform has sent. Nothing sent: the turns
+// start level. y7 sent (not a fragment of this plan): the C-terminus has had one, so b3 goes first. y6 sent and
+// planned again (a sent intensity of 0 admits the re-acquisition): b3 goes first, y6 takes the C-terminal turn and
+// is not a second serving, so y5 follows it before b6.
+// FAILS UNDER: counts that start at zero under a snapshot; a re-acquisition counted twice (b3 y6 b6 y5 y4).
+START_SECTION(interleaved_continues_from_the_committed_fragments)
+{
+  const ScanCommand ctx = yieldCtx();
+  const std::vector<GateFrag> frags = rankedFrags({{"y", 6, 0.0, {2}}, {"y", 5, 0.0, {2}}, {"y", 4, 0.0, {2}}, {"b", 3, 0.0, {2}}, {"b", 6, 0.0, {2}}});
+  TEST_EQUAL(yieldsFall(frags, ctx), true)
+  ABORT_IF(!yieldsFall(frags, ctx))
+  struct Committed
+  {
+    std::vector<Ms3Cleavage> sent;
+    std::string interleaved;
+  };
+  std::vector<Committed> cases(3);
+  cases[0].interleaved = "y6 b3 y5 b6 y4";
+  cases[1].sent.push_back(Ms3Cleavage{"y", 7});
+  cases[1].interleaved = "b3 y6 b6 y5 y4";
+  cases[2].sent.push_back(Ms3Cleavage{"y", 6});
+  cases[2].interleaved = "b3 y6 y5 b6 y4";
+  for (const Committed& committed : cases)
+  {
+    Ms3RegistrySnapshot snap;
+    snap.found = true;
+    for (const Ms3Cleavage& cleavage : committed.sent) snap.sent[cleavage][2] = 0.0;
+    SendOrderCase fixture;
+    fixture.mode = "fragments";
+    fixture.snapshot = &snap;
+    const std::vector<Ms3Target> ranked = planInSendOrder(fixture, "", 153, frags, ctx);
+    const std::vector<Ms3Target> interleaved = planInSendOrder(fixture, "interleaved", 153, frags, ctx);
+    TEST_STRING_EQUAL(ionsText(ranked), "y6 y5 y4 b3 b6")   // precondition: the imposed rank, whatever was sent
+    ABORT_IF(ionsText(ranked) != "y6 y5 y4 b3 b6")
+    TEST_EQUAL(keysOf(ranked) == keysOf(interleaved), true)
+    TEST_STRING_EQUAL(ionsText(interleaved), committed.interleaved)
+  }
+}
+END_SECTION
+
+// Governed ambiguity: a sent fragment counts for the modifications its cover contains, read from its key (b7 and y6
+// are not fragments of this identification). A on 2..3, B on 5..6; the plan is y5 (B), b3 (A), b4 (A), y4 (B).
+// Nothing sent, b7 sent (one each for A and B) or a raw mass sent (no group): the turns start level and the order is
+// the ranked one. y6 sent (it contains B only): A is behind, so b3 goes first.
+// FAILS UNDER: a sent fragment's groups looked up in the model's fragments (y6 would count for nothing: y5 b3 b4 y4);
+// a sent container counted for one modification, or a raw mass counted (both: y5 b3 y4 b4).
+START_SECTION(interleaved_ambiguity_counts_committed_fragments_by_what_they_contain)
+{
+  const ScanCommand ctx = yieldCtx();
+  const std::vector<GateFrag> frags = rankedFrags({{"y", 5, 0.0, {2}}, {"b", 3, 0.0, {2}}, {"b", 4, 0.0, {2}}, {"y", 4, 0.0, {2}}});
+  TEST_EQUAL(yieldsFall(frags, ctx), true)
+  ABORT_IF(!yieldsFall(frags, ctx))
+  struct Committed
+  {
+    std::vector<Ms3Cleavage> sent;
+    std::string interleaved;
+  };
+  std::vector<Committed> cases(4);
+  cases[0].interleaved = "y5 b3 b4 y4";
+  cases[1].sent.push_back(Ms3Cleavage{"b", 7});
+  cases[1].interleaved = "y5 b3 b4 y4";
+  cases[2].sent.push_back(Ms3Cleavage{"u", 1234});
+  cases[2].interleaved = "y5 b3 b4 y4";
+  cases[3].sent.push_back(Ms3Cleavage{"y", 6});
+  cases[3].interleaved = "b3 y5 b4 y4";
+  for (const Committed& committed : cases)
+  {
+    Ms3RegistrySnapshot snap;
+    snap.found = true;
+    for (const Ms3Cleavage& cleavage : committed.sent) snap.sent[cleavage][2] = 0.0;
+    SendOrderCase fixture;
+    fixture.mode = "ambiguity";
+    fixture.sites = {{2, 3}, {5, 6}};
+    fixture.snapshot = &snap;
+    const std::vector<Ms3Target> ranked = planInSendOrder(fixture, "", 154, frags, ctx);
+    const std::vector<Ms3Target> interleaved = planInSendOrder(fixture, "interleaved", 154, frags, ctx);
+    TEST_STRING_EQUAL(ionsText(ranked), "y5 b3 b4 y4")   // precondition: the imposed rank, whatever was sent
+    ABORT_IF(ionsText(ranked) != "y5 b3 b4 y4")
+    TEST_EQUAL(keysOf(ranked) == keysOf(interleaved), true)
+    TEST_STRING_EQUAL(ionsText(interleaved), committed.interleaved)
+  }
+}
+END_SECTION
+
+// fragment_charges separate: a fragment takes one turn and its charges stay together. y6 at 2+ and 3+, y5 at 2+, b3
+// at 2+ and 3+: after the two scans of y6 the C-terminus has had one fragment, so both scans of b3 go before y5.
+// FAILS UNDER: every scan taking a turn (y6 b3 y6 b3 y5), or a fragment counted once per charge.
+START_SECTION(interleaved_keeps_a_fragments_charges_together)
+{
+  const ScanCommand ctx = yieldCtx();
+  const std::vector<GateFrag> frags = rankedFrags({{"y", 6, 0.0, {2, 3}}, {"y", 5, 0.0, {2}}, {"b", 3, 0.0, {2, 3}}});
+  TEST_EQUAL(yieldsFall(frags, ctx), true)
+  ABORT_IF(!yieldsFall(frags, ctx))
+  SendOrderCase fixture;
+  fixture.mode = "fragments";
+  fixture.fragment_charges = "separate";
+  const std::vector<Ms3Target> ranked = planInSendOrder(fixture, "", 155, frags, ctx);
+  const std::vector<Ms3Target> interleaved = planInSendOrder(fixture, "interleaved", 155, frags, ctx);
+  TEST_STRING_EQUAL(ionsText(ranked), "y6 y6 y5 b3 b3")   // precondition: the imposed rank, a scan per charge
+  ABORT_IF(ionsText(ranked) != "y6 y6 y5 b3 b3")
+  TEST_EQUAL(keysOf(ranked) == keysOf(interleaved), true)
+  TEST_STRING_EQUAL(ionsText(interleaved), "y6 y6 b3 b3 y5")
 }
 END_SECTION
 

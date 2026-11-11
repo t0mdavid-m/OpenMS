@@ -1728,7 +1728,8 @@ START_SECTION(identification_section_presence_switches_and_refusals)
     TEST_EQUAL(contains(msg, "ADR-0062"), true)
   }
 
-  // characterization.order: absent and null are ranked; "random" parses; anything else is refused, case included.
+  // characterization.order: absent and null are ranked; "random" and "interleaved" parse; anything else is refused,
+  // case included.
   {
     const std::string ms3 = R"(, "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 35 })";
     auto ordered = [&ms3](const std::string& order) {
@@ -1739,9 +1740,31 @@ START_SECTION(identification_section_presence_switches_and_refusals)
     TEST_EQUAL((int)Config(ordered("null")).characterization().send_order, (int)Ms3SendOrder::Ranked)
     TEST_EQUAL((int)Config(ordered("\"ranked\"")).characterization().send_order, (int)Ms3SendOrder::Ranked)
     TEST_EQUAL((int)Config(ordered("\"random\"")).characterization().send_order, (int)Ms3SendOrder::Random)
+    TEST_EQUAL((int)Config(ordered("\"interleaved\"")).characterization().send_order, (int)Ms3SendOrder::Interleaved)
     for (const std::string bad : {"\"Random\"", "1"})
       TEST_EQUAL(contains(refineMessage(ordered(bad)),
-                          "identification.characterization.order must be \"ranked\" or \"random\""), true)
+                          "identification.characterization.order must be \"ranked\", \"random\" or \"interleaved\""), true)
+
+    // ADR-0073: "interleaved" loads under the three modes whose plans have groups, and is refused under the two
+    // whose plans have none; the refusal names the modes that take it. "random" still loads under those two.
+    auto inMode = [&ms3](const std::string& mode, const std::string& order) {
+      const std::string method = (mode == "discriminating") ? R"("method": "refine", )" : "";
+      return cfgJson("", R"("identification": { "reference": { "sequence": "PEPTIDEK" }, )" + method
+                             + R"("characterization": { "mode": ")" + mode + R"(", "order": ")" + order + R"(" } },)", ms3);
+    };
+    for (const std::string mode : {"ambiguity", "coverage", "fragments"})
+      TEST_EQUAL((int)Config(inMode(mode, "interleaved")).characterization().send_order, (int)Ms3SendOrder::Interleaved)
+    for (const std::string mode : {"exhaustive", "discriminating"})
+    {
+      const std::string msg = refineMessage(inMode(mode, "interleaved"));
+      TEST_EQUAL(contains(msg, "identification.characterization.order \"interleaved\""), true)
+      TEST_EQUAL(contains(msg, "\"ambiguity\""), true)
+      TEST_EQUAL(contains(msg, "\"coverage\""), true)
+      TEST_EQUAL(contains(msg, "\"fragments\""), true)
+      TEST_EQUAL(contains(msg, "got mode \"" + mode + "\""), true)
+      TEST_EQUAL(contains(msg, "ADR-0073"), true)
+      TEST_EQUAL((int)Config(inMode(mode, "random")).characterization().send_order, (int)Ms3SendOrder::Random)
+    }
   }
 }
 END_SECTION
