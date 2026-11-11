@@ -16,6 +16,7 @@ set(sources_list
         FLASHIda/Exploration.cpp
         FLASHIda/EventLog.cpp
         FLASHIda/FAIMS.cpp
+        FLASHIda/AnnotatorMetrics.cpp
         FLASHIda/KineticModel.cpp
         FLASHIda/Refine.cpp
         FLASHIda/FragmentAnalysis.cpp
