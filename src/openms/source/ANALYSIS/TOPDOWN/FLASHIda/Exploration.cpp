@@ -1287,46 +1287,29 @@ namespace OpenMS
     };
     const std::optional<YieldGateConfig>& yield_gate = config_.quantification().ms3_yield_gate;
     bool yield_refused = false;   // ADR-0069: a fragment had an SNR-positive charge and the yield gate refused every one
-    for (const Ms3Target& candidate : candidates)
-    {
-      if (static_cast<int>(out.commands.size()) >= n) break;
-      Ms3Target t = candidate;
-      double snr = 0.0;
-      if (!yield_gate)
+    // ADR-0069: the fragment's charges strongest first, each through the SNR test and then the yield test; the first to
+    // pass both buys the MS3. None: the fragment is refused. @p any_snr: it had an SNR-positive charge.
+    auto walkCharges = [&](const Ms3Target& candidate, Ms3Target& t, double& snr, double& e, bool& any_snr) {
+      for (const Ms3Target& c : tracker.labelledFragmentCharges(precursor_id, candidate.ion_type, candidate.ion_index))
       {
-        snr = windowSnrOf(t);
-        if (!(snr > 1.0)) continue;
-        ++eligible;
-      }
-      else
-      {
-        // ADR-0069: the fragment's charges strongest first, each through the SNR test and then the yield test; the first
-        // to pass both buys the MS3. None: the fragment is refused and the next one takes its place.
-        bool bought = false, any_snr = false;
-        for (const Ms3Target& c : tracker.labelledFragmentCharges(precursor_id, candidate.ion_type, candidate.ion_index))
+        const double s = windowSnrOf(c);
+        if (!(s > 1.0)) continue;
+        any_snr = true;
+        const YieldInputs in = yieldInputsOf(ms_ctx, c.stage1_scores, c.ion_index);
+        const YieldPrediction pred = predictBondYield(yield_gate->coefficients, in);
+        if (yieldAdmits(*yield_gate, pred))
         {
-          const double s = windowSnrOf(c);
-          if (!(s > 1.0)) continue;
-          any_snr = true;
-          const YieldInputs in = yieldInputsOf(ms_ctx, c.stage1_scores, c.ion_index);
-          const YieldPrediction pred = predictBondYield(yield_gate->coefficients, in);
-          if (yieldAdmits(*yield_gate, pred))
-          {
-            t = c;
-            snr = s;
-            bought = true;
-            break;
-          }
-          logYieldVerdict("quantification", precursor_id, c.ion_type, c.ion_index, std::abs(c.frag_charge), "refused",
-                          *yield_gate, in, pred);
+          t = c;
+          snr = s;
+          e = pred.e;
+          return true;
         }
-        if (any_snr) ++eligible;   // eligible counts fragments with an SNR-positive charge, as without the gate
-        if (!bought)
-        {
-          yield_refused = yield_refused || any_snr;
-          continue;
-        }
+        logYieldVerdict("quantification", precursor_id, c.ion_type, c.ion_index, std::abs(c.frag_charge), "refused",
+                        *yield_gate, in, pred);
       }
+      return false;
+    };
+    auto buy = [&](const Ms3Target& t, double snr) {
       const char ion_type = t.ion_type.empty() ? '\0' : t.ion_type[0];
       // Stage 0 is the identification scan's own isolation and activation (ADR-0003): no per-ion override.
       ScanCommand cmd = queue.buildMS3(ms_ctx, quant_scan, t.frag_mz, std::abs(t.frag_charge), t.iso_width, ms_ctx.scan_id,
@@ -1334,6 +1317,63 @@ namespace OpenMS
       cmd.faims_cv = faims_cv;
       cmd.window_snr = snr;
       out.commands.push_back(cmd);
+    };
+    if (yield_gate && yield_gate->rank_by == YieldRank::Yield)
+    {
+      // ADR-0069 (amended): every labelled fragment is walked first, then the buyable ones are taken by predicted
+      // bond yield, highest first (stable: equal yields keep the strongest-first order), up to n.
+      struct Buyable
+      {
+        Ms3Target target;
+        double snr = 0.0;
+        double e = 0.0;
+      };
+      std::vector<Buyable> buyable;
+      for (const Ms3Target& candidate : candidates)
+      {
+        Buyable b;
+        b.target = candidate;
+        bool any_snr = false;
+        const bool bought = walkCharges(candidate, b.target, b.snr, b.e, any_snr);
+        if (any_snr) ++eligible;   // eligible counts fragments with an SNR-positive charge, as without the gate
+        if (bought) buyable.push_back(b);
+        else yield_refused = yield_refused || any_snr;
+      }
+      std::stable_sort(buyable.begin(), buyable.end(), [](const Buyable& a, const Buyable& b) { return a.e > b.e; });
+      for (const Buyable& b : buyable)
+      {
+        if (static_cast<int>(out.commands.size()) >= n) break;
+        buy(b.target, b.snr);
+      }
+    }
+    else
+    {
+      for (const Ms3Target& candidate : candidates)
+      {
+        if (static_cast<int>(out.commands.size()) >= n) break;
+        Ms3Target t = candidate;
+        double snr = 0.0;
+        if (!yield_gate)
+        {
+          snr = windowSnrOf(t);
+          if (!(snr > 1.0)) continue;
+          ++eligible;
+        }
+        else
+        {
+          // rank_by intensity: strongest fragment first; a refused fragment hands its place to the next.
+          bool any_snr = false;
+          double e = 0.0;
+          const bool bought = walkCharges(candidate, t, snr, e, any_snr);
+          if (any_snr) ++eligible;   // eligible counts fragments with an SNR-positive charge, as without the gate
+          if (!bought)
+          {
+            yield_refused = yield_refused || any_snr;
+            continue;
+          }
+        }
+        buy(t, snr);
+      }
     }
     // Nothing bought: yield_refused when the quantification yield gate refused an eligible fragment (ADR-0069), else no
     // labelled fragment was eligible.
@@ -1408,6 +1448,17 @@ namespace OpenMS
       }
 
       auto targets = tracker->planNextScans(precursor_id, (gov || yield_gated) ? &gate : nullptr);
+      // characterization.order: under "random" the plan's MS3 are sent in one reproducible permutation, drawn from the
+      // dispatching scan's id. Only the send order changes: the plan above (its targets, slots and stamps) is made.
+      if (config_.characterization().send_order == Ms3SendOrder::Random && targets.size() > 1)
+      {
+        const uint64_t seed = kSweepSeed ^ static_cast<uint64_t>(ms_ctx != nullptr ? ms_ctx->scan_id : precursor_id);
+        const std::vector<int> perm = sweepPermutation(static_cast<int>(targets.size()), seed);
+        std::vector<Ms3Target> shuffled;
+        shuffled.reserve(targets.size());
+        for (const int p : perm) shuffled.push_back(targets[static_cast<size_t>(p)]);
+        targets = std::move(shuffled);
+      }
 
       // A raw-mass plan (exhaustive, or a discriminating round still undecided after planning) stamped each target's
       // nominal mass; its items carry it so a withdrawal can give it back. A mapped plan stamps nothing.

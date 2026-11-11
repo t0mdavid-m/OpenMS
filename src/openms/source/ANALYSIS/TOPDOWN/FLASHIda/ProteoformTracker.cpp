@@ -291,7 +291,9 @@ namespace OpenMS
     // stage-1 scores against the dispatching MS2 (gate.ms_ctx) and the ion index. Returns the charges the yield gate
     // admits, in order: under `separate` every charge is tested (each is its own scan), otherwise the walk stops at the
     // first admitted one, which anchors the MS3. Every refused charge writes an [MS3-YIELD] refused line. A target with
-    // no ion index is not tested: one untested line, and every charge comes back.
+    // no ion index is not tested: one untested line, and every charge comes back. @p anchor_e receives the predicted
+    // bond yield of the first admitted charge (0 when none, or untested) and @p tested whether the yield test ran:
+    // what rank_by yield orders a plan's candidates by.
     inline const FragmentAnalysis::FragmentScores& scoresOf(const FragmentObservation* o) { return o->stage1_scores; }
     inline const FragmentAnalysis::FragmentScores& scoresOf(const ChargeRecord& c) { return c.stage1_scores; }
     inline int chargeOf(const FragmentObservation* o) { return o->frag_charge; }
@@ -299,8 +301,11 @@ namespace OpenMS
 
     template <typename Obs>
     std::vector<Obs> yieldWalk(const Ms3PlanGate& gate, int precursor_id, const std::string& ion_type, int ion_index,
-                               const std::vector<Obs>& charges, bool test_every_charge)
+                               const std::vector<Obs>& charges, bool test_every_charge, double* anchor_e = nullptr,
+                               bool* tested = nullptr)
     {
+      if (anchor_e != nullptr) *anchor_e = 0.0;
+      if (tested != nullptr) *tested = false;
       if (gate.yield == nullptr || gate.ms_ctx == nullptr || charges.empty()) return charges;
       const YieldGateConfig& yg = *gate.yield;
       if (ion_index <= 0)
@@ -310,6 +315,7 @@ namespace OpenMS
                         in, predictBondYield(yg.coefficients, in));
         return charges;
       }
+      if (tested != nullptr) *tested = true;
       std::vector<Obs> admitted;
       for (const Obs& o : charges)
       {
@@ -317,6 +323,7 @@ namespace OpenMS
         const YieldPrediction pred = predictBondYield(yg.coefficients, in);
         if (yieldAdmits(yg, pred))
         {
+          if (admitted.empty() && anchor_e != nullptr) *anchor_e = pred.e;
           admitted.push_back(o);
           if (!test_every_charge) break;
         }
@@ -324,6 +331,19 @@ namespace OpenMS
           logYieldVerdict("characterization", precursor_id, ion_type, ion_index, chargeOf(o), "refused", yg, in, pred);
       }
       return admitted;
+    }
+
+    /// ADR-0069 (amended), rank_by yield, for a raw-mass pool already in its own order: the tested entries first, by
+    /// predicted bond yield descending, then the untested ones (no ion index), then the refused ones, which are never
+    /// emitted. Stable, so equal yields and the untested entries keep the pool's order.
+    template <typename Entry>
+    void rankPoolByYield(std::vector<Entry>& pool)
+    {
+      auto cls = [](const Entry& e) { return e.yield_refused ? 2 : (e.yield_tested ? 0 : 1); };
+      std::stable_sort(pool.begin(), pool.end(), [&cls](const Entry& a, const Entry& b) {
+        if (cls(a) != cls(b)) return cls(a) < cls(b);
+        return cls(a) == 0 && a.yield_e > b.yield_e;
+      });
     }
 
   } // anonymous namespace
@@ -854,19 +874,40 @@ namespace OpenMS
     // BEFORE room.admit, so a refused fragment takes no budget place and no cleavage slot.
     const bool yield_on = gate != nullptr && gate->yield != nullptr;
     const bool separate_charges = config_.characterization().fragment_charges == ChargeAcquisitionMode::Separate;
-    std::map<FragmentKey, std::vector<const FragmentObservation*>> yield_pass;
-    auto yieldPassOf = [&](const MappedFragment& f) -> const std::vector<const FragmentObservation*>& {
+    struct YieldPass
+    {
+      std::vector<const FragmentObservation*> admitted;
+      double e = 0.0;   ///< the anchor's predicted bond yield
+    };
+    std::map<FragmentKey, YieldPass> yield_pass;
+    auto yieldPassOf = [&](const MappedFragment& f) -> const YieldPass& {
       const FragmentKey key{f.ion_type, f.ion_index};
       auto cached = yield_pass.find(key);
       if (cached != yield_pass.end()) return cached->second;
-      return yield_pass.emplace(key, yieldWalk(*gate, precursor_id, f.ion_type, f.ion_index, chargesOf(f), separate_charges))
-          .first->second;
+      YieldPass pass;
+      pass.admitted = yieldWalk(*gate, precursor_id, f.ion_type, f.ion_index, chargesOf(f), separate_charges, &pass.e);
+      return yield_pass.emplace(key, std::move(pass)).first->second;
+    };
+    // ADR-0069 (amended): the order a plan walks its candidates in, and sends its targets in. Strongest best-MS2 first;
+    // under rank_by yield then by predicted bond yield, highest first (stable, so equal yields stay strongest first),
+    // a refused fragment last. Every verdict is made before the sort, so the refusals are written in intensity order.
+    const bool rank_by_yield = yield_on && gate->yield->rank_by == YieldRank::Yield;
+    auto rankCandidates = [&](std::vector<const MappedFragment*>& v) {
+      std::sort(v.begin(), v.end(), by_intensity);
+      if (!rank_by_yield) return;
+      for (const MappedFragment* f : v) yieldPassOf(*f);
+      std::stable_sort(v.begin(), v.end(), [&](const MappedFragment* a, const MappedFragment* b) {
+        const YieldPass& pa = yieldPassOf(*a);
+        const YieldPass& pb = yieldPassOf(*b);
+        if (pa.admitted.empty() != pb.admitted.empty()) return pb.admitted.empty();
+        return pa.e > pb.e;
+      });
     };
     auto add_target = [&](const MappedFragment* f) -> bool {
       if (f == nullptr || !f->best_ms2.has_value()) return false;
       const FragmentKey key{f->ion_type, f->ion_index};
       if (chosen.count(key)) return false;
-      if (yield_on && yieldPassOf(*f).empty()) return true;   // yield-refused: the next candidate takes the place
+      if (yield_on && yieldPassOf(*f).admitted.empty()) return true;   // yield-refused: the next candidate takes the place
       if (gate != nullptr && !room.admit(key)) return true;
       chosen.insert(key);
       targets.push_back(f);
@@ -912,10 +953,7 @@ namespace OpenMS
           if (!fragmentContains(f, rs_region, re_region)) continue;
           cands.push_back(&f);
         }
-        std::sort(cands.begin(), cands.end(),
-                  [](const MappedFragment* a, const MappedFragment* b) {
-                    return a->best_ms2->intensity > b->best_ms2->intensity;
-                  });
+        rankCandidates(cands);
         per_mod_candidates.push_back(std::move(cands));
       }
 
@@ -964,7 +1002,7 @@ namespace OpenMS
       std::vector<const MappedFragment*> cands;
       for (const auto& kv : m.fragments)
         if (eligible(kv.second)) cands.push_back(&kv.second);
-      std::sort(cands.begin(), cands.end(), by_intensity);
+      rankCandidates(cands);
 
       for (const MappedFragment* f : cands)
       {
@@ -987,7 +1025,7 @@ namespace OpenMS
         const auto [lo, hi] = interior(kv.second);
         if (eligible(kv.second) && hi >= lo) cands.push_back(&kv.second);
       }
-      std::sort(cands.begin(), cands.end(), by_intensity);
+      rankCandidates(cands);
       for (const MappedFragment* f : cands)
         if (!add_target(f)) break;  // dedup + budget bound (false => budget full)
     }
@@ -1001,11 +1039,9 @@ namespace OpenMS
       return no_plan(had_ambiguous_mod ? "no_containing_fragment" : "all_mods_localized");
     }
 
-    // Strongest best-MS2 first within the chosen set (the executor dispatches in this order).
-    std::sort(targets.begin(), targets.end(),
-              [](const MappedFragment* a, const MappedFragment* b) {
-                return a->best_ms2->intensity > b->best_ms2->intensity;
-              });
+    // The plan's ranking within the chosen set (the executor dispatches in this order): strongest best-MS2 first, or
+    // highest predicted bond yield first under rank_by yield.
+    rankCandidates(targets);
 
     // --- 2) Emit Ms3Targets, budget-bounded ---------------------------------------------------------
     // Single (default): one target per fragment from best_ms2 — byte-identical to the pre-mode build.
@@ -1032,7 +1068,7 @@ namespace OpenMS
       if (gated != nullptr && gated->empty()) continue;   // unreachable: such a fragment never enters a pool
       // ADR-0069: with the yield gate on, the anchor is the first charge it admitted, and separate acquires only the
       // charges it admitted; multiplexed notches still come from `gated` and are not yield-tested.
-      const std::vector<const FragmentObservation*>* acquire = yield_on ? &yieldPassOf(*f) : gated;
+      const std::vector<const FragmentObservation*>* acquire = yield_on ? &yieldPassOf(*f).admitted : gated;
       if (acquire != nullptr && acquire->empty()) continue;   // unreachable: add_target refused it
       const FragmentObservation* anchor = (acquire != nullptr) ? acquire->front() : &(*f->best_ms2);
 
@@ -1201,6 +1237,10 @@ namespace OpenMS
       int nominal = 0;
       std::vector<ChargeRecord> charges;   ///< governed: the admitted charges, strongest first
       Ms3Cleavage cleavage;                ///< governed: what the mass acquires
+      std::vector<ChargeRecord> yield_admitted;   ///< rank_by yield: the charges the yield gate admits
+      double yield_e = 0.0;                       ///< rank_by yield: the anchor's predicted bond yield
+      bool yield_tested = false;                  ///< rank_by yield: the mass has an ion index, so the test ran
+      bool yield_refused = false;                 ///< rank_by yield: every charge refused
     };
     std::vector<PoolEntry> pool;
     pool.reserve(m.winner_peaks.size());
@@ -1234,6 +1274,21 @@ namespace OpenMS
                      [](const PoolEntry& a, const PoolEntry& b) {
                        return a.peak->intensity > b.peak->intensity;
                      });
+    // ADR-0069 (amended): under rank_by yield every mass gets its verdict here, before the walk, and the pool is
+    // re-ranked: tested masses by predicted bond yield, then the untested ones (no ion index) in intensity order.
+    const bool rank_by_yield = gate != nullptr && gate->yield != nullptr && gate->yield->rank_by == YieldRank::Yield;
+    if (rank_by_yield)
+    {
+      const bool separate = config_.characterization().fragment_charges == ChargeAcquisitionMode::Separate;
+      for (PoolEntry& e : pool)
+      {
+        const std::pair<std::string, int> label = labelFor(*e.peak);
+        e.yield_admitted = yieldWalk(*gate, precursor_id, label.first, label.second, e.charges, separate, &e.yield_e,
+                                     &e.yield_tested);
+        e.yield_refused = e.yield_admitted.empty();
+      }
+      rankPoolByYield(pool);
+    }
 
     // --- 3) Emit, budget-bounded -------------------------------------------------------------------
     // THE BUDGET COUNTS SPECIES, not emitted targets, exactly as it counts fragments on the mapped
@@ -1251,7 +1306,12 @@ namespace OpenMS
       // ADR-0069: yield-refused -- before the cap, so it takes no slot; not emitted, not stamped. A mass that matches no
       // ion (label index 0) is admitted untested.
       std::vector<ChargeRecord> yield_admitted;
-      if (gate != nullptr && gate->yield != nullptr)
+      if (rank_by_yield)
+      {
+        if (e.yield_refused) continue;
+        yield_admitted = e.yield_admitted;
+      }
+      else if (gate != nullptr && gate->yield != nullptr)
       {
         yield_admitted = yieldWalk(*gate, precursor_id, label.first, label.second, e.charges,
                                    config_.characterization().fragment_charges == ChargeAcquisitionMode::Separate);
@@ -1393,6 +1453,10 @@ namespace OpenMS
       int nominal = 0;
       std::vector<ChargeRecord> charges;   ///< governed: the admitted charges, strongest first
       Ms3Cleavage cleavage;                ///< governed: what the mass acquires (the best path's ion, else 'u')
+      std::vector<ChargeRecord> yield_admitted;   ///< rank_by yield: the charges the yield gate admits
+      double yield_e = 0.0;                       ///< rank_by yield: the anchor's predicted bond yield
+      bool yield_tested = false;                  ///< rank_by yield: the record has a winner-path ion, so the test ran
+      bool yield_refused = false;                 ///< rank_by yield: every charge refused
     };
     std::vector<PoolEntry> pool;
     for (DiscriminatingRecord& rec : st.records)
@@ -1415,6 +1479,21 @@ namespace OpenMS
       pool.push_back(std::move(entry));
     }
     if (pool.empty()) return dead_end("pool_exhausted");
+    // ADR-0069 (amended): under rank_by yield every record gets its verdict here, at the winner path's ion, and the
+    // pool is re-ranked: tested records by predicted bond yield, then the untested ones in the records' order.
+    const bool rank_by_yield = gate != nullptr && gate->yield != nullptr && gate->yield->rank_by == YieldRank::Yield;
+    if (rank_by_yield)
+    {
+      const bool separate = config_.characterization().fragment_charges == ChargeAcquisitionMode::Separate;
+      for (PoolEntry& e : pool)
+      {
+        const std::optional<Refine::Path::Ion>& yion = e.rec->target.ion_a;
+        e.yield_admitted = yieldWalk(*gate, precursor_id, yion ? std::string(1, yion->type) : std::string(kUnassignedIonType),
+                                     yion ? yion->index : 0, e.charges, separate, &e.yield_e, &e.yield_tested);
+        e.yield_refused = e.yield_admitted.empty();
+      }
+      rankPoolByYield(pool);
+    }
 
     // --- 2) Emit, budget-bounded, in the records' order (intensity-desc, Refine::discriminating) --------------------
     // The budget counts SPECIES, as in planExhaustive_ (ADR-0016).
@@ -1433,7 +1512,12 @@ namespace OpenMS
       // ADR-0069: yield-refused -- before the cap, so it takes no slot; not dispatched, not stamped. Tested at the winner
       // path's ion; a mass only the second path explains has no ion index and is admitted untested.
       std::vector<ChargeRecord> yield_admitted;
-      if (gate != nullptr && gate->yield != nullptr)
+      if (rank_by_yield)
+      {
+        if (e.yield_refused) continue;
+        yield_admitted = e.yield_admitted;
+      }
+      else if (gate != nullptr && gate->yield != nullptr)
       {
         const std::optional<Refine::Path::Ion>& yion = rec.target.ion_a;
         yield_admitted = yieldWalk(*gate, precursor_id, yion ? std::string(1, yion->type) : std::string(kUnassignedIonType),
