@@ -180,6 +180,9 @@ public:
     /// bonds covered by terminal and accepted internal fragments (both ends of an internal fragment), and their percentage
     int covered_bonds_with_internal = -1;
     double coverage_with_internal = -1;
+    /// summed intensity of the peaks of the accepted terminal envelopes, each peak once (envelopes that share peaks, as z, z+1 and z+2
+    /// do, count them once)
+    double explained_intensity = -1;
   };
 
   /// constructor

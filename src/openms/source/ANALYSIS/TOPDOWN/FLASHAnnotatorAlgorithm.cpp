@@ -991,6 +991,12 @@ void FLASHAnnotatorAlgorithm::annotateOne_(const PeakArrays& spec, const std::ve
   result.matched_fragments = matched_hypotheses;
   result.fragment_hypotheses = hypotheses;
   result.decoy_matched_fragments = decoy_matched;
+  double explained_intensity = 0;
+  for (Size k = 0; k < terminal_peaks.size(); k++)
+  {
+    if (terminal_peaks[k]) explained_intensity += spec.intensities[k];
+  }
+  result.explained_intensity = explained_intensity;
 
   if (! internal_on_ || empty || length < 5) return;
 
