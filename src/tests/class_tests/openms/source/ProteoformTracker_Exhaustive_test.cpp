@@ -1367,4 +1367,77 @@ START_SECTION(exhaustive_unlabelled_is_admitted_untested_labelled_is_gated)
 }
 END_SECTION
 
+/////////////////////////////////////////////////////////////
+// ADR-0069 (amended). Under rank_by yield the masses with an ion index come first, by predicted bond yield, and the
+// untested ones follow in intensity order. The interleaved pool of section 3 (U1, b6, U2, y6, U3) at budget 3:
+// without a gate, and with an open gate ranked by intensity, the plan is U1, b6, U2 and y6 loses its place; ranked by
+// yield it is b6 and y6, then U1.
+//
+// FAILS UNDER: untested masses ranked among or ahead of the tested ones under rank_by yield, or rank_by intensity
+// changing the plan.
+/////////////////////////////////////////////////////////////
+START_SECTION(exhaustive_tested_targets_rank_before_untested)
+{
+  const std::vector<MassCharge> interleaved{
+    {MASS_U1, 2}, {MASS_B6, 2}, {MASS_U2, 2}, {MASS_Y6, 2}, {MASS_U3, 2}};
+  const ScanCommand ctx = makeMs2Ctx();
+  YieldGateConfig open;
+  open.threshold = 1e-12;
+
+  // No gate: today's plan.
+  Config cfg0{trackerConfig("exhaustive", 3, 0.0, 0)};
+  IdaLogger logger0(cfg0);
+  ProteoformTracker tracker0(cfg0, logger0);
+  feedWinnerScan(tracker0, 70, 701, interleaved, TWO_FRAGS, "HCD");
+  const std::vector<Ms3Target> today = tracker0.planNextScans(70);
+  TEST_EQUAL(static_cast<int>(today.size()), 3)
+  ABORT_IF(today.size() != 3)
+  TEST_TRUE(targetAtMass(today, MASS_Y6) == nullptr)   // non-vacuity: y6 loses its place to an unassigned mass
+
+  // rank_by intensity: the same plan, place by place.
+  {
+    Config cfg{trackerConfig("exhaustive", 3, 0.0, 0)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    feedWinnerScan(tracker, 71, 702, interleaved, TWO_FRAGS, "HCD");
+    YieldGateConfig by_intensity = open;
+    by_intensity.rank_by = YieldRank::Intensity;
+    Ms3PlanGate gate;   // ungoverned: no snapshot, no spectrum
+    gate.max_targets = 10;
+    gate.yield = &by_intensity;
+    gate.ms_ctx = &ctx;
+    const std::vector<Ms3Target> plan = tracker.planNextScans(71, &gate);
+    TEST_EQUAL(static_cast<int>(plan.size()), 3)
+    ABORT_IF(plan.size() != 3)
+    for (size_t i = 0; i < 3; ++i) TEST_REAL_SIMILAR(plan[i].frag_mass, today[i].frag_mass)
+  }
+
+  // rank_by yield: the two tested masses, by yield, then the strongest untested one.
+  {
+    Config cfg{trackerConfig("exhaustive", 3, 0.0, 0)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    feedWinnerScan(tracker, 72, 703, interleaved, TWO_FRAGS, "HCD");
+    Ms3PlanGate gate;
+    gate.max_targets = 10;
+    gate.yield = &open;
+    gate.ms_ctx = &ctx;
+    const std::vector<Ms3Target> plan = tracker.planNextScans(72, &gate);
+    TEST_EQUAL(static_cast<int>(plan.size()), 3)
+    ABORT_IF(plan.size() != 3)
+    TEST_TRUE(targetForIon(plan, "b", 6) != nullptr)
+    TEST_TRUE(targetForIon(plan, "y", 6) != nullptr)
+    TEST_EQUAL(plan[0].ion_index, 6)
+    TEST_EQUAL(plan[1].ion_index, 6)
+    auto eOf = [&ctx](const Ms3Target& t) {
+      return predictBondYield(YieldCoefficients{}, yieldInputsOf(ctx, t.stage1_scores, t.ion_index)).e;
+    };
+    TEST_EQUAL(eOf(plan[0]) >= eOf(plan[1]), true)
+    TEST_EQUAL(plan[2].ion_type, std::string("u"))
+    TEST_REAL_SIMILAR(plan[2].frag_mass, MASS_U1)
+    TEST_EQUAL(countUnassigned(plan), 1)
+  }
+}
+END_SECTION
+
 END_TEST

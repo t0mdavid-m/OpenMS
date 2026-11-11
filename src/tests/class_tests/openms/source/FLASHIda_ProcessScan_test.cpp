@@ -4580,9 +4580,10 @@ START_SECTION(quant_ms3_yield_refused_hands_on)
       if (cell(t, row, "tracking_id") == ScanCommandQueue::encode(c.scan_id)) return std::stod(cell(t, row, "predicted_bond_yield"));
     return -2.0;
   };
-  auto withGate = [](const std::string& dir, double threshold) {
+  auto withGate = [](const std::string& dir, double threshold, const char* rank_by = nullptr) {
     nlohmann::json j = nlohmann::json::parse(quantMs3Json(dir, "ms3", 10.0));
     if (threshold > 0) j["quantification"]["ms3_yield_gate"] = {{"threshold", threshold}};
+    if (threshold > 0 && rank_by != nullptr) j["quantification"]["ms3_yield_gate"]["rank_by"] = rank_by;
     return j.dump();
   };
 
@@ -4621,12 +4622,21 @@ START_SECTION(quant_ms3_yield_refused_hands_on)
     TEST_EQUAL(yield_refused_rows > 0, true)
   }
 
+  // rank_by intensity: the strongest labelled fragment is walked first, so at 0.5 it is bought again.
   const std::string d2 = freshLogDir("quant_ms3_yield_half");
-  const QuantMs3Run half = runQuantMs3(d2, withGate(d2, 0.5));
+  const QuantMs3Run half = runQuantMs3(d2, withGate(d2, 0.5, "intensity"));
   TEST_EQUAL(half.quant_ms3.size(), 1)
   ABORT_IF(half.quant_ms3.size() != 1)
   TEST_EQUAL(ionOf(half.quant_ms3[0]), bought_ion)
   TEST_EQUAL(std::abs(rowE(d2, half.quant_ms3[0]) - e_off) <= 1e-3, true)
+
+  // rank_by yield (the default): at 0.5 the fragment bought has the highest predicted yield of the buyable ones, so
+  // its E is at least that of the strongest fragment, which passes at this threshold.
+  const std::string d3 = freshLogDir("quant_ms3_yield_half_ranked");
+  const QuantMs3Run ranked = runQuantMs3(d3, withGate(d3, 0.5, "yield"));
+  TEST_EQUAL(ranked.quant_ms3.size(), 1)
+  ABORT_IF(ranked.quant_ms3.size() != 1)
+  TEST_EQUAL(rowE(d3, ranked.quant_ms3[0]) >= e_off - 1e-3, true)
 }
 END_SECTION
 
@@ -4773,6 +4783,81 @@ START_SECTION(window_scan_decides_nothing)
   TEST_EQUAL(off.window_cmds.size(), 0)
   TEST_EQUAL(msnSequence(on) == msnSequence(off), true)
   TEST_EQUAL(on.ms1_cmds.size(), off.ms1_cmds.size())
+}
+END_SECTION
+
+// characterization.order "random": the MS3 of one plan are sent in one reproducible permutation, drawn from the
+// dispatching MS2's id; the plan itself is the ranked one. The cytC fragments recipe, three runs: ranked, random, and
+// random again. Per dispatching MS2 the random run sends the ranked run's MS3, reordered by
+// sweepPermutation(n, kSweepSeed ^ that MS2's id); the second random run is the first.
+//
+// FAILS UNDER: a shuffle inside the planner (the set would change where the budget is contended), a shuffle not seeded
+// by the dispatching scan, or an unseeded one (the two random runs would differ).
+START_SECTION(ms3_random_send_order_permutes_the_plan)
+{
+  auto ms1 = loadTsvScans(ms1_cytc_tsv_path);
+  auto ms2 = loadTsvScans(ms2_cytc_fresh_tsv_path);
+  ABORT_IF(ms1.empty() || ms2.empty())
+  auto run = [&](const char* order, const std::string& tag) {
+    nlohmann::json j = nlohmann::json::parse(ms3_mode1_json);
+    j["deconvolution"]["tqscore_threshold"] = 0.0;
+    j["identification"]["characterization"] = {{"mode", "fragments"}, {"max_targets", 3}};
+    if (order != nullptr) j["identification"]["characterization"]["order"] = order;
+    j["runtime"] = {{"log_dir", freshLogDir(tag)}};
+    const std::string cfg = j.dump();
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    return runInterleaved(&ida, ms1, ms2, nullptr, 4000).ms3_cmds;
+  };
+  const std::vector<ScanCommand> ranked = run(nullptr, "ms3_order_ranked");
+  const std::vector<ScanCommand> random = run("random", "ms3_order_random");
+  const std::vector<ScanCommand> again = run("random", "ms3_order_random_again");
+  TEST_EQUAL(ranked.empty(), false)
+  TEST_EQUAL(random.size(), ranked.size())
+
+  // Parent tracking id -> the MS3 ion keys it dispatched, in dequeue order.
+  auto groups = [](const std::vector<ScanCommand>& cmds) {
+    std::map<std::string, std::vector<std::string>> g;
+    for (const ScanCommand& c : cmds)
+    {
+      std::string ion;
+      decodeTrailingIonKey(c.scan_description, ion);
+      g[std::string(c.parent_scan_id)].push_back(ion);
+    }
+    return g;
+  };
+  auto idOf = [](const std::string& encoded) {
+    for (int i = 0; i < 200000; ++i)
+      if (ScanCommandQueue::encode(i) == encoded) return i;
+    return -1;
+  };
+  const std::map<std::string, std::vector<std::string>> a = groups(ranked);
+  const std::map<std::string, std::vector<std::string>> b = groups(random);
+  TEST_EQUAL(a.size(), b.size())
+  int permuted = 0;
+  for (const auto& entry : a)
+  {
+    const std::vector<std::string>& ions = entry.second;
+    const auto it = b.find(entry.first);
+    TEST_EQUAL(it != b.end(), true)
+    if (it == b.end()) continue;
+    const int id = idOf(entry.first);
+    TEST_EQUAL(id >= 0, true)
+    std::vector<std::string> expected = ions;
+    if (ions.size() > 1)
+    {
+      const std::vector<int> perm = Exploration::sweepPermutation(static_cast<int>(ions.size()),
+                                                                  Exploration::kSweepSeed ^ static_cast<uint64_t>(id));
+      for (size_t k = 0; k < perm.size(); ++k) expected[k] = ions[static_cast<size_t>(perm[k])];
+    }
+    TEST_EQUAL(it->second == expected, true)
+    if (it->second != ions) ++permuted;
+  }
+  TEST_EQUAL(permuted > 0, true)   // non-vacuity: at least one plan is sent in another order
+
+  // Reproducible: the second random run is the first, command for command.
+  TEST_EQUAL(again.size(), random.size())
+  for (size_t i = 0; i < std::min(again.size(), random.size()); ++i)
+    TEST_EQUAL(std::string(again[i].scan_description), std::string(random[i].scan_description))
 }
 END_SECTION
 

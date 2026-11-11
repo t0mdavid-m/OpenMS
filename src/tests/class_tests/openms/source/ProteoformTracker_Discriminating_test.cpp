@@ -1261,6 +1261,7 @@ START_SECTION(discriminating_yield_refused_record_is_not_dispatched)
     feedAndFinalize(cfg2, tracker2, pid, 673, twoTotals());
     YieldGateConfig open;
     open.threshold = 1e-12;
+    open.rank_by = YieldRank::Intensity;   // place by place the round without a gate: the records' own order
     Ms3PlanGate gate;
     gate.max_targets = 100;
     gate.yield = &open;
@@ -1271,6 +1272,82 @@ START_SECTION(discriminating_yield_refused_record_is_not_dispatched)
     TEST_EQUAL(gated.empty(), false)
     for (size_t i = 0; i < std::min(gated.size(), ungated.size()); ++i)
       TEST_REAL_SIMILAR(gated[i].frag_mass, ungated[i].frag_mass)
+  }
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// ADR-0069 (amended). Under rank_by yield a discriminating round is walked by predicted bond yield: the records the
+// winner path labels first, highest yield first, then the ones it does not label, in the records' order. The gate's
+// coefficients here make the yield RISE with the ion index (no intensity term, a positive mass-ratio term), against
+// the records' intensity order, whose first record is b4.
+//
+// FAILS UNDER: the records' order kept under rank_by yield (the first target would be the first record).
+/////////////////////////////////////////////////////////////
+START_SECTION(discriminating_round_walks_by_yield)
+{
+  const ScanCommand ctx = makeMs2Ctx();
+  YieldGateConfig yg;
+  yg.threshold = 1e-12;
+  yg.coefficients.intercept = -35.0;
+  yg.coefficients.fragment_intensity = 0.0;
+  yg.coefficients.mass_ratio = 10.0;
+  auto eOf = [&](const Ms3Target& t) { return predictBondYield(yg.coefficients, yieldInputsOf(ctx, t.stage1_scores, t.ion_index)).e; };
+  for (const bool governed : {false, true})
+  {
+    Ms3RegistrySnapshot snap;
+    snap.found = true;
+    auto gateOf = [&]() {
+      Ms3PlanGate g;   // no spectrum: the fixture carries no per-charge signal
+      g.max_targets = 100;
+      g.yield = &yg;
+      g.ms_ctx = &ctx;
+      if (governed) g.snapshot = &snap;
+      return g;
+    };
+
+    // The whole round in one plan: every labelled target ahead of every unlabelled one, by yield.
+    const int pid_all = governed ? 76 : 75;
+    Config cfg_all{trackerConfig("discriminating", "refine", 100)};
+    IdaLogger logger_all(cfg_all);
+    ProteoformTracker all(cfg_all, logger_all);
+    feedAndFinalize(cfg_all, all, pid_all, 674, twoTotals());
+    const ProteoformModel* m_all = all.getModel(pid_all);
+    ABORT_IF(m_all == nullptr || !m_all->refine.has_value() || m_all->refine->records.empty())
+    const double first_record_mass = m_all->refine->records.front().target.mass;
+    Ms3PlanGate gate_all = gateOf();
+    const std::vector<Ms3Target> round = all.planNextScans(pid_all, &gate_all);
+    int labelled = 0;
+    bool seen_unlabelled = false;
+    for (size_t i = 0; i < round.size(); ++i)
+    {
+      if (round[i].ion_index <= 0)
+      {
+        seen_unlabelled = true;
+        continue;
+      }
+      ++labelled;
+      TEST_EQUAL(seen_unlabelled, false)
+      if (i > 0) TEST_EQUAL(eOf(round[i - 1]) >= eOf(round[i]), true)
+    }
+    TEST_EQUAL(labelled >= 2, true)
+    ABORT_IF(round.empty())
+    TEST_EQUAL(std::abs(round.front().frag_mass - first_record_mass) > 0.5, true)   // non-vacuity: not the records' order
+
+    // Budget 1: the one record dispatched is the highest-yield one.
+    const int pid_one = governed ? 78 : 77;
+    Config cfg_one{trackerConfig("discriminating", "refine", 1)};
+    IdaLogger logger_one(cfg_one);
+    ProteoformTracker one(cfg_one, logger_one);
+    feedAndFinalize(cfg_one, one, pid_one, 675, twoTotals());
+    Ms3PlanGate gate_one = gateOf();
+    const std::vector<Ms3Target> plan = one.planNextScans(pid_one, &gate_one);
+    TEST_EQUAL(plan.size(), 1)
+    ABORT_IF(plan.size() != 1)
+    TEST_REAL_SIMILAR(plan[0].frag_mass, round.front().frag_mass)
+    const ProteoformModel* m_one = one.getModel(pid_one);
+    ABORT_IF(m_one == nullptr || !m_one->refine.has_value())
+    TEST_EQUAL(countDispatched(*m_one), 1)
   }
 }
 END_SECTION

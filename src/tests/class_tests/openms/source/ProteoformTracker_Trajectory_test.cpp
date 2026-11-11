@@ -864,6 +864,7 @@ START_SECTION(yield_refused_strongest_hands_its_place_on)
   TEST_EQUAL(planHas(today, order[0].first, order[0].second), true)   // non-vacuity: ungated, it is planned
 
   YieldGateConfig yg;
+  yg.rank_by = YieldRank::Intensity;   // the walk this section pins: strongest first, the next two take the place
   yg.threshold = thresholdBetween(FOUR_FRAGS, order[0], ctx);
   Ms3PlanGate gate = yieldGate(yg, ctx);
   std::vector<Ms3Target> gated;
@@ -915,6 +916,7 @@ START_SECTION(governed_yield_refusal_takes_no_cleavage_slot)
   TEST_EQUAL(one_slot[0].ion_type == order[0].first && one_slot[0].ion_index == order[0].second, true)   // non-vacuity
 
   YieldGateConfig yg;
+  yg.rank_by = YieldRank::Intensity;   // the walk this section pins: strongest first, the second takes the slot
   yg.threshold = thresholdBetween(FOUR_FRAGS, order[0], ctx);
   Ms3PlanGate gate = yieldGate(yg, ctx);
   gate.snapshot = &snap;
@@ -1038,6 +1040,148 @@ START_SECTION(ungoverned_gate_moves_floor_into_the_walk)
   ABORT_IF(gated.size() != 1)
   TEST_EQUAL(gated[0].frag_charge, 3)
   TEST_EQUAL(planHas(gated, "b", 6), true)
+}
+END_SECTION
+
+// T16. rank_by yield (the default) walks a plan by predicted bond yield, highest first, and sends it in that order;
+// rank_by intensity keeps the strongest-first walk. Four fragments whose yield order is their intensity order reversed,
+// budget 2: yield plans the two highest yields, intensity the two strongest. With a threshold between the second and
+// third yield and room for all four, the plan is exactly the two above it and the two below are refused.
+// FAILS UNDER: a sort left on intensity (the yield plan would be the two strongest), or a ranking that lets a
+// below-threshold fragment in.
+START_SECTION(yield_rank_takes_the_highest_yield_first)
+{
+  const ScanCommand ctx = yieldCtx();
+  // The intensity order, learnt with every fragment at the same isotope cosine.
+  std::vector<std::pair<std::string, int>> order;
+  {
+    Config cfg{gateConfig("fragments", 10)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    feedGateWinner(tracker, 146, withIsoCos(FOUR_FRAGS, {}, 0.99));
+    for (const Ms3Target& t : tracker.planNextScans(146)) order.emplace_back(t.ion_type, t.ion_index);
+  }
+  TEST_EQUAL(order.size(), 4)
+  ABORT_IF(order.size() != 4)
+  // Isotope cosines rising against the intensity order: 0.05 a place outweighs the fragments' lengths and masses, so
+  // the yield order is the intensity order reversed. e[i] is the yield of order[i].
+  std::vector<GateFrag> frags = FOUR_FRAGS;
+  std::vector<double> e(4, 0.0);
+  for (GateFrag& g : frags)
+    for (size_t i = 0; i < 4; ++i)
+      if (g.ion_type == order[i].first && g.ion_index == order[i].second)
+      {
+        g.iso_cos = 0.85 + 0.05 * static_cast<double>(i);
+        e[i] = yieldOf(g, ctx);
+      }
+  const bool rising = e[0] > 0.0 && e[0] < e[1] && e[1] < e[2] && e[2] < e[3];
+  TEST_EQUAL(rising, true)   // non-vacuity: the two orders are opposite
+  ABORT_IF(!rising)
+  auto is = [](const Ms3Target& t, const std::pair<std::string, int>& k) { return t.ion_type == k.first && t.ion_index == k.second; };
+
+  for (const std::string mode : {"fragments", "coverage"})
+    for (const bool governed : {false, true})
+    {
+      Config cfg{gateConfig(mode, 2)};
+      IdaLogger logger(cfg);
+      ProteoformTracker tracker(cfg, logger);
+      feedGateWinner(tracker, 146, frags);
+      Ms3RegistrySnapshot snap;
+      snap.found = true;
+
+      YieldGateConfig by_yield;
+      by_yield.threshold = e[0] / 2.0;   // below every yield: the budget decides
+      Ms3PlanGate gate = yieldGate(by_yield, ctx);
+      if (governed) gate.snapshot = &snap;
+      const std::vector<Ms3Target> ranked = tracker.planNextScans(146, &gate);
+      TEST_EQUAL(ranked.size(), 2)
+      ABORT_IF(ranked.size() != 2)
+      TEST_EQUAL(is(ranked[0], order[3]), true)   // the highest yield, sent first
+      TEST_EQUAL(is(ranked[1], order[2]), true)
+
+      YieldGateConfig by_intensity = by_yield;
+      by_intensity.rank_by = YieldRank::Intensity;
+      Ms3PlanGate gate_i = yieldGate(by_intensity, ctx);
+      if (governed) gate_i.snapshot = &snap;
+      const std::vector<Ms3Target> strongest = tracker.planNextScans(146, &gate_i);
+      TEST_EQUAL(strongest.size(), 2)
+      ABORT_IF(strongest.size() != 2)
+      TEST_EQUAL(is(strongest[0], order[0]), true)
+      TEST_EQUAL(is(strongest[1], order[1]), true)
+    }
+
+  // A threshold between the second and third yield, room for all four.
+  {
+    Config cfg{gateConfig("fragments", 10)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    feedGateWinner(tracker, 147, frags);
+    YieldGateConfig yg;
+    yg.threshold = std::sqrt(e[1] * e[2]);
+    Ms3PlanGate gate = yieldGate(yg, ctx);
+    std::vector<Ms3Target> plan;
+    std::string log;
+    {
+      EventCapture cap;
+      plan = tracker.planNextScans(147, &gate);
+      log = cap.str();
+    }
+    TEST_EQUAL(plan.size(), 2)
+    ABORT_IF(plan.size() != 2)
+    TEST_EQUAL(is(plan[0], order[3]), true)
+    TEST_EQUAL(is(plan[1], order[2]), true)
+    TEST_EQUAL(countOf(log, "verdict=refused"), 2)
+  }
+}
+END_SECTION
+
+// T17. Ambiguity keeps its round-robin and orders each modification's containers by yield: one ambiguous modification,
+// two containers, the weaker one at the higher yield, budget 1.
+// FAILS UNDER: the per-modification list left on intensity under rank_by yield.
+START_SECTION(yield_rank_ambiguity_orders_each_modification_by_yield)
+{
+  const ScanCommand ctx = yieldCtx();
+  const std::vector<GateFrag> two_amb{{"b", 6, 700.0, {2}}, {"y", 6, 900.0, {2}}};
+  std::vector<std::pair<std::string, int>> order;
+  {
+    Config cfg{gateConfig("ambiguity", 10)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    feedGateWinner(tracker, 148, withIsoCos(two_amb, {}, 0.99), /*ambiguous=*/true);
+    for (const Ms3Target& t : tracker.planNextScans(148)) order.emplace_back(t.ion_type, t.ion_index);
+  }
+  TEST_EQUAL(order.size(), 2)
+  ABORT_IF(order.size() != 2)
+  std::vector<GateFrag> frags = two_amb;
+  double e_strong = 0.0, e_weak = 0.0;
+  for (GateFrag& g : frags)
+  {
+    const bool strong = g.ion_type == order[0].first && g.ion_index == order[0].second;
+    g.iso_cos = strong ? 0.85 : 1.0;
+    (strong ? e_strong : e_weak) = yieldOf(g, ctx);
+  }
+  TEST_EQUAL(e_strong > 0.0 && e_strong < e_weak, true)   // non-vacuity: the weaker container has the higher yield
+  ABORT_IF(!(e_strong > 0.0 && e_strong < e_weak))
+
+  Config cfg{gateConfig("ambiguity", 1)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedGateWinner(tracker, 148, frags, /*ambiguous=*/true);
+  YieldGateConfig by_yield;
+  by_yield.threshold = e_strong / 2.0;
+  Ms3PlanGate gate = yieldGate(by_yield, ctx);
+  const std::vector<Ms3Target> ranked = tracker.planNextScans(148, &gate);
+  TEST_EQUAL(ranked.size(), 1)
+  ABORT_IF(ranked.size() != 1)
+  TEST_EQUAL(ranked[0].ion_type == order[1].first && ranked[0].ion_index == order[1].second, true)
+
+  YieldGateConfig by_intensity = by_yield;
+  by_intensity.rank_by = YieldRank::Intensity;
+  Ms3PlanGate gate_i = yieldGate(by_intensity, ctx);
+  const std::vector<Ms3Target> strongest = tracker.planNextScans(148, &gate_i);
+  TEST_EQUAL(strongest.size(), 1)
+  ABORT_IF(strongest.size() != 1)
+  TEST_EQUAL(strongest[0].ion_type == order[0].first && strongest[0].ion_index == order[0].second, true)
 }
 END_SECTION
 
