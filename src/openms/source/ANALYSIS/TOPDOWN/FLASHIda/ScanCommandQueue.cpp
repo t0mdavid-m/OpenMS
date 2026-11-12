@@ -79,6 +79,16 @@ namespace OpenMS
     std::snprintf(cmd.scan_description, 16, "%s%c", id_str.c_str(), roleMarker(role));
   }
 
+  void ScanCommandQueue::writeWindowDescription(ScanCommand& cmd, double mono_mass, int charge)
+  {
+    if (mono_mass <= 0.0 || charge == 0)
+    {
+      writeMs1Description(cmd, ScanRole::Window);
+      return;
+    }
+    writeMs2Description_(cmd, encode(cmd.scan_id), roleMarker(ScanRole::Window), mono_mass, charge);
+  }
+
   int ScanCommandQueue::decode(const std::string& s) const
   {
     const int base = static_cast<int>(tracking_alphabet_.size());

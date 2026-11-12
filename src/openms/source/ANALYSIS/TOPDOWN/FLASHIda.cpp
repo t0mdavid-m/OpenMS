@@ -1229,15 +1229,16 @@ FLASHIda::FLASHIda(char* arg) :
                                 std::vector<std::string>& child_ids)
   {
     if (ctx.num_stages <= 0) return 0;
-    std::vector<std::pair<double, double>> windows;   // (centre, width): the anchor, then the notches
-    windows.emplace_back(ctx.stages[0].precursor_mz, ctx.stages[0].isolation_width);
+    struct Window { double centre; double width; int charge; };
+    std::vector<Window> windows;   // the anchor, then the notches
+    windows.push_back({ctx.stages[0].precursor_mz, ctx.stages[0].isolation_width, ctx.stages[0].charge_state});
     const auto notches = notchesForStage(ctx, 0);
     for (int k = 0; k < notches.second; ++k)
-      windows.emplace_back(notches.first[k].precursor_mz, notches.first[k].isolation_width);
+      windows.push_back({notches.first[k].precursor_mz, notches.first[k].isolation_width, notches.first[k].charge_state});
     const auto& own = config_.identification().window_scan_config;
     const double margin = config_.identification().window_scan_margin;
     int bought = 0;
-    for (const auto& [centre, width] : windows)
+    for (const auto& [centre, width, charge] : windows)
     {
       if (centre <= 0.0 || width <= 0.0) continue;
       ScanCommand ws = own.has_value() ? queue_.makeMS1(*own) : queue_.makeMS1();
@@ -1248,7 +1249,7 @@ FLASHIda::FLASHIda(char* arg) :
       ws.faims_cv = ctx.faims_cv;
       std::strncpy(ws.parent_scan_id, trigger.c_str(), sizeof(ws.parent_scan_id) - 1);
       ws.parent_scan_id[sizeof(ws.parent_scan_id) - 1] = '\0';
-      ScanCommandQueue::writeMs1Description(ws, ScanRole::Window);
+      ScanCommandQueue::writeWindowDescription(ws, ctx.mono_mass, charge);   // the species and this window's charge
       stampAndPush_(ws, precursor_id);
       child_ids.push_back(ScanCommandQueue::encode(ws.scan_id));
       ++bought;

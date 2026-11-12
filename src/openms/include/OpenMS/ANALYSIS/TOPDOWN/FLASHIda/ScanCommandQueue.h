@@ -367,6 +367,11 @@ namespace OpenMS
      */
     static void writeMs1Description(ScanCommand& cmd, ScanRole role);
 
+    /// A Window scan's description (ADR-0071 amendment): `{id}W{mass token}@{charge}`, an MS2's form with the 'W'
+    /// marker -- the species the scan was bought for and the charge whose window it reads. Without a mass or a charge
+    /// it is the bare `{id}W`. Call after scan_id is assigned.
+    static void writeWindowDescription(ScanCommand& cmd, double mono_mass, int charge);
+
     /// Decode a 3-character base-94 string back to integer
     int decode(const std::string& s) const;
 

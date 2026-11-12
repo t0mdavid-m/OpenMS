@@ -4986,6 +4986,59 @@ START_SECTION(window_scan_sweep_with_production_scan_buys_on_the_production_scan
 }
 END_SECTION
 
+// ADR-0071 amendment: a Window scan's description names the species it was bought for and the charge whose window it
+// reads, in an MS2's form: {id}W{mass token}@{charge}, at most 15 characters. Under multiplexed each Window scan of
+// one 'R' carries the charge of its own window.
+START_SECTION(window_scan_description_names_species_and_charge)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  int multi_window_triggers = 0;
+  for (const bool multiplexed : {false, true})
+  {
+    const std::string cfg = windowCytcJson(freshLogDir(multiplexed ? "window_desc_multiplexed" : "window_desc_single"), true, multiplexed);
+    AcqResult acq;
+    {
+      FLASHIda ida(const_cast<char*>(cfg.c_str()));
+      acq = runInterleaved(&ida, ms1, ms2);
+    }
+    ABORT_IF(acq.window_cmds.empty())
+    std::map<std::string, ScanCommand> ms2_by_id;
+    for (const auto& c : acq.ms2_cmds) ms2_by_id[ScanCommandQueue::encode(c.scan_id)] = c;
+    std::map<std::string, std::set<int>> charges_of;   // 'R' id -> the charges its Window scans name
+    for (const auto& w : acq.window_cmds)
+    {
+      auto it = ms2_by_id.find(std::string(w.parent_scan_id));
+      TEST_EQUAL(it != ms2_by_id.end(), true)
+      if (it == ms2_by_id.end()) continue;
+      const ScanCommand& r = it->second;
+      // The charge of the window this scan reads: the one whose commanded bounds are its range.
+      int charge = 0;
+      if (std::abs(w.first_mass - (r.stages[0].precursor_mz - r.stages[0].isolation_width / 2.0)) < 1e-6) charge = r.stages[0].charge_state;
+      const auto notches = notchesForStage(r, 0);
+      for (int k = 0; k < notches.second; ++k)
+        if (std::abs(w.first_mass - (notches.first[k].precursor_mz - notches.first[k].isolation_width / 2.0)) < 1e-6)
+          charge = notches.first[k].charge_state;
+      TEST_EQUAL(charge != 0, true)
+      const std::string expected = ScanCommandQueue::encode(w.scan_id) + "W"
+          + ScanCommandQueue::formatMassToken(r.mono_mass / 1000.0, charge, '\0', 0) + "@" + std::to_string(charge);
+      TEST_STRING_EQUAL(std::string(w.scan_description), expected)
+      TEST_EQUAL(std::strlen(w.scan_description) <= 15, true)
+      TEST_EQUAL(std::strlen(w.scan_description) > 4, true)
+      charges_of[std::string(w.parent_scan_id)].insert(charge);
+    }
+    for (const auto& [rid, charges] : charges_of)
+    {
+      TEST_EQUAL(static_cast<int>(charges.size()), windowsAtStage(ms2_by_id[rid], 0))   // one distinct charge per window
+      if (charges.size() > 1) ++multi_window_triggers;
+    }
+  }
+  TEST_EQUAL(multi_window_triggers > 0, true)   // non-vacuity: a notch-bearing 'R' bought Window scans
+}
+END_SECTION
+
 // characterization.order "random": the MS3 of one plan are sent in one reproducible permutation, drawn from the
 // dispatching MS2's id; the plan itself is the ranked one. The cytC fragments recipe, three runs: ranked, random, and
 // random again. Per dispatching MS2 the random run sends the ranked run's MS3, reordered by
