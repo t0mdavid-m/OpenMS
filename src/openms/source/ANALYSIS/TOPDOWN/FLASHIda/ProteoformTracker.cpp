@@ -2497,23 +2497,23 @@ namespace OpenMS
         const FragmentObservation& o = *f.best_ms3;
         const double I = o.intensity;
 
-        // Complement-aware, MOD-AWARE localization verdict. o.includes_ptm = the matched sub-ion's honest
-        // verdict; on a complement flip the equiv ion (deposited under the prefix key) is the COMPLEMENT, so
-        // it carries the mod iff the sub does NOT -- EXCEPT an N-terminal net-loss composite (Met-excision +
-        // N-alpha-acetyl = -89, mass_shift<0 anchored at residue 1), which stays localized to the N-terminus.
-        bool includes = o.includes_ptm;
-        if (o.is_complement_flip)
-        {
-          const bool nterm_loss = (mod.mass_shift < 0.0) && (mod.candidate_start == 1);
-          includes = nterm_loss ? o.includes_ptm : !o.includes_ptm;
-        }
+        // Localization verdict: FragmentAnalysis::equivalentCarriesShift, the one rule the logged mass and the
+        // row's localization apply too. o.includes_ptm = the matched sub-ion's honest verdict; on a complement
+        // flip the equiv ion (deposited under the prefix key) is the COMPLEMENT, so it carries the mod iff the
+        // sub does NOT, and an N-terminal net-loss composite (Met-excision + N-alpha-acetyl = -89, mass_shift<0
+        // anchored at residue 1) stays on the prefix equivalent either way.
+        const bool nterm_loss = (mod.mass_shift < 0.0) && (mod.candidate_start == 1);
+        const bool includes = FragmentAnalysis::equivalentCarriesShift(o.includes_ptm, o.is_complement_flip, nterm_loss);
+        // The net loss left to the prefix by a complement that matched WITHOUT it is carried by inference: no ion
+        // measured it. Under refine only a fragment that itself carries the shift moves a boundary (ADR-0049).
+        const bool inferred = o.is_complement_flip && nterm_loss && !o.includes_ptm;
 
-        if (includes)            // PTM IS inside this equiv ion's coverage
+        if (includes && !(shift_only && inferred))   // PTM IS inside this equiv ion's coverage
         {
           if (f.is_prefix) tightenUpper(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_end, I);
           else             tightenLower(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_start, I);
         }
-        else if (!shift_only)    // PTM is OUTSIDE this equiv ion's coverage (not under refine)
+        else if (!includes && !shift_only)   // PTM is OUTSIDE this equiv ion's coverage (not under refine)
         {
           if (f.is_prefix) tightenLower(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_end + 1, I);
           else             tightenUpper(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_start - 1, I);

@@ -988,6 +988,16 @@ START_SECTION(narrowFragmentPTMSites)
   TEST_EQUAL(sitesH[0].start_position, 60)
   TEST_EQUAL(sitesH[0].end_position, 60)
 
+  // ---- Case I: a complement that matched WITHOUT an N-terminal net loss leaves it to the prefix --------
+  // The refine_discriminating_cytc row of a b33 precursor: -89 somewhere in (1-8); yb27 (residues 7-33) matched
+  // WITHOUT it, so it is not in 7-33 and the equivalent b6 carries it -> (1-6).
+  // ISSUE(net-loss case kept the sub-ion's verdict): b6 read as an excluder -> (7-33), which shuts out residue 1.
+  auto sitesI = FragmentAnalysis::narrowFragmentPTMSites(
+      { PTM{4, 1, 8, -89.0302} }, 33, { mkEq("yb", 27, "b", 6, true, false) }, 0, 0);
+  TEST_EQUAL((int)sitesI.size(), 1)
+  TEST_EQUAL(sitesI[0].start_position, 1)
+  TEST_EQUAL(sitesI[0].end_position, 6)
+
   // ---- No-op guards ---------------------------------------------------------------------------------
   PTM heme_np{20, 15, 26, 615.2498};
   auto rL1 = FragmentAnalysis::narrowFragmentPTMSites({ heme_np }, 1, { mkEq("b", 1, "b", 1, false, true) }, 0, 0);
@@ -1007,6 +1017,12 @@ START_SECTION(narrowFragmentPTMSites)
   auto leafB1 = FragmentAnalysis::narrowFragmentPTMSites({ PTM{4, 1, 8, -89.0302} }, 70, { mkEq("yb", 69, "b", 1, true, true) }, 0, 0);
   bool leaf_b1 = (leafB1[0].start_position == 1 && leafB1[0].end_position == 1);
   TEST_EQUAL(leaf_b1, pooled_b1)   // both true: the flipped b1 pins -89 to M1
+  // (a') flip + N-terminal-loss, sub-ion matched WITHOUT (b6 / -89, Case I): the mass predicate folds the -89 into
+  //      b6, matching the leaf bounding it at 6.
+  bool pooled_b6 = MS3FragmentMatcher::coveredAmbiguousInEquivFrame(ctxNterm, "b", 6, 33, /*sub_includes_ptm=*/false, /*is_flip=*/true) != 0.0;
+  bool leaf_b6 = (sitesI[0].start_position == 1 && sitesI[0].end_position == 6);
+  TEST_EQUAL(pooled_b6, true)
+  TEST_EQUAL(leaf_b6, pooled_b6)   // both true: b6 carries the -89 its complement lacks
 
   // (b) flip-INVERT (b22 / +615, non-nterm): the pooled predicate inverts the flipped sub-verdict so the
   //     equivalent ion carries the mod -- matching the leaf including b22 (case C).

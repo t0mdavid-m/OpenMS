@@ -537,15 +537,13 @@ namespace OpenMS
         sum += pm.mass_shift;
       else if (overlap)
       {
-        // Complement-aware, MOD-AWARE straddle verdict. sub_includes_ptm = the matched sub-ion's own verdict.
-        // On a complement flip the equivalent ion is the COMPLEMENT, so it carries the mod iff the sub-ion
-        // does NOT -- EXCEPT an N-terminal net-loss composite (Met-excision + N-alpha-acetyl = -89, anchored
-        // at residue 1): the loss cannot be assigned to one side of a cleavage, so keep the direct verdict
-        // (equiv b1 = M-89 = 42.01 correctly localizes it to the N-terminus). This keeps the logged mass in
-        // step with narrowModifications_ Pass B, which applies the same rule for the localization.
+        // Straddle verdict: FragmentAnalysis::equivalentCarriesShift, the one rule the row's and the pooled
+        // localization apply too. sub_includes_ptm = the matched sub-ion's own verdict. An N-terminal net-loss
+        // composite (Met-excision + N-alpha-acetyl = -89, anchored at residue 1) stays on a prefix equivalent
+        // of a complement ion: equiv b1 = M-89 = 42.01, and b6 of a complement that matched WITHOUT the -89
+        // is the b6 that carries it (it read 89 Da heavy while that case kept the sub-ion's verdict).
         const bool nterm_loss = (pm.mass_shift < 0.0) && (abs_start == 0);
-        const bool carries = nterm_loss ? sub_includes_ptm : (is_flip ? !sub_includes_ptm : sub_includes_ptm);
-        if (carries)
+        if (FragmentAnalysis::equivalentCarriesShift(sub_includes_ptm, is_flip, nterm_loss))
           sum += pm.mass_shift;
       }
     }

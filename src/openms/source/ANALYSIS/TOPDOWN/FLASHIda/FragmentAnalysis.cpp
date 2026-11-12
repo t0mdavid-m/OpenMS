@@ -1387,9 +1387,8 @@ namespace
           bool includes;
           if (mod_hi <= cover_end)      includes = true;              // fully covers the a-priori range -> includer
           else if (mod_lo > cover_end)  includes = false;             // no overlap -> excluder
-          else                                                        // straddle -> flip/mod-aware (== pooled Pass B)
-            includes = nterm_loss ? fm.includes_ptm
-                                  : (fm.is_complement_flip ? !fm.includes_ptm : fm.includes_ptm);
+          else                                                        // straddle -> the one rule (== mass, pooled Pass B)
+            includes = equivalentCarriesShift(fm.includes_ptm, fm.is_complement_flip, nterm_loss);
           if (includes) { if (cover_end < hi) hi = cover_end; }       // includer -> upper bound
           else          { if (cover_end + 1 > lo) lo = cover_end + 1; } // excluder -> lower bound
         }
@@ -1400,8 +1399,8 @@ namespace
           bool includes;                                              // nterm_loss NOT applied on suffix (subframe-1 != abs-0)
           if (mod_lo >= cover_start)      includes = true;            // fully covers -> includer
           else if (mod_hi < cover_start)  includes = false;           // no overlap -> excluder
-          else                                                        // straddle -> plain flip verdict
-            includes = fm.is_complement_flip ? !fm.includes_ptm : fm.includes_ptm;
+          else                                                        // straddle -> the one rule, no net-loss case
+            includes = equivalentCarriesShift(fm.includes_ptm, fm.is_complement_flip, false);
           if (includes) { if (cover_start > lo) lo = cover_start; }   // includer -> lower bound
           else          { if (cover_start - 1 < hi) hi = cover_start - 1; } // excluder -> upper bound
         }

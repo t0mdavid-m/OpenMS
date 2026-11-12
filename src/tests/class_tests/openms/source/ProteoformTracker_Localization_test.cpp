@@ -149,8 +149,10 @@ namespace
 
   // Config JSON with the winner sequence as the identification reference. No pooled log path
   // (this test reads the model directly via tracker.getModel(pid), not the pooled file).
-  std::string makeConfigJson()
+  // @p method: "" leaves identification.method at its default (flashtnt); "refine" selects ADR-0049's method.
+  std::string makeConfigJson(const std::string& method = "")
   {
+    const std::string method_key = method.empty() ? std::string() : (std::string(R"("method": ")") + method + R"(", )");
     return std::string(R"({
     "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 1, "max_charge": 50, "min_mass": 100, "max_mass": 50000, "tol": [10, 10, 10] },
     "precursor_selection": { "rt_window": 180, "targeting": "none", "consider_all_charges": false, "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 3 },
@@ -163,7 +165,7 @@ namespace
     },
     "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
     "files": { "target_logs": [], "inclusion_list": "" },
-    "identification": { "reference": { "sequence": ")") + std::string(WINNER_SEQ) + R"(" }, "flashtnt": { "min_length": 3, "max_length": 8, "max_blind_mod_count": 2, "max_mod_mass": 700 },
+    "identification": { )") + method_key + R"("reference": { "sequence": ")" + std::string(WINNER_SEQ) + R"(" }, "flashtnt": { "min_length": 3, "max_length": 8, "max_blind_mod_count": 2, "max_mod_mass": 700 },
                         "characterization": { "mode": "coverage", "max_targets": 10 } },
     "runtime": {} })";
   }
@@ -365,6 +367,66 @@ START_SECTION(ms3_pooled_localization_is_monotonic)
   TEST_EQUAL(hi, 16)
   // (The complement-flip verdict that pooled Pass B applies is pinned deterministically against the production
   //  predicate coveredAmbiguousInEquivFrame in FragmentAnalysis_test's Leg-2 parity check.)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// Sections 4, 5: an N-terminal net loss (-89 = Met-excision + N-alpha-acetyl, anchored at residue 1) and a
+// COMPLEMENT ion that matched WITHOUT it. The precursor holds the shift and the measured piece does not, so the
+// prefix equivalent carries it: the range tightens TOWARD the N-terminus. Under identification.method refine the
+// same fragment narrows nothing: no ion measured the shift there (ADR-0049).
+/////////////////////////////////////////////////////////////
+// Folds one MS3 fragment -- equivalent b5, complement flip, matched WITHOUT the shift -- onto a model whose
+// MS2 left -89.03 ambiguous over [1,8], and returns the range after the fold in @p lo / @p hi.
+auto foldComplementWithoutShift = [](const std::string& method, int precursor_id, int& lo, int& hi)
+{
+  {
+    Config cfg{makeConfigJson(method)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    ScanCommand ms2_ctx = makeMs2Ctx();
+    Ms2Params p;    p.collision_energy = 29.0; p.activation_type = "HCD"; p.reaction_time = 0.0;
+    Ms2Params ms3p; ms3p.collision_energy = 29.0; ms3p.activation_type = "HCD"; ms3p.reaction_time = 0.0;
+
+    // MS2 winner: -89.03 ambiguous over [1,8]; its one fragment (y3) is nowhere near the range.
+    DeconvolvedSpectrum d101(101);
+    d101.push_back(makeSyntheticPeakGroup(700.0 / 2.0 + 1.0, 700.0, 2));
+    tracker.feedScan(precursor_id, 2, p, 101, d101, makeMatchMs2WithMod("y", 3, 700.0, 1, 8, -89.03), 1.0, ms2_ctx);
+    tracker.finalizeMS2(precursor_id);
+    const ProteoformModel* m0 = tracker.getModel(precursor_id);
+    TEST_TRUE(m0 != nullptr && m0->modifications.size() == 1)
+    if (m0 == nullptr || m0->modifications.size() != 1) return;
+    TEST_EQUAL(m0->modifications[0].candidate_start, 1)
+    TEST_EQUAL(m0->modifications[0].candidate_end, 8)     // wide before any MS3 evidence
+
+    DeconvolvedSpectrum d201(201);
+    d201.push_back(makeSyntheticPeakGroup(2000.0 / 2.0 + 1.0, 2000.0, 2));
+    tracker.feedScan(precursor_id, 3, ms3p, 201, d201,
+                     makeMatchMs3("b", 5, 2000.0, /*includes_ptm=*/false, /*is_complement_flip=*/true), -1.0, ms2_ctx);
+    tracker.foldMs3(precursor_id, "b5", "b5");
+    const ProteoformModel* m1 = tracker.getModel(precursor_id);
+    TEST_TRUE(m1 != nullptr && m1->modifications.size() == 1)
+    if (m1 == nullptr || m1->modifications.size() != 1) return;
+    lo = m1->modifications[0].candidate_start;
+    hi = m1->modifications[0].candidate_end;
+  }
+};
+
+START_SECTION(ms3_complement_without_shift_keeps_net_loss_n_terminal)
+{
+  int lo = -1, hi = -1;
+  foldComplementWithoutShift("", 14, lo, hi);
+  TEST_EQUAL(lo, 1)
+  TEST_EQUAL(hi, 5)    // ISSUE(net-loss case kept the sub-ion's verdict): b5 read as an excluder -> [6,8], residue 1 shut out
+}
+END_SECTION
+
+START_SECTION(ms3_complement_without_shift_does_not_narrow_under_refine)
+{
+  int lo = -1, hi = -1;
+  foldComplementWithoutShift("refine", 15, lo, hi);
+  TEST_EQUAL(lo, 1)
+  TEST_EQUAL(hi, 8)    // carried by inference only: under refine it moves no boundary
 }
 END_SECTION
 

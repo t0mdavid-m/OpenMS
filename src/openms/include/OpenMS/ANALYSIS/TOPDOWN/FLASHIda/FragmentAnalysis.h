@@ -188,6 +188,24 @@ namespace OpenMS
     /// (ProteoformTracker). No region, or the whole protein, gives exactly toProForma(proteoform_sequence, ptm_sites).
     static std::string regionProForma(const ProteoformMatch& match);
 
+    /// Does an MS3 fragment's EQUIVALENT ion carry an ambiguous shift its coverage straddles? The one rule behind
+    /// the logged mass (MS3FragmentMatcher::coveredAmbiguousInEquivFrame), the identification row's localization
+    /// (narrowFragmentPTMSites) and the pooled localization (ProteoformTracker::narrowModifications_ Pass B).
+    ///   @p sub_includes  the matched sub-ion's own verdict: it matched WITH the shift
+    ///   @p is_flip       the equivalent ion is the COMPLEMENT of the matched sub-ion
+    ///   @p nterm_loss    the shift is an N-terminal net loss anchored at residue 1 (Met-excision + N-alpha-acetyl)
+    /// Same direction: the sub-ion IS the equivalent ion, so its verdict stands. Complement: the precursor holds the
+    /// shift, so the equivalent ion carries it iff the sub-ion does not. An N-terminal net loss stays on the prefix
+    /// equivalent either way: a complement that matched without it leaves it to the prefix (the plain complement
+    /// rule), and a complement that matched with it is the composite that no single cleavage side owns (the
+    /// equivalent b1 = M - 89 = 42.01 keeps it at the N-terminus).
+    static bool equivalentCarriesShift(bool sub_includes, bool is_flip, bool nterm_loss)
+    {
+      if (!is_flip) return sub_includes;
+      if (nterm_loss) return true;
+      return !sub_includes;
+    }
+
     /// Narrow fragment-frame ambiguous PTM ranges using ONLY this scan's matched MS3 sub-fragments
     /// (per-scan identification evidence). For each wide site [s,e] (1-based, SUBSEQUENCE frame) and each
     /// matched sub-fragment that BRACKETS it (backbone cleavage strictly inside the range), tighten the
