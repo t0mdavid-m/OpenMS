@@ -354,7 +354,7 @@ FLASHIda::FLASHIda(char* arg) :
   BoardSnapshot FLASHIda::boardSnapshot_() const
   {
     return board_.snapshot(config_.targeting().rt_window, config_.global().duration,
-                           search_pool_ ? search_pool_->backlog() : 0);
+                           search_pool_ ? search_pool_->waiting() : 0, search_pool_ ? search_pool_->backlog() : 0);
   }
 
   // Stop the pool FIRST: a running apply touches the tracker, the queue and the logger, and members are

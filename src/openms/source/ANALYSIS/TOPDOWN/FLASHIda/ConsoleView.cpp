@@ -159,7 +159,9 @@ namespace OpenMS
       out += "  MS1 " + std::to_string(s.ms1) + d + "MS2 " + std::to_string(s.ms2) + d + "MS3 " + std::to_string(s.ms3);
       out += "   live " + std::to_string(s.live.size()) + d + "identified " + std::to_string(s.identified) + d + "closed out "
              + std::to_string(s.closed_out) + d + "plan " + std::to_string(s.planned);
-      out += "   backlog " + std::to_string(s.backlog);
+      // the searches waiting against the backlog's capacity (a full backlog drops the oldest); no pool, no item
+      if (s.search_capacity > 0)
+        out += "   searching " + std::to_string(s.search_waiting) + "/" + std::to_string(s.search_capacity);
       return out;
     }
   } // namespace

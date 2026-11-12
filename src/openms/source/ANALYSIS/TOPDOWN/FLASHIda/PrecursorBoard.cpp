@@ -172,7 +172,8 @@ namespace OpenMS
     search_wait_ms_.push_back(ms);
   }
 
-  BoardSnapshot PrecursorBoard::snapshot(double rt_window_s, double duration_min, size_t backlog) const
+  BoardSnapshot PrecursorBoard::snapshot(double rt_window_s, double duration_min, size_t search_waiting,
+                                         size_t search_capacity) const
   {
     std::lock_guard<std::mutex> lock(mutex_);
     BoardSnapshot s;
@@ -182,7 +183,8 @@ namespace OpenMS
     s.ms2 = ms2_;
     s.ms3 = ms3_;
     s.planned = planned_;
-    s.backlog = backlog;
+    s.search_waiting = search_waiting;
+    s.search_capacity = search_capacity;
     s.log_dir = log_dir_;
     s.id_rts_s = id_rts_s_;
     s.search_wait_ms = search_wait_ms_;

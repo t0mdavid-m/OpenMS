@@ -101,7 +101,10 @@ namespace OpenMS
     /// every worker. Idempotent.
     void stop();
 
+    /// The backlog's capacity: how many jobs may wait before submit() drops the oldest. Not how many wait (waiting()).
     size_t backlog() const;
+    /// The jobs waiting now, running ones excluded: what the operator view's `searching` shows against backlog().
+    size_t waiting() const;
     void setBacklog(size_t backlog);   ///< test seam (FLASHIdaTestAccess::setSearchBacklog)
     int threadCount() const { return static_cast<int>(workers_.size()); }
     int searchesFinished() const { return searches_finished_.load(); }

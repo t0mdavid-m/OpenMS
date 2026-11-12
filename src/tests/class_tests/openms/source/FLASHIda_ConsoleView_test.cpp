@@ -24,6 +24,8 @@
 #include "FLASHIda_TestAccess.h"
 #include "FLASHIda_TestHelpers.h"
 
+#include <nlohmann/json.hpp>  // the status section sets identification.search_threads on the parsed recipe
+
 #include <cmath>
 #include <optional>
 #include <string>
@@ -95,9 +97,9 @@ START_SECTION(board_moves_a_precursor_through_its_states)
   PrecursorBoard b;
   b.setRt(60.0);
   b.onSent(ms2At(12358.2, 14), 7);
-  TEST_EQUAL(rowOf(b.snapshot(180, 60, 0), 12358.2)->state == PrecursorState::Acquiring, true)
+  TEST_EQUAL(rowOf(b.snapshot(180, 60, 0, 0), 12358.2)->state == PrecursorState::Acquiring, true)
   b.onReturned(12358.2, true);
-  TEST_EQUAL(rowOf(b.snapshot(180, 60, 0), 12358.2)->state == PrecursorState::Searching, true)
+  TEST_EQUAL(rowOf(b.snapshot(180, 60, 0, 0), 12358.2)->state == PrecursorState::Searching, true)
   b.onResult(12358.2, identifiedMatch(821.0, "CYC_HORSE", "GDVEKGKK"), true, std::optional<double>(500.0));
 
   b.onSent(ms2At(8441.0, 11), 8);
@@ -107,7 +109,7 @@ START_SECTION(board_moves_a_precursor_through_its_states)
   b.onSent(ms2At(6230.0, 9), 9);
   b.onReturned(6230.0, false);
 
-  const BoardSnapshot s = b.snapshot(180, 60, 0);
+  const BoardSnapshot s = b.snapshot(180, 60, 0, 0);
   const BoardRow* a = rowOf(s, 12358.2);
   const BoardRow* n = rowOf(s, 8441.0);
   const BoardRow* q = rowOf(s, 6230.0);
@@ -138,7 +140,7 @@ START_SECTION(board_merges_a_redetection_and_counts_ms3_on_its_precursor)
   b.setRt(90.0);
   b.onSent(ms2At(12358.31, 15), 9);   // same nominal mass
   b.onSent(ms3(), 9);
-  const BoardSnapshot s = b.snapshot(180, 60, 0);
+  const BoardSnapshot s = b.snapshot(180, 60, 0, 0);
   TEST_EQUAL(s.live.size(), 1)
   ABORT_IF(s.live.empty())
   TEST_EQUAL(s.live[0].ms2, 2)
@@ -159,7 +161,7 @@ START_SECTION(board_live_set_is_the_retention_time_window)
   b.onSent(ms2At(7000.0, 7), 2);
   b.setRt(400.0);
   b.onSent(ms2At(9000.0, 9), 3);
-  const BoardSnapshot s = b.snapshot(180, 60, 0);   // cut-off 220 s
+  const BoardSnapshot s = b.snapshot(180, 60, 0, 0);   // cut-off 220 s
   TEST_EQUAL(s.live.size(), 2)
   ABORT_IF(s.live.size() != 2)
   TEST_EQUAL(s.live[0].nominal, SpectralDeconvolution::getNominalMass(9000.0))
@@ -252,6 +254,53 @@ START_SECTION(summary_reports_search_wait_percentiles)
     if (l.rfind("search", 0) == 0) search = l;
   TEST_EQUAL(search.find("median 50 ms") != std::string::npos, true)
   TEST_EQUAL(search.find("p95 95 ms") != std::string::npos, true)
+}
+END_SECTION
+
+// The status line's `searching` is the searches WAITING against the backlog's capacity, read from the pool: one search
+// parked at the gate, two more fed, so two wait while the capacity is 4 (one worker). No pool, no item.
+// FAILS UNDER: the snapshot carrying the capacity as the waiting count (the bug this replaced: `backlog` was
+// SearchPool::backlog(), a constant), or the item drawn without a pool.
+START_SECTION(status_counts_waiting_searches_not_capacity)
+{
+  BoardSnapshot plain;
+  plain.search_waiting = 3;
+  plain.search_capacity = 8;
+  TEST_EQUAL(ConsoleView::renderPanel(plain, 200, 6, false, false)[0].find("searching 3/8") != std::string::npos, true)
+  plain.search_capacity = 0;
+  TEST_EQUAL(ConsoleView::renderPanel(plain, 200, 6, false, false)[0].find("searching") == std::string::npos, true)
+
+  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+  nlohmann::json j = nlohmann::json::parse(buildJsonWithLogDir(freshLogDir("console_view_waiting"), true));
+  j["identification"]["search_threads"] = 1;
+  const std::string cfg = j.dump();
+  FLASHIda ida(const_cast<char*>(cfg.c_str()));
+  AcqResult acq = runInterleaved(&ida, ms1_scans, {});
+  ABORT_IF(acq.ms2_cmds.size() < 3)
+
+  SearchGate gate;
+  FLASHIdaTestAccess::onBeforeSearch(ida, gate.hook());
+  const auto& ms2 = ms2_scans[0];
+  auto feed = [&](const ScanCommand& c) {
+    ida.processScan(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt, 2, c.scan_description, 0.0,
+                    instrumentScanNumberOf(ms2));
+  };
+  feed(acq.ms2_cmds[0]);   // taken by the worker, parked before its search
+  const bool parked = gate.reached();
+  if (parked)
+  {
+    feed(acq.ms2_cmds[1]);
+    feed(acq.ms2_cmds[2]);
+  }
+  const BoardSnapshot held = FLASHIdaTestAccess::board(ida);
+  gate.release();
+  ida.waitForSearchIdle();
+  ABORT_IF(!parked)
+  TEST_EQUAL(held.search_waiting, 2)
+  TEST_EQUAL(held.search_capacity, 4)
+  TEST_EQUAL(FLASHIdaTestAccess::board(ida).search_waiting, 0)
 }
 END_SECTION
 

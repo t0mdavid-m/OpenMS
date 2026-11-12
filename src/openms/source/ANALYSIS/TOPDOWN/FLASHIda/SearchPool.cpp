@@ -102,6 +102,12 @@ namespace OpenMS
     return backlog_;
   }
 
+  size_t SearchPool::waiting() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return waiting_.size();
+  }
+
   void SearchPool::setBacklog(size_t backlog)
   {
     std::lock_guard<std::mutex> lock(mutex_);

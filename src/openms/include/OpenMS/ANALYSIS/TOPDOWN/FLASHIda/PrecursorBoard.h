@@ -86,7 +86,8 @@ namespace OpenMS
     int precursors = 0, identified = 0, closed_out = 0, no_id = 0;   ///< run totals, by row
     std::vector<double> id_rts_s;   ///< retention time (s) of every identification (a row's first result with a proteoform)
     std::vector<int> search_wait_ms;
-    size_t backlog = 0;             ///< searches waiting on the pool
+    size_t search_waiting = 0;      ///< searches waiting on the pool now (SearchPool::waiting)
+    size_t search_capacity = 0;     ///< how many may wait before the oldest is dropped (SearchPool::backlog); 0 = no pool
     std::string log_dir;
     std::string best_accession;     ///< the best-scoring row's protein, for the summary
     double best_score = -1.0;
@@ -134,7 +135,7 @@ namespace OpenMS
 
     /// The live set (last activity within @p rt_window_s of the latest retention time), most recent first, and the
     /// run's counters.
-    BoardSnapshot snapshot(double rt_window_s, double duration_min, size_t backlog) const;
+    BoardSnapshot snapshot(double rt_window_s, double duration_min, size_t search_waiting, size_t search_capacity) const;
 
     /// The ProForma the board shows for @p match (the MS2 identification row's rendering).
     static std::string proformaOf(const FragmentAnalysis::ProteoformMatch& match);
