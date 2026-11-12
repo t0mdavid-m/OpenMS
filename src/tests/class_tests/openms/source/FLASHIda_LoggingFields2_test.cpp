@@ -1181,6 +1181,9 @@ START_SECTION(identification_refine_columns_carry_the_candidates)
     row.cut = 5;
     row.n_levels = 5;
     row.precursor_mass_difference = -0.98;
+    // distinct values, so the two swapped columns are pinned by value, not only by header (2026-11-12)
+    row.flash_extender_score = 61;
+    row.match.identification_score = 429.0;
     logger.writeIdentificationRow(row);
 
     // the same decision with a single candidate
@@ -1202,11 +1205,20 @@ START_SECTION(identification_refine_columns_carry_the_candidates)
   // (ADR-0061 push 4b: then its five; a hand-built row chose no protein, so protein is empty; ADR-0064: then quant_ms3;
   // ADR-0074: then bond_coverage and explained_signal, -1 on a hand-built match)
   TEST_TRUE(endsWith(header, "\ttic_coverage\tannotation_score\ttotal_shift\tsecond_total_shift\tsecond_score\tcut\tn_levels\tprecursor_mass_difference"
-                             "\tprotein\traw_score\tidentification_score\tclosed_out\tinferred_precursor_mass\tquant_ms3\tbond_coverage\texplained_signal"))
+                             "\tprotein\traw_score\tflash_extender_score\tclosed_out\tinferred_precursor_mass\tquant_ms3\tbond_coverage\texplained_signal"))
+  TEST_TRUE(header.find("\tproteoform\tidentification_score\ttag_count\t") != std::string::npos)
   TEST_EQUAL(std::count(two.begin(), two.end(), '\t'), 48)
   TEST_EQUAL(std::count(one.begin(), one.end(), '\t'), 48)
-  TEST_TRUE(endsWith(two, "\t0.5000\t61\t526.1400\t655.1900\t46\t5\t5\t-0.9800\t\t-1.0000\t-1.0000\t0\t-1.0000\tnone\t-1.0000\t-1.0000"))
-  TEST_TRUE(endsWith(one, "\t0.5000\t61\t526.1400\t\t-1\t5\t5\t-0.9800\t\t-1.0000\t-1.0000\t0\t-1.0000\tnone\t-1.0000\t-1.0000"))
+  TEST_TRUE(endsWith(two, "\t0.5000\t61\t526.1400\t655.1900\t46\t5\t5\t-0.9800\t\t-1.0000\t61.0000\t0\t-1.0000\tnone\t-1.0000\t-1.0000"))
+  TEST_TRUE(endsWith(one, "\t0.5000\t61\t526.1400\t\t-1\t5\t5\t-0.9800\t\t-1.0000\t61.0000\t0\t-1.0000\tnone\t-1.0000\t-1.0000"))
+  auto field = [](const std::string& l, int k) {   // the k-th tab-separated field (0-based)
+    size_t b = 0;
+    for (int n = 0; n < k && b != std::string::npos; ++n) b = l.find('\t', b) == std::string::npos ? std::string::npos : l.find('\t', b) + 1;
+    if (b == std::string::npos) return std::string();
+    return l.substr(b, l.find('\t', b) - b);
+  };
+  TEST_EQUAL(field(two, 7), "429.0000")   // identification_score, next to proteoform
+  TEST_EQUAL(field(one, 7), "429.0000")
 }
 END_SECTION
 

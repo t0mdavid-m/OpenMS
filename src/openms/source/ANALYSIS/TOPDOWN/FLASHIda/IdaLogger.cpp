@@ -193,8 +193,9 @@ namespace OpenMS
                                    // P5: per-MS1-selection precursor identity (plain decimal).
                                    << "precursor_id\t"
                                    << "ms1_precursor_mass\tms2_precursor_ion\tproteoform\t"
-                                   // C: FLASHExtender score of this scan's OWN match; -1 = winner-re-matched row (no own ID).
-                                   << "flash_extender_score\t"
+                                   // The Identification score: the number the close-out and the operator view read. It
+                                   // swapped places with flash_extender_score, which is one of its terms (2026-11-12).
+                                   << "identification_score\t"
                                    // Sequence tags FLASHTagger read off THIS spectrum, beside the other
                                    // "how strong is this ID" scalar. -1 on every MS3 row: that is a
                                    // POLICY, not an absence of tagging (MS3 exploration variants are
@@ -228,9 +229,10 @@ namespace OpenMS
                                    << "annotation_score\ttotal_shift\tsecond_total_shift\tsecond_score\t"
                                    << "cut\tn_levels\tprecursor_mass_difference\t"
                                    // ADR-0061 push 4b, APPENDED: the protein (accession) the match chose, the
-                                   // annotator's raw score, the identification score, whether the Precursor was
-                                   // closed out, and the precursor mass the Extender inferred. -1 / 0 = none.
-                                   << "protein\traw_score\tidentification_score\tclosed_out\tinferred_precursor_mass\t"
+                                   // annotator's raw score, the FLASHExtender score of this scan's OWN match (-1 =
+                                   // winner-re-matched row, no own ID; where identification_score was until 2026-11-12),
+                                   // whether the Precursor was closed out, and the precursor mass the Extender inferred.
+                                   << "protein\traw_score\tflash_extender_score\tclosed_out\tinferred_precursor_mass\t"
                                    // ADR-0064, APPENDED: what the identification bought at MS3 for quantification
                                    // (none | bought | no_cysteine | no_labelled_fragment | yield_refused).
                                    << "quant_ms3\t"
@@ -938,8 +940,8 @@ namespace OpenMS
       << std::fixed << std::setprecision(4) << ctx.ms1_precursor_mass << "\t"
       << precursor_ion << "\t"
       << proforma << "\t"
-      // C: FLASHExtender score of this scan's own match (-1 = winner-re-matched row, no own ID). fixed+4 in effect.
-      << row.flash_extender_score << "\t"
+      // The Identification score (the close-out's number; -1 = not searched). fixed+4 in effect.
+      << match.identification_score << "\t"
       // -1 on every MS3 row by POLICY, not because nothing tagged: MS3 exploration variants ARE tagged
       // (computeFragmentMatch_), but a tag count there measures the sub-fragment spectrum rather than
       // the precursor's identifiability, which is not what this column means. On MS2 rows 0 is a real
@@ -984,7 +986,8 @@ namespace OpenMS
       identification_tsv_stream_
         << protein << "\t"
         << std::fixed << std::setprecision(4) << match.raw_score << "\t"
-        << std::fixed << std::setprecision(4) << match.identification_score << "\t"
+        // C: FLASHExtender score of this scan's own match (-1 = winner-re-matched row, no own ID)
+        << std::fixed << std::setprecision(4) << row.flash_extender_score << "\t"
         << (row.closed_out ? 1 : 0) << "\t"
         << std::fixed << std::setprecision(4) << match.inferred_precursor_mass << "\t"
         << row.quant_ms3 << "\t"  // ADR-0064

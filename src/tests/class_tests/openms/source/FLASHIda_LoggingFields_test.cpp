@@ -160,7 +160,7 @@ START_SECTION(schema_column_counts)
   // ADR-0061 push 4b: the block after the refine record, pinned as a contiguous run.
   TEST_EQUAL(i.colIndex("protein"), 41)
   TEST_EQUAL(i.colIndex("raw_score"), 42)
-  TEST_EQUAL(i.colIndex("identification_score"), 43)
+  TEST_EQUAL(i.colIndex("flash_extender_score"), 43)          // swapped with identification_score (2026-11-12)
   TEST_EQUAL(i.colIndex("closed_out"), 44)
   TEST_EQUAL(i.colIndex("inferred_precursor_mass"), 45)
   TEST_EQUAL(i.colIndex("quant_ms3"), 46)
@@ -173,7 +173,7 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(i.colIndex("cut"), 38)
   TEST_EQUAL(i.colIndex("n_levels"), 39)
   TEST_EQUAL(i.colIndex("precursor_mass_difference"), 40)
-  TEST_EQUAL(i.colIndex("flash_extender_score"), 7)             // moved up next to proteoform
+  TEST_EQUAL(i.colIndex("identification_score"), 7)             // next to proteoform: the score the close-out reads
   TEST_EQUAL(i.colIndex("tag_count"), 8)                        // beside it: the other per-ID evidence scalar
   TEST_EQUAL(i.colIndex("fragment_qscores"), 31)                // inside the aligned table, right after diff_ppm
   TEST_EQUAL(i.colIndex("tic_coverage"), 33)                    // trailing column index
