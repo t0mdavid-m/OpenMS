@@ -14,6 +14,7 @@
 //#include <sys/types.h>
 #include <csignal> // for SIGSEGV and kill
 #include <iostream>
+#include <mutex>
 #include <new>
 
 #ifndef OPENMS_WINDOWSPLATFORM
@@ -26,6 +27,15 @@
 
 namespace OpenMS::Exception
 {
+    namespace
+    {
+      /// the last exception's record is process-wide; exceptions thrown on several threads at once (e.g. in an OpenMP loop) write it in turn
+      std::mutex& recordMutex()
+      {
+        static std::mutex m;
+        return m;
+      }
+    }
 
     GlobalExceptionHandler::GlobalExceptionHandler() throw()
     {
@@ -79,6 +89,7 @@ namespace OpenMS::Exception
 
     void GlobalExceptionHandler::set(const std::string & file, int line, const std::string & function, const std::string & name, const std::string & message) throw()
     {
+      std::lock_guard<std::mutex> lock(recordMutex());
       GlobalExceptionHandler::name_() = name;
       GlobalExceptionHandler::line_() = line;
       GlobalExceptionHandler::what_() = message;
@@ -88,26 +99,31 @@ namespace OpenMS::Exception
 
     void GlobalExceptionHandler::setName(const std::string & name) throw()
     {
+      std::lock_guard<std::mutex> lock(recordMutex());
       GlobalExceptionHandler::name_() = name;
     }
 
     void GlobalExceptionHandler::setMessage(const std::string & message) throw()
     {
+      std::lock_guard<std::mutex> lock(recordMutex());
       GlobalExceptionHandler::what_() = message;
     }
 
     void GlobalExceptionHandler::setFile(const std::string & file) throw()
     {
+      std::lock_guard<std::mutex> lock(recordMutex());
       GlobalExceptionHandler::file_() = file;
     }
 
     void GlobalExceptionHandler::setFunction(const std::string & function) throw()
     {
+      std::lock_guard<std::mutex> lock(recordMutex());
       GlobalExceptionHandler::function_() = function;
     }
 
     void GlobalExceptionHandler::setLine(int line) throw()
     {
+      std::lock_guard<std::mutex> lock(recordMutex());
       GlobalExceptionHandler::line_() = line;
     }
 
