@@ -328,28 +328,33 @@ namespace OpenMS
 
   ScanCommand ScanCommandQueue::makeMS1() const
   {
+    return makeMS1(config_.level(1).scans[0]);
+  }
+
+  ScanCommand ScanCommandQueue::makeMS1(const ScanConfig& scan) const
+  {
     ScanCommand cmd{};
     cmd.msn_level = 1;
     cmd.priority = 3; // lowest priority -- MS1 is the fallback
     cmd.is_agc = 0;
     cmd.num_stages = 0;
-    cmd.orbitrap_resolution = config_.level(1).scans[0].resolution;
-    cmd.agc_target = config_.level(1).scans[0].agc_target;
-    cmd.first_mass = config_.level(1).scans[0].first_mass;
-    cmd.last_mass = config_.level(1).scans[0].last_mass;
-    cmd.max_it = config_.level(1).scans[0].max_it;
-    cmd.microscans = config_.level(1).scans[0].microscans;
-    cmd.rf_lens = config_.level(1).scans[0].rf_lens;
-    cmd.source_cid = config_.level(1).scans[0].source_cid;
-    cmd.source_cid_scaling = config_.level(1).scans[0].source_cid_scaling;
+    cmd.orbitrap_resolution = scan.resolution;
+    cmd.agc_target = scan.agc_target;
+    cmd.first_mass = scan.first_mass;
+    cmd.last_mass = scan.last_mass;
+    cmd.max_it = scan.max_it;
+    cmd.microscans = scan.microscans;
+    cmd.rf_lens = scan.rf_lens;
+    cmd.source_cid = scan.source_cid;
+    cmd.source_cid_scaling = scan.source_cid_scaling;
     cmd.faims_enabled = config_.faims().enabled ? 1 : 0;
-    std::strncpy(cmd.data_type, config_.level(1).scans[0].data_type.c_str(), sizeof(cmd.data_type) - 1);
+    std::strncpy(cmd.data_type, scan.data_type.c_str(), sizeof(cmd.data_type) - 1);
     cmd.data_type[sizeof(cmd.data_type) - 1] = '\0';
-    std::strncpy(cmd.scan_rate, config_.level(1).scans[0].scan_rate.c_str(), sizeof(cmd.scan_rate) - 1);
+    std::strncpy(cmd.scan_rate, scan.scan_rate.c_str(), sizeof(cmd.scan_rate) - 1);
     cmd.scan_rate[sizeof(cmd.scan_rate) - 1] = '\0';
 
     // Copy analyzer string safely
-    std::strncpy(cmd.analyzer, config_.level(1).scans[0].analyzer.c_str(), sizeof(cmd.analyzer) - 1);
+    std::strncpy(cmd.analyzer, scan.analyzer.c_str(), sizeof(cmd.analyzer) - 1);
     cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
 
     std::strncpy(cmd.scan_description, "S", sizeof(cmd.scan_description) - 1);

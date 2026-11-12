@@ -577,6 +577,7 @@ namespace OpenMS
     // variant's identification is the calibrated re-score's alone (below, fragment_count); a measuring metric
     // identifies no pre-scan (ADR-0020), and a variant of a dropped sweep is never scored.
     if (group.msn_level == 2) info.identification.result = frag;
+    if (group.msn_level == 2) v.found_proteoform = !frag.proteoform_sequence.empty() && !frag.fragments.empty();
 
     // Stage this MS2 variant into the ProteoformTracker for pooling (MS3 evidence folds via foldMs3,
     // not here). A measured-only (trap) variant is never pooled (ADR-0045), nor one whose search the
@@ -1054,6 +1055,19 @@ namespace OpenMS
           }
         }
       }
+    }
+
+    // ADR-0071 amendment: a completed MS2 sweep reports the windows an identified pre-scan isolated, unless it sends a
+    // production MS2 (the only level-2 command a completed MS2 group emits): that scan is an 'R' and buys for itself.
+    if (group.msn_level == 2
+        && std::none_of(info.commands.begin(), info.commands.end(), [](const ScanCommand& c) { return c.msn_level == 2; }))
+    {
+      for (const auto& var : group.variants)
+        if (var.found_proteoform)
+        {
+          info.window_ctx = var.cmd;
+          break;
+        }
     }
 
     // F1 fallback: stamp any command whose builder left the parent empty with the group's originating id

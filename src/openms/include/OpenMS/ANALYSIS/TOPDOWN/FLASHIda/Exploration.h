@@ -89,6 +89,8 @@ namespace OpenMS
       bool received = false;
       bool measured_only = false;         ///< ADR-0045: read out by the ion trap -- window sum only; never
                                           ///< deconvolved, matched or pooled. Decided on `cmd.analyzer`.
+      bool found_proteoform = false;      ///< MS2 variant: its own match has a sequence and fragments (the test its
+                                          ///< identification row is written on). ADR-0071: such a sweep buys Window scans.
       DeconvolvedSpectrum result{0};
       ScanCommand cmd;
       FragmentAnalysis::ProteoformMatch identification_result;  ///< Per-fragment match details (populated at batch eval)
@@ -293,6 +295,10 @@ namespace OpenMS
       /// ADR-0066: the governed MS3 plan an MS2 group's next-level dispatch made (the sweep-winner cascade forwards
       /// NextLevelResult::governed). Its commands are in neither `commands` nor `child_ids`: the caller swaps it in.
       std::optional<GovernedMs3> governed;
+      /// ADR-0071 amendment: set only on the row that completes an MS2 group which sends no production scan and one of
+      /// whose pre-scans found a proteoform -- the command of the first such pre-scan (every pre-scan of a sweep
+      /// isolates the same windows). The caller buys the sweep's Window scans from it, if they are on.
+      std::optional<ScanCommand> window_ctx;
     };
 
     /// The MEASURING half of initiateNextLevel (ADR-0062): the match and the report it shapes, computed

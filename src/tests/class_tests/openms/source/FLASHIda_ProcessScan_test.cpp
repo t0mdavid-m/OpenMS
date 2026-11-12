@@ -4786,6 +4786,206 @@ START_SECTION(window_scan_decides_nothing)
 }
 END_SECTION
 
+// ADR-0071 amendment: identification.window_scan as a block. Its margin widens the scan range by that many Th on each
+// side of the window's commanded bounds, and the scan still decides nothing: the MSn sequence and the survey count are
+// those of the run with window_scan true.
+START_SECTION(window_scan_margin_widens_the_range)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  auto drive = [&](bool block, const std::string& tag) {
+    nlohmann::json j = nlohmann::json::parse(windowCytcJson(freshLogDir(tag)));
+    if (block) j["identification"]["window_scan"] = {{"margin", 2.0}};
+    const std::string cfg = j.dump();
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    return runInterleaved(&ida, ms1, ms2);
+  };
+  const AcqResult plain = drive(false, "window_margin_plain");
+  const AcqResult wide = drive(true, "window_margin_block");
+  ABORT_IF(wide.window_cmds.empty())
+
+  std::map<std::string, ScanCommand> ms2_by_id;
+  for (const auto& c : wide.ms2_cmds) ms2_by_id[ScanCommandQueue::encode(c.scan_id)] = c;
+  for (const auto& w : wide.window_cmds)
+  {
+    auto it = ms2_by_id.find(std::string(w.parent_scan_id));
+    TEST_EQUAL(it != ms2_by_id.end(), true)
+    if (it == ms2_by_id.end()) continue;
+    const ScanCommand& r = it->second;
+    TEST_REAL_SIMILAR(w.first_mass, r.stages[0].precursor_mz - r.stages[0].isolation_width / 2.0 - 2.0)
+    TEST_REAL_SIMILAR(w.last_mass, r.stages[0].precursor_mz + r.stages[0].isolation_width / 2.0 + 2.0)
+  }
+  TEST_EQUAL(wide.window_cmds.size(), plain.window_cmds.size())
+  TEST_EQUAL(msnSequence(wide) == msnSequence(plain), true)
+  TEST_EQUAL(wide.ms1_cmds.size(), plain.ms1_cmds.size())
+}
+END_SECTION
+
+// ADR-0071 amendment: ms_settings.window_scan is the Window scan's own scan config. With it every Window scan carries
+// its values and every survey still carries ms_settings.ms1's; without it a Window scan carries ms_settings.ms1's.
+START_SECTION(window_scan_uses_its_own_scan_config)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  auto drive = [&](bool own, const std::string& tag) {
+    nlohmann::json j = nlohmann::json::parse(windowCytcJson(freshLogDir(tag)));
+    if (own)
+      j["ms_settings"]["window_scan"] = {{"analyzer", "Orbitrap"}, {"resolution", 60000}, {"agc_target", 200000},
+                                         {"max_it", 500.0}, {"microscans", 2}};
+    const std::string cfg = j.dump();
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    return runInterleaved(&ida, ms1, ms2);
+  };
+  const AcqResult own = drive(true, "window_own_config");
+  const AcqResult inherited = drive(false, "window_ms1_config");
+  ABORT_IF(own.window_cmds.empty() || own.ms1_cmds.empty() || inherited.window_cmds.empty() || inherited.ms1_cmds.empty())
+
+  const ScanCommand& survey = own.ms1_cmds.front();
+  TEST_EQUAL(survey.orbitrap_resolution != 60000 || survey.microscans != 2, true)   // non-vacuity: ms1 differs
+  for (const auto& w : own.window_cmds)
+  {
+    TEST_EQUAL(w.orbitrap_resolution, 60000)
+    TEST_EQUAL(w.agc_target, 200000)
+    TEST_REAL_SIMILAR(w.max_it, 500.0)
+    TEST_EQUAL(w.microscans, 2)
+  }
+  for (const auto& s : own.ms1_cmds)
+  {
+    TEST_EQUAL(s.orbitrap_resolution, survey.orbitrap_resolution)
+    TEST_EQUAL(s.microscans, survey.microscans)
+    TEST_REAL_SIMILAR(s.max_it, survey.max_it)
+  }
+  const ScanCommand& plain_survey = inherited.ms1_cmds.front();
+  for (const auto& w : inherited.window_cmds)
+  {
+    TEST_EQUAL(w.orbitrap_resolution, plain_survey.orbitrap_resolution)
+    TEST_EQUAL(w.agc_target, plain_survey.agc_target)
+    TEST_REAL_SIMILAR(w.max_it, plain_survey.max_it)
+    TEST_EQUAL(w.microscans, plain_survey.microscans)
+  }
+  TEST_EQUAL(msnSequence(own) == msnSequence(inherited), true)
+}
+END_SECTION
+
+// ADR-0071 amendment: a completed MS2 sweep one of whose pre-scans found a proteoform buys its Window scans once, on
+// the pre-scan that completes it. cytC under a three-energy fragment_count sweep (a reading metric: no production scan).
+//
+// FAILS UNDER: no buy on the variant path (every sweep buys none), a buy per identified pre-scan (more than one set per
+// sweep), or a buy parented on another pre-scan than the completing one.
+START_SECTION(window_scan_sweep_buys_once_at_completion)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  const std::string dir = freshLogDir("window_sweep");
+  nlohmann::json j = nlohmann::json::parse(windowCytcJson(dir));
+  j["precursor_selection"]["exploration"] = {{"metric", "fragment_count"}, {"ce_min", 25}, {"ce_max", 35}, {"ce_step", 5},
+                                             {"activations", nlohmann::json::array({"HCD"})}};
+  const std::string cfg = j.dump();
+  AcqResult acq;
+  {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    acq = runInterleaved(&ida, ms1, ms2);
+  }
+  std::map<std::string, ScanCommand> variant_by_id;   // the pre-scans
+  for (const auto& c : acq.ms2_cmds)
+    if (c.scan_description[3] == 'E') variant_by_id[ScanCommandQueue::encode(c.scan_id)] = c;
+  ABORT_IF(variant_by_id.empty())
+
+  std::set<std::string> identified;   // pre-scans with an identification row
+  auto idf = TSVFile::parse(dir + "/identification.tsv");
+  for (const auto& row : idf.rows)
+    if (cell(idf, row, "ms_level") == "2") identified.insert(cell(idf, row, "tracking_id"));
+
+  struct Sweep { std::vector<std::string> ids; std::string completing; bool any_identified = false; int total = 0; };
+  std::map<std::string, Sweep> sweeps;   // exploration_group_id -> its pre-scans
+  auto res = TSVFile::parse(dir + "/scan_results.tsv");
+  for (const auto& row : res.rows)
+  {
+    const std::string id = cell(res, row, "tracking_id");
+    if (variant_by_id.count(id) == 0) continue;
+    Sweep& s = sweeps[cell(res, row, "exploration_group_id")];
+    s.ids.push_back(id);
+    s.total = static_cast<int>(toD(cell(res, row, "total_variants")));
+    if (!cell(res, row, "winner_tracking_id").empty()) s.completing = id;   // written on the completing row only
+    if (identified.count(id) > 0) s.any_identified = true;
+  }
+
+  std::map<std::string, std::vector<ScanCommand>> windows_of;   // parent id -> its Window scans
+  for (const auto& w : acq.window_cmds)
+  {
+    TEST_EQUAL(variant_by_id.count(std::string(w.parent_scan_id)), 1)
+    windows_of[std::string(w.parent_scan_id)].push_back(w);
+  }
+
+  int sweeps_that_bought = 0;
+  for (const auto& [gid, s] : sweeps)
+  {
+    int bought = 0;
+    for (const auto& id : s.ids)
+    {
+      const auto it = windows_of.find(id);
+      if (it == windows_of.end()) continue;
+      bought += static_cast<int>(it->second.size());
+      TEST_EQUAL(id, s.completing)   // only the completing pre-scan is a parent
+      const auto expected = stage0Windows(variant_by_id[id]);
+      for (const auto& w : it->second)
+      {
+        bool found = false;
+        for (const auto& [centre, width] : expected)
+          found = found || (std::abs(w.first_mass - (centre - width / 2.0)) < 1e-6 && std::abs(w.last_mass - (centre + width / 2.0)) < 1e-6);
+        TEST_EQUAL(found, true)
+        TEST_EQUAL(w.priority, 0)
+      }
+    }
+    const bool complete = s.total > 0 && static_cast<int>(s.ids.size()) == s.total;
+    const int expected_bought = (complete && s.any_identified) ? windowsAtStage(variant_by_id[s.ids.front()], 0) : 0;
+    TEST_EQUAL(bought, expected_bought)
+    if (bought > 0) ++sweeps_that_bought;
+  }
+  TEST_EQUAL(sweeps_that_bought > 0, true)   // non-vacuity: a sweep identified and bought
+}
+END_SECTION
+
+// ADR-0071 amendment: a sweep that ends in a production MS2 buys nothing itself; the production scan is an 'R' and buys
+// as any identified 'R' does. The same sweep under exploration overrides, which force the production scan.
+START_SECTION(window_scan_sweep_with_production_scan_buys_on_the_production_scan)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  const std::string dir = freshLogDir("window_sweep_production");
+  nlohmann::json j = nlohmann::json::parse(windowCytcJson(dir));
+  j["precursor_selection"]["exploration"] = {{"metric", "fragment_count"}, {"ce_min", 25}, {"ce_max", 35}, {"ce_step", 5},
+                                             {"activations", nlohmann::json::array({"HCD"})}, {"overrides", {{"analyzer", "Orbitrap"}}}};
+  const std::string cfg = j.dump();
+  AcqResult acq;
+  {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    acq = runInterleaved(&ida, ms1, ms2);
+  }
+  std::map<std::string, char> role_by_id;
+  for (const auto& c : acq.ms2_cmds) role_by_id[ScanCommandQueue::encode(c.scan_id)] = c.scan_description[3];
+  int on_variant = 0, on_production = 0;
+  for (const auto& w : acq.window_cmds)
+  {
+    const auto it = role_by_id.find(std::string(w.parent_scan_id));
+    TEST_EQUAL(it != role_by_id.end(), true)
+    if (it == role_by_id.end()) continue;
+    if (it->second == 'E') ++on_variant;
+    if (it->second == 'R') ++on_production;
+  }
+  TEST_EQUAL(on_variant, 0)
+  TEST_EQUAL(on_production > 0, true)   // non-vacuity: a production scan identified and bought
+}
+END_SECTION
+
 // characterization.order "random": the MS3 of one plan are sent in one reproducible permutation, drawn from the
 // dispatching MS2's id; the plan itself is the ranked one. The cytC fragments recipe, three runs: ranked, random, and
 // random again. Per dispatching MS2 the random run sends the ranked run's MS3, reordered by

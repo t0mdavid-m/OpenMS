@@ -1140,41 +1140,11 @@ FLASHIda::FLASHIda(char* arg) :
     }
 
     // ADR-0071: a searched identification scan whose search found a proteoform, at any score, buys one Window scan per
-    // window it isolated at stage 0 -- the anchor and each notch. A Window scan is an ordinary full MS1 from
-    // ms_settings.ms1 whose scan range is that window's commanded bounds: a tribrid's quadrupole transmits only a full
-    // MS1's range, so the trap fills from that window alone. It observes and decides nothing (its role does not decide,
-    // so its return takes ADR-0042's observing arm), it is not registered anywhere, so neither a survey nor a close-out
-    // withdraws it, and it is uncapped. "Found a proteoform" is the identification row's own test, below.
+    // window it isolated at stage 0 -- the anchor and each notch (buyWindowScans_). "Found a proteoform" is the
+    // identification row's own test, below. A completed MS2 sweep buys in finishVariantMS2_.
     if (config_.identification().window_scan && !dropped && !is_quant_scan && parent_ctx.num_stages > 0
         && !ms3_targeting.proteoform_match.proteoform_sequence.empty() && !ms3_targeting.proteoform_match.fragments.empty())
-    {
-      std::vector<std::pair<double, double>> windows;   // (centre, width): the anchor, then the notches
-      windows.emplace_back(parent_ctx.stages[0].precursor_mz, parent_ctx.stages[0].isolation_width);
-      const auto notches = notchesForStage(parent_ctx, 0);
-      for (int k = 0; k < notches.second; ++k)
-        windows.emplace_back(notches.first[k].precursor_mz, notches.first[k].isolation_width);
-      const std::string trigger = ScanCommandQueue::encode(parent_ctx.scan_id);
-      int bought = 0;
-      for (const auto& [centre, width] : windows)
-      {
-        if (centre <= 0.0 || width <= 0.0) continue;
-        ScanCommand ws = queue_.makeMS1();   // every parameter from ms_settings.ms1
-        ws.scan_id = queue_.nextTrackingId();
-        ws.first_mass = centre - width / 2.0;
-        ws.last_mass = centre + width / 2.0;
-        ws.priority = 0;
-        ws.faims_cv = parent_ctx.faims_cv;
-        std::strncpy(ws.parent_scan_id, trigger.c_str(), sizeof(ws.parent_scan_id) - 1);
-        ws.parent_scan_id[sizeof(ws.parent_scan_id) - 1] = '\0';
-        ScanCommandQueue::writeMs1Description(ws, ScanRole::Window);
-        stampAndPush_(ws, precursor_id);
-        child_ids.push_back(ScanCommandQueue::encode(ws.scan_id));
-        commands_pushed++;
-        ++bought;
-      }
-      if (bought > 0)
-        EventLine() << "[WINDOW-SCAN] precursor_id=" << precursor_id << " trigger=" << parent_id_str << " windows=" << bought;
-    }
+      commands_pushed += buyWindowScans_(parent_ctx, precursor_id, ScanCommandQueue::encode(parent_ctx.scan_id), child_ids);
 
     // Write MS2 identification row if proteoform was matched.
     // Gate on the actual match (proteoform_match), NOT on ms3_targeting.proteoform_sequence — the
@@ -1250,6 +1220,44 @@ FLASHIda::FLASHIda(char* arg) :
     return commands_pushed;
   }
 
+  // ADR-0071. A Window scan is an ordinary full MS1 whose scan range is one window's commanded bounds, widened by the
+  // authored margin: a tribrid's quadrupole transmits only a full MS1's range, so the trap fills from that range alone.
+  // Its parameters are ms_settings.window_scan's when authored, else ms_settings.ms1's. It observes and decides nothing
+  // (its role does not decide, so its return takes ADR-0042's observing arm), it is not registered anywhere, so neither
+  // a survey nor a close-out withdraws it, and it is uncapped.
+  int FLASHIda::buyWindowScans_(const ScanCommand& ctx, int precursor_id, const std::string& trigger,
+                                std::vector<std::string>& child_ids)
+  {
+    if (ctx.num_stages <= 0) return 0;
+    std::vector<std::pair<double, double>> windows;   // (centre, width): the anchor, then the notches
+    windows.emplace_back(ctx.stages[0].precursor_mz, ctx.stages[0].isolation_width);
+    const auto notches = notchesForStage(ctx, 0);
+    for (int k = 0; k < notches.second; ++k)
+      windows.emplace_back(notches.first[k].precursor_mz, notches.first[k].isolation_width);
+    const auto& own = config_.identification().window_scan_config;
+    const double margin = config_.identification().window_scan_margin;
+    int bought = 0;
+    for (const auto& [centre, width] : windows)
+    {
+      if (centre <= 0.0 || width <= 0.0) continue;
+      ScanCommand ws = own.has_value() ? queue_.makeMS1(*own) : queue_.makeMS1();
+      ws.scan_id = queue_.nextTrackingId();
+      ws.first_mass = centre - width / 2.0 - margin;
+      ws.last_mass = centre + width / 2.0 + margin;
+      ws.priority = 0;
+      ws.faims_cv = ctx.faims_cv;
+      std::strncpy(ws.parent_scan_id, trigger.c_str(), sizeof(ws.parent_scan_id) - 1);
+      ws.parent_scan_id[sizeof(ws.parent_scan_id) - 1] = '\0';
+      ScanCommandQueue::writeMs1Description(ws, ScanRole::Window);
+      stampAndPush_(ws, precursor_id);
+      child_ids.push_back(ScanCommandQueue::encode(ws.scan_id));
+      ++bought;
+    }
+    if (bought > 0)
+      EventLine() << "[WINDOW-SCAN] precursor_id=" << precursor_id << " trigger=" << trigger << " windows=" << bought;
+    return bought;
+  }
+
   int FLASHIda::finishVariantMS2_(Exploration::FeedResultInfo& expl_result, int mass_count,
                                    const DeconvolvedSpectrum* spectrum, int precursor_id, const std::string& parent_id_str,
                                    bool dropped, IdaLogger::ScanRowDescriptor& results_row,
@@ -1266,6 +1274,11 @@ FLASHIda::FLASHIda(char* arg) :
     // ADR-0066: the group's governed next-level plan, swapped in; its inserted ids join the group's children.
     int governed_pushed = 0;
     if (expl_result.governed) governed_pushed = pushGovernedMs3_(*expl_result.governed, precursor_id, expl_result.child_ids);
+    // ADR-0071 amendment: a completed MS2 sweep one of whose pre-scans found a proteoform, and which sends no
+    // production scan (that scan buys as any 'R' does), buys its Window scans once, here, on the completing pre-scan.
+    int window_bought = 0;
+    if (config_.identification().window_scan && expl_result.window_ctx.has_value())
+      window_bought = buyWindowScans_(*expl_result.window_ctx, precursor_id, parent_id_str, expl_result.child_ids);
 
     int expl_mass_count = mass_count;
     const DeconvolvedSpectrum* expl_spec = spectrum;
@@ -1282,7 +1295,7 @@ FLASHIda::FLASHIda(char* arg) :
     }
     // Fill scan_results row in canonical order (copy expl_result.* by value — it dies at block end).
     results_row.mass_count          = expl_mass_count;
-    results_row.commands_pushed     = static_cast<int>(expl_result.commands.size()) + governed_pushed;
+    results_row.commands_pushed     = static_cast<int>(expl_result.commands.size()) + governed_pushed + window_bought;
     results_row.child_ids           = expl_result.child_ids;
     results_row.deconv_spectrum     = expl_spec;
     results_row.parent_tracking_id  = parent_id;
@@ -1331,7 +1344,7 @@ FLASHIda::FLASHIda(char* arg) :
       }
 
     publishExplorationState_();
-    return static_cast<int>(expl_result.commands.size()) + governed_pushed;
+    return static_cast<int>(expl_result.commands.size()) + governed_pushed + window_bought;
   }
 
   bool FLASHIda::isClosedOut_(double mass, double rt, int precursor_id)

@@ -166,6 +166,10 @@ namespace OpenMS
     /// Create an MS1 survey scan command from current config
     ScanCommand makeMS1() const;
 
+    /// The same command from @p scan instead of ms_settings.ms1 (ADR-0071 amendment: a Window scan with its own scan
+    /// config). makeMS1() is this with level 1's scan.
+    ScanCommand makeMS1(const ScanConfig& scan) const;
+
     /// Create an AGC calibration scan command
     ScanCommand makeAGC() const;
 

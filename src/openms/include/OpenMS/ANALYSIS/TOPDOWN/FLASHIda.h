@@ -497,6 +497,13 @@ namespace OpenMS
                           int commands_pushed, std::vector<std::string>& child_ids,
                           IdaLogger::ScanRowDescriptor& results_row, std::vector<IdaLogger::IdRowDescriptor>& id_rows);
 
+    /// ADR-0071: buy one Window scan per stage-0 window of @p ctx (the anchor, then each notch): a full MS1 from
+    /// ms_settings.window_scan (else ms_settings.ms1) whose scan range is that window's commanded bounds widened by
+    /// identification.window_scan.margin, at priority 0 and @p ctx's FAIMS CV, its parent @p trigger. The one push
+    /// site of a Window scan; the caller decides whether to buy. Appends the ids to @p child_ids; returns the count.
+    int buyWindowScans_(const ScanCommand& ctx, int precursor_id, const std::string& trigger,
+                        std::vector<std::string>& child_ids);
+
     /// The exploration-variant tail: push the group's commands, seed the MS3 contexts, fill the row and the
     /// identification rows. @p mass_count / @p spectrum: the variant's own deconvolution. Returns commands pushed.
     int finishVariantMS2_(Exploration::FeedResultInfo& expl_result, int mass_count, const DeconvolvedSpectrum* spectrum,
