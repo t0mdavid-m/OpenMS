@@ -819,7 +819,10 @@ bool FLASHTnTAlgorithm::areConsistent_(const ProteinHit& a, const ProteinHit& b,
   //   not confirmed by a precursor mass, and an open terminus may be any position, so such a PrSM is a separate proteoform only if
   //   no other PrSM of the protein fits its known termini. Counting it apart whenever its blind shifts or its open end differed
   //   counted a determined proteoform again (232 of 511 undetermined proteoform rows of Eclip_1480 shared their known termini with a
-  //   determined proteoform).
+  //   determined proteoform). The precursor masses of the two spectra must agree as the determined masses above (the same or one
+  //   isotope apart) when both have one: without it every PrSM whose shifts do not add up to its precursor joined the best PrSM with
+  //   its termini, whatever its precursor (cytochrome c coverage run of 2026-11-12: one proteoform row of 131 PrSMs, 121 of them
+  //   undetermined, with precursors from 2404.76 to 12989.65 Da).
   if (a == b) return true;
   const double mass1 = a.getMetaValue(tntKey("Mass")), mass2 = b.getMetaValue(tntKey("Mass"));
   const int sp1 = a.getMetaValue(tntKey("StartPosition")), ep1 = a.getMetaValue(tntKey("EndPosition"));
@@ -829,6 +832,13 @@ bool FLASHTnTAlgorithm::areConsistent_(const ProteinHit& a, const ProteinHit& b,
     const bool overlap = (sp1 < 0 || ep2 < 0 || sp1 <= ep2) && (sp2 < 0 || ep1 < 0 || sp2 <= ep1);
     const double diff = std::abs(mass1 - mass2), max_diff = std::max(mass1, mass2) * tol * 2e-6;
     return overlap && (diff <= max_diff || std::abs(diff - Constants::ISOTOPE_MASSDIFF_55K_U) <= max_diff);
+  }
+  const double pm1 = a.metaValueExists(tntKey("GivenMass")) ? (double)a.getMetaValue(tntKey("GivenMass")) : -1.0;
+  const double pm2 = b.metaValueExists(tntKey("GivenMass")) ? (double)b.getMetaValue(tntKey("GivenMass")) : -1.0;
+  if (pm1 > 0 && pm2 > 0)
+  {
+    const double diff = std::abs(pm1 - pm2), max_diff = std::max(pm1, pm2) * tol * 2e-6;
+    if (diff > max_diff && std::abs(diff - Constants::ISOTOPE_MASSDIFF_55K_U) > max_diff) return false;
   }
   return (sp1 < 0 || sp2 < 0 || sp1 == sp2) && (ep1 < 0 || ep2 < 0 || ep1 == ep2);
 }
