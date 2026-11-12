@@ -468,6 +468,8 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   Config cfg{cfg_json};
   IdaLogger logger(cfg);                 // opens the pooled stream (writes the header)
   ProteoformTracker tracker(cfg, logger);
+  std::vector<ProteoformTracker::PooledUpdate> observed;   // the operator view's feed: one call per row written
+  tracker.setPooledObserver([&](const ProteoformTracker::PooledUpdate& u) { observed.push_back(u); });
 
   // Real winner (PEPTIDEK) b/y ladder. A NON-winner MS2 scan is now re-matched against the winner
   // ladder (Change 1: winner-anchored pooling), so its raw peak mass MUST equal a real winner ion or it
@@ -637,6 +639,20 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   const double cov2 = std::stod(rows[2][CI_COV]);
   TEST_TRUE(cov1 >= cov0)
   TEST_TRUE(cov2 >= cov1)
+
+  // The pooled observer saw exactly the rows written, field for field (the board shows what the log carries).
+  // FAILS UNDER: a call before the write, a missed emit site, or fields that differ from the row.
+  const int CI_NOMINAL = colOf("nominal_mass");
+  TEST_TRUE(CI_NOMINAL >= 0)
+  TEST_EQUAL(observed.size(), rows.size())
+  for (size_t k = 0; k < observed.size() && k < rows.size(); ++k)
+  {
+    TEST_EQUAL(std::to_string(observed[k].precursor_id), rows[k][CI_PRECID])
+    TEST_EQUAL(std::to_string(observed[k].nominal_mass), rows[k][CI_NOMINAL])
+    TEST_EQUAL(observed[k].trigger, rows[k][CI_TRIGGER])
+    TEST_EQUAL(observed[k].trigger_scan_id, rows[k][CI_TRIGGER_SCAN])
+    TEST_TRUE(std::fabs(observed[k].coverage - std::stod(rows[k][CI_COV])) < 1e-4)
+  }
 }
 END_SECTION
 

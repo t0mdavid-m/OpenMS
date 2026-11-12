@@ -48,6 +48,7 @@
 #include <OpenMS/config.h>
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <set>
 #include <string>
@@ -327,8 +328,23 @@ namespace OpenMS
   class OPENMS_DLLAPI ProteoformTracker
   {
   public:
+    /// What one pooled_identification.tsv row carries for the operator view (ADR-0065: the board shows what the logs
+    /// carry). Copied from the row just written; a plain struct because IdaLogger is only forward-declared here.
+    struct PooledUpdate
+    {
+      int precursor_id = 0;
+      int nominal_mass = 0;
+      std::string trigger;           ///< "MS2", "MS3-DECIDE", or the folded MS3 ion (e.g. "b39")
+      std::string trigger_scan_id;
+      double coverage = 0.0;         ///< coverage_pct: Pooled coverage, a fraction
+    };
+
     /// Construct with references to the shared Config and IdaLogger
     ProteoformTracker(const Config& cfg, IdaLogger& logger);
+
+    /// Called with every pooled row right after it is written; null (the default) calls nothing. Runs on the thread
+    /// that wrote the row, under analysis_mutex_ in the engine.
+    void setPooledObserver(std::function<void(const PooledUpdate&)> observer) { pooled_observer_ = std::move(observer); }
 
     /**
      * @brief Integrate a new deconvolved scan into the model for @p precursor_id.
@@ -575,6 +591,7 @@ namespace OpenMS
 
     const Config& config_;
     IdaLogger& logger_;
+    std::function<void(const PooledUpdate&)> pooled_observer_;   ///< setPooledObserver; null = none
 
     /// Active models keyed by precursor_id (per-MS1-selection identity; one selection -> one charge)
     std::unordered_map<int, ProteoformModel> models_;

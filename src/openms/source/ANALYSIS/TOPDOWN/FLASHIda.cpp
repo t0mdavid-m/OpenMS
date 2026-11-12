@@ -348,6 +348,11 @@ FLASHIda::FLASHIda(char* arg) :
 
     // ADR-0065 push 2: the operator view, only on a console that takes VT sequences (null on a pipe or a file).
     board_.setLogDir(config_.runtime().log_dir);
+    // The board's coverage is the pooled rows' coverage_pct, and an MS3 that raises it says so (ADR-0065).
+    tracker_.setPooledObserver([this](const ProteoformTracker::PooledUpdate& u) {
+      if (auto line = board_.onPooled(u.precursor_id, u.nominal_mass, u.trigger, u.trigger_scan_id, u.coverage))
+        EventLog::say(OperatorKind::Ms3, *line);
+    });
     view_ = ConsoleView::start([this] { return boardSnapshot_(); });
   }
 
@@ -1098,7 +1103,8 @@ FLASHIda::FLASHIda(char* arg) :
     {
       sayIdentification(parent_id_str, ms3_targeting.proteoform_match, parent_ctx.mono_mass, closed_out,
                         config_.identification().threshold, config_.targeting().rt_window);
-      board_.onResult(parent_ctx.mono_mass, ms3_targeting.proteoform_match, closed_out, config_.identification().threshold);
+      board_.onResult(parent_ctx.mono_mass, parent_ctx.stages[0].charge_state, precursor_id, ms3_targeting.proteoform_match,
+                      closed_out, config_.identification().threshold);
     }
 
     // ADR-0068: an identification scan that was searched and fell short of the close-out threshold (no proteoform, or a
@@ -1302,8 +1308,8 @@ FLASHIda::FLASHIda(char* arg) :
     {
       sayIdentification(parent_id_str, expl_result.identification.result, vctx.ms1_precursor_mass, closed_out,
                         config_.identification().threshold, config_.targeting().rt_window);
-      board_.onResult(vctx.ms1_precursor_mass, expl_result.identification.result, closed_out,
-                      config_.identification().threshold);
+      board_.onResult(vctx.ms1_precursor_mass, vctx.ms1_precursor_charge, precursor_id, expl_result.identification.result,
+                      closed_out, config_.identification().threshold);
     }
 
     // MS2 identification row (copy by value before expl_result goes out of scope).

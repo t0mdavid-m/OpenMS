@@ -37,6 +37,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <set>
 
 namespace OpenMS
@@ -98,7 +99,7 @@ namespace OpenMS
       ++ms2_;
       BoardRow& row = rowFor_(cmd.mono_mass);
       ++row.ms2;
-      if (cmd.num_stages > 0) row.charge = cmd.stages[0].charge_state;
+      if (cmd.num_stages > 0 && !hasProteoform(row.state)) row.charge = cmd.stages[0].charge_state;   // identified: its own
       if (!hasResult(row.state)) row.state = PrecursorState::Acquiring;
       if (precursor_id > 0) nominal_by_precursor_[precursor_id] = row.nominal;
       return;
@@ -127,7 +128,8 @@ namespace OpenMS
     else if (!hasResult(row.state)) row.state = PrecursorState::Acquired;
   }
 
-  void PrecursorBoard::onResult(double commanded_mass, const FragmentAnalysis::ProteoformMatch& match, bool closed_out,
+  void PrecursorBoard::onResult(double commanded_mass, int charge, int precursor_id,
+                                const FragmentAnalysis::ProteoformMatch& match, bool closed_out,
                                 const std::optional<double>& threshold)
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -140,11 +142,19 @@ namespace OpenMS
     }
     if (!hasProteoform(row.state)) id_rts_s_.push_back(rt_s_);   // the Precursor's first identification
     const double score = match.search_identification_score;
+    if (precursor_id > 0)
+    {
+      const auto best = best_score_by_precursor_.find(precursor_id);
+      if (best == best_score_by_precursor_.end() || score > best->second) best_score_by_precursor_[precursor_id] = score;
+    }
     if (score >= row.score || !hasProteoform(row.state))
     {
       row.score = score;
       row.accession = match.matched_protein;
       row.proforma = proformaOf(match);
+      row.mass = commanded_mass;
+      if (charge != 0) row.charge = charge;
+      row.precursor_id = precursor_id;
     }
     if (closed_out || row.state == PrecursorState::ClosedOut)
     {
@@ -157,6 +167,24 @@ namespace OpenMS
       row.below_threshold = threshold.has_value() && row.score < *threshold;
       row.threshold = threshold.value_or(0.0);
     }
+  }
+
+  std::optional<std::string> PrecursorBoard::onPooled(int precursor_id, int nominal, const std::string& trigger,
+                                                      const std::string& trigger_scan_id, double coverage)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = coverage_by_precursor_.find(precursor_id);
+    const double before = it == coverage_by_precursor_.end() ? -1.0 : it->second;
+    coverage_by_precursor_[precursor_id] = coverage;
+    const bool ms3_fold = !trigger.empty() && trigger != "MS2" && trigger != "MS3-DECIDE";
+    if (!ms3_fold || before < 0.0 || !(coverage > before)) return std::nullopt;
+    const auto best = best_score_by_precursor_.find(precursor_id);
+    char buf[192];
+    if (best != best_score_by_precursor_.end())
+      std::snprintf(buf, sizeof(buf), "  cov %.1f%% -> %.1f%%  (score %.0f)", before * 100.0, coverage * 100.0, best->second);
+    else
+      std::snprintf(buf, sizeof(buf), "  cov %.1f%% -> %.1f%%", before * 100.0, coverage * 100.0);
+    return "#" + trigger_scan_id + "  " + std::to_string(nominal) + "  MS3 " + trigger + buf;
   }
 
   void PrecursorBoard::onDropped(double commanded_mass)
@@ -212,7 +240,12 @@ namespace OpenMS
           s.best_accession = r.accession;
         }
       }
-      if (r.last_rt_s >= rt_s_ - rt_window_s) s.live.push_back(r);
+      if (r.last_rt_s >= rt_s_ - rt_window_s)
+      {
+        s.live.push_back(r);
+        const auto cov = coverage_by_precursor_.find(r.precursor_id);   // the best identification's model, now
+        if (r.precursor_id > 0 && cov != coverage_by_precursor_.end()) s.live.back().coverage = cov->second;
+      }
     }
     s.proteins = static_cast<int>(accessions.size());
     std::stable_sort(s.live.begin(), s.live.end(),

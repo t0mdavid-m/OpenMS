@@ -232,7 +232,7 @@ namespace OpenMS
                          width));   // no count: the status line carries identified and closed out
 
     // 3. the header
-    lines.push_back(clip(" nominal       mass   z  state        score  MS2  MS3      rt  protein", width));
+    lines.push_back(clip(" nominal       mass   z  state        score   cov  MS2  MS3      rt  protein", width));
 
     // 4. the rows that fit whole, most recent first; the rest go to the footer
     const int wrap = std::max(10, width - 9);
@@ -249,6 +249,7 @@ namespace OpenMS
       std::string state = stateName(r.state);
       state.resize(11, ' ');
       std::string score = r.score >= 0 ? fmtd("%6.0f", r.score) : std::string("     -");
+      score += r.coverage >= 0 ? fmtd("%5.0f%%", r.coverage * 100.0) : std::string("     -");   // Pooled coverage
       char tail[96];
       std::snprintf(tail, sizeof(tail), "  %4d %4d  %6.2f  ", r.ms2, r.ms3, r.last_rt_s / 60.0);
       std::string row = std::string(head) + (ansi ? stateColour(r.state) : "") + state + (ansi ? "\x1b[0m" : "") + score + tail

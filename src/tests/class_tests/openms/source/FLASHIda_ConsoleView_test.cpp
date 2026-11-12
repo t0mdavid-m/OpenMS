@@ -21,12 +21,14 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PrecursorBoard.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 
+#include "FLASHIda_EventCapture.h"
 #include "FLASHIda_TestAccess.h"
 #include "FLASHIda_TestHelpers.h"
 
 #include <nlohmann/json.hpp>  // the status section sets identification.search_threads on the parsed recipe
 
 #include <cmath>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -100,11 +102,11 @@ START_SECTION(board_moves_a_precursor_through_its_states)
   TEST_EQUAL(rowOf(b.snapshot(180, 60, 0, 0), 12358.2)->state == PrecursorState::Acquiring, true)
   b.onReturned(12358.2, true);
   TEST_EQUAL(rowOf(b.snapshot(180, 60, 0, 0), 12358.2)->state == PrecursorState::Searching, true)
-  b.onResult(12358.2, identifiedMatch(821.0, "CYC_HORSE", "GDVEKGKK"), true, std::optional<double>(500.0));
+  b.onResult(12358.2, 14, 7, identifiedMatch(821.0, "CYC_HORSE", "GDVEKGKK"), true, std::optional<double>(500.0));
 
   b.onSent(ms2At(8441.0, 11), 8);
   b.onReturned(8441.0, true);
-  b.onResult(8441.0, FragmentAnalysis::ProteoformMatch(), false, std::optional<double>(500.0));
+  b.onResult(8441.0, 11, 8, FragmentAnalysis::ProteoformMatch(), false, std::optional<double>(500.0));
 
   b.onSent(ms2At(6230.0, 9), 9);
   b.onReturned(6230.0, false);
@@ -147,6 +149,82 @@ START_SECTION(board_merges_a_redetection_and_counts_ms3_on_its_precursor)
   TEST_EQUAL(s.live[0].ms3, 1)
   TEST_REAL_SIMILAR(s.live[0].last_rt_s, 90.0)
   TEST_EQUAL(s.ms3, 1)
+}
+END_SECTION
+
+// Every value of an identified row describes its best identification (CONTEXT.md "Precursor board"): two detections of
+// one nominal mass, the first scoring 180 at 34 % coverage, the second 961 at 5 %. The row shows the second's mass,
+// charge, score, coverage and ProForma; a later, lower-scoring result and a later MS2 send change none of them, and an
+// MS3 that raises the first detection's coverage leaves the row at 5 %.
+// FAILS UNDER: mass or charge left at the first MS2's, coverage taken from another detection, or a lower result or a
+// send overwriting the row.
+START_SECTION(board_row_follows_its_best_identification)
+{
+  PrecursorBoard b;
+  b.setRt(60.0);
+  b.onSent(ms2At(7304.70, 7), 5);
+  b.onResult(7304.70, 7, 5, identifiedMatch(180.0, "CSPC_ECOLI", "MSGKMTGIVK"), false, std::nullopt);
+  b.onPooled(5, 7301, "MS2", "!aa", 0.34);
+  b.setRt(120.0);
+  b.onSent(ms2At(7304.90, 8), 9);   // a re-detection 0.2 Da away: the same nominal mass, 7301
+  b.onResult(7304.90, 8, 9, identifiedMatch(961.0, "CSPC_ECOLI", "MSGKMTGIVKWF"), false, std::nullopt);
+  b.onPooled(9, 7301, "MS2", "!bb", 0.05);
+  b.onResult(7304.70, 7, 5, identifiedMatch(200.0, "OTHER", "PEPTIDE"), false, std::nullopt);   // lower than 961
+  b.onSent(ms2At(7304.70, 12), 5);                                                                // a later send
+  b.onPooled(5, 7301, "b39", "!cc", 0.41);                                                         // detection 5 rises
+
+  const BoardSnapshot s = b.snapshot(180, 60, 0, 0);
+  TEST_EQUAL(s.live.size(), 1)
+  ABORT_IF(s.live.size() != 1)
+  const BoardRow& r = s.live[0];
+  TEST_REAL_SIMILAR(r.mass, 7304.90)
+  TEST_EQUAL(r.charge, 8)
+  TEST_REAL_SIMILAR(r.score, 961.0)
+  TEST_EQUAL(r.precursor_id, 9)
+  TEST_REAL_SIMILAR(r.coverage, 0.05)
+  TEST_EQUAL(r.accession, "CSPC_ECOLI")
+  TEST_EQUAL(r.ms2, 3)
+
+  // a row with no identification keeps today's behaviour: its first mass, its latest charge, no coverage
+  b.onSent(ms2At(9000.6, 9), 11);
+  b.onSent(ms2At(9000.8, 10), 12);   // both nominal 8996
+  const BoardRow* u = rowOf(b.snapshot(180, 60, 0, 0), 9000.6);
+  ABORT_IF(u == nullptr)
+  TEST_REAL_SIMILAR(u->mass, 9000.6)
+  TEST_EQUAL(u->charge, 10)
+  TEST_REAL_SIMILAR(u->coverage, -1.0)
+
+  // the panel draws coverage in whole percent after the score, and '-' without a model
+  const auto lines = ConsoleView::renderPanel(b.snapshot(180, 60, 0, 0), 120, 8, false, false);
+  int with_cov = 0, without = 0;
+  for (const auto& l : lines)
+  {
+    if (l.find("   961    5%") != std::string::npos) ++with_cov;
+    if (l.find("     -     -") != std::string::npos) ++without;
+  }
+  TEST_EQUAL(with_cov, 1)
+  TEST_EQUAL(without, 1)
+}
+END_SECTION
+
+// An MS3 fold that raises a detection's Pooled coverage returns one operator line naming the MS3, its nominal mass,
+// the coverage before and after, and that detection's best score; nothing else returns one.
+// FAILS UNDER: a line for an MS2 baseline, an MS3-DECIDE re-pick, an unchanged or lower coverage, or a bracket
+// carrying another detection's score.
+START_SECTION(pooled_rise_prints_one_line)
+{
+  PrecursorBoard b;
+  b.onResult(7304.70, 7, 5, identifiedMatch(180.0, "CSPC_ECOLI", "MSGKMTGIVK"), false, std::nullopt);
+  b.onResult(7304.90, 8, 9, identifiedMatch(961.0, "CSPC_ECOLI", "MSGKMTGIVKWF"), false, std::nullopt);
+  TEST_EQUAL(b.onPooled(5, 7301, "MS2", "!aa", 0.342).has_value(), false)   // the baseline
+  const auto rise = b.onPooled(5, 7301, "b39", "!Xy", 0.41);
+  TEST_EQUAL(rise.has_value(), true)
+  ABORT_IF(!rise)
+  TEST_EQUAL(*rise, "#!Xy  7301  MS3 b39  cov 34.2% -> 41.0%  (score 180)")
+  TEST_EQUAL(b.onPooled(5, 7301, "y12", "!Xz", 0.41).has_value(), false)    // unchanged
+  TEST_EQUAL(b.onPooled(5, 7301, "y13", "!X0", 0.40).has_value(), false)    // lower
+  TEST_EQUAL(b.onPooled(5, 7301, "MS3-DECIDE", "!aa", 0.50).has_value(), false)
+  TEST_EQUAL(b.onPooled(9, 7301, "b20", "!X1", 0.30).has_value(), false)    // no baseline seen for 9
 }
 END_SECTION
 
@@ -318,9 +396,9 @@ START_SECTION(status_counts_waiting_searches_not_capacity)
 }
 END_SECTION
 
-// Logged value = decision value: a cytC drive's board shows an identified row whose ProForma and score are an MS2 row
-// of identification.tsv for the same nominal mass.
-// FAILS UNDER: the board rendering its own ProForma, or keeping a different score than the log.
+// Logged value = decision value: a cytC drive's board shows an identified row whose ProForma, score, mass and charge
+// are one MS2 row of identification.tsv for the same nominal mass.
+// FAILS UNDER: the board rendering its own ProForma, or keeping a different score, mass or charge than the log.
 START_SECTION(engine_board_matches_the_identification_log)
 {
   auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
@@ -347,10 +425,75 @@ START_SECTION(engine_board_matches_the_identification_log)
     if (cell(tsv, row, "ms_level") != "2") continue;
     if (SpectralDeconvolution::getNominalMass(std::stod(cell(tsv, row, "ms1_precursor_mass"))) != id_row->nominal) continue;
     if (cell(tsv, row, "proteoform") != id_row->proforma) continue;
-    if (std::fabs(std::stod(cell(tsv, row, "identification_score")) - id_row->score) < 1e-3) ++matching;
+    if (std::fabs(std::stod(cell(tsv, row, "identification_score")) - id_row->score) >= 1e-3) continue;
+    if (std::fabs(std::stod(cell(tsv, row, "ms1_precursor_mass")) - id_row->mass) >= 1e-3) continue;
+    if (std::stoi(cell(tsv, row, "ms1_precursor_charge")) != id_row->charge) continue;
+    ++matching;
   }
   TEST_EQUAL(matching > 0, true)
   TEST_EQUAL(snap.ms2 > 0, true)
+}
+END_SECTION
+
+// Logged value = decision value: on a cytC MS2+MS3 drive, every operator coverage line is one pooled row whose MS3
+// fold raised its precursor id's coverage_pct, and a live row's coverage is the last coverage_pct of its precursor id.
+// The drive produces such rises (13 on this fixture), so the section cannot pass on none.
+// FAILS UNDER: the observer not wired, a line for a fold that did not raise coverage, a missing line, or the board's
+// coverage taken from another precursor id than the one whose identification it shows.
+START_SECTION(ms3_coverage_rise_reaches_board_and_console)
+{
+  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+  const std::string dir = freshLogDir("console_view_coverage");
+  EventCapture cap;
+  BoardSnapshot snap;
+  {
+    std::string json = buildJsonWithLogDir(dir, true);
+    FLASHIda ida(const_cast<char*>(json.c_str()));
+    runFullCycle(&ida, ms1_scans, ms2_scans);
+    snap = FLASHIdaTestAccess::board(ida);
+  }
+  const std::string events = cap.str();
+
+  auto pooled = TSVFile::parse(dir + "/pooled_identification.tsv");
+  std::map<int, double> last;
+  int rises = 0, found = 0;
+  for (const auto& row : pooled.rows)
+  {
+    const int pid = std::stoi(cell(pooled, row, "precursor_id"));
+    const double cov = std::stod(cell(pooled, row, "coverage_pct"));
+    const std::string trigger = cell(pooled, row, "trigger");
+    const auto before = last.find(pid);
+    if (trigger != "MS2" && trigger != "MS3-DECIDE" && before != last.end() && cov > before->second + 1e-9)
+    {
+      ++rises;
+      const std::string head = "#" + cell(pooled, row, "trigger_scan_id") + "  " + cell(pooled, row, "nominal_mass")   // parse unquotes ids
+                               + "  MS3 " + trigger + "  cov ";
+      if (events.find(head) != std::string::npos) ++found;
+    }
+    last[pid] = cov;
+  }
+  int lines = 0;
+  for (size_t p = events.find("[OP-MS3] #"); p != std::string::npos; p = events.find("[OP-MS3] #", p + 1))
+  {
+    const size_t eol = events.find('\n', p);
+    if (events.substr(p, eol - p).find("  cov ") != std::string::npos) ++lines;
+  }
+  TEST_EQUAL(rises > 0, true)
+  TEST_EQUAL(found, rises)
+  TEST_EQUAL(lines, rises)
+
+  int with_coverage = 0, agree = 0;
+  for (const auto& r : snap.live)
+  {
+    if (r.coverage < 0.0) continue;
+    ++with_coverage;
+    const auto l = last.find(r.precursor_id);
+    if (l != last.end() && std::fabs(l->second - r.coverage) < 1e-4) ++agree;
+  }
+  TEST_EQUAL(with_coverage > 0, true)
+  TEST_EQUAL(agree, with_coverage)
 }
 END_SECTION
 

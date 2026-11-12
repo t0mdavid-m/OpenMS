@@ -62,8 +62,8 @@ namespace OpenMS
   struct OPENMS_DLLAPI BoardRow
   {
     int nominal = 0;
-    double mass = 0.0;
-    int charge = 0;
+    double mass = 0.0;              ///< the commanded mass of its best identification; until then, of its first MS2
+    int charge = 0;                 ///< the anchor charge of its best identification; until then, of its latest MS2
     PrecursorState state = PrecursorState::Acquiring;
     double score = -1.0;            ///< the Identification score the close-out reads; -1 = none
     int ms2 = 0;                    ///< MS2 scans sent for it
@@ -73,6 +73,8 @@ namespace OpenMS
     std::string proforma;           ///< as identification.tsv writes it for the MS2 row
     bool below_threshold = false;   ///< identified, a threshold is authored and the score is below it
     double threshold = 0.0;         ///< that threshold, for "(below 70)"
+    int precursor_id = 0;           ///< the precursor id of its best identification; 0 = none
+    double coverage = -1.0;         ///< the Pooled coverage (fraction) of that identification's model; -1 = no model
   };
 
   /// Everything the view draws, copied under the board's lock.
@@ -126,8 +128,16 @@ namespace OpenMS
     /// A searched MS2's result, from the apply: the match, the ProForma the identification row writes, whether it
     /// closed the species out, and the authored threshold. A result never lowers a row: ClosedOut is sticky, a
     /// proteoform beats none, the score is the best seen.
-    void onResult(double commanded_mass, const FragmentAnalysis::ProteoformMatch& match, bool closed_out,
-                  const std::optional<double>& threshold);
+    /// Every value an identified row shows comes from its best identification (CONTEXT.md "Precursor board"): when this
+    /// result becomes it, the row takes its @p commanded_mass, anchor @p charge and @p precursor_id with its score.
+    void onResult(double commanded_mass, int charge, int precursor_id, const FragmentAnalysis::ProteoformMatch& match,
+                  bool closed_out, const std::optional<double>& threshold);
+
+    /// A pooled_identification.tsv row (ProteoformTracker's observer): records that precursor id's Pooled coverage, and
+    /// returns the operator line when an MS3 fold (@p trigger an ion, not "MS2" or "MS3-DECIDE") raised it:
+    /// "#<trigger_scan_id>  <nominal>  MS3 <ion>  cov 34.2% -> 41.0%  (score 180)", the score that id's best.
+    std::optional<std::string> onPooled(int precursor_id, int nominal, const std::string& trigger,
+                                        const std::string& trigger_scan_id, double coverage);
 
     /// A search dropped from the backlog: the row ends NoId unless it already has a proteoform.
     void onDropped(double commanded_mass);
@@ -151,6 +161,8 @@ namespace OpenMS
     mutable std::mutex mutex_;
     std::map<int, BoardRow> rows_;
     std::map<int, int> nominal_by_precursor_;
+    std::map<int, double> coverage_by_precursor_;     ///< latest Pooled coverage per precursor id
+    std::map<int, double> best_score_by_precursor_;   ///< best Identification score per precursor id
     std::vector<double> id_rts_s_;
     std::vector<int> search_wait_ms_;
     std::vector<int> search_ms_;

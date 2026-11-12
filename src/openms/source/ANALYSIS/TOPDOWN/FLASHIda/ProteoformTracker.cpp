@@ -2665,6 +2665,7 @@ namespace OpenMS
     r.trigger_scan_id = trigger_scan_id;
 
     logger_.writePooledModelRow(r);
+    if (pooled_observer_) pooled_observer_({r.precursor_id, r.nominal_mass, r.trigger, r.trigger_scan_id, r.coverage_pct});
   }
 
 } // namespace OpenMS
