@@ -221,6 +221,8 @@ private:
   bool chimeric_same_protein_ = false;
   /// weight of MS3Score in the combined score (a bonus: a PrSM without MS3 evidence loses nothing); 0: the MS3 spectra do not change the score
   double ms3_score_weight_ = 8.0;
+  /// tolerance (ppm) of the loose pass that calibrates the MS3 spectra; 0: each MS3 spectrum is calibrated on its own
+  double ms3_cal_tol_ = 50.0;
   /// candidates from gapped tags: off, fallback (spectra without sequence-tag candidates), both, only
   std::string gapped_mode_ = "fallback";
   /// candidates from terminal ladders (residue sums from an intact protein terminus) in every spectrum

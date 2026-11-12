@@ -94,6 +94,8 @@ public:
     bool known_c_term = true;
     /// index of the spectrum in the spectra given to annotate(); negative if the spectrum is missing
     int spectrum_index = -1;
+    /// a given calibration (ppm error of the observed m/z); NaN: the spectrum is calibrated on the fragments of this PrSM
+    double calibration_ppm = std::numeric_limits<double>::quiet_NaN();
   };
 
   /// a terminal fragment hypothesis
@@ -208,6 +210,9 @@ public:
   */
   bool getFragments(const PrSM& prsm, std::vector<Fragment>& fragments, std::vector<Fragment>* span_fragments = nullptr) const;
 
+  /// appends the ppm errors of the calibration envelopes of @p prsm on its spectrum, matched within @p tol_ppm (without any calibration)
+  void calibrationErrors(const std::vector<PeakArrays>& spectra, const PrSM& prsm, double tol_ppm, std::vector<double>& errors);
+
   /// theoretical m/z and relative intensities (most abundant = 1) of the kept isotope peaks of a fragment
   void getIsotopeEnvelope(double mono_mass, int charge, std::vector<double>& mzs, std::vector<double>& intensities);
 
@@ -312,6 +317,8 @@ private:
   bool searchEnvelope_(const PeakArrays& spec, const PeakOccupancy& occupancy, double base, double scale, int bin, EnvelopeMatch& match) const;
   /// the median ppm error of the calibration envelopes, or 0 if there are fewer than min_calibration_envelopes_
   double calibrate_(const PeakArrays& spec, const std::vector<Fragment>& fragments, int& count) const;
+  /// appends the ppm errors of the calibration envelopes of @p fragments, matched within @p tol (a fraction)
+  void calibrationErrors_(const PeakArrays& spec, const std::vector<Fragment>& fragments, double tol, std::vector<double>& errors) const;
   /// annotate one PrSM (without the scores, which are computed afterwards); @p sorted_intensities: the spectrum's intensities, sorted
   void annotateOne_(const PeakArrays& spec, const std::vector<double>& sorted_intensities, const PrSM& prsm, Result& result) const;
 

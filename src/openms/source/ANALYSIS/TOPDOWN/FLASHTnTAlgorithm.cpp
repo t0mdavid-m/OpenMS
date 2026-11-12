@@ -500,6 +500,13 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "A bonus: a PrSM without MS3 evidence loses nothing. 0: the MS3 spectra do not change the score.",
                      {"advanced"});
   defaults_.setMinFloat("ms3_score_weight", 0.0);
+  defaults_.setValue("ms3_calibration_tol", 50.0,
+                     "Tolerance (ppm) of the loose pass that calibrates the MS3 spectra (needs -in_raw and MS3 spectra): the sub-ions of the precursor "
+                     "identities are matched within it in all MS3 spectra, and the densest error (the median of the raw:tol wide window with the most "
+                     "sub-ion envelopes, at least 5) corrects the m/z of every MS3 spectrum before the sub-ions are matched at raw:tol. "
+                     "0: each MS3 spectrum is calibrated on its own, as an MS2 spectrum.",
+                     {"advanced"});
+  defaults_.setMinFloat("ms3_calibration_tol", 0.0);
   // raw-spectrum annotation (FLASHAnnotator's defaults, terminal fragments only): only its tolerance is a parameter
   const auto aparam = FLASHAnnotatorAlgorithm().getDefaults();
   defaults_.setValue("raw:tol", aparam.getValue("tol"), aparam.getDescription("tol"));
@@ -682,6 +689,7 @@ void FLASHTnTAlgorithm::updateMembers_()
   chimeric_rounds_ = param_.getValue("chimeric_rounds");
   chimeric_same_protein_ = param_.getValue("chimeric_same_protein").toString() == "true";
   ms3_score_weight_ = param_.getValue("ms3_score_weight");
+  ms3_cal_tol_ = param_.getValue("ms3_calibration_tol");
   pro_fdr_ = param_.getValue("pro_fdr");
   keep_decoy_ = param_.getValue("keep_decoy").toString() == "true";
   keep_underdetermined_ = param_.getValue("discard_underdetermined").toString() == "false";
@@ -5177,6 +5185,37 @@ void FLASHTnTAlgorithm::annotateMS3_(std::vector<ProteinHit>& hits, bool before_
     if (ms2_prsms[h].spectrum_index < 0) continue;
     int reason = 4;
     ms2_prsms[h].precursor_charge = ms2_annotator.precursorChargeCap(raw_spectra_[ms2_prsms[h].spectrum_index], ms2_precursor_mass[h], reason);
+  }
+  // The MS3 spectra share one calibration (two passes, as FLASHIda's MS3 matching): the sub-ions of all identities are matched within a loose
+  // tolerance, and the densest error corrects every MS3 spectrum. The densest window instead of the median of all errors: the identities of
+  // wrong candidate PrSMs match by chance anywhere in the loose tolerance.
+  if (ms3_cal_tol_ > 0 && ! identities.empty())
+  {
+    std::vector<double> errors;
+    for (const auto& id : identities)
+    {
+      (id.electron ? cz_annotator : by_annotator).calibrationErrors(raw_peaks_, (id.electron ? cz_prsms : by_prsms)[id.prsm], ms3_cal_tol_, errors);
+    }
+    std::sort(errors.begin(), errors.end());
+    const double width = (double)annotator_param_.getValue("tol");
+    Size best_begin = 0, best_count = 0;
+    for (Size i = 0, j = 0; i < errors.size(); i++)
+    {
+      while (j < errors.size() && errors[j] - errors[i] <= width) j++;
+      if (j - i > best_count)
+      {
+        best_count = j - i;
+        best_begin = i;
+      }
+    }
+    if (best_count >= 5)
+    {
+      const double ms3_cal_ppm = errors[best_begin + best_count / 2];
+      for (auto& prsm : by_prsms) prsm.calibration_ppm = ms3_cal_ppm;
+      for (auto& prsm : cz_prsms) prsm.calibration_ppm = ms3_cal_ppm;
+      OPENMS_LOG_INFO << "MS3 calibration: " << ms3_cal_ppm << " ppm (" << best_count << " of " << errors.size() << " sub-ion envelopes within "
+                      << ms3_cal_tol_ << " ppm)" << std::endl;
+    }
   }
   std::vector<FLASHAnnotatorAlgorithm::Result> ms2_results, by_results, cz_results;
   ms2_annotator.annotate(raw_peaks_, ms2_prsms, ms2_results);

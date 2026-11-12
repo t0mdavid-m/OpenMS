@@ -755,15 +755,23 @@ bool FLASHAnnotatorAlgorithm::searchEnvelope_(const PeakArrays& spec, const Peak
   return true;
 }
 
-double FLASHAnnotatorAlgorithm::calibrate_(const PeakArrays& spec, const std::vector<Fragment>& fragments, int& count) const
+void FLASHAnnotatorAlgorithm::calibrationErrors(const std::vector<PeakArrays>& spectra, const PrSM& prsm, double tol_ppm, std::vector<double>& errors)
 {
-  count = 0;
-  if (spec.mzs.empty()) return 0;
+  if (prsm.spectrum_index < 0 || prsm.spectrum_index >= (int)spectra.size()) return;
+  const double mass = getProteoformMass(prsm.sequence, prsm.modifications);
+  if (mass < 0) return;
+  ensureIsotopeTable_(mass + 100.0); // + the largest ion type shift
+  std::vector<Fragment> fragments;
+  if (! getFragments(prsm, fragments)) return;
+  calibrationErrors_(spectra[prsm.spectrum_index], fragments, tol_ppm * 1e-6, errors);
+}
+
+void FLASHAnnotatorAlgorithm::calibrationErrors_(const PeakArrays& spec, const std::vector<Fragment>& fragments, double tol, std::vector<double>& errors) const
+{
+  if (spec.mzs.empty()) return;
   const int size = (int)spec.mzs.size();
   const double min_mz = spec.mzs.front();
   const double max_mz = spec.mzs.back();
-  const double tol = cal_tol_ * 1e-6;
-  std::vector<double> errors;
 
   for (const auto& f : fragments)
   {
@@ -825,7 +833,12 @@ double FLASHAnnotatorAlgorithm::calibrate_(const PeakArrays& spec, const std::ve
       errors.push_back((spec.mzs[ref_peak] - expected) / expected * 1e6);
     }
   }
+}
 
+double FLASHAnnotatorAlgorithm::calibrate_(const PeakArrays& spec, const std::vector<Fragment>& fragments, int& count) const
+{
+  std::vector<double> errors;
+  calibrationErrors_(spec, fragments, cal_tol_ * 1e-6, errors);
   count = (int)errors.size();
   if (count < min_calibration_envelopes_) return 0;
   const Size mid = errors.size() / 2;
@@ -850,7 +863,7 @@ void FLASHAnnotatorAlgorithm::annotateOne_(const PeakArrays& spec, const std::ve
   result.envelopes.clear();
 
   int cal_count = 0;
-  const double cal_ppm = calibrate_on_ ? calibrate_(spec, fragments, cal_count) : 0.0;
+  const double cal_ppm = ! std::isnan(prsm.calibration_ppm) ? prsm.calibration_ppm : (calibrate_on_ ? calibrate_(spec, fragments, cal_count) : 0.0);
   const double cal_factor = 1.0 + cal_ppm * 1e-6;
   result.calibration_ppm = cal_ppm;
   result.calibration_envelopes = cal_count;
