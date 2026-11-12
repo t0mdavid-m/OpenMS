@@ -330,6 +330,20 @@ E = p × (L − 1) reaches `threshold` (default 1). Absent, every plan is exactl
   anchor's E and whether the test ran through two optional out-parameters.
 - **`characterization.order`.** `Ms3SendOrder::Random` permutes the vector `planNextScans` returned, in
   `dispatchFromModel`, with `sweepPermutation(n, kSweepSeed ^ ms_ctx->scan_id)`. The planner never sees it.
+  `Ms3SendOrder::Interleaved` (ADR-0073) is made in the planner, because the groups need the proteoform model:
+  after `rankCandidates(targets)`, `planNextScans` calls `interleaveTargets_`, which builds each target's groups
+  and hands them to the pure, static `ProteoformTracker::interleavedOrder(groups_of, served, counted)`. Each turn
+  goes to the target whose least-served group has been served least; a tie goes to the higher-ranked target; a
+  target in no group follows every grouped one. Groups: under `coverage` and `fragments` the two termini (first
+  letter of `ion_type`: a/b/c or x/y/z); under `ambiguity` every modification with `candidate_start <
+  candidate_end`, and a target belongs to each one it contains (`fragmentContains`, the planner's own test), so a
+  container of two serves both. Under a governed plan (`per_proteoform`) `served` starts from the keys of
+  `snap->sent`, read from the key and not from `m.fragments` (a sent cleavage need not be a fragment of the current
+  identification; a raw-mass key `u…` belongs to no group), and a target already among them is `counted`: it takes
+  its turn and serves nobody a second time. Ungoverned, every plan starts at zero. The emit loop is unchanged, so
+  under `fragment_charges: separate` a fragment's charges stay together and count once. `Config` refuses the value
+  under `exhaustive` and `discriminating`, the latter for the whole run, including the ambiguity plans made after
+  the round is decided.
 - **The row.** `writeScanCommandRow` recomputes `predicted_bond_yield` from the command under the gate of its role
   (`Q` → quantification, any other MS3 → characterization); −1 otherwise. No map carries it: the planner's inputs are
   what `buildMS3` copies into the command (`FLASHIda_Ms3YieldModel_test::row_inputs_equal_plan_inputs`).

@@ -75,7 +75,10 @@ departure from the plan goes back to the owner. Ambiguous cases count as source 
   among a charge's tests and before the target takes a place or a slot. Under `rank_by: yield` (the default) every
   planner ranks its candidates by that yield (`rankCandidates`, `rankPoolByYield`, `dispatchQuant`'s buyable list),
   untested targets after tested ones; `intensity` is the strongest-first walk. `characterization.order: random`
-  permutes only the returned plan, in `dispatchFromModel`. The row's `predicted_bond_yield` is
+  permutes only the returned plan, in `dispatchFromModel`; `interleaved` (ADR-0073) reorders it inside
+  `planNextScans`, after the ranking, into turns between the two termini or the ambiguous modifications, and is
+  refused at load under `exhaustive` and `discriminating`. Neither changes which MS3 the plan holds. The row's
+  `predicted_bond_yield` is
   recomputed from the command (`Ms3YieldModel.h`), never stashed: keep the planner's inputs the ones `buildMS3`
   copies, or the drift test fails.
 - **An MS2's MS3s are pushed by a search worker's apply**, not by `processScan` (ADR-0062): the
