@@ -242,8 +242,10 @@ private:
   bool chimeric_same_protein_ = false;
   /// weight of MS3Score in the combined score (a bonus: a PrSM without MS3 evidence loses nothing); 0: the MS3 spectra do not change the score
   double ms3_score_weight_ = 8.0;
-  /// tolerance (ppm) of the loose pass that calibrates the MS3 spectra; 0: each MS3 spectrum is calibrated on its own
-  double ms3_cal_tol_ = 50.0;
+  /// tolerance (ppm) of the loose pass that calibrates the MS3 spectra; 0: each MS3 spectrum is calibrated on its own, as an MS2 spectrum
+  double ms3_cal_tol_ = 200.0;
+  /// the MS3 spectra that share one calibration: "run", "parent" (the MS3 spectra of one MS2 spectrum) or "spectrum"
+  std::string ms3_cal_scope_ = "run";
   /// the PrSMs of a proteoform row are annotated again under each proteoform found among them, and the row takes the one with the highest
   /// summed raw score (setCombinedCoverage_)
   bool harmonize_proteoforms_ = false;

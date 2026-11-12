@@ -500,13 +500,19 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "A bonus: a PrSM without MS3 evidence loses nothing. 0: the MS3 spectra do not change the score.",
                      {"advanced"});
   defaults_.setMinFloat("ms3_score_weight", 0.0);
-  defaults_.setValue("ms3_calibration_tol", 50.0,
+  defaults_.setValue("ms3_calibration_tol", 200.0,
                      "Tolerance (ppm) of the loose pass that calibrates the MS3 spectra (needs -in_raw and MS3 spectra): the sub-ions of the precursor "
-                     "identities are matched within it in all MS3 spectra, and the densest error (the median of the raw:tol wide window with the most "
-                     "sub-ion envelopes, at least 5) corrects the m/z of every MS3 spectrum before the sub-ions are matched at raw:tol. "
+                     "identities are matched within it, and the densest error (the median of the raw:tol wide window with the most sub-ion envelopes, "
+                     "at least 5) of the spectra of one ms3_calibration_scope corrects their m/z before the sub-ions are matched at raw:tol. "
                      "0: each MS3 spectrum is calibrated on its own, as an MS2 spectrum.",
                      {"advanced"});
   defaults_.setMinFloat("ms3_calibration_tol", 0.0);
+  defaults_.setValue("ms3_calibration_scope", "run",
+                     "The MS3 spectra that share one calibration (ms3_calibration_tol > 0): run: all MS3 spectra; parent: the MS3 spectra of one MS2 "
+                     "spectrum (of all its candidate PrSMs); spectrum: each MS3 spectrum alone. A parent or spectrum with fewer than 5 sub-ion "
+                     "envelopes in its densest window takes the run's value.",
+                     {"advanced"});
+  defaults_.setValidStrings("ms3_calibration_scope", {"run", "parent", "spectrum"});
   defaults_.setValue("harmonize_proteoforms", "false",
                      "The PrSMs of one proteoform row often carry different proteoforms (other termini, other or missing mass shifts). With true, "
                      "after the search and the FDR every PrSM of a row is annotated again on its raw spectrum under each proteoform found among them "
@@ -697,6 +703,7 @@ void FLASHTnTAlgorithm::updateMembers_()
   chimeric_same_protein_ = param_.getValue("chimeric_same_protein").toString() == "true";
   ms3_score_weight_ = param_.getValue("ms3_score_weight");
   ms3_cal_tol_ = param_.getValue("ms3_calibration_tol");
+  ms3_cal_scope_ = param_.getValue("ms3_calibration_scope").toString();
   harmonize_proteoforms_ = param_.getValue("harmonize_proteoforms").toString() == "true";
   pro_fdr_ = param_.getValue("pro_fdr");
   keep_decoy_ = param_.getValue("keep_decoy").toString() == "true";
@@ -5209,35 +5216,77 @@ void FLASHTnTAlgorithm::annotateMS3_(std::vector<ProteinHit>& hits, bool before_
     int reason = 4;
     ms2_prsms[h].precursor_charge = ms2_annotator.precursorChargeCap(raw_spectra_[ms2_prsms[h].spectrum_index], ms2_precursor_mass[h], reason);
   }
-  // The MS3 spectra share one calibration (two passes, as FLASHIda's MS3 matching): the sub-ions of all identities are matched within a loose
-  // tolerance, and the densest error corrects every MS3 spectrum. The densest window instead of the median of all errors: the identities of
-  // wrong candidate PrSMs match by chance anywhere in the loose tolerance.
+  // The MS3 spectra of one scope share one calibration (two passes, as FLASHIda's MS3 matching): the sub-ions of their identities are matched
+  // within a loose tolerance, and the densest error corrects them. The densest window instead of the median of all errors: the identities of
+  // wrong candidate PrSMs match by chance anywhere in the loose tolerance. A parent or spectrum without a densest window of 5 takes the run's.
   if (ms3_cal_tol_ > 0 && ! identities.empty())
   {
-    std::vector<double> errors;
+    const double width = (double)annotator_param_.getValue("tol");
+    // the median of the densest raw:tol wide window of the errors (at least 5 envelopes; NaN: none) and its envelopes
+    const auto densest = [width](std::vector<double>& errors, Size& best_count) {
+      std::sort(errors.begin(), errors.end());
+      Size best_begin = 0;
+      best_count = 0;
+      for (Size i = 0, j = 0; i < errors.size(); i++)
+      {
+        while (j < errors.size() && errors[j] - errors[i] <= width) j++;
+        if (j - i > best_count)
+        {
+          best_count = j - i;
+          best_begin = i;
+        }
+      }
+      return best_count >= 5 ? errors[best_begin + best_count / 2] : std::numeric_limits<double>::quiet_NaN();
+    };
+    const auto scope_of = [&](const Identity& id) {
+      if (ms3_cal_scope_ == "parent") return (int)hits[id.hit].getMetaValue(tntKey("Scan"));
+      if (ms3_cal_scope_ == "spectrum") return id.ms3_scan;
+      return 0;
+    };
+    std::vector<double> all;
+    std::map<int, std::vector<double>> errors_of_scope;
     for (const auto& id : identities)
     {
+      std::vector<double> errors;
       (id.electron ? cz_annotator : by_annotator).calibrationErrors(raw_peaks_, (id.electron ? cz_prsms : by_prsms)[id.prsm], ms3_cal_tol_, errors);
+      all.insert(all.end(), errors.begin(), errors.end());
+      if (ms3_cal_scope_ != "run") errors_of_scope[scope_of(id)].insert(errors_of_scope[scope_of(id)].end(), errors.begin(), errors.end());
     }
-    std::sort(errors.begin(), errors.end());
-    const double width = (double)annotator_param_.getValue("tol");
-    Size best_begin = 0, best_count = 0;
-    for (Size i = 0, j = 0; i < errors.size(); i++)
+    const Size n_all = all.size();
+    Size run_count = 0;
+    const double run_ppm = densest(all, run_count);
+    if (! std::isnan(run_ppm))
     {
-      while (j < errors.size() && errors[j] - errors[i] <= width) j++;
-      if (j - i > best_count)
-      {
-        best_count = j - i;
-        best_begin = i;
-      }
-    }
-    if (best_count >= 5)
-    {
-      const double ms3_cal_ppm = errors[best_begin + best_count / 2];
-      for (auto& prsm : by_prsms) prsm.calibration_ppm = ms3_cal_ppm;
-      for (auto& prsm : cz_prsms) prsm.calibration_ppm = ms3_cal_ppm;
-      OPENMS_LOG_INFO << "MS3 calibration: " << ms3_cal_ppm << " ppm (" << best_count << " of " << errors.size() << " sub-ion envelopes within "
+      OPENMS_LOG_INFO << "MS3 calibration: " << run_ppm << " ppm (" << run_count << " of " << n_all << " sub-ion envelopes within "
                       << ms3_cal_tol_ << " ppm)" << std::endl;
+    }
+    std::map<int, double> ppm_of_scope;
+    std::vector<double> values;
+    for (auto& [scope, errors] : errors_of_scope)
+    {
+      Size count = 0;
+      const double ppm = densest(errors, count);
+      if (std::isnan(ppm)) continue;
+      ppm_of_scope[scope] = ppm;
+      values.push_back(ppm);
+    }
+    for (const auto& id : identities)
+    {
+      const auto it = ppm_of_scope.find(scope_of(id));
+      const double ppm = it != ppm_of_scope.end() ? it->second : run_ppm;
+      if (! std::isnan(ppm)) (id.electron ? cz_prsms : by_prsms)[id.prsm].calibration_ppm = ppm;
+    }
+    if (! errors_of_scope.empty())
+    {
+      std::sort(values.begin(), values.end());
+      OPENMS_LOG_INFO << "MS3 calibration per " << ms3_cal_scope_ << ": " << values.size() << " of " << errors_of_scope.size()
+                      << " calibrated on their own";
+      if (! values.empty())
+      {
+        OPENMS_LOG_INFO << " (median " << values[values.size() / 2] << " ppm, 5-95%: " << values[values.size() / 20] << " .. "
+                        << values[values.size() - 1 - values.size() / 20] << ")";
+      }
+      OPENMS_LOG_INFO << ", the rest with the run's" << std::endl;
     }
   }
   std::vector<FLASHAnnotatorAlgorithm::Result> ms2_results, by_results, cz_results;
