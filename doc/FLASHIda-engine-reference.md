@@ -1122,6 +1122,14 @@ the caller's responsibility.
   written. A b sub-fragment of a b precursor therefore reads the same label and mass in `ms3_fragments` and
   `ms2_fragments`, on any region. The pooled model finds an MS3 fragment's peak by its measured mass and
   pools the adjusted one.
+- **Whether an MS3 fragment's equivalent ion carries an ambiguous shift it straddles is one rule**,
+  `FragmentAnalysis::equivalentCarriesShift`, read by the logged mass (`coveredAmbiguousInEquivFrame`), the
+  identification row's localization (`narrowFragmentPTMSites`) and the pooled localization
+  (`narrowModifications_` Pass B). Same direction: the sub-ion's own verdict. Complement: the opposite, since the
+  precursor holds the shift. An N-terminal net loss (negative shift anchored at residue 1: Met-excision +
+  N-alpha-acetyl) stays on the prefix equivalent of a complement ion whichever way the complement matched.
+  Under `identification.method: refine` the pooled range does not narrow on a net loss a complement ion only
+  implies (the complement matched without it): no ion measured the shift (ADR-0049).
 - **`ida.log`'s two identifiers are different quantities and neither substitutes for the other**
   (ADR-0035). `MS1 Scan#` is the **instrument's** scan number, arriving as a trailing `int` on
   `processScan` and used for nothing else; `Access ID` on the same line is the base-94 **tracking
