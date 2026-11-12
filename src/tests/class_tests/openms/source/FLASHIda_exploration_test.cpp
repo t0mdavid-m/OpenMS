@@ -1445,6 +1445,88 @@ namespace
   }
 } // anonymous namespace
 
+// ---------------------------------------------------------------------------------------------------------
+// min_fragment_charge on an MS3's fragment stage (ADR-0040, amended 2026-11-12).
+// ---------------------------------------------------------------------------------------------------------
+namespace
+{
+  /// The C++-schema twin of test-data/configs/method_multiplexed_ms3.json: inclusion of cytC, one precursor, ambiguity
+  /// characterization of the M-starting proteoform, fragment charges co-isolated. Its golden's MS3s carry notches below
+  /// their fragment anchor (b50 at z6 with a z5 notch). No log folder, so nothing is written.
+  std::string multiplexedMs3CytcConfig()
+  {
+    return R"JSON({
+  "deconvolution": {
+    "score_threshold": 0.0, "tqscore_threshold": 0.0,
+    "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+  },
+  "faims": { "cv_values": [], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
+  "scheduling": {
+    "cycle_time": { "enabled": false, "value_ms": 60000 },
+    "scan_timeout": { "enabled": false, "value_ms": 30000 },
+    "agc_interval_seconds": 9999999
+  },
+  "files": { "target_logs": [], "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt" },
+  "precursor_selection": {
+    "rt_window": 180, "targeting": "inclusion", "consider_all_charges": false, "strict_inclusion": false,
+    "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 1
+  },
+  "identification": {
+    "reference": { "sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },
+    "flashtnt": { "min_length": 3, "max_length": 8, "allow_gap": false, "max_aa_in_gap": 2, "fixed_mod": [],
+                  "max_blind_mod_count": 2, "max_mod_mass": 700 },
+    "characterization": { "mode": "ambiguity", "max_targets": 3, "fragment_charges": "multiplexed" }
+  },
+  "ms_settings": {
+    "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+    "ms2": { "analyzer": "Orbitrap", "first_mass": 100, "last_mass": 2000, "resolution": 120000, "agc_target": 500000,
+             "max_it": 100, "microscans": 4, "activation": "HCD", "collision_energy": 30 },
+    "ms3": { "analyzer": "Orbitrap", "first_mass": 200, "last_mass": 2000, "resolution": 240000, "agc_target": 50000000,
+             "max_it": 500, "microscans": 8, "activation": "CID", "collision_energy": 25 }
+  },
+  "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 }
+})JSON";
+  }
+
+  /// @p cfg with @p from replaced by @p to; throws when @p from is absent, so a fixture edit cannot silently miss
+  std::string replaced(std::string cfg, const std::string& from, const std::string& to)
+  {
+    const auto p = cfg.find(from);
+    if (p == std::string::npos) throw std::runtime_error("replaced: no '" + from + "'");
+    return cfg.replace(p, from.size(), to);
+  }
+
+  /// every charge an MS3 isolates at its fragment stage: the anchor first, then the stage's notches
+  std::vector<int> fragmentStageCharges(const ScanCommand& c)
+  {
+    std::vector<int> z{std::abs(c.stages[1].charge_state)};
+    const auto notches = notchesForStage(c, 1);
+    for (int i = 0; i < notches.second; ++i) z.push_back(std::abs(notches.first[i].charge_state));
+    return z;
+  }
+
+  /// A fragment charge floor that removes a notch and keeps its anchor: the fragment-stage anchor of the first MS3 with
+  /// a notch below it; 0 if no MS3 has one.
+  int floorBelowAnAnchor(const std::vector<ScanCommand>& ms3)
+  {
+    for (const ScanCommand& c : ms3)
+    {
+      const std::vector<int> z = fragmentStageCharges(c);
+      if (std::any_of(z.begin() + 1, z.end(), [&z](int n) { return n < z.front(); })) return z.front();
+    }
+    return 0;
+  }
+
+  /// how many charges the MS3s of @p ms3 isolate at their fragment stage below @p floor_z
+  int fragmentChargesBelow(const std::vector<ScanCommand>& ms3, int floor_z)
+  {
+    int n = 0;
+    for (const ScanCommand& c : ms3)
+      for (int z : fragmentStageCharges(c)) n += z < floor_z ? 1 : 0;
+    return n;
+  }
+} // anonymous namespace
+
 START_TEST(FLASHIda_exploration, "$Id$")
 
 /////////////////////////////////////////////////////////////
@@ -4247,6 +4329,71 @@ START_SECTION(exploration_multiplexed_ms3_inherits_the_variant_notch_set)
   STATUS("MS3 stage-0 inheritance: checked=" << checked << " mismatched=" << mismatched)
   TEST_EQUAL(checked >= 1, true)
   TEST_EQUAL(mismatched, 0)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// min_fragment_charge bounds every charge an MS3 isolates at its fragment stage, the co-isolated notches of an
+// ungoverned fragment_charges "multiplexed" plan included: the model path (planNextScans' selectNotches call) and the
+// exhaustive raw-mass path (emitRawMassTarget_). Each floor comes from an unfloored drive of the same fixture: the
+// anchor of an MS3 with a notch below it, so the floor forbids a charge the plan isolated without it.
+/////////////////////////////////////////////////////////////
+
+START_SECTION(ms3_notches_respect_min_fragment_charge)
+{
+  const auto ms1_scans = loadTsvScans(FI_MS1_CYTC);
+  const auto ms2_scans = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+
+  const std::map<std::string, std::vector<ScanData>> no_ms3_fixtures;  // non-null + empty => record, never feed
+  const int budget = 256 + 64 * static_cast<int>(ms1_scans.size() + 1);
+  const auto drive = [&](const std::string& cfg) {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    return runInterleaved(&ida, ms1_scans, std::vector<ScanData>{ms2_scans[0]}, &no_ms3_fixtures, budget).ms3_cmds;
+  };
+
+  const std::string cfg = multiplexedMs3CytcConfig();
+  const int floor_z = floorBelowAnAnchor(drive(cfg));
+  STATUS("min_fragment_charge from the unfloored drive: " << floor_z)
+  ABORT_IF(floor_z == 0)   // no MS3 co-isolated a charge below its anchor: the floor would forbid nothing
+
+  const std::vector<ScanCommand> ms3 = drive(replaced(cfg, R"("fragment_charges": "multiplexed")",
+                                                      R"("fragment_charges": "multiplexed", "min_fragment_charge": )" + std::to_string(floor_z)));
+  TEST_EQUAL(ms3.empty(), false)
+  TEST_EQUAL(fragmentChargesBelow(ms3, floor_z), 0)
+}
+END_SECTION
+
+START_SECTION(exhaustive_notches_respect_min_fragment_charge)
+{
+  // unidentified_regular_ms2_dispatches_exhaustive_ms3's drive, fragment charges co-isolated: every MS3 is a raw-mass
+  // ('u'/0) target of the unidentified MS2.
+  const auto ms1_scans = loadTsvScans(FI_MS1_CYTC);
+  const auto ms2_scans = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+
+  const std::map<std::string, std::vector<ScanData>> no_ms3_fixtures;  // non-null + empty => record, never feed
+  const int budget = 256 + 64 * static_cast<int>(ms1_scans.size() + 1);
+  const auto drive = [&](const std::string& cfg) {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    const AcqResult a = runInterleaved(&ida, ms1_scans, std::vector<ScanData>{ms2_scans[0]}, &no_ms3_fixtures, budget,
+                                       /*single_group_only=*/true);
+    std::vector<ScanCommand> raw;
+    for (const ScanCommand& c : a.ms3_cmds)
+      if (isNoIonDescription(c.scan_description)) raw.push_back(c);
+    return raw;
+  };
+
+  const std::string cfg = replaced(unidentifiedExhaustiveCytc(/*ms2_exploration=*/false), R"("mode": "exhaustive")",
+                                   R"("mode": "exhaustive", "fragment_charges": "multiplexed")");
+  const int floor_z = floorBelowAnAnchor(drive(cfg));
+  STATUS("min_fragment_charge from the unfloored drive: " << floor_z)
+  ABORT_IF(floor_z == 0)   // no raw-mass MS3 co-isolated a charge below its anchor: the floor would forbid nothing
+
+  const std::vector<ScanCommand> ms3 = drive(replaced(cfg, R"("fragment_charges": "multiplexed")",
+                                                      R"("fragment_charges": "multiplexed", "min_fragment_charge": )" + std::to_string(floor_z)));
+  TEST_EQUAL(ms3.empty(), false)
+  TEST_EQUAL(fragmentChargesBelow(ms3, floor_z), 0)
 }
 END_SECTION
 
