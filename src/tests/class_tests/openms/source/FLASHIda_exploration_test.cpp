@@ -5730,7 +5730,8 @@ END_SECTION
 // MS2, the whole engine: a 20..40 sweep on cytC where only the CE-30 pre-scan is fragmented (the rich scan57; the
 // others get the unfragmented CE-0 spectrum). Each pre-scan's exploration_score is the value on ITS OWN
 // identification row -- the search's raw_score or bond_coverage, the worker's explained_signal -- a pre-scan that
-// identified nothing is unscored, and the winner is the highest.
+// identified nothing is unscored, and the winner is the highest. The drive selects several precursors, so it runs one
+// sweep of five per precursor: rows and winner are judged per exploration_group_id.
 START_SECTION(ms2_annotator_metrics_read_the_variants_own_prsm)
 {
   auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
@@ -5765,13 +5766,15 @@ START_SECTION(ms2_annotator_metrics_read_the_variants_own_prsm)
       if (cell(idf, row, "ms_level") == "2" && toD(cell(idf, row, "flash_extender_score")) >= 0.0)
         own[cell(idf, row, "tracking_id")] = toD(cell(idf, row, metric));
 
-    int n_rows = 0, n_scored = 0;
-    std::string winner, best_id;
-    double best = -1.0;
+    struct Sweep { int n_rows = 0; double best = -1.0; std::string winner; };
+    std::map<std::string, Sweep> sweeps;       // exploration_group_id -> its five pre-scans
+    std::map<std::string, double> score_of;    // tracking id -> exploration_score
+    int n_scored = 0;
     for (const auto& row : results.rows)
     {
       if (cell(results, row, "ms_level") != "2" || cell(results, row, "exploration_metric") != std::to_string(static_cast<int>(code))) continue;
-      ++n_rows;
+      Sweep& sweep = sweeps[cell(results, row, "exploration_group_id")];
+      ++sweep.n_rows;
       const std::string id = cell(results, row, "tracking_id");
       const double score = toD(cell(results, row, "exploration_score"));
       const auto it = own.find(id);
@@ -5784,14 +5787,24 @@ START_SECTION(ms2_annotator_metrics_read_the_variants_own_prsm)
       {
         TEST_REAL_SIMILAR(score, -1.0)   // nothing identified: unscored, never 0
       }
-      if (score > best) { best = score; best_id = id; }
-      if (!cell(results, row, "winner_tracking_id").empty()) winner = cell(results, row, "winner_tracking_id");
+      score_of[id] = score;
+      sweep.best = std::max(sweep.best, score);
+      if (!cell(results, row, "winner_tracking_id").empty()) sweep.winner = cell(results, row, "winner_tracking_id");
     }
-    TEST_EQUAL(n_rows, 5)
     TEST_TRUE(n_scored >= 1)
-    TEST_TRUE(best >= 0.0)
-    TEST_EQUAL(winner.empty(), false)
-    TEST_EQUAL(winner, best_id)
+    TEST_EQUAL(sweeps.empty(), false)
+    int n_decided = 0;
+    for (const auto& [group_id, sweep] : sweeps)
+    {
+      TEST_EQUAL(sweep.n_rows, 5)
+      if (sweep.best < 0.0) continue;   // a precursor no pre-scan identified: nothing to crown
+      ++n_decided;
+      TEST_EQUAL(sweep.winner.empty(), false)
+      const auto w = score_of.find(sweep.winner);
+      ABORT_IF(w == score_of.end())
+      TEST_REAL_SIMILAR(w->second, sweep.best)   // the winner holds its sweep's highest score
+    }
+    TEST_TRUE(n_decided >= 1)
   }
 }
 END_SECTION
