@@ -1356,6 +1356,28 @@ only lower it and the 2048-byte ABI is never at risk. `min_charge_states` is a f
 what the species already isolated (ADR-0036); without that exemption the floor refuses precisely the
 PeakGroup supplying the last charge of a split envelope.
 
+**The set cap has one definition**: `maxAcquisitionSetSize(max_charge_states)` in `NotchSelection.h`
+(`max_charge_states`, at most `MAX_NOTCHES_PER_STAGE + 1`; `0` means that limit). Admission and the
+`buildMS2` fallback pass it minus one as `max_notches`; the `separate` remainder of a re-plan
+(`FLASHIda.cpp`) reads it as its cap. Before 2026-11-12 the re-plan read the raw key, so `0` was
+unbounded there and `12` meant 12.
+
+**What `min_charge_states` counts depends on the mode** (ADR-0040, amended 2026-11-12). Under `separate`
+and `multiplexed` it is the size of the acquired set. Under `single` the set is always the anchor, so the
+gate counts the charges the species **resolves**: `resolvedChargeCount` (`CandidateAdmission.h`) is the
+anchor plus `admissibleNotches` of the species' candidates, restricted to the authored set when the row
+names one. A charge acquired on an earlier survey still counts. `max_charge_states` does not cap this
+count. It is computed only when `min_charge_states > 1`.
+
+**The charge floor bounds every charge of a set, not only its anchor.** `selectNotches` takes it as a
+required argument (`min_charge`, after `snr_threshold`), so a caller cannot leave it out:
+`acquisitionChargeSet` and the `buildMS2` fallback pass level 1's (`min_precursor_charge`), the two
+`ProteoformTracker` calls pass level 2's (`min_fragment_charge`), and `rechooseCharges` applies level 1's
+to the `separate` remainder and the bought `R`. `admissibleNotches` is the gate alone (not the anchor,
+isolatable, `snr >= snr_threshold`, at or above the floor): it does not clamp and does not print
+`[NOTCH-CLAMP]`, which is why the `single` count reads it. Before 2026-11-12 the floor reached only the
+anchor of an unrestricted species, and the notches of an ungoverned MS3 plan had none.
+
 ⚠️ **The clamp mattered most where it meant least.** `buildMS2` writes notches only under
 `Multiplexed` (`ScanCommandQueue.cpp:316`), yet `separate` — which never writes one — was clamped by
 the notch array's capacity all the same, because it calls `selectNotches` upstream purely to compute
@@ -1412,7 +1434,9 @@ representative fields, and *also* stores every present charge as a `ChargeRecord
 envelope, `ms2_by_charge` held one entry per fragment per scan and `identification.characterization.fragment_charges`
 was inert in **both** on-values while the spectra resolved ~38% of fragments at two or more charges.
 `planNextScans` derives `separate` and `multiplexed` from **one** `selectNotches` call, so the two modes
-acquire the same set and differ only in scan count.
+acquire the same set and differ only in scan count. That call takes `min_fragment_charge` as its floor,
+so no charge below it is a notch or a `separate` scan of an ungoverned plan (a governed or yield-gated
+plan floors its candidates earlier, in `gateAdmitsCharge`).
 
 Two things notches deliberately do **not** carry: per-notch **scores** (the slots hold geometry only,
 and the `*_s1` block is two-stage, so `charge_snr`/`precursor_intensity` remain the anchor's), and a

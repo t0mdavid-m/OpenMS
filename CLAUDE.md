@@ -229,10 +229,15 @@ keep reading pre-2026-09 run folders. The FLASHDeconv side is inside the boundar
 - **`num_stages` counts cascade stages, never notches.**
 - Notches live in `Notch notches[18]`, stage k owning a fixed block of 9; use `notchesForStage()`.
   `MAX_ISOLATION_STAGES` and `MAX_NOTCHES_PER_STAGE + 1` are **different tens**.
-- `NotchSelection.h` holds the policy (SNR gate, authored `charge_selection`, clamp). Under `snr` and
-  `qscore` the anchor must be a **resolved** charge (`463d2ba1a4`).
-- `snr_threshold`, `max_charge_states` (→ `max_charge_states - 1` notches) and `min_charge_states`
-  (exempts a sibling) are authored and inert by default (ADR-0040).
+- `NotchSelection.h` holds the policy (SNR gate, charge floor, authored `charge_selection`, clamp). Under
+  `snr` and `qscore` the anchor must be a **resolved** charge (`463d2ba1a4`).
+- **The charge floor is a required argument of `selectNotches`** (`min_charge`, after `snr_threshold`):
+  level 1's `min_precursor_charge` for an MS2 set, level 2's `min_fragment_charge` for an MS3 set.
+  `rechooseCharges` applies the same floor. `admissibleNotches` is the gate alone, with no clamp and no report.
+- `snr_threshold`, `max_charge_states` and `min_charge_states` (exempts a sibling) are authored and inert
+  by default (ADR-0040). **Every site reads the set cap from `maxAcquisitionSetSize`** (at most 10; the
+  notch count is that minus one). `min_charge_states` counts the acquired set under `separate` and
+  `multiplexed`, and under `single` the charges the species resolves (`resolvedChargeCount`).
 - `separate` and `multiplexed` read **one** `selectNotches` call and differ only in scan count
   (ADR-0021). **Fan out at the emit loop, never in the candidate loop.**
 - **A command's `max_it` is its scan config's divided by `windowsAtStage(cmd, 0)`** (`sharedMaxIt_` in
