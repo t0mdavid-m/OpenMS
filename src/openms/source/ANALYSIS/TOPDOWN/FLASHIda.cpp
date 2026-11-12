@@ -587,7 +587,8 @@ FLASHIda::FLASHIda(char* arg) :
     std::vector<AdjustRequest> adjust;
     {
       const ScanCommandQueue::Waiting waiting = queue_.waitingAt(faims_cv);
-      const int cap = config_.targeting().max_charge_states > 0 ? config_.targeting().max_charge_states : std::numeric_limits<int>::max();
+      // The same cap admission applied (max_charge_states, at most the 10 charges one stage isolates).
+      const int cap = maxAcquisitionSetSize(config_.targeting().max_charge_states);
 
       // A `separate` remainder is re-derived, not fixed at its original count: the species' charges are
       // re-ranked on this survey, the ones already sent are excluded, and the remainder is what is left of

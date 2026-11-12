@@ -158,6 +158,20 @@ namespace OpenMS
     return out;
   }
 
+  /// The most charges one acquisition charge set may hold (anchor included) under an authored
+  /// precursor_selection.max_charge_states: the key itself, bounded by what one fragmentation stage
+  /// can isolate (the anchor plus MAX_NOTCHES_PER_STAGE notches, 10); 0 = no authored bound, so 10.
+  ///
+  /// The one reading of the key. Admission and buildMS2's fallback subtract the anchor to get a notch
+  /// budget; the re-plan (a `separate` remainder, a multiplexed bought R) reads it as the set size.
+  /// The re-plan used to read the raw key, so 0 meant unbounded there and 12 meant 12 while admission
+  /// held both at 10.
+  inline int maxAcquisitionSetSize(int max_charge_states)
+  {
+    const int limit = MAX_NOTCHES_PER_STAGE + 1;
+    return max_charge_states > 0 ? std::min(max_charge_states, limit) : limit;
+  }
+
   /// The per-side widening applied to a MEASURED m/z range before it is commanded as an isolation
   /// window, so the envelope is transmitted whole rather than clipped at its edges: the species does
   /// not stop at the outermost isotope the deconvolution happened to resolve, and an unpadded window

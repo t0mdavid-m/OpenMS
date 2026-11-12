@@ -495,9 +495,7 @@ namespace OpenMS
       }
       else
       {
-        const int max_charge_states = config_.targeting().max_charge_states;
-        const int max_notches = max_charge_states > 0 ? std::min(max_charge_states - 1, MAX_NOTCHES_PER_STAGE)
-                                                      : MAX_NOTCHES_PER_STAGE;
+        const int max_notches = maxAcquisitionSetSize(config_.targeting().max_charge_states) - 1;
         notches = selectNotches(notch_candidates, charge, config_.targeting().snr_threshold, config_.level(1).min_charge,
                                 max_notches, config_.targeting().charge_selection, "MS2 z=" + std::to_string(charge));
       }
