@@ -458,11 +458,17 @@ winner (`initiateNextLevel` inside `applyVariant`) still runs under the lock.
     with MS3 on and `per_proteoform` off loads with a `[CONFIG-WARN]` (each rescue's identification plans its own MS3).
   - **Events:** one per set, `[RESCUE] precursor_id=… nominal=… score=… reason=unidentified|below_threshold n=… ids=…
     trigger=…` (`ids` space-separated: the id alphabet contains `;`).
-- **A Window scan is bought on the apply** (ADR-0071, `finishRegularMS2_`, after the rescue block): with
+- **A Window scan is bought on the apply** (ADR-0071, `buyWindowScans_`, its one push site): with
   `identification.window_scan`, a searched, non-Q MS2 whose search found a proteoform (the identification row's own
-  test) buys, for each stage-0 window (the anchor, then `notchesForStage(parent_ctx, 0)`), a `makeMS1()` command whose
-  `first_mass`/`last_mass` are that window's commanded bounds, at priority 0, at the MS2's CV, with the MS2 as
-  `parent_scan_id`, role `'W'`, pushed with `stampAndPush_` under the MS2's precursor id. Hazards:
+  test; `finishRegularMS2_`, after the rescue block) buys, for each stage-0 window (the anchor, then
+  `notchesForStage(ctx, 0)`), an MS1 command whose `first_mass`/`last_mass` are that window's commanded bounds widened
+  by `window_scan_margin`, at priority 0, at the MS2's CV, with the MS2 as `parent_scan_id`, role `'W'`, pushed with
+  `stampAndPush_` under the MS2's precursor id. The command is `makeMS1(*window_scan_config)` when
+  `ms_settings.window_scan` is authored, else `makeMS1()`. Hazards:
+  - **A completed MS2 sweep buys too, once** (`finishVariantMS2_`). `Exploration` sets `FeedResultInfo::window_ctx`
+    on the row that completes an MS2 group: the command of the first pre-scan with `found_proteoform`, unless the
+    group emitted a level-2 command (its production scan, an `'R'` that buys for itself). The parent is the completing
+    pre-scan, and the bought ids join its `child_ids` and `commands_pushed`.
   - **It decides nothing because its role does not.** `'W'` has `decides == false`, so ADR-0042's MS1 fork sends its
     return to `observeMonitoringMS1_`, and the drain does not reset the survey clock for it. `monitor_deconv_` is built
     when `window_scan` is on, as well as for monitor scans.
