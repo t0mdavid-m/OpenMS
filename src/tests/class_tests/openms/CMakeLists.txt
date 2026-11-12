@@ -74,10 +74,12 @@ target_link_libraries(BinnedSpectrum_test Eigen3::Eigen)
 # than by string surgery on the template (see buildCapConfig for why). FLASHIda_LegacyConfig_test reads
 # method.schema.json to pin each identification.flashtnt default to FLASHTnT's (ADR-0061 push 4c).
 # FLASHIda_Replan_test builds its per-proteoform configs by editing the parsed document (ADR-0066).
+# FLASHIda_ConsoleView_test sets identification.search_threads on the parsed recipe (the waiting-search section).
 target_link_libraries(ConfigSchemaParity_test nlohmann_json::nlohmann_json)
 target_link_libraries(FLASHIda_ProcessScan_test nlohmann_json::nlohmann_json)
 target_link_libraries(FLASHIda_LegacyConfig_test nlohmann_json::nlohmann_json)
 target_link_libraries(FLASHIda_Replan_test nlohmann_json::nlohmann_json)
+target_link_libraries(FLASHIda_ConsoleView_test nlohmann_json::nlohmann_json)
 
 if (WITH_HDF5)
   target_link_libraries(HDF5_test HDF5::HDF5)
