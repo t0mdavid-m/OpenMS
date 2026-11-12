@@ -176,14 +176,18 @@ private:
   std::vector<MS3Row> ms3_rows_;
   /// the raw evidence of the PrSMs of each proteoform combined (meta values CombinedPrSMs, CombinedCoverage, CombinedCoverageChance on its
   /// representative): @p clusters as markRepresentativeProteoformHits_ returns them, @p qvalues the PrSM q-values, a PrSM taking part if its
-  /// q-value is at most @p rep_q (with @p use_fdr; otherwise only the representative's own termini and modifications count)
-  void setCombinedCoverage_(const std::vector<std::vector<Size>>& clusters, const std::vector<double>& qvalues, double rep_q, bool use_fdr);
+  /// q-value is at most @p rep_q (with @p use_fdr; otherwise only the representative's own termini and modifications count). With
+  /// harmonize_proteoforms the row of a proteoform may move to another of its PrSMs (@p clusters keeps the row first); @p precursor_tol
+  /// (ppm) decides which candidate proteoform fits the precursor mass of a PrSM, as areConsistent_.
+  void setCombinedCoverage_(std::vector<std::vector<Size>>& clusters, const std::vector<double>& qvalues, double rep_q, bool use_fdr, double precursor_tol);
   /// the PrSMs setCombinedCoverage_ combined for one proteoform: their Index values at that time (the representative first), the bonds each
-  /// covers on its MS2 spectrum, and the number of bonds of the proteoform
+  /// covers on its MS2 spectrum, whether it was annotated with the proteoform of the row instead of its own (harmonize_proteoforms), and the
+  /// number of bonds of the proteoform
   struct CombinedSet
   {
     std::vector<int> members;
     std::vector<std::vector<int>> bonds;
+    std::vector<char> adopted;
     int bond_count = 0;
   };
   /// one per proteoform with a combined coverage, kept until addMS3ToCombinedCoverage_
@@ -240,6 +244,9 @@ private:
   double ms3_score_weight_ = 8.0;
   /// tolerance (ppm) of the loose pass that calibrates the MS3 spectra; 0: each MS3 spectrum is calibrated on its own
   double ms3_cal_tol_ = 50.0;
+  /// the PrSMs of a proteoform row are annotated again under each proteoform found among them, and the row takes the one with the highest
+  /// summed raw score (setCombinedCoverage_)
+  bool harmonize_proteoforms_ = false;
   /// candidates from gapped tags: off, fallback (spectra without sequence-tag candidates), both, only
   std::string gapped_mode_ = "fallback";
   /// candidates from terminal ladders (residue sums from an intact protein terminus) in every spectrum

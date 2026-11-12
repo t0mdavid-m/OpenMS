@@ -507,6 +507,13 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "0: each MS3 spectrum is calibrated on its own, as an MS2 spectrum.",
                      {"advanced"});
   defaults_.setMinFloat("ms3_calibration_tol", 0.0);
+  defaults_.setValue("harmonize_proteoforms", "false",
+                     "The PrSMs of one proteoform row often carry different proteoforms (other termini, other or missing mass shifts). With true, "
+                     "after the search and the FDR every PrSM of a row is annotated again on its raw spectrum under each proteoform found among them "
+                     "that fits its precursor mass, the row takes the proteoform with the highest raw score summed over the PrSMs (moving to the PrSM "
+                     "that found it), and the combined coverage counts all PrSMs annotated under it (needs -in_raw). PrSM scores and q-values do not change.",
+                     {"advanced"});
+  defaults_.setValidStrings("harmonize_proteoforms", {"true", "false"});
   // raw-spectrum annotation (FLASHAnnotator's defaults, terminal fragments only): only its tolerance is a parameter
   const auto aparam = FLASHAnnotatorAlgorithm().getDefaults();
   defaults_.setValue("raw:tol", aparam.getValue("tol"), aparam.getDescription("tol"));
@@ -690,6 +697,7 @@ void FLASHTnTAlgorithm::updateMembers_()
   chimeric_same_protein_ = param_.getValue("chimeric_same_protein").toString() == "true";
   ms3_score_weight_ = param_.getValue("ms3_score_weight");
   ms3_cal_tol_ = param_.getValue("ms3_calibration_tol");
+  harmonize_proteoforms_ = param_.getValue("harmonize_proteoforms").toString() == "true";
   pro_fdr_ = param_.getValue("pro_fdr");
   keep_decoy_ = param_.getValue("keep_decoy").toString() == "true";
   keep_underdetermined_ = param_.getValue("discard_underdetermined").toString() == "false";
@@ -4264,9 +4272,9 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   std::vector<double> qvalues, decoy_weights;
   std::vector<bool> decoys;
   // the proteoforms: positions of their PrSMs in proteoform_hits_ (Index), the representative first; representatives in the order above
-  const auto clusters = proteoformQvalues(hit_class, qvalues, decoys, decoy_weights, true);
+  auto clusters = proteoformQvalues(hit_class, qvalues, decoys, decoy_weights, true);
   const Size hit_count = proteoform_hits_.size();
-  setCombinedCoverage_(clusters, qvalues, rep_q, use_fdr);
+  setCombinedCoverage_(clusters, qvalues, rep_q, use_fdr, precursor_tol);
 
   if (use_fdr && native_rule) { setProteinQvalues_(hit_class, qvalues, decoys, decoy_weights, clusters, rep_q, *db); }
   else if (use_fdr && protein_model_fdr_ && scoring_model_ && raw_loader_)
@@ -5373,7 +5381,7 @@ void FLASHTnTAlgorithm::annotateMS3_(std::vector<ProteinHit>& hits, bool before_
                   << with_evidence << " PrSMs with MS3-covered bonds" << std::endl;
 }
 
-void FLASHTnTAlgorithm::setCombinedCoverage_(const std::vector<std::vector<Size>>& clusters, const std::vector<double>& qvalues, double rep_q, bool use_fdr)
+void FLASHTnTAlgorithm::setCombinedCoverage_(std::vector<std::vector<Size>>& clusters, const std::vector<double>& qvalues, double rep_q, bool use_fdr, double precursor_tol)
 {
   // A proteoform identified by several spectra has the raw evidence of all of them. Its combined coverage counts the terminal bonds covered
   // by its best PrSM (the most covered bonds; the representative among equal ones) and those covered in at least two of its PrSMs, by the
@@ -5434,7 +5442,8 @@ void FLASHTnTAlgorithm::setCombinedCoverage_(const std::vector<std::vector<Size>
       {
         if (use_fdr && qvalues[i] > rep_q) continue;
         if (h.metaValueExists(mi_chimeric) && (int)h.getMetaValue(mi_chimeric) > 0) continue;
-        if ((int)h.getMetaValue(tntKey("StartPosition")) != start || (int)h.getMetaValue(tntKey("EndPosition")) != end || ! sameMods(modKey(h), key)) continue;
+        // harmonize_proteoforms: every PrSM of the row takes part, and the proteoform is chosen below
+        if (! harmonize_proteoforms_ && ((int)h.getMetaValue(tntKey("StartPosition")) != start || (int)h.getMetaValue(tntKey("EndPosition")) != end || ! sameMods(modKey(h), key))) continue;
       }
       const int scan = h.getMetaValue(tntKey("Scan"));
       if (! seen.insert(scan).second) continue;
@@ -5479,6 +5488,178 @@ void FLASHTnTAlgorithm::setCombinedCoverage_(const std::vector<std::vector<Size>
   }
   std::vector<FLASHAnnotatorAlgorithm::Result> results;
   annotator.annotate(raw_peaks_, prsms, results);
+
+  // harmonize_proteoforms. The PrSMs of a row can carry different proteoforms: other termini, other shift masses, a shift missing (cytochrome c
+  // coverage run of 2026-11-12: in 14 of 90 rows the PrSM with the most covered bonds was not combined, 10 of them with another number of
+  // shifts). The candidates of a row are the distinct proteoforms of its PrSMs (termini and shift masses as above), each modelled by its
+  // PrSM with the most covered bonds. A candidate with a proteoform mass is tried on a PrSM whose precursor mass it fits (the same or one
+  // isotope off, as areConsistent_), one without on every PrSM. The row takes the candidate with the highest raw score summed over the PrSMs
+  // (ties: a proteoform mass, then fewer modifications, then the candidate of the row) and moves to its model PrSM; the PrSMs the candidate
+  // fits are combined below as annotated under it. Reporting only: no PrSM score or q-value changes, and the proteoform q-value and class
+  // stay those of the group. The chance below is that of the chosen candidate: the choice is not repeated on the decoy sets.
+  std::vector<char> adopted(prsms.size(), 0); // the PrSM is annotated with a proteoform other than its own
+  if (harmonize_proteoforms_)
+  {
+    struct Candidate
+    {
+      Size first = 0;           // its first PrSM (position in prsms)
+      Size model = 0;           // its PrSM with the most covered bonds
+      int model_bonds = -2;
+      std::vector<Size> trials; // positions in trial_prsms
+    };
+    std::vector<std::vector<Candidate>> candidates(clusters.size());
+    std::vector<Size> candidate_of(prsms.size(), 0), trial_member;
+    std::vector<FLASHAnnotatorAlgorithm::PrSM> trial_prsms;
+    for (Size c = 0; c < clusters.size(); c++)
+    {
+      const Size first = first_of[c], last = first_of[c + 1];
+      if (last - first < 2) continue;
+      auto& cands = candidates[c];
+      for (Size j = first; j < last; j++)
+      {
+        const auto& h = proteoform_hits_[hit_of[j]];
+        int count = -1;
+        if (results[j].annotated)
+        {
+          std::set<int> covered;
+          for (const auto& e : results[j].envelopes)
+            if (e.first < 0 && e.decoy_shift == 0 && e.bond >= 1) covered.insert(e.bond);
+          count = (int)covered.size();
+        }
+        Size g = 0;
+        for (; g < cands.size(); g++)
+        {
+          const auto& f = proteoform_hits_[hit_of[cands[g].first]];
+          if ((int)h.getMetaValue(tntKey("StartPosition")) == (int)f.getMetaValue(tntKey("StartPosition"))
+              && (int)h.getMetaValue(tntKey("EndPosition")) == (int)f.getMetaValue(tntKey("EndPosition")) && sameMods(modKey(h), modKey(f)))
+            break;
+        }
+        if (g == cands.size())
+        {
+          cands.emplace_back();
+          cands[g].first = j;
+        }
+        candidate_of[j] = g;
+        if (count > cands[g].model_bonds)
+        {
+          cands[g].model_bonds = count;
+          cands[g].model = j;
+        }
+      }
+      if (cands.size() < 2)
+      {
+        cands.clear(); // one proteoform: combined as it is
+        continue;
+      }
+      for (auto& cand : cands)
+      {
+        const double mass = proteoform_hits_[hit_of[cand.model]].getMetaValue(tntKey("Mass"));
+        for (Size j = first; j < last; j++)
+        {
+          if (j == cand.model) continue;
+          const double pm = precursor_masses[j];
+          if (mass > 0 && pm > 0)
+          {
+            const double diff = std::abs(mass - pm), max_diff = std::max(mass, pm) * precursor_tol * 2e-6;
+            if (diff > max_diff && std::abs(diff - Constants::ISOTOPE_MASSDIFF_55K_U) > max_diff) continue;
+          }
+          FLASHAnnotatorAlgorithm::PrSM trial = prsms[cand.model];
+          trial.spectrum_index = prsms[j].spectrum_index;
+          trial.precursor_charge = prsms[j].precursor_charge;
+          cand.trials.push_back(trial_prsms.size());
+          trial_prsms.push_back(std::move(trial));
+          trial_member.push_back(j);
+        }
+      }
+    }
+    std::vector<FLASHAnnotatorAlgorithm::Result> trial_results;
+    annotator.annotate(raw_peaks_, trial_prsms, trial_results);
+
+    std::vector<FLASHAnnotatorAlgorithm::PrSM> new_prsms;
+    std::vector<FLASHAnnotatorAlgorithm::Result> new_results;
+    std::vector<Size> new_hit_of;
+    std::vector<char> new_adopted;
+    Size harmonized = 0, moved = 0;
+    for (Size c = 0; c < clusters.size(); c++)
+    {
+      const Size first = first_of[c], last = first_of[c + 1];
+      first_of[c] = new_prsms.size();
+      const auto& cands = candidates[c];
+      if (cands.empty())
+      {
+        for (Size j = first; j < last; j++)
+        {
+          new_prsms.push_back(std::move(prsms[j]));
+          new_results.push_back(std::move(results[j]));
+          new_hit_of.push_back(hit_of[j]);
+          new_adopted.push_back(0);
+        }
+        continue;
+      }
+      Size win = 0;
+      double win_score = 0;
+      bool win_defined = false;
+      Size win_mods = 0;
+      for (Size g = 0; g < cands.size(); g++)
+      {
+        const auto& cand = cands[g];
+        double score = results[cand.model].annotated ? std::max(0.0, results[cand.model].score) : 0.0;
+        for (Size t : cand.trials)
+          if (trial_results[t].annotated) score += std::max(0.0, trial_results[t].score);
+        const bool defined = (double)proteoform_hits_[hit_of[cand.model]].getMetaValue(tntKey("Mass")) > 0;
+        const Size mods = prsms[cand.model].modifications.size();
+        const bool tie = std::abs(score - win_score) <= 1e-9;
+        if (g == 0 || (! tie && score > win_score) || (tie && (defined != win_defined ? defined : mods < win_mods)))
+        {
+          win = g;
+          win_score = score;
+          win_defined = defined;
+          win_mods = mods;
+        }
+      }
+      const auto& cand = cands[win];
+      const Size old_row = clusters[c][0], new_row = hit_of[cand.model];
+      new_prsms.push_back(prsms[cand.model]);
+      new_results.push_back(results[cand.model]);
+      new_hit_of.push_back(new_row);
+      new_adopted.push_back(0);
+      for (Size t : cand.trials)
+      {
+        new_prsms.push_back(std::move(trial_prsms[t]));
+        new_results.push_back(std::move(trial_results[t]));
+        new_hit_of.push_back(hit_of[trial_member[t]]);
+        new_adopted.push_back(candidate_of[trial_member[t]] != win ? 1 : 0);
+      }
+      harmonized++;
+      if (new_row == old_row) continue;
+      // the row moves: what proteoformQvalues set on the row only goes with it, the row first in the list of its PrSMs
+      auto& from = proteoform_hits_[old_row];
+      auto& to = proteoform_hits_[new_row];
+      std::stable_partition(clusters[c].begin(), clusters[c].end(), [new_row](Size i) { return i == new_row; });
+      if (from.metaValueExists("ProteoformEvidenceClass"))
+      {
+        to.setMetaValue("ProteoformEvidenceClass", from.getMetaValue("ProteoformEvidenceClass"));
+        from.removeMetaValue("ProteoformEvidenceClass");
+      }
+      if (from.metaValueExists("PrSMIndices"))
+      {
+        std::vector<int> prsm_indices;
+        for (Size i : clusters[c]) prsm_indices.push_back((int)i);
+        to.setMetaValue("PrSMIndices", prsm_indices);
+        from.removeMetaValue("PrSMIndices");
+      }
+      from.setMetaValue("Representative", 0);
+      to.setMetaValue("Representative", 1);
+      moved++;
+    }
+    first_of[clusters.size()] = new_prsms.size();
+    prsms.swap(new_prsms);
+    results.swap(new_results);
+    hit_of.swap(new_hit_of);
+    adopted.swap(new_adopted);
+    OPENMS_LOG_INFO << "Harmonized proteoforms: " << harmonized << " rows with two or more candidate proteoforms, " << trial_prsms.size()
+                    << " annotations under another PrSM's proteoform; " << moved << " rows moved to another PrSM" << std::endl;
+  }
 
   Size combined = 0;
   double sum_best = 0, sum_combined = 0, sum_chance = 0;
@@ -5539,6 +5720,7 @@ void FLASHTnTAlgorithm::setCombinedCoverage_(const std::vector<std::vector<Size>
     for (Size j = 0; j < n; j++)
     {
       set.members.push_back((int)hit_of[first + j]);
+      set.adopted.push_back(adopted[first + j]);
       set.bonds.emplace_back();
       for (int b = 1; b <= bonds; b++)
         if (covered[0][j][b]) set.bonds.back().push_back(b);
@@ -5722,6 +5904,43 @@ void FLASHTnTAlgorithm::addMS3ToCombinedCoverage_(const std::map<int, int>& inde
   // MS2 bonds only, so a proteoform could have less combined coverage than its own representative PrSM (cytochrome c coverage run of
   // 2026-11-12: 7 of 33 proteoforms, e.g. 7.8% combined against 29.1% of the representative with 22 MS3-only bonds).
   const UInt mi_coverage = MetaInfoInterface::metaRegistry().registerName("CombinedCoverage");
+  // harmonize_proteoforms: a PrSM combined under the proteoform of its row instead of its own (CombinedSet::adopted) has MS3 bonds numbered
+  // on its own sequence. Its MS3 spectra are annotated again under the proteoform of the row, on a copy of the row with its scan and
+  // precursor mass; the rows of -out_ms3 and the PrSM's own MS3 values stay those of its own proteoform.
+  std::map<int, std::set<int>> adopted_bonds; // by the Index of the PrSM
+  {
+    std::vector<ProteinHit> copies;
+    for (const auto& set : combined_sets_)
+    {
+      if (set.members.empty()) continue;
+      const auto row_it = index_map.find(set.members[0]);
+      if (row_it == index_map.end() || row_it->second < 0 || row_it->second >= (int)proteoform_hits_.size()) continue;
+      for (Size j = 1; j < set.members.size() && j < set.adopted.size(); j++)
+      {
+        if (! set.adopted[j]) continue;
+        const auto it = index_map.find(set.members[j]);
+        if (it == index_map.end() || it->second < 0 || it->second >= (int)proteoform_hits_.size()) continue;
+        const auto& own = proteoform_hits_[it->second];
+        if (ms3_scans_of_.count((int)own.getMetaValue(tntKey("Scan"))) == 0) continue;
+        ProteinHit copy = proteoform_hits_[row_it->second];
+        copy.setMetaValue("Scan", own.getMetaValue("Scan"));
+        if (own.metaValueExists("GivenMass")) copy.setMetaValue("GivenMass", own.getMetaValue("GivenMass"));
+        else copy.removeMetaValue("GivenMass");
+        copy.setMetaValue("Index", it->second);
+        copies.push_back(std::move(copy));
+      }
+    }
+    if (! copies.empty())
+    {
+      auto rows = std::move(ms3_rows_);
+      auto own_bonds = std::move(ms3_bonds_of_prsm_);
+      ms3_bonds_of_prsm_.clear();
+      annotateMS3_(copies);
+      adopted_bonds = std::move(ms3_bonds_of_prsm_);
+      ms3_rows_ = std::move(rows);
+      ms3_bonds_of_prsm_ = std::move(own_bonds);
+    }
+  }
   Size changed = 0;
   for (const auto& set : combined_sets_)
   {
@@ -5735,8 +5954,9 @@ void FLASHTnTAlgorithm::addMS3ToCombinedCoverage_(const std::map<int, int>& inde
       covered.emplace_back(set.bonds[j].begin(), set.bonds[j].end());
       const auto it = index_map.find(set.members[j]);
       if (it == index_map.end()) continue;
-      const auto ms3 = ms3_bonds_of_prsm_.find(it->second);
-      if (ms3 == ms3_bonds_of_prsm_.end()) continue;
+      const auto& source = (j < set.adopted.size() && set.adopted[j]) ? adopted_bonds : ms3_bonds_of_prsm_;
+      const auto ms3 = source.find(it->second);
+      if (ms3 == source.end()) continue;
       for (int b : ms3->second)
         if (b >= 1 && b <= set.bond_count) covered.back().insert(b);
       with_ms3 = with_ms3 || ! ms3->second.empty();
