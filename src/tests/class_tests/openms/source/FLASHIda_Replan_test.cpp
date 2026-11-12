@@ -1125,6 +1125,56 @@ START_SECTION(separate_r_remainder_kept_when_unresolved)
 }
 END_SECTION
 
+// The remainder B re-derives respects min_precursor_charge: a re-chosen charge is one B's own admission would have
+// taken. The floor comes from an unfloored drive of the same two surveys: one above the lowest charge of its
+// remainder, so the floor forbids a charge the re-plan chose without it.
+START_SECTION(separate_remainder_respects_the_charge_floor)
+{
+  const auto ms1 = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  ABORT_IF(ms1.size() < kSeparateB + 1)
+  const ScanData& a = ms1[8];
+
+  // One stale-survey drive: the charge that went out before B, and the charges of that species dequeued after B.
+  struct Remainder
+  {
+    bool sent = false;
+    int sent_z = 0;
+    std::vector<int> rest;
+  };
+  const auto drive = [&](const std::string& cfg) {
+    Remainder r;
+    StaleDrive d;
+    captureCout([&] {
+      FLASHIda ida(const_cast<char*>(cfg.c_str()));
+      d = driveStaleSurvey(ida, a, at(ms1[kSeparateB], a.rt + 2.0), 1);
+    });
+    if (d.before_b.size() != 1) return r;
+    r.sent = true;
+    r.sent_z = std::abs(d.before_b[0].stages[0].charge_state);
+    const int x = nominalOf(d.before_b[0]);
+    for (const auto& c : ms2Of(d.after_b))
+      if (std::abs(nominalOf(c) - x) <= 1) r.rest.push_back(std::abs(c.stages[0].charge_state));
+    return r;
+  };
+
+  const Remainder unfloored = drive(cytcSeparateConfig());
+  ABORT_IF(!unfloored.sent || unfloored.rest.empty())
+  const int floor_z = *std::min_element(unfloored.rest.begin(), unfloored.rest.end()) + 1;
+  const bool has_admissible = std::any_of(unfloored.rest.begin(), unfloored.rest.end(), [floor_z](int z) { return z >= floor_z; });
+  ABORT_IF(!has_admissible)   // a one-charge remainder: the floor would leave nothing to re-derive
+
+  const Remainder floored = drive(with(cytcSeparateConfig(), R"("max_precursors": 1,)",
+                                       R"("max_precursors": 1, "min_precursor_charge": )" + std::to_string(floor_z) + ","));
+  ABORT_IF(!floored.sent)
+  TEST_EQUAL(floored.rest.empty(), false)
+  for (int z : floored.rest)
+  {
+    TEST_EQUAL(z >= floor_z, true)
+    TEST_EQUAL(z != floored.sent_z, true)
+  }
+}
+END_SECTION
+
 // A sweep none of whose variants went out is uncommitted: B drops it, the exploration group goes with it, and
 // only B's own sweep is active.
 START_SECTION(unsent_sweep_dropped_and_group_forgotten)
