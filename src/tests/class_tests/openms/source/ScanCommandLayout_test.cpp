@@ -14,6 +14,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <string>
@@ -372,6 +373,47 @@ START_SECTION(selectNotches_clamp_uses_the_rule)
   auto inten = selectNotches(rankFixture(), 17, 1.0, 0, 2, ChargeSelection::Intensity);
   TEST_EQUAL(inten[0].charge, 16)
   TEST_EQUAL(inten[1].charge, 14)
+}
+END_SECTION
+
+// The level's charge floor (min_precursor_charge at MS2, min_fragment_charge at MS3) bounds every
+// charge of a set, not only its anchor: it is a gate of selectNotches itself, so no caller can leave
+// it out. Every candidate here is above noise, so the floor is the only gate that can remove one.
+START_SECTION(select_notches_drops_charges_below_the_floor)
+{
+  // charge, mz, width, snr, intensity. z=17 is the anchor.
+  const std::vector<NotchCandidate> cands = {
+    {15,  883.9, 2.9, 9.0, 2.0e6},
+    {16,  938.2, 3.0, 5.0, 9.0e6},
+    {17, 1000.5, 3.2, 8.0, 5.0e6},
+    {18, 1059.3, 3.3, 6.0, 4.0e6},
+  };
+  auto has = [](const std::vector<NotchCandidate>& v, int z) {
+    return std::any_of(v.begin(), v.end(), [z](const NotchCandidate& n) { return n.charge == z; });
+  };
+
+  auto floored = selectNotches(cands, /*anchor=*/17, /*snr_threshold=*/1.0, /*min_charge=*/16, /*max_notches=*/9,
+                               ChargeSelection::Intensity);
+  TEST_EQUAL(floored.size(), 2)
+  TEST_EQUAL(has(floored, 16), true)    // at the floor: kept
+  TEST_EQUAL(has(floored, 18), true)
+  TEST_EQUAL(has(floored, 15), false)   // below the floor: dropped
+
+  // Without a floor all three are notches, so the floor is what removed z=15.
+  auto unfloored = selectNotches(cands, 17, 1.0, /*min_charge=*/0, 9, ChargeSelection::Intensity);
+  TEST_EQUAL(unfloored.size(), 3)
+  TEST_EQUAL(has(unfloored, 15), true)
+}
+END_SECTION
+
+// max_charge_states is read through one function: the acquired set (anchor included) holds at most
+// the ten charges one stage isolates, whatever is authored, and 0 means that limit, not "unbounded".
+START_SECTION(the_acquired_set_cap_is_at_most_ten)
+{
+  TEST_EQUAL(maxAcquisitionSetSize(0), 10)
+  TEST_EQUAL(maxAcquisitionSetSize(3), 3)
+  TEST_EQUAL(maxAcquisitionSetSize(10), 10)
+  TEST_EQUAL(maxAcquisitionSetSize(12), 10)
 }
 END_SECTION
 
