@@ -88,7 +88,7 @@ namespace OpenMS
     SnrBelowThreshold,   ///< the anchor's own envelope does not rise above noise
     Barred,              ///< dynamic exclusion: a tqscore_exceeding_* bar, or a spent authored charge
     ScoreNotBetter,      ///< the species has been acquired at a score this survey does not beat
-    BelowMinChargeStates ///< the acquisition charge set is smaller than min_charge_states (ADR-0040)
+    BelowMinChargeStates ///< fewer charges than min_charge_states: acquired when fanned out, resolved under single (ADR-0040)
   };
 
   /// The anchor charge of one candidate, with the score that will be logged and excluded on.
@@ -180,7 +180,7 @@ namespace OpenMS
     double qscore_threshold = 0.0;       ///< likewise zeroed for a matched target
     double tqscore_threshold = 0.0;
     int    max_notches = MAX_NOTCHES_PER_STAGE;
-    int    min_charge_states = 1;    ///< floor on the ACQUIRED set size; 1 = no floor. Siblings exempt.
+    int    min_charge_states = 1;    ///< 1 = no floor. Fanned out: the ACQUIRED set size; single: the resolved charges. Siblings exempt.
     ChargeSelection charge_selection = ChargeSelection::Snr;  ///< ranks the set; same rule as the anchor
     const MSSpectrum* raw = nullptr; ///< the survey's raw spectrum, for isolation purity
     std::string where;               ///< short label for selectNotches' clamp message
@@ -451,6 +451,29 @@ namespace OpenMS
     return out;
   }
 
+  /// How many charges the species RESOLVES on this survey: the anchor plus every other charge that
+  /// passes the gate a fanned-out set applies (admissibleNotches: isolatable, at or above
+  /// `snr_threshold`, at or above the charge floor) and, for a row with a charge set, is named by it.
+  ///
+  /// It is what `min_charge_states` counts under `single` (ADR-0040, amended 2026-11-12), where the
+  /// acquired set is always the anchor alone. Two things differ from acquisitionChargeSet on
+  /// purpose: a charge acquired on an earlier survey still counts -- the species resolves it, and a
+  /// row naming three charges must not stop after its first -- and `max_notches` does not cap the
+  /// count, because `max_charge_states` bounds what is acquired and is inert under `single`.
+  inline int resolvedChargeCount(const PeakGroup& pg, int anchor_charge, const AdmissionContext& ctx)
+  {
+    std::vector<NotchCandidate> candidates = peakGroupNotchCandidates(pg, optimal_window_margin_);
+    if (ctx.has_authored)
+    {
+      candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
+                                      [&ctx](const NotchCandidate& n) {
+                                        return !CandidateAdmissionDetail::contains(ctx.authored, n.charge);
+                                      }),
+                       candidates.end());
+    }
+    return 1 + static_cast<int>(admissibleNotches(candidates, anchor_charge, ctx.snr_threshold, ctx.min_charge).size());
+  }
+
   /// The admission decision proper, past the anchor and past the caller's target matching.
   ///
   /// Gate order is the loop's own and is not incidental: the score gate precedes the SNR gate, both
@@ -518,11 +541,20 @@ namespace OpenMS
     // mass_qscore_map_ entries through expiry, and a species never acquired has no qscore entry --
     // so operator[] default-inserts a 0.0 bar, which bars nothing. Moving the gate earlier would
     // reorder exclusion stamping, which is a behaviour change dressed as a refactor.
-    if (ctx.min_charge_states > 1 && !v.is_sibling
-        && static_cast<int>(v.acquisition_charges.size()) < ctx.min_charge_states)
+    //
+    // WHAT is counted depends on the mode. Fanned out, it is the acquired set. Under `single` that
+    // set is always the anchor alone, so counting it refused every species at any floor above 1;
+    // there the floor counts the charges the species resolves (resolvedChargeCount), and one charge
+    // is still acquired. Computed only when the floor is armed.
+    if (ctx.min_charge_states > 1 && !v.is_sibling)
     {
-      v.reason = AdmissionReason::BelowMinChargeStates;
-      return v;   // v.admit stays false -> no slot spent
+      const int counted = ctx.fan_out ? static_cast<int>(v.acquisition_charges.size())
+                                      : resolvedChargeCount(pg, anchor_charge, ctx);
+      if (counted < ctx.min_charge_states)
+      {
+        v.reason = AdmissionReason::BelowMinChargeStates;
+        return v;   // v.admit stays false -> no slot spent
+      }
     }
 
     // The qscore ledger is mass-keyed and therefore skipped entirely for an authored species: it

@@ -385,9 +385,12 @@ namespace OpenMS
     /// capacity, so a SCAN COUNT was limited by a geometry constant. Measured on the
     /// separate_charges golden: 10 of 18 species sat at exactly 10 charges, 100 of its 135 MS2.
     int max_charge_states = 0;
-    /// precursor_selection.min_charge_states -- the minimum ACQUISITION CHARGE SET size for a
-    /// species to be selected at all (ADR-0040). 1 = no floor, and 1 is the default, so this is
-    /// inert unless authored. Inert under `single` too, where the set is always size 1.
+    /// precursor_selection.min_charge_states -- the minimum number of charges a species must show
+    /// to be selected at all (ADR-0040). 1 = no floor, and 1 is the default, so this is inert
+    /// unless authored. Under `separate` and `multiplexed` it counts the ACQUISITION CHARGE SET.
+    /// Under `single` that set is always one charge, so it counts the charges the species RESOLVES
+    /// on the survey (isolatable, at or above snr_threshold and min_precursor_charge, named by the
+    /// row when the row names charges), and one charge is still acquired (amended 2026-11-12).
     ///
     /// Refused in admitCandidate, so a species below the floor costs no max_precursors slot.
     /// A SIBLING is exempt: its set is REDUCED by what the species already isolated (ADR-0036),
