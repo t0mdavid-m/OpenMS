@@ -5378,7 +5378,10 @@ void FLASHTnTAlgorithm::setCombinedCoverage_(const std::vector<std::vector<Size>
   // envelope rule of the raw score (FLASHAnnotatorAlgorithm, the same for every spectrum). Its chance is the same rule on the decoy fragment
   // sets of the raw score (decoy_shifts), each set combined over the PrSMs as the targets are, averaged over the sets. The PrSMs combined
   // are those of the proteoform at a PrSM q-value of at most rep_q, of one spectrum each, not of a residual round, with the termini and the
-  // modification masses (to 0.05 Da) of its representative; the representative always takes part. Prototype on the f5c72eda25 outputs
+  // modification masses of its representative (each within 0.05 Da; one of them may be one isotope off, the precursor isotope error of
+  // that spectrum); the representative always takes part. The masses were compared in 0.05-Da bins before, which kept out a PrSM one
+  // isotope off and one on the other side of a bin edge (cytochrome c coverage run of 2026-11-12: 525.116 and 526.135 of one heme
+  // proteoform). Prototype on the f5c72eda25 outputs
   // (proteoforms with two or more such PrSMs; mean coverage %, chance in brackets): best PrSM, this rule, the union of all PrSMs, one
   // spectrum averaged from the calibrated raw spectra:
   //   Eclip_1480  35.9 (1.6), 38.4 (2.1), 43.0 (4.1), 40.4 (3.8)
@@ -5397,13 +5400,21 @@ void FLASHTnTAlgorithm::setCombinedCoverage_(const std::vector<std::vector<Size>
   const UInt mi_chimeric = registry.registerName("ChimericRound"), mi_prsms = registry.registerName("CombinedPrSMs"),
              mi_coverage = registry.registerName("CombinedCoverage"), mi_chance = registry.registerName("CombinedCoverageChance");
   auto modKey = [](const ProteinHit& h) {
-    std::vector<long> k;
-    if (h.metaValueExists("Modifications"))
-    {
-      for (double m : h.getMetaValue("Modifications").toDoubleList()) k.push_back(std::lround(m / 0.05));
-    }
+    std::vector<double> k;
+    if (h.metaValueExists("Modifications")) k = h.getMetaValue("Modifications").toDoubleList();
     std::sort(k.begin(), k.end());
     return k;
+  };
+  auto sameMods = [](const std::vector<double>& a, const std::vector<double>& b) {
+    if (a.size() != b.size()) return false;
+    int isotope_off = 0;
+    for (Size k = 0; k < a.size(); k++)
+    {
+      const double diff = std::abs(a[k] - b[k]);
+      if (diff <= 0.05) continue;
+      if (std::abs(diff - Constants::ISOTOPE_MASSDIFF_55K_U) > 0.05 || ++isotope_off > 1) return false;
+    }
+    return true;
   };
   std::vector<std::vector<Size>> members(clusters.size());
   std::set<int> scans;
@@ -5421,7 +5432,7 @@ void FLASHTnTAlgorithm::setCombinedCoverage_(const std::vector<std::vector<Size>
       {
         if (use_fdr && qvalues[i] > rep_q) continue;
         if (h.metaValueExists(mi_chimeric) && (int)h.getMetaValue(mi_chimeric) > 0) continue;
-        if ((int)h.getMetaValue(tntKey("StartPosition")) != start || (int)h.getMetaValue(tntKey("EndPosition")) != end || modKey(h) != key) continue;
+        if ((int)h.getMetaValue(tntKey("StartPosition")) != start || (int)h.getMetaValue(tntKey("EndPosition")) != end || ! sameMods(modKey(h), key)) continue;
       }
       const int scan = h.getMetaValue(tntKey("Scan"));
       if (! seen.insert(scan).second) continue;
