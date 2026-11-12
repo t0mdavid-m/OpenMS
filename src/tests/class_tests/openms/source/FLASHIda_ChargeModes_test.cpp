@@ -36,6 +36,7 @@
 #include <cmath>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <set>
@@ -99,7 +100,9 @@ namespace
                      int max_charge_states = 0,
                      int min_charge_states = 1,
                      // ADR-0059. Emitted unconditionally at its default ("snr").
-                     const std::string& charge_selection = "snr")
+                     const std::string& charge_selection = "snr",
+                     // The level-1 charge floor. Emitted unconditionally at its default (0 = no floor).
+                     int min_precursor_charge = 0)
   {
     return std::string(R"JSON({
   "deconvolution": {
@@ -127,6 +130,7 @@ namespace
     "tie_threshold": 0.1,
     "rank_by": "qscore",
     "max_precursors": )JSON" + std::to_string(max_precursors) + R"JSON(,
+    "min_precursor_charge": )JSON" + std::to_string(min_precursor_charge) + R"JSON(,
     "precursor_charges": ")JSON" + precursor_charges + R"JSON(",
     "max_charge_states": )JSON" + std::to_string(max_charge_states) + R"JSON(,
     "min_charge_states": )JSON" + std::to_string(min_charge_states) + R"JSON(,
@@ -1413,6 +1417,152 @@ START_SECTION(separate_single_pass_budget_is_unchanged)
   const std::vector<std::pair<double, int>> sep = selectSynthetic(cfgFor("separate", "none", "", /*max_precursors=*/2));
   TEST_EQUAL((int)speciesOf(sep).size(), 2)
   TEST_EQUAL((int)sep.size(), 8)
+}
+END_SECTION
+
+// CM-15 (ADR-0040, amended 2026-11-12): under single, min_charge_states counts the charges a species
+// RESOLVES on the survey, although one is acquired. The gate used to count the acquired set, which is
+// one charge under single, so any value above 1 refused every species and the run acquired no MS2.
+//
+// The threshold comes from an ungated pass over the same fixture: one above the smallest count a
+// selected species resolves, so the gate has something to refuse and something to admit.
+START_SECTION(single_selects_only_species_resolving_min_charge_states)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+
+  // The test's own count, from raw accessors: the resolved charges at or above the floor whose SNR
+  // reaches snr_threshold. The anchor is one of them (its own gate is the same threshold here).
+  const auto resolved = [](const PeakGroup& pg, const MSSpectrum& raw, const Config& cfg) {
+    int count = 0;
+    for (const auto& c : oracleCharges(pg, raw, cfg.level(1).min_charge))
+      if (c.snr >= cfg.targeting().snr_threshold) ++count;
+    return count;
+  };
+
+  std::vector<int> base_counts;
+  forEachSurvey(cfgFor("single"), scans, [&](const Config& cfg, PrecursorSelection& ps, int n, int) {
+    const MSSpectrum& raw = ps.deconvolvedMS1().getOriginalSpectrum();
+    for (int i = 0; i < n; ++i) base_counts.push_back(resolved(ps.selectedPeakGroups()[i], raw, cfg));
+  });
+  ABORT_IF(base_counts.empty())
+  const int min_states = *std::min_element(base_counts.begin(), base_counts.end()) + 1;
+  const int widest = *std::max_element(base_counts.begin(), base_counts.end());
+  ABORT_IF(widest < min_states)   // every selected species resolves the same count: nothing to tell apart
+
+  const std::string gated_cfg = cfgFor("single", "none", "", 10, false, 0, /*min_charge_states=*/min_states);
+  int selected = 0, below = 0;
+  forEachSurvey(gated_cfg, scans, [&](const Config& cfg, PrecursorSelection& ps, int n, int si) {
+    const MSSpectrum& raw = ps.deconvolvedMS1().getOriginalSpectrum();
+    for (int i = 0; i < n; ++i)
+    {
+      const PeakGroup& pg = ps.selectedPeakGroups()[i];
+      const int count = resolved(pg, raw, cfg);
+      ++selected;
+      if (count >= min_states) continue;
+      ++below;
+      std::cout << "[CM-15] survey=" << si << " mass=" << pg.getMonoMass() << " resolves " << count
+                << " charges, below min_charge_states " << min_states << std::endl;
+    }
+  });
+  if (selected == 0)
+    std::cout << "[CM-15] min_charge_states " << min_states << " under single selected nothing" << std::endl;
+  TEST_EQUAL(selected > 0, true)
+  TEST_EQUAL(below, 0)
+
+  // End to end: the run acquires, and it is still single (one charge per mass per survey, no notch).
+  FLASHIda ida(const_cast<char*>(gated_cfg.c_str()));
+  AcqResult a = runMode(ida, scans);
+  TEST_EQUAL(a.ms2_cmds.size() > 0, true)
+
+  int violations = 0;
+  for (const auto& kv : chargesPerSurveyMass(a, /*with_notches=*/false))
+    if (kv.second.size() > 1) ++violations;
+  TEST_EQUAL(violations, 0)
+
+  int notched = 0;
+  for (const auto& c : a.ms2_cmds)
+    if (notchesForStage(c, 0).second > 0) ++notched;
+  TEST_EQUAL(notched, 0)
+}
+END_SECTION
+
+// CM-16: min_precursor_charge bounds every scan of a separate set, not only the anchor. The floor
+// used to be applied to the anchor of an unrestricted species alone, so the extra scans went below it.
+//
+// The floor comes from an unfloored run of the same fixture: the middle of the charges it acquired,
+// so the unfloored run has MS2s below it and at it.
+START_SECTION(separate_acquires_no_charge_below_the_floor)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+
+  const std::string base_cfg = cfgFor("separate");
+  FLASHIda base_ida(const_cast<char*>(base_cfg.c_str()));
+  AcqResult base = runMode(base_ida, scans);
+  std::set<int> base_charges;
+  for (const auto& c : base.ms2_cmds)
+    if (c.num_stages >= 1) base_charges.insert(c.stages[0].charge_state);
+  ABORT_IF(base_charges.size() < 2)
+  const int floor_z = *std::next(base_charges.begin(), base_charges.size() / 2);
+
+  const std::string cfg = cfgFor("separate", "none", "", 10, false, 0, 1, "snr", /*min_precursor_charge=*/floor_z);
+  FLASHIda ida(const_cast<char*>(cfg.c_str()));
+  AcqResult a = runMode(ida, scans);
+  TEST_EQUAL(a.ms2_cmds.size() > 0, true)
+
+  int below = 0;
+  for (const auto& c : a.ms2_cmds)
+  {
+    if (c.num_stages < 1 || c.stages[0].charge_state >= floor_z) continue;
+    ++below;
+    std::cout << "[CM-16] mass " << c.mono_mass << " acquired at z=" << c.stages[0].charge_state
+              << ", below min_precursor_charge " << floor_z << std::endl;
+  }
+  TEST_EQUAL(below, 0)
+}
+END_SECTION
+
+// CM-17: the same floor under multiplexed, where the charges below it were co-isolated as notches.
+// The floor is the middle of the notch charges of an unfloored run, so that run has a notch below it.
+START_SECTION(multiplexed_isolates_no_charge_below_the_floor)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+
+  const std::string base_cfg = cfgFor("multiplexed");
+  FLASHIda base_ida(const_cast<char*>(base_cfg.c_str()));
+  AcqResult base = runMode(base_ida, scans);
+  std::set<int> base_notches;
+  for (const auto& c : base.ms2_cmds)
+  {
+    auto [first, count] = notchesForStage(c, 0);
+    for (int i = 0; i < count; ++i) base_notches.insert(first[i].charge_state);
+  }
+  ABORT_IF(base_notches.size() < 2)
+  const int floor_z = *std::next(base_notches.begin(), base_notches.size() / 2);
+
+  const std::string cfg = cfgFor("multiplexed", "none", "", 10, false, 0, 1, "snr", /*min_precursor_charge=*/floor_z);
+  FLASHIda ida(const_cast<char*>(cfg.c_str()));
+  AcqResult a = runMode(ida, scans);
+  TEST_EQUAL(a.ms2_cmds.size() > 0, true)
+
+  int below = 0;
+  for (const auto& c : a.ms2_cmds)
+  {
+    if (c.num_stages < 1) continue;
+    std::vector<int> isolated{c.stages[0].charge_state};
+    auto [first, count] = notchesForStage(c, 0);
+    for (int i = 0; i < count; ++i) isolated.push_back(first[i].charge_state);
+    for (int z : isolated)
+    {
+      if (z >= floor_z) continue;
+      ++below;
+      std::cout << "[CM-17] mass " << c.mono_mass << " isolates z=" << z << ", below min_precursor_charge "
+                << floor_z << std::endl;
+    }
+  }
+  TEST_EQUAL(below, 0)
 }
 END_SECTION
 
