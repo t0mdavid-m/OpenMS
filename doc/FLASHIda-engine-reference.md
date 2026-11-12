@@ -464,7 +464,8 @@ winner (`initiateNextLevel` inside `applyVariant`) still runs under the lock.
   `notchesForStage(ctx, 0)`), an MS1 command whose `first_mass`/`last_mass` are that window's commanded bounds widened
   by `window_scan_margin`, at priority 0, at the MS2's CV, with the MS2 as `parent_scan_id`, role `'W'`, pushed with
   `stampAndPush_` under the MS2's precursor id. The command is `makeMS1(*window_scan_config)` when
-  `ms_settings.window_scan` is authored, else `makeMS1()`. Hazards:
+  `ms_settings.window_scan` is authored, else `makeMS1()`. Its description is `{id}W{mass token}@{charge}`
+  (`writeWindowDescription`): the MS2's `mono_mass` and the charge of the window it reads. Hazards:
   - **A completed MS2 sweep buys too, once** (`finishVariantMS2_`). `Exploration` sets `FeedResultInfo::window_ctx`
     on the row that completes an MS2 group: the command of the first pre-scan with `found_proteoform`, unless the
     group emitted a level-2 command (its production scan, an `'R'` that buys for itself). The parent is the completing
