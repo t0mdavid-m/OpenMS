@@ -9,6 +9,7 @@
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/CandidateAdmission.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -544,6 +545,105 @@ START_SECTION(the_acquired_set_size_is_the_anchor_plus_max_notches)
   anchor_only.fan_out = true;
   anchor_only.max_notches = 1 - 1;                          // max_charge_states: 1 -> zero notches
   TEST_EQUAL(acquisitionChargeSet(pg, 13, anchor_only).size(), 1)
+}
+END_SECTION
+
+// CA-B19: under `single` the min_charge_states floor counts the charges the species RESOLVES, because
+// the acquired set is always the anchor alone (ADR-0040, amended 2026-11-12). Counting the acquired
+// set there refused every species at any floor above 1, so a run acquired no MS2 at all.
+//
+// A charge is resolved when it passes the gates a fanned-out set applies: at or above snr_threshold,
+// at or above the charge floor, and named by the row when the row names charges. One charge is still
+// acquired. Each refusal below removes exactly one of the three charges from the count of case (a).
+START_SECTION(min_charge_states_counts_resolved_charges_under_single)
+{
+  auto singleFloor3 = [](std::vector<int> authored = {}, std::vector<int> spent = {}) {
+    AdmissionContext c = admitCtx(std::move(authored), std::move(spent));
+    c.fan_out = false;
+    c.min_charge_states = 3;
+    c.snr_threshold = 1.0;
+    return c;
+  };
+
+  // (a) three resolved charges meet a floor of three; the scan still isolates the anchor alone.
+  {
+    PeakGroup pg = makeEnvelope(12351.39, {12, 13, 14}, 0.94, 10.0f);
+    AdmissionVerdict v = admitCandidate(pg, 13, 0.94, singleFloor3());
+    TEST_EQUAL(v.admit, true)
+    TEST_EQUAL(v.acquisition_charges.size(), 1)
+    TEST_EQUAL(v.acquisition_charges[0], 13)
+  }
+
+  // (b) two resolved charges do not.
+  {
+    PeakGroup pg = makeEnvelope(12351.39, {12, 13}, 0.94, 10.0f);
+    AdmissionVerdict v = admitCandidate(pg, 13, 0.94, singleFloor3());
+    TEST_EQUAL(v.admit, false)
+    TEST_EQUAL(v.reason == AdmissionReason::BelowMinChargeStates, true)
+  }
+
+  // (c) a charge below snr_threshold is not resolved.
+  {
+    PeakGroup pg = makeEnvelope(12351.39, {12, 13, 14}, 0.94, 10.0f);
+    pg.setChargeSNR(12, 0.5f);
+    AdmissionVerdict v = admitCandidate(pg, 13, 0.94, singleFloor3());
+    TEST_EQUAL(v.admit, false)
+    TEST_EQUAL(v.reason == AdmissionReason::BelowMinChargeStates, true)
+  }
+
+  // (d) a charge below the charge floor is not resolved.
+  {
+    PeakGroup pg = makeEnvelope(12351.39, {12, 13, 14}, 0.94, 10.0f);
+    AdmissionContext ctx = singleFloor3();
+    ctx.min_charge = 13;
+    AdmissionVerdict v = admitCandidate(pg, 13, 0.94, ctx);
+    TEST_EQUAL(v.admit, false)
+    TEST_EQUAL(v.reason == AdmissionReason::BelowMinChargeStates, true)
+  }
+
+  // (e) a named charge acquired on an earlier survey still counts: the species resolves it. Without
+  // this a row naming three charges would stop after its first.
+  {
+    PeakGroup pg = makeEnvelope(12351.39, {12, 13, 14}, 0.94, 10.0f);
+    AdmissionVerdict v = admitCandidate(pg, 13, 0.94, singleFloor3({12, 13, 14}, {12}));
+    TEST_EQUAL(v.admit, true)
+    TEST_EQUAL(v.acquisition_charges.size(), 1)
+    TEST_EQUAL(v.acquisition_charges[0], 13)
+  }
+
+  // (f) a charge the row does not name does not count, although the envelope resolves it.
+  {
+    PeakGroup pg = makeEnvelope(12351.39, {12, 13, 14}, 0.94, 10.0f);
+    AdmissionVerdict v = admitCandidate(pg, 13, 0.94, singleFloor3({13, 14}));
+    TEST_EQUAL(v.admit, false)
+    TEST_EQUAL(v.reason == AdmissionReason::BelowMinChargeStates, true)
+  }
+}
+END_SECTION
+
+// CA-B20: the charge floor bounds the WHOLE set of an unrestricted species, not only its anchor. It
+// used to be applied to the extra charges only under an authored row, so `separate` and
+// `multiplexed` acquired charges below min_precursor_charge.
+START_SECTION(the_charge_floor_bounds_the_whole_unrestricted_set)
+{
+  PeakGroup pg = makeEnvelope(12351.39, {10, 11, 12, 13, 14}, 0.94, 10.0f);
+  auto has = [](const std::vector<int>& v, int z) { return std::find(v.begin(), v.end(), z) != v.end(); };
+
+  AdmissionContext ctx = admitCtx();   // unauthored
+  ctx.fan_out = true;
+  ctx.min_charge = 12;
+  AdmissionVerdict v = admitCandidate(pg, 13, 0.50, ctx);
+  TEST_EQUAL(v.admit, true)
+  TEST_EQUAL(v.acquisition_charges.size(), 3)
+  for (int z : v.acquisition_charges) TEST_EQUAL(z >= 12, true)
+  TEST_EQUAL(has(v.acquisition_charges, 12), true)   // at the floor: kept
+  TEST_EQUAL(has(v.acquisition_charges, 14), true)
+
+  // Without the floor the same species takes z=10, so the floor is what removed it.
+  ctx.min_charge = 0;
+  AdmissionVerdict open_set = admitCandidate(pg, 13, 0.50, ctx);
+  TEST_EQUAL(open_set.admit, true)
+  TEST_EQUAL(has(open_set.acquisition_charges, 10), true)
 }
 END_SECTION
 
