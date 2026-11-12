@@ -687,13 +687,29 @@ namespace OpenMS
         identification_.threshold = th.get<double>();
       }
 
-      // ADR-0071: the Window scan. Absent or null = false; anything but a boolean is refused.
+      // ADR-0071: the Window scan. Absent or null = off; true / false; or a block, whose presence is the switch and
+      // whose one key is the margin (Th added to each side of the window). Anything else is refused.
       if (ident.contains("window_scan") && !ident["window_scan"].is_null())
       {
-        if (!ident["window_scan"].is_boolean())
-          throw std::invalid_argument("Config: identification.window_scan must be true or false; got "
-                                      + ident["window_scan"].dump() + " (ADR-0071).");
-        identification_.window_scan = ident["window_scan"].get<bool>();
+        const auto& ws = ident["window_scan"];
+        if (ws.is_boolean())
+          identification_.window_scan = ws.get<bool>();
+        else if (ws.is_object())
+        {
+          rejectUnknownKeys(ws, {"margin"}, "identification.window_scan");
+          identification_.window_scan = true;
+          if (ws.contains("margin") && !ws["margin"].is_null())
+          {
+            const auto& m = ws["margin"];
+            if (!m.is_number() || !std::isfinite(m.get<double>()) || m.get<double>() < 0.0)
+              throw std::invalid_argument("Config: identification.window_scan.margin must be a number >= 0 (Th added "
+                                          "to each side of the window); got " + m.dump() + " (ADR-0071).");
+            identification_.window_scan_margin = m.get<double>();
+          }
+        }
+        else
+          throw std::invalid_argument("Config: identification.window_scan must be true, false or a block "
+                                      "{\"margin\": <Th>}; got " + ws.dump() + " (ADR-0071).");
       }
 
       if (ident.contains("characterization") && !ident["characterization"].is_null())
@@ -1138,7 +1154,8 @@ namespace OpenMS
     // ms2_quant is a bare slot beside ms1/ms2/ms3, not a name reference (ADR-0038) -- the same
     // shape characterization already uses, where the decision section holds no scan config and
     // ms_settings.ms3 supplies the parameters with no key pointing at it.
-    rejectUnknownKeys(ms_settings, {"ms1", "ms2", "ms2_quant", "ms2_rescue", "ms3", "ms3_quant", "additional_ms2"}, "ms_settings");
+    rejectUnknownKeys(ms_settings, {"ms1", "ms2", "ms2_quant", "ms2_rescue", "ms3", "ms3_quant", "additional_ms2", "window_scan"},
+                      "ms_settings");
 
     if (ms_settings.contains("ms2") && ms_settings["ms2"].is_array())
       throw std::invalid_argument(
@@ -1218,6 +1235,26 @@ namespace OpenMS
         identification_.rescue_scans.push_back(
             parseNamedScan(rescue[i], "ms_settings.ms2_rescue[" + std::to_string(i) + "]"));
       }
+    }
+
+    // ADR-0071 amendment: the Window scan's own scan config. An MS1, so only the keys an MS1 has; its range is the
+    // window's, so an authored first_mass / last_mass is refused (0, what the host emits for an unset one, is unset).
+    if (ms_settings.contains("window_scan") && !ms_settings["window_scan"].is_null())
+    {
+      const auto& ws = ms_settings["window_scan"];
+      if (!ws.is_object())
+        throw std::invalid_argument("Config: ms_settings.window_scan must be a scan config object; got "
+                                    + std::string(ws.type_name()) + " (ADR-0071).");
+      rejectUnknownKeys(ws, {"analyzer", "resolution", "agc_target", "max_it", "first_mass", "last_mass", "microscans",
+                             "data_type", "rf_lens", "source_cid", "source_cid_scaling", "scan_rate"},
+                        "ms_settings.window_scan");
+      ScanConfig sc;
+      parseScanConfig(ws, sc, "ms_settings.window_scan", "");
+      if (sc.first_mass != 0.0 || sc.last_mass != 0.0)
+        throw std::invalid_argument("Config: ms_settings.window_scan must not set first_mass / last_mass: a Window "
+                                    "scan's range is the window it reads, widened by identification.window_scan.margin "
+                                    "(ADR-0071).");
+      identification_.window_scan_config = sc;
     }
 
     // additional_ms2: user-authored KEYS, so they cannot be allowlisted -- validated as identifiers
@@ -1648,6 +1685,10 @@ namespace OpenMS
           "Config: ms_settings.ms2_rescue is set but identification.threshold is not set. A rescue scan is bought when "
           "an identification scan finds no proteoform or one scoring below the close-out threshold, so it needs "
           "identification with a reference and a threshold (ADR-0068).");
+    // ADR-0071 amendment: a Window scan config with the Window scan off is inert, not invalid (as monitor_ms1 is).
+    if (identification_.window_scan_config.has_value() && !identification_.window_scan)
+      EventLine(EventLevel::Warn) << "[CONFIG-WARN] ms_settings.window_scan is set but identification.window_scan is "
+                                     "off: no Window scan will be acquired. The key is inert, not invalid.";
     // ADR-0070 d.5: several rescues of one precursor each plan their own MS3 unless per_proteoform folds them into one
     // live plan. Allowed, and said once at load.
     if (identification_.rescue_scans.size() > 1 && characterization_.mode != CharacterizationMode::Off

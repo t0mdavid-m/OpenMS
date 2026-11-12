@@ -108,7 +108,28 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   // --- identification.search_threads (ADR-0062: the search pool's size) ---
   TEST_EQUAL(cfg.identification().search_threads, j["identification"]["search_threads"].get<int>())
   // --- identification.window_scan (ADR-0071: the Window scan) ---
-  TEST_EQUAL(cfg.identification().window_scan, j["identification"]["window_scan"].get<bool>())
+  // The reference authors the block form (ADR-0071 amendment), with a non-default margin.
+  TEST_EQUAL(j["identification"]["window_scan"].is_object(), true)
+  TEST_EQUAL(cfg.identification().window_scan, true)
+  TEST_REAL_SIMILAR(cfg.identification().window_scan_margin, j["identification"]["window_scan"]["margin"].get<double>())
+  TEST_EQUAL(cfg.identification().window_scan_margin > 0.0, true)
+  // --- ms_settings.window_scan (ADR-0071 amendment: the Window scan's own scan config) ---
+  {
+    const auto& jws = j["ms_settings"]["window_scan"];
+    TEST_EQUAL(jws.is_object(), true)
+    TEST_EQUAL(cfg.identification().window_scan_config.has_value(), true)
+    if (cfg.identification().window_scan_config.has_value() && jws.is_object())
+    {
+      const ScanConfig& ws = *cfg.identification().window_scan_config;
+      TEST_EQUAL(ws.analyzer, jws["analyzer"].get<std::string>())
+      TEST_EQUAL(ws.resolution, jws["resolution"].get<int>())
+      TEST_EQUAL(ws.agc_target, jws["agc_target"].get<int>())
+      TEST_REAL_SIMILAR(ws.max_it, jws["max_it"].get<double>())
+      TEST_EQUAL(ws.microscans, jws["microscans"].get<int>())
+      TEST_REAL_SIMILAR(ws.first_mass, 0.0)
+      TEST_REAL_SIMILAR(ws.last_mass, 0.0)
+    }
+  }
 
   // --- ms_settings.ms2_quant, the quantification scan (ADR-0038) ---
   // Replaces the old quantification.follow_up_scan block. That key named the scan quantification

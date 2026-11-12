@@ -745,8 +745,9 @@ START_SECTION(per_proteoform_absent_is_off_and_only_a_boolean_parses)
 END_SECTION
 
 // ADR-0071: identification.window_scan. Absent or null = false (every committed config); true and false parse; a
-// non-boolean is refused with a message naming the key.
-START_SECTION(window_scan_absent_is_off_and_only_a_boolean_parses)
+// block is on, its one key the margin (default 0, a number >= 0); anything else is refused with a message naming the
+// key. ms_settings.window_scan is the scan's own config: an MS1's keys, and no range of its own.
+START_SECTION(window_scan_is_a_boolean_or_a_block_with_a_margin)
 {
   auto withWindowScan = [](const std::string& extra) {
     return withIdentification(R"({ "reference": { "sequence": "PEPTIDEK" })" + extra + " }");
@@ -755,9 +756,47 @@ START_SECTION(window_scan_absent_is_off_and_only_a_boolean_parses)
   TEST_EQUAL(Config{withWindowScan(R"(, "window_scan": null)")}.identification().window_scan, false)
   TEST_EQUAL(Config{withWindowScan(R"(, "window_scan": false)")}.identification().window_scan, false)
   TEST_EQUAL(Config{withWindowScan(R"(, "window_scan": true)")}.identification().window_scan, true)
+  TEST_REAL_SIMILAR(Config{withWindowScan(R"(, "window_scan": true)")}.identification().window_scan_margin, 0.0)
   for (const std::string bad : {std::string("1"), std::string("\"yes\""), std::string("[true]")})
     TEST_EQUAL(contains(loadError(withWindowScan(", \"window_scan\": " + bad)),
-                        "identification.window_scan must be true or false"), true)
+                        "identification.window_scan must be true, false or a block"), true)
+
+  {
+    const Config empty_block{withWindowScan(R"(, "window_scan": {})")};
+    TEST_EQUAL(empty_block.identification().window_scan, true)
+    TEST_REAL_SIMILAR(empty_block.identification().window_scan_margin, 0.0)
+    const Config block{withWindowScan(R"(, "window_scan": { "margin": 2.5 })")};
+    TEST_EQUAL(block.identification().window_scan, true)
+    TEST_REAL_SIMILAR(block.identification().window_scan_margin, 2.5)
+    TEST_EQUAL(block.identification().window_scan_config.has_value(), false)
+  }
+  for (const std::string bad : {std::string("-1"), std::string("\"2\""), std::string("[2]")})
+    TEST_EQUAL(contains(loadError(withWindowScan(", \"window_scan\": { \"margin\": " + bad + " }")),
+                        "identification.window_scan.margin must be a number >= 0"), true)
+  TEST_EQUAL(contains(loadError(withWindowScan(R"(, "window_scan": { "padding": 2 })")), "padding"), true)
+
+  // ms_settings.window_scan: parsed onto the identification; a range or a fragmentation key is refused.
+  auto withScan = [&](const std::string& scan) {
+    nlohmann::json j = nlohmann::json::parse(withWindowScan(R"(, "window_scan": true)"));
+    j["ms_settings"]["window_scan"] = nlohmann::json::parse(scan);
+    return j.dump();
+  };
+  {
+    const Config own{withScan(R"({ "analyzer": "Orbitrap", "resolution": 60000, "agc_target": 200000, "max_it": 500, "microscans": 2 })")};
+    TEST_EQUAL(own.identification().window_scan_config.has_value(), true)
+    if (own.identification().window_scan_config.has_value())
+    {
+      TEST_EQUAL(own.identification().window_scan_config->resolution, 60000)
+      TEST_EQUAL(own.identification().window_scan_config->agc_target, 200000)
+      TEST_REAL_SIMILAR(own.identification().window_scan_config->max_it, 500.0)
+      TEST_EQUAL(own.identification().window_scan_config->microscans, 2)
+    }
+    // An unset range (0, what the host emits) is unset.
+    TEST_EQUAL(Config{withScan(R"({ "resolution": 60000, "first_mass": 0, "last_mass": 0 })")}.identification().window_scan_config.has_value(), true)
+  }
+  TEST_EQUAL(contains(loadError(withScan(R"({ "resolution": 60000, "first_mass": 500 })")),
+                      "ms_settings.window_scan must not set first_mass / last_mass"), true)
+  TEST_EQUAL(contains(loadError(withScan(R"({ "resolution": 60000, "collision_energy": 30 })")), "collision_energy"), true)
 }
 END_SECTION
 
