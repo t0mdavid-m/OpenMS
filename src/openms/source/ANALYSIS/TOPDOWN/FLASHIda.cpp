@@ -983,6 +983,7 @@ FLASHIda::FLASHIda(char* arg) :
                                          job.results_row, id_rows);
     fillSearchColumns(job.results_row, job.timing.submitted, job.timing.started, job.timing.finished);
     board_.onSearchWait(static_cast<int>(job.results_row.search_wait_ms));
+    board_.onSearchTime(static_cast<int>(job.results_row.search_ms));
     logger_.writeScanResultRow(job.results_row);
     for (const auto& r : id_rows)
       logger_.writeIdentificationRow(r);
@@ -1000,6 +1001,7 @@ FLASHIda::FLASHIda(char* arg) :
                                          job.precursor_id, job.parent_id_str, false, job.results_row, id_rows);
     fillSearchColumns(job.results_row, job.timing.submitted, job.timing.started, job.timing.finished);
     board_.onSearchWait(static_cast<int>(job.results_row.search_wait_ms));
+    board_.onSearchTime(static_cast<int>(job.results_row.search_ms));
     logger_.writeScanResultRow(job.results_row);
     for (const auto& r : id_rows)
       logger_.writeIdentificationRow(r);

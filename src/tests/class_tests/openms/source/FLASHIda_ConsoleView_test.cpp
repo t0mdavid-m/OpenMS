@@ -123,7 +123,7 @@ START_SECTION(board_moves_a_precursor_through_its_states)
   TEST_EQUAL(q->state == PrecursorState::Acquired, true)
   TEST_EQUAL(s.precursors, 3)
   TEST_EQUAL(s.closed_out, 1)
-  TEST_EQUAL(s.identified, 1)
+  TEST_EQUAL(s.identified, 0)   // exclusive: the one identified row is closed out, and counted there
   TEST_EQUAL(s.no_id, 1)
   TEST_EQUAL(s.ms2, 3)
   TEST_EQUAL(s.id_rts_s.size(), 1)
@@ -201,6 +201,7 @@ START_SECTION(render_panel_fits_the_window)
       if (lines[k].rfind(" ", 0) == 0 && lines[k].find(" " + std::to_string(r.nominal) + " ") != std::string::npos) { ++shown; break; }
   TEST_EQUAL(shown, 8)
   TEST_EQUAL(lines.back(), " + 4 more live (2 acquiring | 2 closed out)")
+  TEST_EQUAL(lines[1].back(), '|')   // the timeline ends at its frame: the status line carries the counts
 }
 END_SECTION
 
@@ -243,17 +244,30 @@ START_SECTION(timeline_shades_by_identifications_and_stops_at_now)
 }
 END_SECTION
 
-// The summary's search line: nearest-rank median and 95th percentile of the waits.
-// FAILS UNDER: another percentile definition, or the line missing.
+// The summary's search line: nearest-rank median and 95th percentile of the search times, then of the waits; the
+// precursors line counts identified and closed out apart; the timeline carries no count.
+// FAILS UNDER: another percentile definition, the waits shown as the times, a missing line, or a closed-out row
+// counted as identified too.
 START_SECTION(summary_reports_search_wait_percentiles)
 {
   BoardSnapshot s;
   for (int i = 100; i >= 1; --i) s.search_wait_ms.push_back(i);
-  std::string search;
+  for (int i = 100; i >= 1; --i) s.search_ms.push_back(10 * i);
+  s.precursors = 10;
+  s.identified = 3;
+  s.closed_out = 2;
+  s.no_id = 5;
+  std::string search, precursors, timeline;
   for (const auto& l : ConsoleView::renderSummary(s, false))
+  {
     if (l.rfind("search", 0) == 0) search = l;
-  TEST_EQUAL(search.find("median 50 ms") != std::string::npos, true)
-  TEST_EQUAL(search.find("p95 95 ms") != std::string::npos, true)
+    if (l.rfind("precursors", 0) == 0) precursors = l;
+    if (l.rfind("timeline", 0) == 0) timeline = l;
+  }
+  TEST_EQUAL(search, "search      median 500 ms | p95 950 ms | wait median 50 ms | p95 95 ms | n 100")
+  TEST_EQUAL(precursors, "precursors  10 | identified 3 | closed out 2 | no-id 5")
+  TEST_EQUAL(timeline.empty(), false)
+  TEST_EQUAL(timeline.back(), '|')
 }
 END_SECTION
 

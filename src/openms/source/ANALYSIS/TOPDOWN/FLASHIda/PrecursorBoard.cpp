@@ -172,6 +172,12 @@ namespace OpenMS
     search_wait_ms_.push_back(ms);
   }
 
+  void PrecursorBoard::onSearchTime(int ms)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    search_ms_.push_back(ms);
+  }
+
   BoardSnapshot PrecursorBoard::snapshot(double rt_window_s, double duration_min, size_t search_waiting,
                                          size_t search_capacity) const
   {
@@ -188,13 +194,14 @@ namespace OpenMS
     s.log_dir = log_dir_;
     s.id_rts_s = id_rts_s_;
     s.search_wait_ms = search_wait_ms_;
+    s.search_ms = search_ms_;
     std::set<std::string> accessions;
     for (const auto& kv : rows_)
     {
       const BoardRow& r = kv.second;
       ++s.precursors;
       if (r.state == PrecursorState::ClosedOut) ++s.closed_out;
-      if (hasProteoform(r.state)) ++s.identified;
+      if (r.state == PrecursorState::Identified) ++s.identified;   // exclusive: a closed-out row is counted there
       if (r.state == PrecursorState::NoId) ++s.no_id;
       if (hasProteoform(r.state))
       {

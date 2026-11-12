@@ -83,9 +83,11 @@ namespace OpenMS
     std::vector<BoardRow> live;     ///< the live set, most recently active first
     int ms1 = 0, ms2 = 0, ms3 = 0;  ///< scans sent, run totals
     int planned = 0;                ///< the last survey's plan units
-    int precursors = 0, identified = 0, closed_out = 0, no_id = 0;   ///< run totals, by row
+    /// run totals, by row and by state: identified counts the Identified state only, so a closed-out row counts once
+    int precursors = 0, identified = 0, closed_out = 0, no_id = 0;
     std::vector<double> id_rts_s;   ///< retention time (s) of every identification (a row's first result with a proteoform)
     std::vector<int> search_wait_ms;
+    std::vector<int> search_ms;     ///< duration of every search, as scan_results.tsv's search_ms
     size_t search_waiting = 0;      ///< searches waiting on the pool now (SearchPool::waiting)
     size_t search_capacity = 0;     ///< how many may wait before the oldest is dropped (SearchPool::backlog); 0 = no pool
     std::string log_dir;
@@ -133,6 +135,9 @@ namespace OpenMS
     /// The wait (ms) of one search, from submit to start.
     void onSearchWait(int ms);
 
+    /// The duration (ms) of one search: scan_results.tsv's search_ms.
+    void onSearchTime(int ms);
+
     /// The live set (last activity within @p rt_window_s of the latest retention time), most recent first, and the
     /// run's counters.
     BoardSnapshot snapshot(double rt_window_s, double duration_min, size_t search_waiting, size_t search_capacity) const;
@@ -148,6 +153,7 @@ namespace OpenMS
     std::map<int, int> nominal_by_precursor_;
     std::vector<double> id_rts_s_;
     std::vector<int> search_wait_ms_;
+    std::vector<int> search_ms_;
     double rt_s_ = 0.0;
     int ms1_ = 0, ms2_ = 0, ms3_ = 0, planned_ = 0;
     std::string log_dir_;

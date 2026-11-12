@@ -228,8 +228,8 @@ namespace OpenMS
     // 2. the identification timeline
     const int cells = std::max(10, width - 24);
     lines.push_back(clip(std::string("ids ") + (utf8 ? "\xE2\x96\x95" : "|") + timelineCells(snap, cells, utf8)
-                             + (utf8 ? "\xE2\x96\x8F" : "|") + " " + std::to_string(snap.identified) + " identified",
-                         width));
+                             + (utf8 ? "\xE2\x96\x8F" : "|"),
+                         width));   // no count: the status line carries identified and closed out
 
     // 3. the header
     lines.push_back(clip(" nominal       mass   z  state        score  MS2  MS3      rt  protein", width));
@@ -298,11 +298,13 @@ namespace OpenMS
     if (snap.search_wait_ms.empty())
       out.push_back("search      none");
     else
-      out.push_back("search      wait median " + std::to_string(percentile(snap.search_wait_ms, 50)) + " ms" + d + "p95 "
+      out.push_back("search      median " + std::to_string(percentile(snap.search_ms, 50)) + " ms" + d + "p95 "
+                    + std::to_string(percentile(snap.search_ms, 95)) + " ms" + d + "wait median "
+                    + std::to_string(percentile(snap.search_wait_ms, 50)) + " ms" + d + "p95 "
                     + std::to_string(percentile(snap.search_wait_ms, 95)) + " ms" + d + "n "
                     + std::to_string(snap.search_wait_ms.size()));
     out.push_back(std::string("timeline    ") + (utf8 ? "\xE2\x96\x95" : "|") + timelineCells(snap, 60, utf8)
-                  + (utf8 ? "\xE2\x96\x8F" : "|") + " " + std::to_string(snap.identified) + " identified");
+                  + (utf8 ? "\xE2\x96\x8F" : "|"));
     if (!snap.log_dir.empty()) out.push_back("logs        " + snap.log_dir);
     return out;
   }
