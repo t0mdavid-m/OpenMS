@@ -1109,7 +1109,9 @@ namespace OpenMS
             cands.push_back({kv.second.frag_charge, kv.second.frag_mz, kv.second.iso_width,
                              kv.second.stage1_scores.charge_snr, kv.second.intensity});
         }
-        extra_charges = selectNotches(cands, anchor->frag_charge, snr_threshold,
+        // The fragment-charge floor bounds the notches as it bounds the anchor: an ungoverned plan's candidates are
+        // every charge the fragment was seen at, floored nowhere else.
+        extra_charges = selectNotches(cands, anchor->frag_charge, snr_threshold, config_.level(2).min_charge,
                                       MAX_NOTCHES_PER_STAGE, ChargeSelection::Intensity,  // MS3 keeps intensity (ADR-0059)
                                       "MS3 " + f->ion_type + std::to_string(f->ion_index));
       }
@@ -1479,7 +1481,8 @@ namespace OpenMS
       cands.reserve(envelope.size());
       for (const ChargeRecord& cr : envelope)
         cands.push_back({cr.charge, cr.mz, cr.iso_width, cr.stage1_scores.charge_snr, cr.intensity});
-      extra_charges = selectNotches(cands, anchor_charge, snr_threshold, MAX_NOTCHES_PER_STAGE,
+      extra_charges = selectNotches(cands, anchor_charge, snr_threshold, config_.level(2).min_charge,  // the fragment-charge floor
+                                    MAX_NOTCHES_PER_STAGE,
                                     ChargeSelection::Intensity,  // MS3 keeps intensity (ADR-0059)
                                     std::string("MS3 ") + mode_name + " m=" + std::to_string(pr.mono_mass));
     }

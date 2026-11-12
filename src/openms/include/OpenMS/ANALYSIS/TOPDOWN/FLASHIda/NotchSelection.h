@@ -78,6 +78,34 @@ namespace OpenMS
               [rule](const NotchCandidate& a, const NotchCandidate& b) { return chargeRanksBefore(a, b, rule); });
   }
 
+  /// The charges of a species, other than its anchor, that may be isolated beside it: the one
+  /// admissibility gate of a charge set. selectNotches ranks and clamps what this returns, and a
+  /// caller that only needs to know how many charges a species resolves counts it.
+  ///
+  /// A charge is dropped when it is the anchor (the cascade stage itself, not a notch), when it has
+  /// no measured window to isolate, when its own envelope does not rise above noise
+  /// (snr < @p snr_threshold), or when it is below @p min_charge (the level's charge floor:
+  /// precursor_selection.min_precursor_charge for a precursor,
+  /// characterization.min_fragment_charge for an MS3 fragment; 0 = no floor). The floor is a
+  /// required parameter on purpose: it used to be applied by the callers, and only the authored-row
+  /// caller did, so an unrestricted species' notches and separate scans went below it.
+  ///
+  /// The order of @p candidates is kept.
+  inline std::vector<NotchCandidate> admissibleNotches(const std::vector<NotchCandidate>& candidates,
+                                                       int anchor_charge, double snr_threshold, int min_charge)
+  {
+    std::vector<NotchCandidate> out;
+    for (const NotchCandidate& c : candidates)
+    {
+      if (c.charge == anchor_charge) continue;          // the stage itself, not a notch
+      if (c.charge <= 0 || c.mz <= 0 || c.width <= 0) continue;  // not isolatable
+      if (c.snr < snr_threshold) continue;              // below noise
+      if (min_charge > 0 && c.charge < min_charge) continue;     // below the level's charge floor
+      out.push_back(c);
+    }
+    return out;
+  }
+
   /// Pick the co-isolation notches for one acquisition charge set (ADR-0016).
   ///
   /// Policy, in one place because three call sites need the same answer and a second copy is how the
@@ -86,7 +114,8 @@ namespace OpenMS
   ///   2. drop any charge whose own envelope does not rise above noise (snr < @p snr_threshold) —
   ///      a charge contributing no signal still consumes part of the scan's ion budget, and under
   ///      MSX the budget is shared with equal injection time per notch, so a junk notch actively
-  ///      costs the good ones,
+  ///      costs the good ones — and any charge below @p min_charge (steps 1 and 2 are
+  ///      admissibleNotches),
   ///   3. order by @p rule (rankCharges), so a clamp keeps the charges the rule ranks first,
   ///   4. clamp to @p max_notches and SAY what was dropped — a silent truncation reads as "we
   ///      isolated the whole envelope" when we did not.
@@ -103,24 +132,18 @@ namespace OpenMS
   /// @param candidates every observed charge of the species, anchor included
   /// @param anchor_charge the charge the cascade stage itself isolates
   /// @param snr_threshold the same targeting().snr_threshold the selector already applies
+  /// @param min_charge the level's charge floor (0 = none); no notch is below it
   /// @param max_notches this stage's own budget (at most MAX_NOTCHES_PER_STAGE)
   /// @param rule the ranking that decides order and which charges survive the clamp
   /// @param where short label for the drop message (e.g. "MS2 z=17 m=12358.3")
-  inline std::vector<NotchCandidate> selectNotches(std::vector<NotchCandidate> candidates,
-                                                   int anchor_charge, double snr_threshold,
+  inline std::vector<NotchCandidate> selectNotches(const std::vector<NotchCandidate>& candidates,
+                                                   int anchor_charge, double snr_threshold, int min_charge,
                                                    int max_notches, ChargeSelection rule,
                                                    const std::string& where = "")
   {
-    std::vector<NotchCandidate> out;
-    if (max_notches <= 0) return out;
+    if (max_notches <= 0) return {};
 
-    for (const NotchCandidate& c : candidates)
-    {
-      if (c.charge == anchor_charge) continue;          // the stage itself, not a notch
-      if (c.charge <= 0 || c.mz <= 0 || c.width <= 0) continue;  // not isolatable
-      if (c.snr < snr_threshold) continue;              // below noise
-      out.push_back(c);
-    }
+    std::vector<NotchCandidate> out = admissibleNotches(candidates, anchor_charge, snr_threshold, min_charge);
 
     rankCharges(out, rule);
 

@@ -223,7 +223,7 @@ START_SECTION(selectNotches_policy)
   // though it is the second most abundant; what survives is ordered by DESCENDING INTENSITY, because
   // a co-isolated fill exists to harvest ion current and SNR only decides admission.
   {
-    auto out = selectNotches(cands, /*anchor=*/17, /*snr_threshold=*/1.0, /*max_notches=*/9, ChargeSelection::Intensity);
+    auto out = selectNotches(cands, /*anchor=*/17, /*snr_threshold=*/1.0, 0, /*max_notches=*/9, ChargeSelection::Intensity);
     TEST_EQUAL(out.size(), 2)
     TEST_EQUAL(out[0].charge, 16)   // intensity 9.0e6, despite the lower SNR
     TEST_EQUAL(out[1].charge, 15)   // intensity 2.0e6, despite the highest SNR
@@ -232,7 +232,7 @@ START_SECTION(selectNotches_policy)
   // The clamp keeps the top N by intensity. (It also reports the drop on stdout; that a value was
   // dropped is never silent, which is the point.)
   {
-    auto out = selectNotches(cands, 17, 1.0, 1, ChargeSelection::Intensity);
+    auto out = selectNotches(cands, 17, 1.0, 0, 1, ChargeSelection::Intensity);
     TEST_EQUAL(out.size(), 1)
     TEST_EQUAL(out[0].charge, 16)
   }
@@ -245,7 +245,7 @@ START_SECTION(selectNotches_policy)
       {14, 800.0, 2.0, 4.0, 1.0e6},
       {13, 750.0, 2.0, 4.0, 1.0e6},
     };
-    auto out = selectNotches(tied, 17, 1.0, 9, ChargeSelection::Intensity);
+    auto out = selectNotches(tied, 17, 1.0, 0, 9, ChargeSelection::Intensity);
     TEST_EQUAL(out.size(), 3)
     TEST_EQUAL(out[0].charge, 12)
     TEST_EQUAL(out[1].charge, 13)
@@ -256,7 +256,7 @@ START_SECTION(selectNotches_policy)
   {
     std::vector<NotchCandidate> wide;
     for (int z = 2; z <= 20; ++z) wide.push_back({z, 500.0 + z, 2.0, 4.0, 1.0e6 * z});
-    auto out = selectNotches(wide, /*anchor=*/20, 1.0, MAX_NOTCHES_PER_STAGE, ChargeSelection::Intensity);
+    auto out = selectNotches(wide, /*anchor=*/20, 1.0, 0, MAX_NOTCHES_PER_STAGE, ChargeSelection::Intensity);
     TEST_EQUAL(out.size(), 9)
     TEST_EQUAL(out[0].charge, 19)   // most intense of the non-anchors
     TEST_EQUAL(out[8].charge, 11)   // ninth; z<=10 dropped as least intense
@@ -264,15 +264,15 @@ START_SECTION(selectNotches_policy)
 
   // max_notches 0 -- an MS3 whose stage-0 notches already consumed every slot -- yields nothing
   // rather than overflowing.
-  TEST_EQUAL(selectNotches(cands, 17, 1.0, 0, ChargeSelection::Intensity).size(), 0)
+  TEST_EQUAL(selectNotches(cands, 17, 1.0, 0, 0, ChargeSelection::Intensity).size(), 0)
 
   // A higher threshold gates more out; a threshold above every candidate leaves nothing.
-  TEST_EQUAL(selectNotches(cands, 17, 6.0, 9, ChargeSelection::Intensity).size(), 1)    // only z=15 (snr 9.0)
-  TEST_EQUAL(selectNotches(cands, 17, 100.0, 9, ChargeSelection::Intensity).size(), 0)
+  TEST_EQUAL(selectNotches(cands, 17, 6.0, 0, 9, ChargeSelection::Intensity).size(), 1)    // only z=15 (snr 9.0)
+  TEST_EQUAL(selectNotches(cands, 17, 100.0, 0, 9, ChargeSelection::Intensity).size(), 0)
 
   // Anchoring elsewhere moves which charge is excluded, and the anchor's own scores are irrelevant.
   {
-    auto out = selectNotches(cands, /*anchor=*/15, 1.0, 9, ChargeSelection::Intensity);
+    auto out = selectNotches(cands, /*anchor=*/15, 1.0, 0, 9, ChargeSelection::Intensity);
     TEST_EQUAL(out.size(), 2)
     TEST_EQUAL(out[0].charge, 16)   // intensity 9.0e6
     TEST_EQUAL(out[1].charge, 17)   // intensity 5.0e6
@@ -287,13 +287,13 @@ START_SECTION(selectNotches_policy)
       { 0, 512.1, 2.0, 99.0, 9.0e6},   // no charge
       {14, 820.0, 2.5,  4.0, 1.0e6},   // fine
     };
-    auto out = selectNotches(broken, 17, 1.0, 9, ChargeSelection::Intensity);
+    auto out = selectNotches(broken, 17, 1.0, 0, 9, ChargeSelection::Intensity);
     TEST_EQUAL(out.size(), 1)
     TEST_EQUAL(out[0].charge, 14)
   }
 
   // Empty in, empty out.
-  TEST_EQUAL(selectNotches({}, 17, 1.0, 9, ChargeSelection::Intensity).size(), 0)
+  TEST_EQUAL(selectNotches({}, 17, 1.0, 0, 9, ChargeSelection::Intensity).size(), 0)
 }
 END_SECTION
 
@@ -315,7 +315,7 @@ auto rankFixture = []() -> std::vector<NotchCandidate>
 
 START_SECTION(selectNotches_ranks_by_snr)
 {
-  auto out = selectNotches(rankFixture(), 17, 1.0, 9, ChargeSelection::Snr);
+  auto out = selectNotches(rankFixture(), 17, 1.0, 0, 9, ChargeSelection::Snr);
   TEST_EQUAL(out.size(), 4)
   TEST_EQUAL(out[0].charge, 15)   // snr 9.0
   TEST_EQUAL(out[1].charge, 14)   // snr 6.0
@@ -326,7 +326,7 @@ START_SECTION(selectNotches_ranks_by_snr)
   const std::vector<NotchCandidate> tied = {
     {12, 700.0, 2.0, 4.0, 1.0e6}, {14, 800.0, 2.0, 4.0, 3.0e6}, {13, 750.0, 2.0, 4.0, 1.0e6},
   };
-  auto t = selectNotches(tied, 17, 1.0, 9, ChargeSelection::Snr);
+  auto t = selectNotches(tied, 17, 1.0, 0, 9, ChargeSelection::Snr);
   TEST_EQUAL(t[0].charge, 14)
   TEST_EQUAL(t[1].charge, 12)
   TEST_EQUAL(t[2].charge, 13)
@@ -335,7 +335,7 @@ END_SECTION
 
 START_SECTION(selectNotches_ranks_by_qscore)
 {
-  auto out = selectNotches(rankFixture(), 17, 1.0, 9, ChargeSelection::Qscore);
+  auto out = selectNotches(rankFixture(), 17, 1.0, 0, 9, ChargeSelection::Qscore);
   TEST_EQUAL(out.size(), 4)
   TEST_EQUAL(out[0].charge, 14)   // 0.95
   TEST_EQUAL(out[1].charge, 13)   // 0.80
@@ -346,14 +346,14 @@ END_SECTION
 
 START_SECTION(selectNotches_ranks_by_purity)
 {
-  auto out = selectNotches(rankFixture(), 17, 1.0, 9, ChargeSelection::Purity);
+  auto out = selectNotches(rankFixture(), 17, 1.0, 0, 9, ChargeSelection::Purity);
   TEST_EQUAL(out.size(), 4)
   TEST_EQUAL(out[0].charge, 13)   // 0.90
   TEST_EQUAL(out[1].charge, 14)   // 0.60
   TEST_EQUAL(out[2].charge, 15)   // 0.55
   TEST_EQUAL(out[3].charge, 16)   // 0.40
   // The clamp keeps the purest.
-  auto one = selectNotches(rankFixture(), 17, 1.0, 1, ChargeSelection::Purity);
+  auto one = selectNotches(rankFixture(), 17, 1.0, 0, 1, ChargeSelection::Purity);
   TEST_EQUAL(one.size(), 1)
   TEST_EQUAL(one[0].charge, 13)
 }
@@ -362,14 +362,14 @@ END_SECTION
 START_SECTION(selectNotches_clamp_uses_the_rule)
 {
   // max_notches 2: the kept pair is the rule's top two, never intensity's (16, 14).
-  auto snr = selectNotches(rankFixture(), 17, 1.0, 2, ChargeSelection::Snr);
+  auto snr = selectNotches(rankFixture(), 17, 1.0, 0, 2, ChargeSelection::Snr);
   TEST_EQUAL(snr.size(), 2)
   TEST_EQUAL(snr[0].charge, 15)
   TEST_EQUAL(snr[1].charge, 14)
-  auto pur = selectNotches(rankFixture(), 17, 1.0, 2, ChargeSelection::Purity);
+  auto pur = selectNotches(rankFixture(), 17, 1.0, 0, 2, ChargeSelection::Purity);
   TEST_EQUAL(pur[0].charge, 13)
   TEST_EQUAL(pur[1].charge, 14)
-  auto inten = selectNotches(rankFixture(), 17, 1.0, 2, ChargeSelection::Intensity);
+  auto inten = selectNotches(rankFixture(), 17, 1.0, 0, 2, ChargeSelection::Intensity);
   TEST_EQUAL(inten[0].charge, 16)
   TEST_EQUAL(inten[1].charge, 14)
 }

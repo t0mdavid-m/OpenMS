@@ -410,6 +410,9 @@ namespace OpenMS
   /// An authored charge set FILTERS the candidates and never extends them; `selectNotches` still
   /// applies the SNR gate afterwards, so a named-but-weak charge is refused as a notch even though
   /// the anchor is exempt.
+  ///
+  /// The charge floor (`ctx.min_charge`) bounds every member, authored or not: `selectNotches`
+  /// applies it, so an unrestricted species' extra charges cannot go below the floor its anchor met.
   inline std::vector<int> acquisitionChargeSet(const PeakGroup& pg, int anchor_charge,
                                                const AdmissionContext& ctx)
   {
@@ -423,13 +426,12 @@ namespace OpenMS
           std::remove_if(notch_candidates.begin(), notch_candidates.end(),
                          [&ctx](const NotchCandidate& n) {
                            return !CandidateAdmissionDetail::contains(ctx.authored, n.charge)
-                                  || CandidateAdmissionDetail::contains(ctx.spent_charges, n.charge)
-                                  || (ctx.min_charge > 0 && n.charge < ctx.min_charge);
+                                  || CandidateAdmissionDetail::contains(ctx.spent_charges, n.charge);
                          }),
           notch_candidates.end());
     }
     for (const NotchCandidate& n :
-         selectNotches(notch_candidates, anchor_charge, ctx.snr_threshold, ctx.max_notches,
+         selectNotches(notch_candidates, anchor_charge, ctx.snr_threshold, ctx.min_charge, ctx.max_notches,
                        ctx.charge_selection, ctx.where))
       out.push_back(n.charge);
 

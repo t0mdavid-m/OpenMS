@@ -1143,8 +1143,10 @@ namespace OpenMS
     const auto contains = [](const std::vector<int>& v, int z) { return std::find(v.begin(), v.end(), z) != v.end(); };
 
     // The same candidates, gate and ranking admission uses (peakGroupNotchCandidates, snr_threshold,
-    // charge_selection), so a re-chosen charge is one this survey would have admitted.
+    // the precursor charge floor, charge_selection), so a re-chosen charge is one this survey would
+    // have admitted.
     const MSSpectrum& raw = deconv_.deconvolvedMS1().getOriginalSpectrum();
+    const int min_charge = config_.level(1).min_charge;
     std::vector<std::pair<NotchCandidate, const PeakGroup*>> cands;
     for (const PeakGroup* pg : findSpecies(nominal))
     {
@@ -1152,6 +1154,7 @@ namespace OpenMS
       {
         if (n.charge <= 0 || n.mz <= 0 || n.width <= 0) continue; // not isolatable
         if (n.snr < config_.targeting().snr_threshold) continue;  // below noise
+        if (min_charge > 0 && n.charge < min_charge) continue;    // below min_precursor_charge
         if (contains(exclude, n.charge)) continue;
         if (!allowed.empty() && !contains(allowed, n.charge)) continue;
         cands.emplace_back(n, pg);
