@@ -178,6 +178,23 @@ private:
   /// representative): @p clusters as markRepresentativeProteoformHits_ returns them, @p qvalues the PrSM q-values, a PrSM taking part if its
   /// q-value is at most @p rep_q (with @p use_fdr; otherwise only the representative's own termini and modifications count)
   void setCombinedCoverage_(const std::vector<std::vector<Size>>& clusters, const std::vector<double>& qvalues, double rep_q, bool use_fdr);
+  /// the PrSMs setCombinedCoverage_ combined for one proteoform: their Index values at that time (the representative first), the bonds each
+  /// covers on its MS2 spectrum, and the number of bonds of the proteoform
+  struct CombinedSet
+  {
+    std::vector<int> members;
+    std::vector<std::vector<int>> bonds;
+    int bond_count = 0;
+  };
+  /// one per proteoform with a combined coverage, kept until addMS3ToCombinedCoverage_
+  std::vector<CombinedSet> combined_sets_;
+  /// the bonds the MS3 spectra of a PrSM cover (annotateMS3_ without before_choice), by the Index of the PrSM
+  std::map<int, std::set<int>> ms3_bonds_of_prsm_;
+  /// CombinedCoverage with the MS3-covered bonds of the combined PrSMs, by the rule of setCombinedCoverage_ (the best PrSM and the bonds
+  /// covered in at least two), so that it is comparable with RawCoverage, which counts MS2 and MS3 bonds. CombinedCoverageChance stays
+  /// that of the MS2 fragments: the MS3 sub-ions have no decoy sets. @p index_map: the Index of a PrSM at setCombinedCoverage_ to its
+  /// Index now (the position in proteoform_hits_).
+  void addMS3ToCombinedCoverage_(const std::map<int, int>& index_map);
   /// native mode: a terminus of a PrSM without a proteoform mass whose side has no more fragments on the raw spectrum than chance is
   /// reported undetermined (-1)
   void setNativeTermini_();

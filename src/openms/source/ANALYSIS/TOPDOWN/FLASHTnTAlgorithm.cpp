@@ -4542,7 +4542,10 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       hit.setMetaValue(tntKey("MS3Scans"), it == ms3_scans_of_.end() ? std::vector<int>() : it->second);
     }
     annotateMS3_(proteoform_hits_);
+    addMS3ToCombinedCoverage_(prsm_index_map);
   }
+  combined_sets_.clear();
+  ms3_bonds_of_prsm_.clear();
   if (native_rule) setNativeTermini_();
   setProteoformLevels_(*db);
   // the large locals freed with all threads instead of by their destructors on return
@@ -5345,6 +5348,7 @@ void FLASHTnTAlgorithm::annotateMS3_(std::vector<ProteinHit>& hits, bool before_
       std::set<int> all = ms2_bonds[h];
       all.insert(ms3_bonds[h].begin(), ms3_bonds[h].end());
       hit.setMetaValue(tntKey("RawCoverage"), 100.0 * (double)all.size() / (double)(L - 1));
+      if (hit.metaValueExists(tntKey("Index"))) ms3_bonds_of_prsm_[(int)hit.getMetaValue(tntKey("Index"))] = ms3_bonds[h];
       with_evidence++;
     }
   }
@@ -5372,6 +5376,7 @@ void FLASHTnTAlgorithm::setCombinedCoverage_(const std::vector<std::vector<Size>
   //   ETD PXD012247 (14 fractions) 33.4 (0.9), 34.4 (1.0), 37.8 (1.6), 35.8 (1.4)
   // The union and the averaged spectrum gain coverage at the price of their chance: decoy bonds recur in the spectra of one proteoform,
   // and an averaged spectrum holds the peaks of all of them. Targets and decoys alike, so a later use in a score stays target-decoy fair.
+  combined_sets_.clear();
   if (! raw_loader_) return;
   if (clusters.empty())
   {
@@ -5424,6 +5429,7 @@ void FLASHTnTAlgorithm::setCombinedCoverage_(const std::vector<std::vector<Size>
   const std::vector<double> shifts = aparam.getValue("decoy_shifts").toDoubleVector();
   std::vector<FLASHAnnotatorAlgorithm::PrSM> prsms;
   std::vector<double> precursor_masses;
+  std::vector<Size> hit_of;                           // the position in proteoform_hits_ (its Index) of each PrSM of prsms
   std::vector<Size> first_of(clusters.size() + 1, 0); // the PrSMs of cluster c: prsms[first_of[c], first_of[c + 1])
   double max_mass = 0;
   for (Size c = 0; c < clusters.size(); c++)
@@ -5437,6 +5443,7 @@ void FLASHTnTAlgorithm::setCombinedCoverage_(const std::vector<std::vector<Size>
       max_mass = std::max({max_mass, precursor_mass, FLASHAnnotatorAlgorithm::getProteoformMass(prsm.sequence, prsm.modifications)});
       prsms.push_back(std::move(prsm));
       precursor_masses.push_back(precursor_mass);
+      hit_of.push_back(i);
     }
   }
   first_of[clusters.size()] = prsms.size();
@@ -5503,6 +5510,17 @@ void FLASHTnTAlgorithm::setCombinedCoverage_(const std::vector<std::vector<Size>
     rep.setMetaValue(mi_prsms, (int)n);
     rep.setMetaValue(mi_coverage, coverage);
     rep.setMetaValue(mi_chance, chance);
+    // for addMS3ToCombinedCoverage_: the MS3 evidence is annotated after the PrSMs are filtered and numbered
+    CombinedSet set;
+    set.bond_count = bonds;
+    for (Size j = 0; j < n; j++)
+    {
+      set.members.push_back((int)hit_of[first + j]);
+      set.bonds.emplace_back();
+      for (int b = 1; b <= bonds; b++)
+        if (covered[0][j][b]) set.bonds.back().push_back(b);
+    }
+    combined_sets_.push_back(std::move(set));
     if (n >= 2 && ! StringUtils::hasPrefix(rep.getAccession(), "DECOY"))
     {
       combined++;
@@ -5674,6 +5692,48 @@ std::pair<double, double> scoringShiftShape(const std::string& seq, const std::v
   return {sub, wlen};
 }
 } // namespace
+
+void FLASHTnTAlgorithm::addMS3ToCombinedCoverage_(const std::map<int, int>& index_map)
+{
+  // RawCoverage of a PrSM with MS3 spectra counts the bonds of its MS2 and of its MS3 spectra (annotateMS3_), CombinedCoverage counted the
+  // MS2 bonds only, so a proteoform could have less combined coverage than its own representative PrSM (cytochrome c coverage run of
+  // 2026-11-12: 7 of 33 proteoforms, e.g. 7.8% combined against 29.1% of the representative with 22 MS3-only bonds).
+  const UInt mi_coverage = MetaInfoInterface::metaRegistry().registerName("CombinedCoverage");
+  Size changed = 0;
+  for (const auto& set : combined_sets_)
+  {
+    if (set.members.empty() || set.bond_count <= 0) continue;
+    const auto rep_it = index_map.find(set.members[0]);
+    if (rep_it == index_map.end() || rep_it->second < 0 || rep_it->second >= (int)proteoform_hits_.size()) continue; // not reported
+    std::vector<std::set<int>> covered;
+    bool with_ms3 = false;
+    for (Size j = 0; j < set.members.size(); j++)
+    {
+      covered.emplace_back(set.bonds[j].begin(), set.bonds[j].end());
+      const auto it = index_map.find(set.members[j]);
+      if (it == index_map.end()) continue;
+      const auto ms3 = ms3_bonds_of_prsm_.find(it->second);
+      if (ms3 == ms3_bonds_of_prsm_.end()) continue;
+      for (int b : ms3->second)
+        if (b >= 1 && b <= set.bond_count) covered.back().insert(b);
+      with_ms3 = with_ms3 || ! ms3->second.empty();
+    }
+    if (! with_ms3) continue;
+    Size best = 0;
+    for (Size j = 1; j < covered.size(); j++)
+      if (covered[j].size() > covered[best].size()) best = j;
+    int count = 0;
+    for (int b = 1; b <= set.bond_count; b++)
+    {
+      int in = 0;
+      for (const auto& c : covered) in += (int)c.count(b);
+      count += (covered[best].count(b) > 0 || in >= 2) ? 1 : 0;
+    }
+    proteoform_hits_[rep_it->second].setMetaValue(mi_coverage, 100.0 * count / set.bond_count);
+    changed++;
+  }
+  if (changed > 0) OPENMS_LOG_INFO << "Combined coverage: MS3-covered bonds added for " << changed << " proteoforms" << std::endl;
+}
 
 void FLASHTnTAlgorithm::applyLearnedScoring_(std::vector<ProteinHit>& hits, const std::map<int, const MSSpectrum*>& spectra) const
 {
