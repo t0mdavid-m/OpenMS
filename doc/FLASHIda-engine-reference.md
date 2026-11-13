@@ -779,6 +779,19 @@ engine's `last_result_deconvolved_` (ADR-0045 below). **No unit test pins it** (
 was outside the approved set of the change that found it); the `refine_discriminating_cytc` golden's
 `scan_results` MS3 rows at `mass_count 0` are the only witness. Do not remove the `else` as dead code.
 
+### An MS3 sweep calibrates each ion without itself (ADR-0075)
+
+`MS3FragmentMatcher::calibrateAndScore` pools the loose-pass (500 ppm) errors of every variant, each kept with the
+theoretical entry it fell on (`MatchDetail::theoretical_index`). Each entry's offset is the median of that pool with
+every error on the entry, in every variant, left out; an entry with no error takes the whole pool's median, and an entry
+whose errors are the whole pool takes 0 (no other ion to learn from). The tight pass then tests each entry against the
+observed mass corrected by its own offset (`matchSpectrum`'s `ppm_offsets`; absent, `matchSpectrum` is unchanged).
+Why: a sweep's variants repeat its masses, and a pooled median that holds a mass's own copies anchors on them; on the
+2026-11-12 decoy ladders the whole-pool median gave 9.7–26 × λ chance matches per MS3 scan, leaving out the judged
+error alone 5.6–22 ×, leaving out the ion 0.4–3.7 ×. The row's `ppm_offset` / `correction_factor` and
+`[MS3-SCORE] calibration_ppm` log the whole pool's median. `Refine::pieceTest` calls it with loose 0 (nothing pooled,
+every offset 0); its own shared-piece median (`Refine.cpp`) is a separate, single-spectrum calibration and unchanged.
+
 ### Any MS2 activation feeds an MS3; only a b/y precursor's MS3 is annotated (ADR-0054)
 
 No activation refuses an MS3: `winnerIsMs3Capable` (`"" | HCD | CID`) is **deleted**, so `exhaustive`
