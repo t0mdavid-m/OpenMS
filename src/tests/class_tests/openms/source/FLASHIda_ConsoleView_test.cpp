@@ -194,16 +194,85 @@ START_SECTION(board_row_follows_its_best_identification)
   TEST_EQUAL(u->charge, 10)
   TEST_REAL_SIMILAR(u->coverage, -1.0)
 
-  // the panel draws coverage in whole percent after the score, and '-' without a model
+  // the panel draws coverage in whole percent after the score and its E-value ('-' here: no E), and '-' without a model
   const auto lines = ConsoleView::renderPanel(b.snapshot(180, 60, 0, 0), 120, 8, false, false);
   int with_cov = 0, without = 0;
   for (const auto& l : lines)
   {
-    if (l.find("   961    5%") != std::string::npos) ++with_cov;
+    if (l.find("   961       -    5%") != std::string::npos) ++with_cov;
     if (l.find("     -     -") != std::string::npos) ++without;
   }
   TEST_EQUAL(with_cov, 1)
   TEST_EQUAL(without, 1)
+}
+END_SECTION
+
+// ADR-0075: the board shows each row's E-value in its own column after the score, right-aligned under the header's E,
+// one significant digit; '-' for a row without one. The board takes it from the identification it takes the score from.
+// FAILS UNDER: no column, a column out of line with its header, an E kept from a lower-scoring identification.
+START_SECTION(board_shows_e_after_score)
+{
+  PrecursorBoard b;
+  b.setRt(60.0);
+  auto high = identifiedMatch(212.0, "P99999", "MSGKMTGIVK");
+  high.chance_log10_e = std::log10(3e-12);
+  auto low = identifiedMatch(100.0, "P99999", "MSGKMTGIVK");
+  low.chance_log10_e = std::log10(4e-3);
+  b.onSent(ms2At(7304.70, 7), 5);
+  b.onResult(7304.70, 7, 5, high, false, std::nullopt);
+  b.onResult(7304.70, 7, 5, low, false, std::nullopt);   // lower: the row keeps 212 and its E
+  b.onSent(ms2At(9000.6, 9), 11);                        // no identification
+  const BoardSnapshot s = b.snapshot(180, 60, 0, 0);
+  const BoardRow* r = rowOf(s, 7304.70);
+  ABORT_IF(r == nullptr)
+  TEST_EQUAL(r->log10_e.has_value(), true)
+  TEST_REAL_SIMILAR(*r->log10_e, std::log10(3e-12))
+
+  // in line with its header as the score is with "score": the same offset between a label's last letter and its values
+  const auto lines = ConsoleView::renderPanel(s, 120, 8, false, false);
+  const size_t score_label_end = lines[2].find("score") + 4;
+  const size_t e_label_end = lines[2].find("  E  ") + 2;
+  const std::string id_nominal = std::to_string(r->nominal) + " ";
+  const std::string bare_nominal = std::to_string(SpectralDeconvolution::getNominalMass(9000.6)) + " ";
+  int with_e = 0, without_e = 0;
+  for (size_t k = 3; k < lines.size(); ++k)
+  {
+    const std::string& l = lines[k];
+    if (l.find(id_nominal) != std::string::npos && l.find("3e-12") != std::string::npos && l.find("212") != std::string::npos)
+    {
+      const size_t score_end = l.find("212") + 2, e_end = l.find("3e-12") + 4;
+      if (score_label_end - score_end == e_label_end - e_end) ++with_e;
+    }
+    if (l.find(bare_nominal) != std::string::npos)
+    {
+      const size_t offset = score_label_end - (l.find(" -") + 1);   // the score's '-'
+      if (e_label_end - offset < l.size() && l[e_label_end - offset] == '-') ++without_e;
+    }
+  }
+  TEST_EQUAL(with_e, 1)
+  TEST_EQUAL(without_e, 1)
+}
+END_SECTION
+
+// ADR-0075: the run summary's best-score line carries that row's E-value, and leaves it out when there is none.
+// FAILS UNDER: no E, an E from another row, or ", E -" for a row without one.
+START_SECTION(summary_best_score_carries_e)
+{
+  BoardSnapshot s;
+  s.proteins = 1;
+  s.best_score = 212.0;
+  s.best_accession = "P99999";
+  s.best_log10_e = std::log10(3e-12);
+  std::string proteins;
+  for (const auto& l : ConsoleView::renderSummary(s, false))
+    if (l.rfind("proteins", 0) == 0) proteins = l;
+  TEST_EQUAL(proteins.find("best score 212 (P99999, E 3e-12)") != std::string::npos, true)
+
+  s.best_log10_e.reset();
+  proteins.clear();
+  for (const auto& l : ConsoleView::renderSummary(s, false))
+    if (l.rfind("proteins", 0) == 0) proteins = l;
+  TEST_EQUAL(proteins.find("best score 212 (P99999)") != std::string::npos, true)
 }
 END_SECTION
 

@@ -118,7 +118,8 @@ START_SECTION(schema_column_counts)
   // ADR-0061 push 4b: + protein/raw_score/identification_score/closed_out/inferred_precursor_mass, appended
   // after precursor_mass_difference (41 -> 46). ADR-0064: + quant_ms3, appended last (46 -> 47).
   // ADR-0074: + bond_coverage/explained_signal, appended last (47 -> 49).
-  TEST_EQUAL(i.headers.size(), 49)
+  // ADR-0075: + chance_p/chance_e/confirmation_p, appended last (49 -> 52).
+  TEST_EQUAL(i.headers.size(), 52)
 
   // Spot-check exact header identities / order at the boundaries that matter for parsing.
   // NOTE: the four log streams were reordered for human legibility (LOG_COLUMN_ORDER_REFERENCE.md);
@@ -156,7 +157,7 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(r.colIndex("fragment_count"), 14)
   TEST_EQUAL(r.colIndex("tic_coverage"), 15)
   TEST_EQUAL(i.headers.front(), std::string("tracking_id"))      // reordered: identification now leads with tracking_id
-  TEST_EQUAL(i.headers.back(), std::string("explained_signal")) // ADR-0074: appended after quant_ms3 (ADR-0064)
+  TEST_EQUAL(i.headers.back(), std::string("confirmation_p"))   // ADR-0075: appended after explained_signal (ADR-0074)
   // ADR-0061 push 4b: the block after the refine record, pinned as a contiguous run.
   TEST_EQUAL(i.colIndex("protein"), 41)
   TEST_EQUAL(i.colIndex("raw_score"), 42)
@@ -166,6 +167,9 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(i.colIndex("quant_ms3"), 46)
   TEST_EQUAL(i.colIndex("bond_coverage"), 47)                   // ADR-0074
   TEST_EQUAL(i.colIndex("explained_signal"), 48)
+  TEST_EQUAL(i.colIndex("chance_p"), 49)                        // ADR-0075
+  TEST_EQUAL(i.colIndex("chance_e"), 50)
+  TEST_EQUAL(i.colIndex("confirmation_p"), 51)
   TEST_EQUAL(i.colIndex("annotation_score"), 34)                // the refine block, pinned as a contiguous run
   TEST_EQUAL(i.colIndex("total_shift"), 35)
   TEST_EQUAL(i.colIndex("second_total_shift"), 36)
@@ -896,6 +900,71 @@ START_SECTION(results_identification_yield_sentinels_by_row_type)
   // Both arms must actually have been exercised, or the matrix above proves nothing.
   TEST_TRUE(saw_ms1)
   TEST_TRUE(saw_ms2)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §Y1b -- identification.tsv : the chance-match columns by row kind (ADR-0075).
+//
+// An own-search MS2 row (its own FLASHExtender score) carries chance_p in (0, 1] and chance_e > 0 and no confirmation_p;
+// a winner-re-matched row (flash_extender_score -1) and an MS3 row carry confirmation_p in (0, 1] and no chance_*. The
+// cells are scientific strings written from the log10, so they are read by mantissa and exponent (a p of 1e-401 is a
+// valid cell no double holds).
+// FAILS UNDER: a fill site missed (-1 where a value belongs), a value on the wrong row kind, or a p above 1.
+/////////////////////////////////////////////////////////////
+START_SECTION(chance_columns_by_row_kind)
+{
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  auto ms2 = loadTsvScans(CYTC_MS2);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  const std::string dir = freshLogDir("lf_chance");
+  std::string json = buildJsonWithLogDir(dir, true);   // the identifying cytC recipe
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+  runFullCycle(&ida, ms1, ms2);
+
+  auto idf = TSVFile::parse(dir + "/identification.tsv");
+  ABORT_IF(idf.rows.size() == 0)
+
+  // mantissa and exponent of a cell; false for "-1" or anything that is not d.dde[+-]dd
+  auto sci = [](const std::string& s, double& mantissa, int& exponent) {
+    const size_t e = s.find('e');
+    if (s == "-1" || e == std::string::npos) return false;
+    mantissa = std::stod(s.substr(0, e));
+    exponent = std::stoi(s.substr(e + 1));
+    return mantissa >= 1.0 && mantissa < 10.0;
+  };
+  auto isProbability = [&](const std::string& s) {
+    double m = 0;
+    int x = 0;
+    return s == "0" || (sci(s, m, x) && (x < 0 || (x == 0 && m <= 1.0)));
+  };
+  auto isPositive = [&](const std::string& s) {
+    double m = 0;
+    int x = 0;
+    return sci(s, m, x);
+  };
+
+  int own = 0;
+  for (const auto& row : idf.rows)
+  {
+    const int lvl = std::atoi(cell(idf, row, "ms_level").c_str());
+    const bool rematched = lvl == 2 && toD(cell(idf, row, "flash_extender_score")) == -1.0;
+    if (lvl == 2 && !rematched)
+    {
+      TEST_TRUE(isProbability(cell(idf, row, "chance_p")))
+      TEST_TRUE(isPositive(cell(idf, row, "chance_e")))
+      TEST_EQUAL(cell(idf, row, "confirmation_p"), "-1")
+      ++own;
+    }
+    else if (rematched || lvl == 3)
+    {
+      TEST_EQUAL(cell(idf, row, "chance_p"), "-1")
+      TEST_EQUAL(cell(idf, row, "chance_e"), "-1")
+      TEST_TRUE(isProbability(cell(idf, row, "confirmation_p")))
+    }
+  }
+  TEST_TRUE(own > 0)   // the own-search arm must run, or the matrix above proves nothing
 }
 END_SECTION
 
