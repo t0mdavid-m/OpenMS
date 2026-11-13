@@ -120,7 +120,9 @@ namespace OpenMS
       };
       std::vector<FragmentMatch> fragments;  ///< All matched fragments with detail
 
-      double ppm_offset = 0.0;        ///< Median PPM error from calibration pass (MS3 only)
+      /// MS3 only: the median ppm error of the sweep's whole calibration pool. It is the offset of every ion with no
+      /// loose-pass error; an ion in the pool is corrected by the median with its own errors left out (ADR-0075).
+      double ppm_offset = 0.0;
       double correction_factor = 1.0;  ///< 1/(1 + ppm_offset * 1e-6) (MS3 only)
       float ms3_fragment_coverage = -1.0f;  ///< MS3 only: distinct backbone bonds covered / (L-1) over the matched sub-fragments; -1 = non-MS3/none
 

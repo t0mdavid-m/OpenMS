@@ -698,4 +698,107 @@ START_SECTION(theoretical_masses_carry_the_fixed_mass)
 }
 END_SECTION
 
+/////////////////////////////////////////////////////////////
+// ADR-0075: a sweep calibrates each ion without itself. The fixture is b10 of a 20-residue protein; the observed masses
+// sit at chosen ppm errors off theoretical entries that have no other entry within 1 Da, so each mass can only ever pair
+// with the entry it was built on, in the loose pass and the tight one alike. (A local struct: this is main's body.)
+/////////////////////////////////////////////////////////////
+  struct SweepFixture
+  {
+    std::string protein = "ACDEFGHIKLMNPQRSTVWY";
+    MS3FragmentMatcher::ProteoformContext ctx;
+    std::vector<MS3FragmentMatcher::TheoreticalMass> theoretical;
+    std::vector<size_t> isolated;   // entries with no other entry within 1 Da, in index order
+
+    SweepFixture()
+    {
+      ctx.region_start = 0;
+      ctx.region_end = 20;
+      theoretical = MS3FragmentMatcher::computeTheoreticalMasses(
+        MS3FragmentMatcher::extractSubsequence(protein, ctx, 'b', 10), MS3FragmentMatcher::getMS3IonTypes('b'));
+      for (size_t i = 0; i < theoretical.size(); ++i)
+      {
+        bool alone = theoretical[i].mass > 0.0;
+        for (size_t j = 0; alone && j < theoretical.size(); ++j)
+          if (j != i && std::abs(theoretical[j].mass - theoretical[i].mass) < 1.0) alone = false;
+        if (alone) isolated.push_back(i);
+      }
+    }
+
+    void add(DeconvolvedSpectrum& s, size_t entry, double ppm) const
+    {
+      PeakGroup pg(1, 1, true);
+      pg.setMonoisotopicMass(theoretical[entry].mass * (1.0 + ppm * 1e-6));
+      s.push_back(pg);
+    }
+  };
+
+// The toy of the leave-out lesson: one noise mass, 130 ppm off an entry, recurs in all 7 variants; six unrelated masses
+// are spread around it. Pooled, the 7 copies are 7 of 13 errors, so today's median is 130 and every copy matches.
+//
+// FAILS UNDER: the whole pool's median (every score 1), or leaving out only the judged error (6 copies still hold the
+// median at 130).
+START_SECTION(calibrate_and_score_leaves_out_the_ion)
+{
+  const SweepFixture f;
+  TEST_EQUAL(f.isolated.size() >= 7, true)
+  const double spread[6] = {-420.0, -310.0, -205.0, -90.0, 15.0, 240.0};
+  std::vector<DeconvolvedSpectrum> specs(7, DeconvolvedSpectrum(0));
+  for (size_t v = 0; v < 7; ++v)
+  {
+    f.add(specs[v], f.isolated[0], 130.0);
+    if (v < 6) f.add(specs[v], f.isolated[1 + v], spread[v]);
+  }
+  std::vector<const DeconvolvedSpectrum*> variants;
+  for (const auto& s : specs) variants.push_back(&s);
+
+  const auto scores = MS3FragmentMatcher::calibrateAndScore(variants, f.protein, f.ctx, 'b', 10,
+                                                            MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 10.0);
+  TEST_EQUAL(scores.size(), 7)
+  for (double s : scores) { TEST_REAL_SIMILAR(s, 0.0) }
+}
+END_SECTION
+
+// Five true ions recur in all 7 variants at the run's -24 ppm. Each ion's offset is learned from the other four ions'
+// 28 errors: -24, so every ion still matches.
+START_SECTION(calibrate_and_score_a_true_ion_learns_from_the_others)
+{
+  const SweepFixture f;
+  TEST_EQUAL(f.isolated.size() >= 5, true)
+  std::vector<DeconvolvedSpectrum> specs(7, DeconvolvedSpectrum(0));
+  for (size_t v = 0; v < 7; ++v)
+    for (size_t i = 0; i < 5; ++i) f.add(specs[v], f.isolated[i], -24.0);
+  std::vector<const DeconvolvedSpectrum*> variants;
+  for (const auto& s : specs) variants.push_back(&s);
+
+  std::vector<FragmentAnalysis::ProteoformMatch> detailed;
+  const auto scores = MS3FragmentMatcher::calibrateAndScore(variants, f.protein, f.ctx, 'b', 10,
+                                                            MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 10.0, &detailed);
+  TEST_EQUAL(scores.size(), 7)
+  for (double s : scores) { TEST_REAL_SIMILAR(s, 5.0) }
+  TEST_REAL_SIMILAR(detailed[0].ppm_offset, -24.0)   // the logged pooled median
+}
+END_SECTION
+
+// One variant, one mass 50 ppm off an entry, nothing else: its error is the whole pool, so there is no other ion to
+// learn from and it is not corrected. The logged pooled median is still its 50 ppm.
+//
+// FAILS UNDER: the whole pool's median (the mass corrects itself to 0 ppm and scores 1).
+START_SECTION(calibrate_and_score_a_lone_ion_is_not_corrected)
+{
+  const SweepFixture f;
+  TEST_EQUAL(f.isolated.empty(), false)
+  DeconvolvedSpectrum spec(0);
+  f.add(spec, f.isolated[0], 50.0);
+  std::vector<const DeconvolvedSpectrum*> variants = {&spec};
+
+  std::vector<FragmentAnalysis::ProteoformMatch> detailed;
+  const auto scores = MS3FragmentMatcher::calibrateAndScore(variants, f.protein, f.ctx, 'b', 10,
+                                                            MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 10.0, &detailed);
+  TEST_EQUAL(scores.size(), 1)
+  TEST_REAL_SIMILAR(scores[0], 0.0)
+  TEST_REAL_SIMILAR(detailed[0].correction_factor, 1.0 / (1.0 + 50.0e-6))
+}
+END_SECTION
+
 END_TEST

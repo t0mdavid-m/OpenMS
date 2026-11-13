@@ -210,9 +210,17 @@ namespace OpenMS
     const std::vector<TheoreticalMass>& theoretical,
     double tolerance_ppm,
     std::vector<double>* ppm_errors,
-    std::vector<MatchDetail>* match_details)
+    std::vector<MatchDetail>* match_details,
+    const std::vector<double>* ppm_offsets)
   {
     if (spectrum.empty() || theoretical.empty()) return 0;
+    if (ppm_offsets != nullptr && ppm_offsets->size() != theoretical.size()) ppm_offsets = nullptr;   // one per entry, or none
+
+    // With per-entry offsets, the sorted scan below is bounded by the widest corrected window; each candidate is then
+    // tested at its own offset. Without them the bound IS the window, and the second test below changes nothing.
+    double max_abs_offset = 0.0;
+    if (ppm_offsets != nullptr)
+      for (double o : *ppm_offsets) max_abs_offset = std::max(max_abs_offset, std::abs(o));
 
     // Sort theoretical masses for binary search
     std::vector<size_t> sorted_idx(theoretical.size());
@@ -227,10 +235,12 @@ namespace OpenMS
     for (Size si = 0; si < spectrum.size(); ++si)
     {
       double obs_mass = spectrum[si].getMonoMass();
-      double tol_da = obs_mass * tolerance_ppm * 1e-6;
+      const double scan_da = ppm_offsets != nullptr ? obs_mass * (tolerance_ppm + max_abs_offset + 1.0) * 1e-6
+                                                    : obs_mass * tolerance_ppm * 1e-6;
 
       int best_theo_idx = -1;
       double best_ppm = tolerance_ppm + 1.0;
+      double best_obs = obs_mass;   // the observed mass as corrected for the best entry
 
       // Scan sorted candidates within tolerance window
       for (size_t k = 0; k < sorted_idx.size(); ++k)
@@ -238,14 +248,20 @@ namespace OpenMS
         size_t ti = sorted_idx[k];
         if (theo_used[ti]) continue;
         double theo_mass = theoretical[ti].mass;
-        if (theo_mass < obs_mass - tol_da) continue;
-        if (theo_mass > obs_mass + tol_da) break;
+        if (theo_mass < obs_mass - scan_da) continue;
+        if (theo_mass > obs_mass + scan_da) break;
 
-        double ppm_err = std::abs((obs_mass - theo_mass) / theo_mass) * 1e6;
+        // ADR-0075: entry ti is tested against the observed mass corrected by ITS offset
+        const double obs_c = ppm_offsets != nullptr ? obs_mass / (1.0 + (*ppm_offsets)[ti] * 1e-6) : obs_mass;
+        const double tol_da = obs_c * tolerance_ppm * 1e-6;
+        if (theo_mass < obs_c - tol_da || theo_mass > obs_c + tol_da) continue;
+
+        double ppm_err = std::abs((obs_c - theo_mass) / theo_mass) * 1e6;
         if (ppm_err < best_ppm)
         {
           best_ppm = ppm_err;
           best_theo_idx = static_cast<int>(ti);
+          best_obs = obs_c;
         }
       }
 
@@ -256,23 +272,24 @@ namespace OpenMS
 
         if (ppm_errors || match_details)
         {
-          double signed_ppm = (obs_mass - theoretical[best_theo_idx].mass)
+          double signed_ppm = (best_obs - theoretical[best_theo_idx].mass)
                               / theoretical[best_theo_idx].mass * 1e6;
           if (ppm_errors)
             ppm_errors->push_back(signed_ppm);
           if (match_details)
           {
             MatchDetail md;
-            md.observed_mass = obs_mass;
+            md.observed_mass = best_obs;
+            md.theoretical_index = static_cast<size_t>(best_theo_idx);
             md.theoretical_mass = theoretical[best_theo_idx].mass;
             md.ppm_error = signed_ppm;
             md.position = theoretical[best_theo_idx].position;
             md.ion_type = theoretical[best_theo_idx].ion_type;
             md.includes_ptm = theoretical[best_theo_idx].includes_ptm;
             md.ambiguous_included = theoretical[best_theo_idx].ambiguous_included;
-            // MS3 leg of fragment_qscores, taken from the group this detail was matched from. Callers
-            // pass a calibration-corrected COPY of the spectrum, but that only rescales the
-            // monoisotopic mass -- the score is not recomputed -- so this is the original deconvolution
+            // MS3 leg of fragment_qscores, taken from the group this detail was matched from. A
+            // calibrated match corrects only the monoisotopic mass (the offsets, or a caller's corrected
+            // copy) -- the score is not recomputed -- so this is the original deconvolution
             // qscore either way, at the same representative charge deconv_qscores reports.
             md.qscore = spectrum[si].getQscore();
             match_details->push_back(md);
@@ -599,27 +616,53 @@ namespace OpenMS
     int prot_start_1based = ctx.region_start + subseq_start_1based;
     int prot_end_1based = prot_start_1based + fragment_ion_index - 1;
 
-    // Pass 1: loose matching for calibration
+    // Pass 1: loose matching for calibration, every error kept with the theoretical entry it fell on
     std::vector<double> all_ppm_errors;
+    std::vector<MatchDetail> loose_details;
     for (size_t vi = 0; vi < variant_spectra.size(); ++vi)
     {
       if (variant_spectra[vi] == nullptr || variant_spectra[vi]->empty()) continue;
-      matchSpectrum(*variant_spectra[vi], theoretical, loose_tolerance_ppm, &all_ppm_errors);
+      matchSpectrum(*variant_spectra[vi], theoretical, loose_tolerance_ppm, &all_ppm_errors, &loose_details);
     }
 
-    // Compute median ppm error
+    auto medianOf = [](const std::vector<double>& sorted) {
+      const size_t mid = sorted.size() / 2;
+      return sorted.size() % 2 == 0 ? (sorted[mid - 1] + sorted[mid]) / 2.0 : sorted[mid];
+    };
+
+    // The whole pool's median: the offset of every ion with no loose-pass error, and what the row and [MS3-SCORE] log
     double correction_factor = 1.0;
     double median_ppm = 0.0;
     if (! all_ppm_errors.empty())
     {
       std::sort(all_ppm_errors.begin(), all_ppm_errors.end());
-      size_t mid = all_ppm_errors.size() / 2;
-      if (all_ppm_errors.size() % 2 == 0)
-        median_ppm = (all_ppm_errors[mid - 1] + all_ppm_errors[mid]) / 2.0;
-      else
-        median_ppm = all_ppm_errors[mid];
-
+      median_ppm = medianOf(all_ppm_errors);
       correction_factor = 1.0 / (1.0 + median_ppm * 1e-6);
+    }
+
+    // ADR-0075: each ion's offset leaves out every error on that ion, in every variant. A sweep fragments one precursor
+    // several times, so the same mass returns in each variant; left in, its copies outvote the rest and pull the window
+    // onto themselves. An ion whose errors are the whole pool has no other ion to learn from and is not corrected.
+    std::vector<double> ion_offsets(theoretical.size(), median_ppm);
+    {
+      std::vector<std::vector<double>> own(theoretical.size());
+      for (const MatchDetail& md : loose_details) own[md.theoretical_index].push_back(md.ppm_error);
+      for (size_t ti = 0; ti < theoretical.size(); ++ti)
+      {
+        if (own[ti].empty()) continue;
+        if (own[ti].size() == all_ppm_errors.size())
+        {
+          ion_offsets[ti] = 0.0;
+          continue;
+        }
+        std::vector<double> rest = all_ppm_errors;   // sorted
+        for (double e : own[ti])
+        {
+          const auto it = std::lower_bound(rest.begin(), rest.end(), e);
+          if (it != rest.end() && *it == e) rest.erase(it);
+        }
+        ion_offsets[ti] = rest.empty() ? 0.0 : medianOf(rest);
+      }
     }
 
     // Precompute protein prefix masses for detailed results
@@ -648,7 +691,7 @@ namespace OpenMS
       }
     }
 
-    // Pass 2: apply correction, match at tight tolerance
+    // Pass 2: match at tight tolerance, each ion at its own offset (ADR-0075)
     for (size_t vi = 0; vi < variant_spectra.size(); ++vi)
     {
       if (variant_spectra[vi] == nullptr || variant_spectra[vi]->empty())
@@ -656,17 +699,9 @@ namespace OpenMS
         continue;
       }
 
-      // Create corrected copy
-      DeconvolvedSpectrum corrected(0);
-      for (Size pi = 0; pi < variant_spectra[vi]->size(); ++pi)
-      {
-        PeakGroup pg = (*variant_spectra[vi])[pi];
-        pg.setMonoisotopicMass(pg.getMonoMass() * correction_factor);
-        corrected.push_back(pg);
-      }
-
       std::vector<MatchDetail> details;
-      scores[vi] = static_cast<double>(matchSpectrum(corrected, theoretical, tight_tolerance_ppm, nullptr, &details));
+      scores[vi] = static_cast<double>(
+        matchSpectrum(*variant_spectra[vi], theoretical, tight_tolerance_ppm, nullptr, &details, &ion_offsets));
 
       if (detailed_results != nullptr)
       {

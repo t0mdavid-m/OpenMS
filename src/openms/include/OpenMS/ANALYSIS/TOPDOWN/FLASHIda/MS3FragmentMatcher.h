@@ -59,6 +59,9 @@ namespace OpenMS
       /// leg is filled independently in FragmentAnalysis::runTagBasedFragmentMatching_. Unaffected by
       /// the calibration copy: that rescales the monoisotopic mass only and never re-scores the group.
       double qscore = 0.0;
+      /// The entry of the theoretical list this detail matched (its index in the vector matchSpectrum was given). The sweep
+      /// calibration groups the loose-pass errors by it, so an ion is left out of its own offset (ADR-0075).
+      size_t theoretical_index = 0;
     };
 
     /// Cached proteoform context from MS2 tag-based matching
@@ -118,13 +121,17 @@ namespace OpenMS
 
     // -- Matching --
 
-    /// Match deconvolved masses against theoretical, return match count
+    /// Match deconvolved masses against theoretical, return match count. Each observed mass takes the closest unused
+    /// theoretical entry within @p tolerance_ppm. With @p ppm_offsets (one per theoretical entry), entry t is tested
+    /// against the observed mass corrected by its own offset, obs / (1 + ppm_offsets[t] * 1e-6), and a detail's
+    /// observed mass and ppm error are the corrected ones (ADR-0075); without it, the masses are taken as they are.
     static int matchSpectrum(
       const DeconvolvedSpectrum& spectrum,
       const std::vector<TheoreticalMass>& theoretical,
       double tolerance_ppm,
       std::vector<double>* ppm_errors = nullptr,
-      std::vector<MatchDetail>* match_details = nullptr);
+      std::vector<MatchDetail>* match_details = nullptr,
+      const std::vector<double>* ppm_offsets = nullptr);
 
     // -- Subsequence extraction + PTM rebasing --
 
@@ -167,7 +174,12 @@ namespace OpenMS
 
     // -- Two-pass calibration pipeline --
 
-    /// Score all CE variants via two-pass calibration + matching
+    /// Score all CE variants via two-pass calibration + matching. Pass 1 matches every variant at @p loose_tolerance_ppm and
+    /// pools the signed errors. Each theoretical ion is then corrected by the median of the pool with every error on that
+    /// ion, in every variant, left out (ADR-0075): a sweep repeats its masses across variants, and a pooled median that
+    /// holds the judged mass's own copies anchors on them. An ion with no error in the pool takes the whole pool's median;
+    /// an ion whose errors are the whole pool is not corrected. Pass 2 matches at @p tight_tolerance_ppm, each ion at its
+    /// own offset. A detailed result's ppm_offset / correction_factor log the whole pool's median.
     static std::vector<double> calibrateAndScore(
       const std::vector<const DeconvolvedSpectrum*>& variant_spectra,
       const std::string& protein_sequence,
