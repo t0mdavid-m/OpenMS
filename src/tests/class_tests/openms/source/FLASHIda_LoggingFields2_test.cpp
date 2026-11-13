@@ -1136,8 +1136,8 @@ START_SECTION(identification_refine_columns_are_sentinels_under_flashtnt)
     if (!line.empty() && line.back() == '\r') line.pop_back();
     if (line.empty()) continue;
     ++n_rows;
-    // 49 columns = 48 tabs, whatever the row type (ADR-0064: + quant_ms3; ADR-0074: + bond_coverage, explained_signal)
-    TEST_EQUAL(std::count(line.begin(), line.end(), '\t'), 48)
+    // 52 columns = 51 tabs, whatever the row type (ADR-0064: + quant_ms3; ADR-0074: + bond_coverage, explained_signal; ADR-0075: + chance_p, chance_e, confirmation_p)
+    TEST_EQUAL(std::count(line.begin(), line.end(), '\t'), 51)
     const std::vector<std::string> f = split_all(line);
     ABORT_IF(f.size() != header.size())
     for (size_t k = 0; k < sentinels.size(); ++k) TEST_EQUAL(f[sentinel_idx[k]], sentinels[k].second)
@@ -1203,14 +1203,14 @@ START_SECTION(identification_refine_columns_carry_the_candidates)
   };
   // tic_coverage, then the seven
   // (ADR-0061 push 4b: then its five; a hand-built row chose no protein, so protein is empty; ADR-0064: then quant_ms3;
-  // ADR-0074: then bond_coverage and explained_signal, -1 on a hand-built match)
+  // ADR-0074: then bond_coverage and explained_signal, -1 on a hand-built match; ADR-0075: then chance_p, chance_e, confirmation_p, -1 likewise)
   TEST_TRUE(endsWith(header, "\ttic_coverage\tannotation_score\ttotal_shift\tsecond_total_shift\tsecond_score\tcut\tn_levels\tprecursor_mass_difference"
-                             "\tprotein\traw_score\tflash_extender_score\tclosed_out\tinferred_precursor_mass\tquant_ms3\tbond_coverage\texplained_signal"))
+                             "\tprotein\traw_score\tflash_extender_score\tclosed_out\tinferred_precursor_mass\tquant_ms3\tbond_coverage\texplained_signal\tchance_p\tchance_e\tconfirmation_p"))
   TEST_TRUE(header.find("\tproteoform\tidentification_score\ttag_count\t") != std::string::npos)
-  TEST_EQUAL(std::count(two.begin(), two.end(), '\t'), 48)
-  TEST_EQUAL(std::count(one.begin(), one.end(), '\t'), 48)
-  TEST_TRUE(endsWith(two, "\t0.5000\t61\t526.1400\t655.1900\t46\t5\t5\t-0.9800\t\t-1.0000\t61.0000\t0\t-1.0000\tnone\t-1.0000\t-1.0000"))
-  TEST_TRUE(endsWith(one, "\t0.5000\t61\t526.1400\t\t-1\t5\t5\t-0.9800\t\t-1.0000\t61.0000\t0\t-1.0000\tnone\t-1.0000\t-1.0000"))
+  TEST_EQUAL(std::count(two.begin(), two.end(), '\t'), 51)
+  TEST_EQUAL(std::count(one.begin(), one.end(), '\t'), 51)
+  TEST_TRUE(endsWith(two, "\t0.5000\t61\t526.1400\t655.1900\t46\t5\t5\t-0.9800\t\t-1.0000\t61.0000\t0\t-1.0000\tnone\t-1.0000\t-1.0000\t-1\t-1\t-1"))
+  TEST_TRUE(endsWith(one, "\t0.5000\t61\t526.1400\t\t-1\t5\t5\t-0.9800\t\t-1.0000\t61.0000\t0\t-1.0000\tnone\t-1.0000\t-1.0000\t-1\t-1\t-1"))
   auto field = [](const std::string& l, int k) {   // the k-th tab-separated field (0-based)
     size_t b = 0;
     for (int n = 0; n < k && b != std::string::npos; ++n) b = l.find('\t', b) == std::string::npos ? std::string::npos : l.find('\t', b) + 1;
