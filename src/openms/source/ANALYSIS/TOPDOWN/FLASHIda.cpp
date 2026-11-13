@@ -208,6 +208,15 @@ namespace OpenMS
       out.hit = *best;
       out.protein_sequence = entry->sequence;
       out.accession = entry->identifier;
+      // ADR-0075: the E-value's multiplicity, the proteins searched and, with a blind shift, the windows it opened: FLASHTnT's
+      // own count with the arguments its raw-score penalty used (the full protein, the hit's mass, its shift bound, its table)
+      out.reference_size = reference.size();
+      if (FLASHTnTAlgorithm::blindModCount_(*best) > 0)
+      {
+        const double mass = best->metaValueExists("Mass") ? static_cast<double>(best->getMetaValue("Mass")) : -1.0;
+        out.shifted_windows = FLASHTnTAlgorithm::shiftedCandidateCount(out.protein_sequence, mass, worker_it->second->maxTotalModificationMass(),
+                                                                       proteome.fixedModifications());
+      }
       return out;
     }
 

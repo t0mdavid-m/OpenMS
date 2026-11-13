@@ -33,6 +33,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ConsoleView.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ChanceMatch.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 
 #include <algorithm>
@@ -232,7 +233,7 @@ namespace OpenMS
                          width));   // no count: the status line carries identified and closed out
 
     // 3. the header
-    lines.push_back(clip(" nominal       mass   z  state        score   cov  MS2  MS3      rt  protein", width));
+    lines.push_back(clip(" nominal       mass   z  state        score       E   cov  MS2  MS3      rt  protein", width));
 
     // 4. the rows that fit whole, most recent first; the rest go to the footer
     const int wrap = std::max(10, width - 9);
@@ -249,6 +250,11 @@ namespace OpenMS
       std::string state = stateName(r.state);
       state.resize(11, ' ');
       std::string score = r.score >= 0 ? fmtd("%6.0f", r.score) : std::string("     -");
+      {
+        // ADR-0075: the E-value of the identification the score is from, right-aligned in 8 columns under "E"
+        const std::string e = ChanceMatch::formatLog10Short(r.log10_e);
+        score += std::string(e.size() < 8 ? 8 - e.size() : 1, ' ') + e;
+      }
       score += r.coverage >= 0 ? fmtd("%5.0f%%", r.coverage * 100.0) : std::string("     -");   // Pooled coverage
       char tail[96];
       std::snprintf(tail, sizeof(tail), "  %4d %4d  %6.2f  ", r.ms2, r.ms3, r.last_rt_s / 60.0);
@@ -294,7 +300,9 @@ namespace OpenMS
     out.push_back("precursors  " + std::to_string(snap.precursors) + d + "identified " + std::to_string(snap.identified) + d
                   + "closed out " + std::to_string(snap.closed_out) + d + "no-id " + std::to_string(snap.no_id));
     std::string proteins = "proteins    " + std::to_string(snap.proteins);
-    if (snap.best_score >= 0) proteins += std::string(d) + "best score " + fmtd("%.0f", snap.best_score) + " (" + snap.best_accession + ")";
+    if (snap.best_score >= 0)
+      proteins += std::string(d) + "best score " + fmtd("%.0f", snap.best_score) + " (" + snap.best_accession
+                  + (snap.best_log10_e ? ", E " + ChanceMatch::formatLog10Short(snap.best_log10_e) : std::string()) + ")";
     out.push_back(proteins);
     if (snap.search_wait_ms.empty())
       out.push_back("search      none");

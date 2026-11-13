@@ -33,6 +33,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ProteoformTracker.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ChanceMatch.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
@@ -2206,6 +2207,41 @@ namespace OpenMS
 
     const double tol_ppm = config_.level(2).tolerance_ppm;
 
+    // The candidate theoreticals of winner ion (prefix or suffix, index k) whose ladder mass is @p base, sorted. Ambiguous
+    // mods this ion brackets are OUT of `base`; the candidates are base + any subset of their shifts (2^n, n tiny).
+    // Duplicates are kept here; the matcher below skips exact-equal values, so equal-shift subsets (e.g. two identical
+    // PTMs) count as ONE mass hypothesis, while a genuine base-vs-base+shift pair (distinct values) still counts as two.
+    auto candidatesFor = [&m, ws, L](bool is_prefix, int k, double base) {
+      // Winner-frame coverage of ion (ic, k): prefix b_k covers [1,k]; suffix y_k covers [L-k+1,L].
+      const int cover_end = is_prefix ? k : L;
+      const int cover_start = is_prefix ? 1 : (L - k + 1);
+
+      // Shifts of the AMBIGUOUS winner mods this ion brackets (region frame; localized never bracket).
+      std::vector<double> bracket_shifts;
+      for (const ModificationState& mod : m.modifications)
+      {
+        const int s = mod.candidate_start - ws;
+        const int e = mod.candidate_end - ws;
+        if (s >= e) continue;   // localized -> baked into `base`, never bracketed
+        const bool brackets = is_prefix ? (s <= cover_end && cover_end < e)
+                                        : (s < cover_start && cover_start <= e);
+        if (brackets) bracket_shifts.push_back(mod.mass_shift);
+      }
+
+      const int nb = static_cast<int>(bracket_shifts.size());
+      std::vector<double> cand;
+      cand.reserve(static_cast<size_t>(1) << nb);
+      for (int mask = 0; mask < (1 << nb); ++mask)
+      {
+        double theo = base;
+        for (int b = 0; b < nb; ++b)
+          if (mask & (1 << b)) theo += bracket_shifts[b];
+        if (theo > 0.0) cand.push_back(theo);
+      }
+      std::sort(cand.begin(), cand.end());
+      return cand;
+    };
+
     // C: if THIS non-winner scan did NOT self-identify (empty own match), seed a per-scan re-matched
     // identification (winner proteoform + full-protein winner mods, like a self-ID row). Fragments this
     // scan's masses match on the winner ladder are appended below; Exploration emits the row afterwards.
@@ -2256,37 +2292,7 @@ namespace OpenMS
 
         for (int k = 1; k <= static_cast<int>(masses.size()); ++k)
         {
-          const double base = masses[k - 1];   // ambiguous mods this ion brackets are OUT of `base`
-          // Winner-frame coverage of ion (ic, k): prefix b_k covers [1,k]; suffix y_k covers [L-k+1,L].
-          const int cover_end = is_prefix ? k : L;
-          const int cover_start = is_prefix ? 1 : (L - k + 1);
-
-          // Shifts of the AMBIGUOUS winner mods this ion brackets (region frame; localized never bracket).
-          std::vector<double> bracket_shifts;
-          for (const ModificationState& mod : m.modifications)
-          {
-            const int s = mod.candidate_start - ws;
-            const int e = mod.candidate_end - ws;
-            if (s >= e) continue;   // localized -> baked into `base`, never bracketed
-            const bool brackets = is_prefix ? (s <= cover_end && cover_end < e)
-                                            : (s < cover_start && cover_start <= e);
-            if (brackets) bracket_shifts.push_back(mod.mass_shift);
-          }
-
-          // Candidate theoreticals = base + any subset of the bracketed shifts (2^n, n tiny). Deduped
-          // by exact value so equal-shift subsets (e.g. two identical PTMs) count as ONE mass
-          // hypothesis, while a genuine base-vs-base+shift pair (distinct values) still counts as two.
-          const int nb = static_cast<int>(bracket_shifts.size());
-          std::vector<double> cand;
-          cand.reserve(static_cast<size_t>(1) << nb);
-          for (int mask = 0; mask < (1 << nb); ++mask)
-          {
-            double theo = base;
-            for (int b = 0; b < nb; ++b)
-              if (mask & (1 << b)) theo += bracket_shifts[b];
-            if (theo > 0.0) cand.push_back(theo);
-          }
-          std::sort(cand.begin(), cand.end());
+          const std::vector<double> cand = candidatesFor(is_prefix, k, masses[k - 1]);
 
           int n_match = 0;
           double theo_here = 0.0;
@@ -2357,6 +2363,33 @@ namespace OpenMS
         fmr.qscore = pr.stage1_scores.qscore;
         rematch->fragments.push_back(fmr);
       }
+    }
+
+    // ADR-0075: the confirmation p-value of the re-matched row. The winner was fixed before this scan was read, so it is
+    // its own E-value: k of this scan's masses on the winner ladder, every distinct candidate theoretical the matcher
+    // above tests, over the winner region's own mass.
+    if (rematch != nullptr)
+    {
+      std::vector<double> theo_masses;
+      for (const std::string& ts : ion_types)
+      {
+        if (ts.empty()) continue;
+        const char ic = ts[0];
+        const bool is_prefix = (ic == 'a' || ic == 'b' || ic == 'c');
+        const auto lit = ladder.find(ic);
+        if (lit == ladder.end()) continue;
+        for (int k = 1; k <= static_cast<int>(lit->second.size()); ++k)
+        {
+          const std::vector<double> cand = candidatesFor(is_prefix, k, lit->second[k - 1]);
+          for (size_t i = 0; i < cand.size(); ++i)
+            if (i == 0 || cand[i] > cand[i - 1]) theo_masses.push_back(cand[i]);
+        }
+      }
+      std::vector<double> shifts;
+      for (const ModificationState& mod : m.modifications) shifts.push_back(mod.mass_shift);
+      const double lambda = ChanceMatch::chanceLambda(ps.peaks.size(), theo_masses, tol_ppm,
+                                                      ChanceMatch::chainMass(region_seq, shifts, config_.identification().fixed_mods));
+      rematch->confirmation_log10_p = ChanceMatch::log10PoissonTail(static_cast<int>(rematch->fragments.size()), lambda);
     }
   }
 

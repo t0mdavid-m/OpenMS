@@ -75,6 +75,7 @@ namespace OpenMS
     double threshold = 0.0;         ///< that threshold, for "(below 70)"
     int precursor_id = 0;           ///< the precursor id of its best identification; 0 = none
     double coverage = -1.0;         ///< the Pooled coverage (fraction) of that identification's model; -1 = no model
+    std::optional<double> log10_e;  ///< ADR-0075: log10 of that identification's E-value, as identification.tsv's chance_e; none = none
   };
 
   /// Everything the view draws, copied under the board's lock.
@@ -95,6 +96,7 @@ namespace OpenMS
     std::string log_dir;
     std::string best_accession;     ///< the best-scoring row's protein, for the summary
     double best_score = -1.0;
+    std::optional<double> best_log10_e;   ///< ADR-0075: the best-scoring row's log10 E-value
     int proteins = 0;               ///< distinct accessions identified
   };
 

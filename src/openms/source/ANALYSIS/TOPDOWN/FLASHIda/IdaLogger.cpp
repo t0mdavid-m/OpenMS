@@ -34,6 +34,7 @@
 
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ChanceMatch.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/LogCell.h>
@@ -238,7 +239,10 @@ namespace OpenMS
                                    << "quant_ms3\t"
                                    // ADR-0074, APPENDED: the annotator's bond coverage and explained signal of the row's PrSM,
                                    // both fractions. -1 = none.
-                                   << "bond_coverage\texplained_signal\n";
+                                   << "bond_coverage\texplained_signal\t"
+                                   // ADR-0075, APPENDED: the chance-match p-value and E-value of an own-search MS2 row,
+                                   // and the confirmation p-value of a winner-re-matched or MS3 row. -1 = none.
+                                   << "chance_p\tchance_e\tconfirmation_p\n";
         identification_tsv_stream_.flush();
       }
     }
@@ -992,7 +996,11 @@ namespace OpenMS
         << std::fixed << std::setprecision(4) << match.inferred_precursor_mass << "\t"
         << row.quant_ms3 << "\t"  // ADR-0064
         << std::fixed << std::setprecision(4) << match.bond_coverage << "\t"      // ADR-0074
-        << std::fixed << std::setprecision(4) << match.explained_signal << "\n";  // ADR-0074
+        << std::fixed << std::setprecision(4) << match.explained_signal << "\t"   // ADR-0074
+        // ADR-0075: written from the log10 as strings ("2.71e-37"), so nothing underflows and no precision sticks
+        << ChanceMatch::formatLog10Scientific(match.chance_log10_p) << "\t"
+        << ChanceMatch::formatLog10Scientific(match.chance_log10_e) << "\t"
+        << ChanceMatch::formatLog10Scientific(match.confirmation_log10_p) << "\n";
     };
     // ADR-0049: Refine's candidate record. The three doubles re-establish std::fixed + setprecision(4)
     // themselves (the stream's float convention) rather than inheriting whatever the last field left sticky.

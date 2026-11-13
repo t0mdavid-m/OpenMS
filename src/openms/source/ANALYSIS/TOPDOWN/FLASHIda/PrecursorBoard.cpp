@@ -150,6 +150,7 @@ namespace OpenMS
     if (score >= row.score || !hasProteoform(row.state))
     {
       row.score = score;
+      row.log10_e = match.chance_log10_e;   // ADR-0075: the E-value of the identification the score is from
       row.accession = match.matched_protein;
       row.proforma = proformaOf(match);
       row.mass = commanded_mass;
@@ -238,6 +239,7 @@ namespace OpenMS
         {
           s.best_score = r.score;
           s.best_accession = r.accession;
+          s.best_log10_e = r.log10_e;
         }
       }
       if (r.last_rt_s >= rt_s_ - rt_window_s)

@@ -7,6 +7,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ChanceMatch.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 #include <OpenMS/CHEMISTRY/Residue.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
@@ -771,6 +772,19 @@ namespace OpenMS
         // E1: record the matched-fragment count so the logged fragment_count / tic_coverage reflect the
         // actual matches (was left at the ProteoformMatch default 0, despite mr.fragments being populated).
         mr.total_match_count = static_cast<int>(details.size());
+
+        // ADR-0075: the confirmation p-value of this variant against its target fragment, fixed before the scan was
+        // read, so it is its own E-value: k of this variant's masses on the sub-fragment ladder, at the tight tolerance,
+        // over the fragment's own mass
+        {
+          std::vector<double> theo_masses, shifts;
+          theo_masses.reserve(theoretical.size());
+          for (const auto& t : theoretical) theo_masses.push_back(t.mass);
+          for (const auto& p : rebased_ptms) shifts.push_back(p.mass_shift);
+          const double lambda = ChanceMatch::chanceLambda(variant_spectra[vi]->size(), theo_masses, tight_tolerance_ppm,
+                                                          ChanceMatch::chainMass(subseq, shifts, fixed_mods));
+          mr.confirmation_log10_p = ChanceMatch::log10PoissonTail(mr.total_match_count, lambda);
+        }
 
         // Per-ion coverage: fraction of the b/y fragment's (L-1) backbone bonds covered by DISTINCT matched
         // MS3 sub-fragments. Prefix (a/b/c) sub-ion of subseq-index p cleaves bond p; suffix (y/x/z) of index p

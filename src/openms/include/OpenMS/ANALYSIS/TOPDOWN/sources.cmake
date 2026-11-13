@@ -18,6 +18,7 @@ set(sources_list_h
         FLASHIda/EventLog.h
         FLASHIda/FAIMS.h
         FLASHIda/AnnotatorMetrics.h
+        FLASHIda/ChanceMatch.h
         FLASHIda/KineticModel.h
         FLASHIda/Refine.h
         FLASHIda/RefineSettings.h

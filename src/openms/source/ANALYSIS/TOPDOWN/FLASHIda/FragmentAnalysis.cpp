@@ -33,6 +33,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ChanceMatch.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Refine.h>
@@ -485,7 +486,8 @@ namespace
   int FragmentAnalysis::matchFromPrSM(const ProteinHit& best_hit, const String& protein_sequence,
                                       const DeconvolvedSpectrum& stored_ms2, const std::vector<std::string>& ion_types_str,
                                       double ppm_tolerance, ProteoformMatch& result,
-                                      std::vector<TagBasedFragmentMatch>& matches, const FixedModifications& fixed_mods)
+                                      std::vector<TagBasedFragmentMatch>& matches, const FixedModifications& fixed_mods,
+                                      bool emit_event)
   {
     matches.clear();
 
@@ -634,10 +636,22 @@ namespace
                 return a.intensity > b.intensity;
               });
 
+    // ADR-0075: the chance matches the matched ladder expects -- every theoretical mass it was matched against, at the
+    // tolerance it was matched at, over the matched chain's own mass
+    {
+      std::vector<double> ladder_masses;
+      for (const auto& [ion_char, masses] : fragment_masses_map) ladder_masses.insert(ladder_masses.end(), masses.begin(), masses.end());
+      std::vector<double> shifts;
+      for (const auto& site : local_ptm_sites) shifts.push_back(site.mass_shift);
+      result.chance_lambda = ChanceMatch::chanceLambda(stored_ms2.size(), ladder_masses, ppm_tolerance,
+                                                       ChanceMatch::chainMass(matching_sequence, shifts, fixed_mods));
+    }
+
     // ADR-0065: one summary event per matched PrSM, replacing the per-ion dump.
-    EventLine() << "[MATCH] region=" << (start_pos >= 0 ? start_pos + 1 : 1) << "-"
-                << (end_pos >= 0 ? end_pos : static_cast<int>(protein_sequence.size())) << " protein_length=" << protein_sequence.size()
-                << " ptm_sites=" << mod_masses.size() << " fragments=" << matches.size() << " masses=" << stored_ms2.size();
+    if (emit_event)
+      EventLine() << "[MATCH] region=" << (start_pos >= 0 ? start_pos + 1 : 1) << "-"
+                  << (end_pos >= 0 ? end_pos : static_cast<int>(protein_sequence.size())) << " protein_length=" << protein_sequence.size()
+                  << " ptm_sites=" << mod_masses.size() << " fragments=" << matches.size() << " masses=" << stored_ms2.size();
 
     result.total_match_count = static_cast<int>(matches.size());
     result.fragments.clear();
@@ -844,6 +858,28 @@ namespace
       n = matchFromPrSM(hit, searched.protein_sequence, stored_ms2, FragmentAnalysis::getIonTypesForFragmentationMethod(fragmentation_method),
                         ppm_tolerance, result, matches, config_.identification().fixed_mods);
       result.identification_score = hit.getScore();
+    }
+    // ADR-0075: the chance-match p-value of the search's PrSM, k counted by matchFromPrSM under every method (under Refine
+    // in a scratch match, so Refine's own result is untouched), and its E-value: times the proteins searched and the
+    // windows a blind shift opened
+    {
+      int k = result.total_match_count;
+      double lambda = result.chance_lambda;
+      if (refine)
+      {
+        ProteoformMatch scratch;
+        std::vector<TagBasedFragmentMatch> scratch_matches;
+        const double ppm_tolerance = (tolerance_ppm > 0.0) ? tolerance_ppm : config_.level(2).tolerance_ppm;
+        k = matchFromPrSM(hit, searched.protein_sequence, stored_ms2, FragmentAnalysis::getIonTypesForFragmentationMethod(fragmentation_method),
+                          ppm_tolerance, scratch, scratch_matches, config_.identification().fixed_mods, /*emit_event*/ false);
+        lambda = scratch.chance_lambda;
+      }
+      if (lambda >= 0.0)
+      {
+        result.chance_log10_p = ChanceMatch::log10PoissonTail(k, lambda);
+        result.chance_log10_e = *result.chance_log10_p + std::log10(static_cast<double>(std::max<std::size_t>(searched.reference_size, 1)))
+                                + std::log10(std::max(searched.shifted_windows, 1.0));
+      }
     }
     result.raw_term = raw_term;
     result.raw_score = hit.metaValueExists("RawScore") ? static_cast<double>(hit.getMetaValue("RawScore")) : -1.0;

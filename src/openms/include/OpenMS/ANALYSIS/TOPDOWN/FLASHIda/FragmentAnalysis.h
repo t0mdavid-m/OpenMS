@@ -42,8 +42,10 @@
 #include <OpenMS/DATASTRUCTURES/String.h>
 #include <OpenMS/METADATA/ProteinHit.h>
 
+#include <cstddef>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -150,6 +152,17 @@ namespace OpenMS
       /// raw intensity of the peaks of accepted terminal envelopes, each peak once, over the centroided scan's. -1 = none.
       double bond_coverage = -1;
       double explained_signal = -1;
+
+      /// ADR-0075, APPEND-ONLY. The chance-match model (FLASHIda/ChanceMatch.h; CONTEXT.md "Chance-match p-value"), every
+      /// value a log10. chance_lambda: the expected chance matches of this match's ladder, set by matchFromPrSM; internal,
+      /// never logged; -1 = not computed. chance_log10_p / chance_log10_e: an own-search MS2 match's p-value and its E-value
+      /// (p times the reference size, times the windows a blind shift opens). confirmation_log10_p: a match fixed in advance
+      /// (a winner-re-matched MS2, an MS3 against its target), its own E-value. Logged as chance_p, chance_e and
+      /// confirmation_p; reported only, never decided on. Absent = this match carries none.
+      double chance_lambda = -1;
+      std::optional<double> chance_log10_p;
+      std::optional<double> chance_log10_e;
+      std::optional<double> confirmation_log10_p;
     };
 
     /// Deconvolution scores of a selected MS2 fragment, copied into the stage-1 (fragment)
@@ -176,6 +189,11 @@ namespace OpenMS
       std::string protein_sequence;   ///< its reference entry's sequence (never the hit's: run() rewrites it)
       std::string accession;          ///< its reference entry's accession
       int tag_count = -1;             ///< every tag the search produced, PrSM or not; -1 = no search ran (a dropped one)
+      /// ADR-0075: the E-value's multiplicity. reference_size: the proteins searched (decoys dropped). shifted_windows: for
+      /// a PrSM with a blind shift, the windows of its protein the shift could have opened (FLASHTnT's own count, the one its
+      /// raw-score penalty uses); 1 otherwise.
+      std::size_t reference_size = 0;
+      double shifted_windows = 1.0;
     };
 
     /// Format a proteoform sequence with PTM annotations in ProForma notation.
@@ -489,14 +507,16 @@ namespace OpenMS
      * region (0-based, exclusive end; -1/-1 = both termini open, the full sequence; with one open, that side is the
      * protein's own end), proteoform_sequence = @p protein_sequence, ptm_sites (1-based, protein frame), fragments and
      * total_match_count, and @p matches with every deconvolved mass matched within @p ppm_tolerance on @p ion_types,
-     * sorted by intensity descending. Leaves score, tag_count and matched_protein to the caller.
+     * sorted by intensity descending. Also sets chance_lambda, the chance matches the matched ladder expects (ADR-0075).
+     * Leaves score, tag_count and matched_protein to the caller. @p emit_event false skips the [MATCH] event (a count
+     * taken for the p-value only, beside another method's match).
      *
      * @return number of matches
      */
     static int matchFromPrSM(const ProteinHit& hit, const String& protein_sequence, const DeconvolvedSpectrum& stored_ms2,
                              const std::vector<std::string>& ion_types, double ppm_tolerance, ProteoformMatch& result,
                              std::vector<TagBasedFragmentMatch>& matches,
-                             const FixedModifications& fixed_mods = FixedModifications::none());
+                             const FixedModifications& fixed_mods = FixedModifications::none(), bool emit_event = true);
 
     /**
      * @brief Refine's MS2 match (identification.method refine, ADR-0049): the sibling of runTagBasedFragmentMatching_.

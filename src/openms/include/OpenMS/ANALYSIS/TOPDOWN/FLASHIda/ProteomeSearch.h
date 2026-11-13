@@ -72,6 +72,13 @@ namespace OpenMS
       return reference_;
     }
 
+    /// the fixed modifications the prepared database was built with: FLASHTnT's own table (ADR-0075 reads it for the
+    /// windows a blind shift opens)
+    const FixedModifications& fixedModifications() const
+    {
+      return prepared_->fixed_mods;
+    }
+
     class OPENMS_DLLAPI Worker
     {
     public:
@@ -83,6 +90,13 @@ namespace OpenMS
       /// before the results are released; 0 for a spectrum with no mass).
       std::vector<ProteinHit> search(const DeconvolvedSpectrum& ms2, double tol_ppm, const MSSpectrum& raw, int scan,
                                      int* tag_count = nullptr);
+
+      /// FLASHTnT's largest total blind shift (max_blind_mod_count x max_mod_mass + 1), the bound its raw-score penalty
+      /// counts a shift's windows within (ADR-0075)
+      double maxTotalModificationMass() const
+      {
+        return tnt_.getMaxTotalModificationMass();
+      }
 
     private:
       const ProteomeSearch& search_;
