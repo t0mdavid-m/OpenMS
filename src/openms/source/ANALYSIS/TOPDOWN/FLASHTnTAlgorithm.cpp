@@ -102,33 +102,6 @@ UInt tntKey(const char* name)
   return keys.at(name);
 }
 
-// The candidate proteoforms a blind shift opens on a protein: the windows (residue i to j) of @p sequence whose mass is within @p max_shift of
-// @p mass, each of which a shift would make fit; every window when the mass is unknown (<= 0). Without a shift only the windows at the
-// mass itself are candidates, so the count is the multiple-testing burden of a PrSM with a shift, as TopPIC counts its candidates by type.
-double shiftedCandidateCount(const String& sequence, double mass, double max_shift, const FixedModifications& fixed_mods)
-{
-  const Size n = sequence.size();
-  if (n == 0) return 1.0;
-  if (mass <= 0) return (double)n * (double)(n + 1) / 2.0;
-  std::vector<double> prefix(n + 1, 0.0);
-  for (Size i = 0; i < n; i++)
-  {
-    const Residue* r = ResidueDB::getInstance()->getResidue((unsigned char)sequence[i]);
-    prefix[i + 1] = prefix[i] + (r != nullptr ? fixed_mods.mass(sequence[i]) : 0.0);
-  }
-  static const double water = EmpiricalFormula("H2O").getMonoWeight();
-  double count = 0;
-  for (Size i = 0; i < n; i++)
-  {
-    // windows i..j-1 with prefix[j] in [prefix[i] + mass - water - max_shift, prefix[i] + mass - water + max_shift]
-    const double low = prefix[i] + mass - water - max_shift, high = prefix[i] + mass - water + max_shift;
-    const auto first = std::lower_bound(prefix.begin() + (long)i + 1, prefix.end(), low);
-    const auto last = std::upper_bound(first, prefix.end(), high);
-    count += (double)(last - first);
-  }
-  return std::max(1.0, count);
-}
-
 // mass and both termini known (unknown: -1)
 bool isDetermined(const ProteinHit& hit)
 {
@@ -278,6 +251,33 @@ private:
 };
 
 } // namespace
+
+// The candidate proteoforms a blind shift opens on a protein: the windows (residue i to j) of @p sequence whose mass is within @p max_shift of
+// @p mass, each of which a shift would make fit; every window when the mass is unknown (<= 0). Without a shift only the windows at the
+// mass itself are candidates, so the count is the multiple-testing burden of a PrSM with a shift, as TopPIC counts its candidates by type.
+double FLASHTnTAlgorithm::shiftedCandidateCount(const String& sequence, double mass, double max_shift, const FixedModifications& fixed_mods)
+{
+  const Size n = sequence.size();
+  if (n == 0) return 1.0;
+  if (mass <= 0) return (double)n * (double)(n + 1) / 2.0;
+  std::vector<double> prefix(n + 1, 0.0);
+  for (Size i = 0; i < n; i++)
+  {
+    const Residue* r = ResidueDB::getInstance()->getResidue((unsigned char)sequence[i]);
+    prefix[i + 1] = prefix[i] + (r != nullptr ? fixed_mods.mass(sequence[i]) : 0.0);
+  }
+  static const double water = EmpiricalFormula("H2O").getMonoWeight();
+  double count = 0;
+  for (Size i = 0; i < n; i++)
+  {
+    // windows i..j-1 with prefix[j] in [prefix[i] + mass - water - max_shift, prefix[i] + mass - water + max_shift]
+    const double low = prefix[i] + mass - water - max_shift, high = prefix[i] + mass - water + max_shift;
+    const auto first = std::lower_bound(prefix.begin() + (long)i + 1, prefix.end(), low);
+    const auto last = std::upper_bound(first, prefix.end(), high);
+    count += (double)(last - first);
+  }
+  return std::max(1.0, count);
+}
 
 FLASHTnTAlgorithm::FLASHTnTAlgorithm(): DefaultParamHandler("FLASHTnTAlgorithm"), ProgressLogger()
 {

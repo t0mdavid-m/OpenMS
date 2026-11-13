@@ -103,6 +103,10 @@ public:
   {
     return max_total_mod_mass_;
   }
+  /// the candidate proteoforms a blind shift opens on a protein, the raw score's multiple-testing burden (see the .cpp)
+  static double shiftedCandidateCount(const String& sequence, double mass, double max_shift, const FixedModifications& fixed_mods);
+  /// number of blind modifications of a proteoform hit (variable modifications excluded)
+  static Size blindModCount_(const ProteinHit& hit);
 
   /// a function that loads the raw MSn spectra of the given scan numbers (FLASHAnnotatorAlgorithm::loadSpectra on the raw mzML)
   using RawSpectrumLoader = std::function<void(const std::set<int>&, std::map<int, MSSpectrum>&)>;
@@ -236,8 +240,6 @@ private:
   std::vector<FLASHHelperClasses::Tag> tags_;
   std::map<int, std::vector<int>> matching_hits_indices_;
   static bool areConsistent_(const ProteinHit& a, const ProteinHit& b, double tol) ;
-  /// number of blind modifications of a proteoform hit (variable modifications excluded)
-  static Size blindModCount_(const ProteinHit& hit);
   /// Groups the PrSMs of each protein into proteoforms (areConsistent_ with the representative) and marks the representatives
   /// (meta values Index, Representative, PrSMIndices). With @p by_qvalue, only PrSMs in an FDR class (@p hit_class >= 0) take part, and a
   /// determined PrSM with PrSM q-value (@p qvalues) <= @p rep_q, then the lowest q-value, comes first as representative; otherwise every
