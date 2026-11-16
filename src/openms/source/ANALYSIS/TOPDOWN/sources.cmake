@@ -23,6 +23,7 @@ set(sources_list
         FLASHIda/FragmentAnalysis.cpp
         FLASHIda/IdaLogger.cpp
         FLASHIda/MS3FragmentMatcher.cpp
+        FLASHIda/Ms3WitnessModel.cpp
         FLASHIda/Ms3YieldModel.cpp
         FLASHIda/PrecursorBoard.cpp
         FLASHIda/PrecursorSelection.cpp
