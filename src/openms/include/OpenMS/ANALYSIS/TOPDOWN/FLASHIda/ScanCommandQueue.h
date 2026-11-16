@@ -435,7 +435,7 @@ namespace OpenMS
     {
       int scan_id = 0;
       uint64_t enqueue_ms = 0;
-      size_t queue_ahead = 0;   ///< queued MS3 enqueued strictly before it (x_queue_ahead now)
+      size_t queue_ahead = 0;   ///< queued MS3 of other parents enqueued strictly before it (x_queue_ahead now)
       WitnessRegistration reg;
     };
     /// Every registered MS3 still queued (never one already dequeued: a dequeue is a commit, ADR-0060), in scan id

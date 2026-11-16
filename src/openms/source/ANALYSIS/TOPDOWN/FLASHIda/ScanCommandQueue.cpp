@@ -1581,10 +1581,15 @@ namespace OpenMS
     std::lock_guard<std::mutex> lock(queue_mutex_);
     std::vector<WitnessedEntry> out;
     if (witnessed_.empty()) return out;
-    std::map<int, uint64_t> queued_ms3;   // scan id -> enqueue ms
+    // scan id -> (enqueue ms, parent MS2). Every MS3 of one plan (its Q MS3 included) names the same parent.
+    std::map<int, std::pair<uint64_t, std::string>> queued_ms3;
     for (int p = 0; p < 4; ++p)
       for (const ScanCommand& cmd : queues_[p])
-        if (cmd.msn_level == 3) queued_ms3[cmd.scan_id] = cmd.enqueue_timestamp_ms;
+        if (cmd.msn_level == 3)
+        {
+          const char* const b = cmd.parent_scan_id;
+          queued_ms3[cmd.scan_id] = {cmd.enqueue_timestamp_ms, std::string(b, std::find(b, b + sizeof(cmd.parent_scan_id), '\0'))};
+        }
     for (auto it = witnessed_.begin(); it != witnessed_.end();)
     {
       const auto q = queued_ms3.find(it->first);
@@ -1595,9 +1600,11 @@ namespace OpenMS
       }
       WitnessedEntry e;
       e.scan_id = it->first;
-      e.enqueue_ms = q->second;
-      for (const auto& [id, ts] : queued_ms3)
-        if (ts < e.enqueue_ms) ++e.queue_ahead;
+      e.enqueue_ms = q->second.first;
+      // q0's rule: the MS3 queued ahead of it from other plans (its siblings are pushed one by one, so their
+      // timestamps fall either side of a millisecond and cannot decide).
+      for (const auto& [id, at] : queued_ms3)
+        if (at.first < e.enqueue_ms && at.second != q->second.second) ++e.queue_ahead;
       e.reg = it->second;
       out.push_back(std::move(e));
       ++it;
