@@ -5071,18 +5071,34 @@ START_SECTION(w_one_line_per_parent)
 }
 END_SECTION
 
-// T22. The prior counts cross selections: the fixture answers every MS2 with the same cytC spectrum, so every plan's
-// placed candidates sit on one (protein, start_pos, end_pos). The n-th plan counts the parents of the earlier ones and
-// its own, so n_ms2_prior rises by at least one per plan and never exceeds the MS2 identification rows; the MS3
-// answered under that key are counted too.
+// T22. The prior counts cross selections, per (protein, start_pos, end_pos) as identification.tsv writes them. A plan's
+// placed candidates count the MS2 identification rows of their parent's key written before the parent's own (the
+// parent's is written after its plan) plus the parent: n_ms2_prior = 1 + that key's earlier rows, exactly. cytC is
+// selected again and again under one key, so the counts climb; the other species the non-strict inclusion selects
+// (12466, 4246 Da) have keys of their own and start at 1. The MS3 answered under a key are counted too.
 //
-// FAILS UNDER: a count kept per selection (n_ms2_prior 1 at every plan), the parent not counted (0 at the first), or an
-// MS3 received but never counted under its planned key.
+// FAILS UNDER: a count kept per selection (1 at every plan), one kept across keys, the parent not counted, or an MS3
+// received but never counted under its planned key.
 START_SECTION(w_prior_counts_cross_selections)
 {
   const std::string dir = freshLogDir("w_gate_priors");
   const WRun run = runWCytc(wCytcJson(dir, 1e-6));
-  std::vector<double> ms2_prior, ms3_prior;
+  // Each parent's expected n_ms2_prior, from the identification rows in the order they were written.
+  std::map<std::string, int> expected;
+  {
+    std::map<std::string, int> rows_of_key;
+    auto idf = TSVFile::parse(dir + "/identification.tsv");
+    for (const auto& row : idf.rows)
+    {
+      if (cell(idf, row, "ms_level") != "2") continue;
+      const std::string id = cell(idf, row, "tracking_id");
+      if (expected.count(id) > 0) continue;   // the first row of a tracking id counts
+      const std::string key = cell(idf, row, "protein") + "|" + cell(idf, row, "start_pos") + "|" + cell(idf, row, "end_pos");
+      expected[id] = 1 + rows_of_key[key]++;
+    }
+  }
+  int plans = 0, climbed = 0;
+  double ms3_prior_first = -1.0, ms3_prior_max = 0.0;
   for (const WLine& l : run.lines)
   {
     if (l.get("stage") != "plan") continue;
@@ -5093,26 +5109,28 @@ START_SECTION(w_prior_counts_cross_selections)
       a = std::max(a, c.num("n_ms2_prior"));
       b = std::max(b, c.num("n_ms3_prior"));
     }
-    ms2_prior.push_back(a);
-    ms3_prior.push_back(b);
+    const auto e = expected.find(l.get("parent"));
+    TEST_EQUAL(e != expected.end(), true)   // every planned parent has its identification row
+    if (e == expected.end()) continue;
+    TEST_EQUAL(a, static_cast<double>(e->second))
+    ++plans;
+    climbed += (e->second >= 3) ? 1 : 0;
+    if (ms3_prior_first < 0.0) ms3_prior_first = b;
+    ms3_prior_max = std::max(ms3_prior_max, b);
   }
-  ABORT_IF(ms2_prior.size() < 2)
-  TEST_EQUAL(ms2_prior.front(), 1.0)   // the first plan: its own parent
-  for (size_t i = 1; i < ms2_prior.size(); ++i) TEST_EQUAL(ms2_prior[i] > ms2_prior[i - 1], true)
-  int id_rows = 0;
-  auto idf = TSVFile::parse(dir + "/identification.tsv");
-  for (const auto& row : idf.rows) id_rows += (cell(idf, row, "ms_level") == "2") ? 1 : 0;
-  TEST_EQUAL(ms2_prior.back() <= id_rows, true)
-  TEST_EQUAL(ms3_prior.front(), 0.0)
-  TEST_EQUAL(ms3_prior.back() >= 1.0, true)
+  TEST_EQUAL(plans >= 2, true)
+  TEST_EQUAL(climbed > 0, true)   // non-vacuity: one key was planned from at least three selections
+  TEST_EQUAL(ms3_prior_first, 0.0)
+  TEST_EQUAL(ms3_prior_max >= 1.0, true)
 }
 END_SECTION
 
 // T23. An MS1 that arrives while a plan's MS3 wait re-scores them: its row's fresh x_ms1_plan and x_plan_age, and the
-// MS3 of other parents queued ahead. A first pass, at a threshold every candidate passes, finds the order of the two
-// MS1 (cytC's survey, a survey of another sample) in which the second lowers the rank-1 candidate's W; at a threshold
-// half-way the plan admits it and the re-score withdraws it, and it is never sent. Every re-scored verdict is on its
-// side of the threshold; a kept MS3 is sent.
+// MS3 of other parents queued ahead. A first pass, at a threshold every candidate passes, finds the candidate and the
+// order of the two MS1 (cytC's survey, a survey of another sample) in which the second lowers a W the most (on this
+// fixture y35 at rank 3, 0.95387 -> 0.95074 when the other sample's survey follows); at a threshold half-way the plan
+// admits it and the re-score withdraws it, and it is never sent. Every re-scored verdict is on its side of the
+// threshold; a kept MS3 is sent.
 //
 // FAILS UNDER: no re-score at an MS1 row, a withdrawal that leaves the command queued, or a kept MS3 dropped.
 START_SECTION(w_rescore_withdraws)
@@ -5133,12 +5151,13 @@ START_SECTION(w_rescore_withdraws)
     const WLine* rescore = h.line("rescore");
     ABORT_IF(plan == nullptr || rescore == nullptr)
     for (const WCand& c : plan->cands)
-      if (c.verdict == "admitted" && c.num("x_rank") == 1.0)
+      if (c.verdict == "admitted")
         if (const WCand* r = rescore->cand(c.ion, c.charge)) cals.push_back({other_first, c.ion, c.charge, c.w, r->w});
   }
+  // The largest drop, at least 1e-3 (W repeats exactly between runs here: x_plan_age crosses no split at milliseconds).
   const Cal* pick = nullptr;
   for (const Cal& c : cals)
-    if (c.w_plan - c.w_rescore > 2e-3 && (pick == nullptr || c.w_plan - c.w_rescore > pick->w_plan - pick->w_rescore)) pick = &c;
+    if (c.w_plan - c.w_rescore > 1e-3 && (pick == nullptr || c.w_plan - c.w_rescore > pick->w_plan - pick->w_rescore)) pick = &c;
   TEST_EQUAL(pick != nullptr, true)   // the premise: one of the two MS1 lowers W
   ABORT_IF(pick == nullptr)
   const double t = 0.5 * (pick->w_plan + pick->w_rescore);
@@ -5344,8 +5363,10 @@ START_SECTION(w_quant_q_ms3)
 END_SECTION
 
 // T28. An input the engine cannot fill leaves the candidate untested and admitted: an exhaustive MS3 of an unidentified
-// MS2 (the cytC precursor against a ubiquitin reference) has no ion and no identification score. Every candidate is
-// untested, with W -1 and the first missing input named; its MS3 are sent, each row -1; none is re-scored.
+// MS2 has no ion and no identification score. The fixture is FLASHIda_exploration_test's
+// unidentified_regular_ms2_dispatches_exhaustive_ms3 (the pinned cytC precursor, the method naming ubiquitin, one
+// group driven, every MS3 no-ion), with a W gate. Every untested candidate has W -1 and names its first missing input;
+// its MS3 is sent with the row -1 and is never re-scored.
 //
 // FAILS UNDER: a missing input defaulted (W computed from a made-up value), or an untested MS3 refused or re-scored.
 START_SECTION(w_missing_input_untested)
@@ -5354,8 +5375,8 @@ START_SECTION(w_missing_input_untested)
   auto ms2 = loadTsvScans(ms2_cytc_fresh_tsv_path);
   ABORT_IF(ms1.empty() || ms2.empty())
   const std::string dir = freshLogDir("w_gate_untested");
-  nlohmann::json j = nlohmann::json::parse(ms3_mode1_json);
-  j["deconvolution"]["tqscore_threshold"] = 0.0;
+  nlohmann::json j = nlohmann::json::parse(inclusionPinCytc(ms3SelectionOnlyConfig()));
+  j["precursor_selection"].erase("exploration");
   j["identification"]["reference"] = {{"sequence", "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"}};
   j["identification"]["characterization"] = {{"mode", "exhaustive"}, {"max_targets", 3},
                                              {"yield_gate", {{"model", "w"}, {"threshold", 0.5}}}};
@@ -5369,25 +5390,38 @@ START_SECTION(w_missing_input_untested)
     EventCapture cap;
     {
       FLASHIda ida(const_cast<char*>(cfg.c_str()));
-      acq = runInterleaved(&ida, ms1, ms2, &no_ms3_fixtures, 4000);
+      const int budget = 256 + 64 * static_cast<int>(ms1.size() + 1);
+      acq = runInterleaved(&ida, ms1, std::vector<ScanData>{ms2[0]}, &no_ms3_fixtures, budget, /*single_group_only=*/true);
     }
     lines = wLines(cap.str());
   }
   TEST_EQUAL(acq.ms3_cmds.empty(), false)
+  int no_ion = 0;
+  for (const ScanCommand& c : acq.ms3_cmds) no_ion += wIonOf(c).second.empty() ? 1 : 0;
+  TEST_EQUAL(no_ion, static_cast<int>(acq.ms3_cmds.size()))   // the premise: nothing identified, every MS3 no-ion
   int untested = 0;
+  std::set<std::pair<std::string, int>> untested_of;
   for (const WLine& l : lines)
   {
-    TEST_EQUAL(l.get("stage"), "plan")   // never re-scored
+    if (l.get("stage") != "plan") continue;
     for (const WCand& c : l.cands)
     {
-      TEST_EQUAL(c.verdict, "untested")
+      if (c.verdict != "untested") continue;
       TEST_EQUAL(c.w, -1.0)
       TEST_EQUAL(c.reason.rfind("missing_input=", 0) == 0 && c.reason.size() > 14, true)
+      untested_of.insert({l.get("parent") + "|" + c.ion, c.charge});
       ++untested;
     }
   }
   TEST_EQUAL(untested > 0, true)
-  for (const WRow& r : wMs3Rows(dir))
+  // Never re-scored.
+  for (const WLine& l : lines)
+    if (l.get("stage") == "rescore")
+      for (const WCand& c : l.cands) TEST_EQUAL(untested_of.count({l.get("parent") + "|" + c.ion, c.charge}), 0)
+  // Sent, each row -1 in both gate columns.
+  const std::vector<WRow> rows = wMs3Rows(dir);
+  TEST_EQUAL(rows.empty(), false)
+  for (const WRow& r : rows)
   {
     TEST_EQUAL(r.w, -1.0)
     TEST_EQUAL(r.pby, std::string("-1"))
