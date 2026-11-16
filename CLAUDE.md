@@ -204,7 +204,7 @@ private `monitor_deconv_` (ADR-0042). **Do not merge the monitor engine into `de
 ## Logging (`FLASHIda/IdaLogger.cpp`)
 
 Five streams in `runtime.log_dir` (empty = nothing opens; the host creates the directory):
-`ida.log` (free text, decision record), `scan_commands.tsv` (39 columns, one row per dequeued
+`ida.log` (free text, decision record), `scan_commands.tsv` (46 columns, one row per dequeued
 command; what FLASHDeconv reads), `scan_results.tsv` (56), `identification.tsv` (52),
 `pooled_identification.tsv` (20). `IdaLogger` serialises each stream itself.
 
@@ -233,6 +233,11 @@ keep reading pre-2026-09 run folders. The FLASHDeconv side is inside the boundar
 
 ## Co-isolation notches (ADR-0016, ADR-0019)
 
+- **The charge check sits between `evaluate` and the first write** (ADR-0078,
+  `PrecursorSelection::filterPeakGroupsUsingMassExclusion_`): only an admitted candidate is measured
+  (`ChargeCheck.h`); a swap or remeasure is evaluated again and a refused one writes nothing. A
+  remeasured trigger keeps its geometry charge in `triggerCharges()` and is relabelled after
+  `buildMS2` (`relabelMS2`); key plan units on `triggerNominal(i)`, never on the PeakGroup's mass.
 - **`num_stages` counts cascade stages, never notches.**
 - Notches live in `Notch notches[18]`, stage k owning a fixed block of 9; use `notchesForStage()`.
   `MAX_ISOLATION_STAGES` and `MAX_NOTCHES_PER_STAGE + 1` are **different tens**.
