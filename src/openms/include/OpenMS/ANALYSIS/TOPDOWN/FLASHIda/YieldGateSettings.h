@@ -33,9 +33,10 @@ namespace OpenMS
   };
 
   /// identification.characterization.yield_gate / quantification.ms3_yield_gate: an MS3 is admitted when its predicted
-  /// bond yield E = p * (L - 1) is at least `threshold` expected bonds.
-  /// yield_gate.rank_by: the order a gated plan walks its candidates in. Yield: by predicted bond yield, highest
-  /// first, a target with no ion index after every tested one. Intensity: strongest first with the yield as a
+  /// bond yield E = p * (L - 1) is at least `threshold` expected bonds (model bond_yield), or when its witness
+  /// probability W is at least `threshold` (model w, ADR-0076).
+  /// yield_gate.rank_by: the order a gated plan walks its candidates in. Yield: by the gate's own value (E, or W under
+  /// model w), highest first, a target with no ion index after every tested one. Intensity: strongest first with the yield as a
   /// pass/fail test only -- the walk before the key, kept for runs that collect training data.
   enum class YieldRank
   {
@@ -43,8 +44,18 @@ namespace OpenMS
     Intensity
   };
 
+  /// yield_gate.model (ADR-0076): what a gate admits by. BondYield: the predicted bond yield E of the coefficients below
+  /// (ADR-0069), threshold in expected bonds. W: the witness probability W of the ms3_esm trees (Ms3WitnessModel.h),
+  /// threshold a probability in (0, 1), required; the coefficients are then read and unused.
+  enum class YieldModel
+  {
+    BondYield = 0,
+    W
+  };
+
   struct OPENMS_DLLAPI YieldGateConfig
   {
+    YieldModel model = YieldModel::BondYield;
     double threshold = 1.0;
     YieldCoefficients coefficients;
     YieldRank rank_by = YieldRank::Yield;

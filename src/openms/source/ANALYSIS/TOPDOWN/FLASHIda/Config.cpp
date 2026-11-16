@@ -82,10 +82,21 @@ namespace
     if (!j.is_object())
       throw std::invalid_argument("Config: " + path + " must be an object; got " + j.dump() + " (ADR-0069).");
     rejectUnknownKeys(j,
-        {"threshold", "intercept", "fragment_intensity", "precursor_intensity", "precursor_charge", "mass_ratio",
+        {"model", "threshold", "intercept", "fragment_intensity", "precursor_intensity", "precursor_charge", "mass_ratio",
          "fragment_iso_cos", "rank_by"},
         path);
     OpenMS::YieldGateConfig g;
+    // ADR-0076: model -- absent or null = bond_yield (ADR-0069 unchanged). Case-sensitive, never defaulted from an
+    // unknown value, as rank_by.
+    if (j.contains("model") && !j["model"].is_null())
+    {
+      const std::string m = j["model"].is_string() ? j["model"].get<std::string>() : j["model"].dump();
+      if (j["model"].is_string() && m == "bond_yield") g.model = OpenMS::YieldModel::BondYield;
+      else if (j["model"].is_string() && m == "w") g.model = OpenMS::YieldModel::W;
+      else
+        throw std::invalid_argument("Config: " + path + ".model must be \"bond_yield\" or \"w\"; got " + m
+                                    + " (values are case-sensitive; ADR-0076).");
+    }
     auto read = [&](const char* key, double& into) {
       if (!j.contains(key) || j[key].is_null()) return;
       if (!j[key].is_number() || !std::isfinite(j[key].get<double>()))
@@ -100,7 +111,20 @@ namespace
     read("precursor_charge", g.coefficients.precursor_charge);
     read("mass_ratio", g.coefficients.mass_ratio);
     read("fragment_iso_cos", g.coefficients.fragment_iso_cos);
-    if (!(g.threshold > 0.0))
+    if (g.model == OpenMS::YieldModel::W)
+    {
+      // ADR-0076: W is a probability and the package chose no threshold, so the method must state one, in (0, 1). The
+      // C# layer always writes a threshold (default 1, the bond_yield default), which this refuses: a W of 1 is never
+      // reached, so a `model: w` block that kept the default would refuse every tested MS3.
+      if (!j.contains("threshold") || j["threshold"].is_null())
+        throw std::invalid_argument("Config: " + path + ".threshold is required under model \"w\": a witness "
+                                    "probability in (0, 1); the model's package names 0.5 and 0.835 as candidates and "
+                                    "chooses neither (ADR-0076).");
+      if (!(g.threshold > 0.0 && g.threshold < 1.0))
+        throw std::invalid_argument("Config: " + path + ".threshold must be a witness probability in (0, 1) under "
+                                    "model \"w\"; got " + j["threshold"].dump() + " (ADR-0076).");
+    }
+    else if (!(g.threshold > 0.0))
       throw std::invalid_argument("Config: " + path + ".threshold must be > 0 expected bonds; got " + j["threshold"].dump()
                                   + ". Delete the block to switch the gate off (ADR-0069).");
     // rank_by: absent or null = yield. Case-sensitive and never defaulted from an unknown value, as exploration.order.
@@ -417,7 +441,16 @@ namespace OpenMS
         {"method_name", "method_description", "duration"}, "global");
     {
       const json global = config.value("global", json::object());
-      if (global.contains("duration") && global["duration"].is_number()) global_.duration = global["duration"].get<double>();
+      if (global.contains("duration") && !global["duration"].is_null())
+      {
+        // ADR-0076: a duration is now a model input (x_rt_frac), so a present one must be a finite number >= 0 rather
+        // than silently ignored. 0 still means "not given".
+        if (!global["duration"].is_number() || !std::isfinite(global["duration"].get<double>())
+            || global["duration"].get<double>() < 0.0)
+          throw std::invalid_argument("Config: global.duration must be a finite number of minutes >= 0; got "
+                                      + global["duration"].dump() + " (ADR-0076).");
+        global_.duration = global["duration"].get<double>();
+      }
     }
 
     // --- deconvolution section ---
@@ -1629,6 +1662,27 @@ namespace OpenMS
 
   void Config::validate() const
   {
+    // --- the W gate (ADR-0076) ------------------------------------------------------------------
+    // Three states the trees were never fitted on, refused rather than evaluated: no run length (x_rt_frac divides the
+    // parent MS2's retention time by global.duration), and a co-isolated MS2 or MS3 (none of the 55,357 recorded
+    // commands had a notch; the inputs would describe the anchor charge only). Owner, 2026-11-16.
+    {
+      const bool w_gate = (characterization_.yield_gate && characterization_.yield_gate->model == YieldModel::W)
+                          || (quant_.ms3_yield_gate && quant_.ms3_yield_gate->model == YieldModel::W);
+      if (w_gate && !(global_.duration > 0.0))
+        throw std::invalid_argument(
+            "Config: a yield gate with model \"w\" needs global.duration > 0 minutes: the model's x_rt_frac is the "
+            "parent MS2's retention time over the run's length (ADR-0076).");
+      if (w_gate && targeting_.precursor_charges == ChargeAcquisitionMode::Multiplexed)
+        throw std::invalid_argument(
+            "Config: a yield gate with model \"w\" cannot run with precursor_selection.precursor_charges "
+            "\"multiplexed\": W was fitted on MS2 that isolate one charge state (ADR-0076).");
+      if (w_gate && characterization_.fragment_charges == ChargeAcquisitionMode::Multiplexed)
+        throw std::invalid_argument(
+            "Config: a yield gate with model \"w\" cannot run with identification.characterization.fragment_charges "
+            "\"multiplexed\": W was fitted on MS3 that isolate one fragment charge state (ADR-0076).");
+    }
+
     // --- charge-set bounds (ADR-0040) -----------------------------------------------------------
     // Unsatisfiable rather than merely odd: the cap truncates the acquisition charge set BELOW the
     // floor, so admitCandidate refuses every species and the run acquires nothing -- silently, with
