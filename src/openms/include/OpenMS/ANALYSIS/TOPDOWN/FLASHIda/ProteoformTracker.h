@@ -40,6 +40,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms2Params.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms3Registry.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms3WitnessGate.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Refine.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
@@ -49,6 +50,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -99,6 +101,9 @@ namespace OpenMS
     /// == Multiplexed. Empty in every other mode. The tracker selects them because buildMS3 receives
     /// only scalars and has no access to the model's per-charge observations (ADR-0016).
     std::vector<NotchCandidate> notches;
+    /// ADR-0076: the W gate's record of this target's charge (its raw values, W and verdict) when a `model: w` yield
+    /// gate scored it; null otherwise. Carried to the command (ScanCommand::witness_probability) and to the re-score.
+    std::shared_ptr<const WitnessRecord> witness;
   };
 
   /// Key identifying a fragment ion: (ion_type, ion_index)
@@ -311,6 +316,9 @@ namespace OpenMS
     int max_targets = 0;                             ///< distinct cleavages per proteoform per run
     const YieldGateConfig* yield = nullptr;          ///< ADR-0069 characterization.yield_gate (null: no yield test)
     const ScanCommand* ms_ctx = nullptr;             ///< ADR-0069 the dispatching MS2 command: stage 0 of every MS3
+    /// ADR-0076: with `yield->model == W`, the plan's W gate. The walk scores each charge at the plan's running rank
+    /// (MS3 admitted so far + 1), records every verdict, and advances the rank only for a target that takes its place.
+    WitnessGate* witness = nullptr;
   };
 
   /**

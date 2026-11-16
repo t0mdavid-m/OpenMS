@@ -1535,6 +1535,161 @@ namespace OpenMS
     return pending_scan_map_.size();
   }
 
+  size_t ScanCommandQueue::queuedMs3Count(const Ms3ProteoformKey* exclude) const
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    const int entry = (exclude != nullptr) ? findMs3Entry_(*exclude) : -1;
+    size_t n = 0;
+    for (int p = 0; p < 4; ++p)
+      for (const ScanCommand& cmd : queues_[p])
+      {
+        if (cmd.msn_level != 3) continue;
+        if (entry >= 0)
+        {
+          const auto m = ms3_item_of_.find(cmd.scan_id);
+          if (m != ms3_item_of_.end() && m->second.first == entry)
+          {
+            const auto e = ms3_entries_.find(entry);
+            bool unsent = false;
+            if (e != ms3_entries_.end())
+            {
+              const auto item = e->second.items.find(m->second.second);
+              unsent = (item != e->second.items.end() && !item->second.committed);
+            }
+            if (unsent) continue;   // the swap withdraws it before this plan is pushed
+          }
+        }
+        ++n;
+      }
+    return n;
+  }
+
+  void ScanCommandQueue::registerWitnessed(int scan_id, WitnessRegistration reg)
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    for (int p = 0; p < 4; ++p)
+      for (const ScanCommand& cmd : queues_[p])
+        if (cmd.scan_id == scan_id)
+        {
+          witnessed_[scan_id] = std::move(reg);
+          return;
+        }
+  }
+
+  std::vector<ScanCommandQueue::WitnessedEntry> ScanCommandQueue::witnessedQueued()
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    std::vector<WitnessedEntry> out;
+    if (witnessed_.empty()) return out;
+    std::map<int, uint64_t> queued_ms3;   // scan id -> enqueue ms
+    for (int p = 0; p < 4; ++p)
+      for (const ScanCommand& cmd : queues_[p])
+        if (cmd.msn_level == 3) queued_ms3[cmd.scan_id] = cmd.enqueue_timestamp_ms;
+    for (auto it = witnessed_.begin(); it != witnessed_.end();)
+    {
+      const auto q = queued_ms3.find(it->first);
+      if (q == queued_ms3.end())
+      {
+        it = witnessed_.erase(it);   // dequeued, expired, cancelled or withdrawn: no longer re-scored
+        continue;
+      }
+      WitnessedEntry e;
+      e.scan_id = it->first;
+      e.enqueue_ms = q->second;
+      for (const auto& [id, ts] : queued_ms3)
+        if (ts < e.enqueue_ms) ++e.queue_ahead;
+      e.reg = it->second;
+      out.push_back(std::move(e));
+      ++it;
+    }
+    return out;
+  }
+
+  ScanCommandQueue::WitnessWithdrawal ScanCommandQueue::applyWitnessRescore(const std::vector<std::pair<int, double>>& keep,
+                                                                           const std::vector<int>& withdraw)
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    WitnessWithdrawal out;
+    auto queuedCommand = [&](int id) -> ScanCommand* {
+      for (int p = 0; p < 4; ++p)
+        for (ScanCommand& cmd : queues_[p])
+          if (cmd.scan_id == id) return &cmd;
+      return nullptr;
+    };
+    for (const auto& [id, w] : keep)
+      if (ScanCommand* cmd = queuedCommand(id)) cmd->witness_probability = w;
+
+    std::set<int> handled;
+    for (const int id : withdraw)
+    {
+      if (handled.count(id) > 0 || queuedCommand(id) == nullptr) continue;
+      // Governed (ADR-0066): the whole item, as cleanupExpired withdraws an expired one, unless it is committed.
+      const auto m = ms3_item_of_.find(id);
+      if (m != ms3_item_of_.end())
+      {
+        const auto [eid, iid] = m->second;
+        auto e = ms3_entries_.find(eid);
+        if (e == ms3_entries_.end()) continue;
+        auto item = e->second.items.find(iid);
+        if (item == e->second.items.end() || item->second.committed) continue;   // a started item is kept
+        std::set<int> ids;
+        for (const ScanCommand& c : item->second.commands) ids.insert(c.scan_id);
+        for (const int x : ids)
+        {
+          handled.insert(x);
+          if (queuedCommand(x) != nullptr)
+          {
+            EventLine() << "[TRACK-CANCEL] id=" << encode(x) << " ms_level=3 state=queued reason=witness_rescore";
+            out.scan_ids.push_back(x);
+          }
+          forgetQueued_(x);
+          witnessed_.erase(x);
+        }
+        removeQueuedMs3_(ids);
+        ms3_expired_inbox_.push_back(std::move(item->second));
+        ms3_expired_entries_.insert(eid);
+        e->second.items.erase(item);
+        out.governed = true;
+        continue;
+      }
+      // Ungoverned: the registration group (a target's CE variants), all still queued, or nothing.
+      const auto r = witnessed_.find(id);
+      const int group = (r != witnessed_.end()) ? r->second.group : 0;
+      std::vector<int> ids;
+      if (group != 0)
+      {
+        for (const auto& [x, reg] : witnessed_)
+          if (reg.group == group) ids.push_back(x);
+      }
+      else
+        ids.push_back(id);
+      bool all_queued = true;
+      for (const int x : ids) all_queued = all_queued && queuedCommand(x) != nullptr;
+      if (!all_queued) continue;   // part of the sweep is already out: a started sweep is not undone
+      for (const int x : ids)
+      {
+        handled.insert(x);
+        EventLine() << "[TRACK-CANCEL] id=" << encode(x) << " ms_level=3 state=queued reason=witness_rescore";
+        ms3_cmd_proteoform_.erase(x);
+        forgetQueued_(x);
+        witnessed_.erase(x);
+        out.scan_ids.push_back(x);
+      }
+      const std::set<int> id_set(ids.begin(), ids.end());
+      for (int p = 0; p < 4; ++p)
+      {
+        auto it = queues_[p].begin();
+        while (it != queues_[p].end())
+        {
+          if (id_set.count(it->scan_id) > 0) it = queues_[p].erase(it);
+          else ++it;
+        }
+      }
+      if (group != 0) out.sweep_groups.push_back(group);
+    }
+    return out;
+  }
+
   size_t ScanCommandQueue::queueSize(int priority) const
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);

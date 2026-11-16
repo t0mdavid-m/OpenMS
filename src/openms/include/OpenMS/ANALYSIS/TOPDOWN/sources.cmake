@@ -26,6 +26,7 @@ set(sources_list_h
         FLASHIda/IdaLogger.h
         FLASHIda/LogCell.h
         FLASHIda/MS3FragmentMatcher.h
+        FLASHIda/Ms3WitnessGate.h
         FLASHIda/Ms3WitnessModel.h
         FLASHIda/Ms3YieldModel.h
         FLASHIda/PrecursorBoard.h

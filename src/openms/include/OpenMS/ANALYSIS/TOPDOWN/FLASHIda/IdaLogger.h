@@ -349,7 +349,8 @@ namespace OpenMS
                              const DecisionInfo* decision = nullptr);
 
     /// Write one TSV row for a processScan result (ms_level is logged at scan_results col 1)
-    void writeScanResultRow(const ScanRowDescriptor& row);
+    /// Returns the row's resolve_ts (steady-clock ms; ADR-0076 stamps the W gate's last MS1 with it).
+    uint64_t writeScanResultRow(const ScanRowDescriptor& row);
 
     /// Write one identification.tsv row for an MS2 or MS3 scan with matched fragments
     void writeIdentificationRow(const IdRowDescriptor& row);

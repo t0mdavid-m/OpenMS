@@ -583,9 +583,13 @@ namespace OpenMS
     commands_tsv_stream_.flush();
   }
 
-  void IdaLogger::writeScanResultRow(const ScanRowDescriptor& row)
+  uint64_t IdaLogger::writeScanResultRow(const ScanRowDescriptor& row)
   {
-    if (!results_tsv_stream_.is_open()) return;
+    // ADR-0076: the row's resolve_ts is returned (the W gate's last MS1 is stamped with it); with no stream open, the
+    // time the row would have been written.
+    if (!results_tsv_stream_.is_open())
+      return static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
     std::lock_guard<std::mutex> lk(results_tsv_mutex_);
 
     // Alias the descriptor fields so the row-building body below is unchanged (byte-identical output).
@@ -799,6 +803,7 @@ namespace OpenMS
                         << "\t" << row.search_wait_ms
                         << "\t" << row.search_ms << "\n";
     results_tsv_stream_.flush();
+    return resolve_ts;
   }
 
   void IdaLogger::writeIdentificationRow(const IdRowDescriptor& row)

@@ -309,6 +309,102 @@ namespace OpenMS
     inline const FragmentAnalysis::FragmentScores& scoresOf(const ChargeRecord& c) { return c.stage1_scores; }
     inline int chargeOf(const FragmentObservation* o) { return o->frag_charge; }
     inline int chargeOf(const ChargeRecord& c) { return c.charge; }
+    // ADR-0076: a charge's stage-0 collision energy, as buildMS3 writes it: the observation's own MS2 (ADR-0003); a raw
+    // mass replays the winner MS2 (the gate's default_ce1).
+    inline double ce1Of(const FragmentObservation* o, double) { return o->params.collision_energy; }
+    inline double ce1Of(const ChargeRecord&, double default_ce1) { return default_ce1; }
+
+    /// ADR-0076: the W walk of one target's charges, strongest first, at the plan's running rank. Under `separate`
+    /// every charge is scored, each admitted one taking the next rank; otherwise the first admitted (or untested) charge
+    /// anchors and the walk stops. Every scored charge is recorded in gate.witness->records (the plan's [MS3-W] line);
+    /// the rank itself advances only when the caller commits the target (it may still lose its place to the cap).
+    /// @p w_by_charge receives each admitted charge's record.
+    template <typename Obs>
+    std::vector<Obs> witnessWalk(const Ms3PlanGate& gate, const std::string& ion_type, int ion_index,
+                                 const std::vector<Obs>& charges, bool test_every_charge,
+                                 std::map<int, std::shared_ptr<const WitnessRecord>>* w_by_charge, double* anchor_w,
+                                 bool* tested)
+    {
+      WitnessGate& wg = *gate.witness;
+      std::vector<Obs> admitted;
+      int rank = wg.admitted + 1;
+      for (const Obs& o : charges)
+      {
+        WitnessRecord r = wg.score(ion_type, ion_index, chargeOf(o), ce1Of(o, wg.default_ce1), scoresOf(o), rank);
+        const bool take = (r.verdict == "admitted" || r.verdict == "untested");
+        if (r.verdict == "admitted" && tested != nullptr) *tested = true;
+        if (take)
+        {
+          if (admitted.empty() && anchor_w != nullptr) *anchor_w = r.w;
+          admitted.push_back(o);
+          rank += wg.ms3_per_target;
+        }
+        auto rec = std::make_shared<const WitnessRecord>(r);
+        wg.records.push_back(*rec);
+        if (take && w_by_charge != nullptr) (*w_by_charge)[std::abs(chargeOf(o))] = rec;
+        if (take && !test_every_charge) break;
+      }
+      return admitted;
+    }
+
+    /// ADR-0076: the MS3 commands a committed target adds to the plan's rank.
+    inline int witnessCommands(const WitnessGate& wg, size_t admitted_charges, bool separate)
+    {
+      return static_cast<int>(separate ? admitted_charges : (admitted_charges > 0 ? 1 : 0)) * wg.ms3_per_target;
+    }
+
+    /// ADR-0076: mark the records [from, to) of a target that lost its place after the W walk admitted it.
+    inline void witnessMark(WitnessGate& wg, size_t from, size_t to, const char* verdict, const char* reason)
+    {
+      for (size_t i = from; i < to && i < wg.records.size(); ++i)
+        if (wg.records[i].verdict == "admitted" || wg.records[i].verdict == "untested")
+        {
+          wg.records[i].verdict = verdict;
+          wg.records[i].reason = reason;
+        }
+    }
+
+    /// ADR-0076, rank_by yield under model w: the order a pool is walked in, greedily -- at each step the candidate
+    /// whose anchor charge scores the highest W at the next rank (W >= threshold; ties keep the input order), the
+    /// untested ones after every tested one, the rest last. Provisional: it records nothing and decides nothing; the
+    /// walk decides each candidate at its actual rank. @p anchorOf gives a candidate's (ion_type, ion_index, anchor).
+    template <typename T, typename AnchorFn>
+    void witnessGreedyOrder(const WitnessGate& wg, std::vector<T>& v, AnchorFn anchorOf)
+    {
+      std::vector<T> ordered;
+      std::vector<T> untested;
+      std::vector<bool> used(v.size(), false);
+      int k = wg.admitted;
+      for (size_t step = 0; step < v.size(); ++step)
+      {
+        int best = -1;
+        double best_w = -1.0;
+        for (size_t i = 0; i < v.size(); ++i)
+        {
+          if (used[i]) continue;
+          const WitnessRecord r = anchorOf(v[i], k + 1);
+          if (r.verdict == "admitted" && r.w > best_w)
+          {
+            best = static_cast<int>(i);
+            best_w = r.w;
+          }
+        }
+        if (best < 0) break;
+        used[static_cast<size_t>(best)] = true;
+        ordered.push_back(v[static_cast<size_t>(best)]);
+        k += wg.ms3_per_target;
+      }
+      std::vector<T> rest;
+      for (size_t i = 0; i < v.size(); ++i)
+      {
+        if (used[i]) continue;
+        if (anchorOf(v[i], k + 1).verdict == "untested") untested.push_back(v[i]);
+        else rest.push_back(v[i]);
+      }
+      ordered.insert(ordered.end(), untested.begin(), untested.end());
+      ordered.insert(ordered.end(), rest.begin(), rest.end());
+      v = std::move(ordered);
+    }
 
     template <typename Obs>
     std::vector<Obs> yieldWalk(const Ms3PlanGate& gate, int precursor_id, const std::string& ion_type, int ion_index,
@@ -319,6 +415,12 @@ namespace OpenMS
       if (tested != nullptr) *tested = false;
       if (gate.yield == nullptr || gate.ms_ctx == nullptr || charges.empty()) return charges;
       const YieldGateConfig& yg = *gate.yield;
+      // ADR-0076: under model w the W walk decides (it records its own verdicts); this caller only sees the admitted.
+      if (yg.model == YieldModel::W)
+      {
+        if (gate.witness == nullptr) return charges;   // no model handed in: untested, as with no ion index
+        return witnessWalk(gate, ion_type, ion_index, charges, test_every_charge, nullptr, anchor_e, tested);
+      }
       if (ion_index <= 0)
       {
         const YieldInputs in = yieldInputsOf(*gate.ms_ctx, scoresOf(charges.front()), ion_index);
@@ -885,10 +987,33 @@ namespace OpenMS
     // BEFORE room.admit, so a refused fragment takes no budget place and no cleavage slot.
     const bool yield_on = gate != nullptr && gate->yield != nullptr;
     const bool separate_charges = config_.characterization().fragment_charges == ChargeAcquisitionMode::Separate;
+    // ADR-0076: under model w the pass is the W walk's, made when add_target reaches the fragment (at the plan's
+    // running rank), not when the plan is ranked.
+    const bool w_on = yield_on && gate->yield->model == YieldModel::W && gate->witness != nullptr;
+    if (w_on)
+    {
+      // Uncovered bonds inside a target fragment, logged with its W (the coverage objective's count, every objective).
+      gate->witness->uncovered_bonds = [&m, L](const std::string& ion_type, int ion_index) -> int {
+        if (ion_index <= 0 || ion_index > L) return -1;
+        const char t = ion_type.empty() ? '\0' : ion_type[0];
+        const bool prefix = (t == 'a' || t == 'b' || t == 'c');
+        const int lo = prefix ? 1 : (L - ion_index + 1);
+        const int hi = prefix ? (ion_index - 1) : (L - 1);
+        std::set<int> witnessed;
+        for (const auto& kv : m.fragments)
+          witnessed.insert(kv.second.is_prefix ? kv.second.cover_end : (kv.second.cover_start - 1));
+        int n = 0;
+        for (int b = lo; b <= hi; ++b) n += witnessed.count(b) == 0 ? 1 : 0;
+        return n;
+      };
+    }
     struct YieldPass
     {
       std::vector<const FragmentObservation*> admitted;
       double e = 0.0;   ///< the anchor's predicted bond yield
+      std::map<int, std::shared_ptr<const WitnessRecord>> w_by_charge;   ///< ADR-0076: each admitted charge's record
+      size_t rec_begin = 0;   ///< ADR-0076: this fragment's records in gate->witness->records
+      size_t rec_end = 0;
     };
     std::map<FragmentKey, YieldPass> yield_pass;
     auto yieldPassOf = [&](const MappedFragment& f) -> const YieldPass& {
@@ -896,7 +1021,15 @@ namespace OpenMS
       auto cached = yield_pass.find(key);
       if (cached != yield_pass.end()) return cached->second;
       YieldPass pass;
-      pass.admitted = yieldWalk(*gate, precursor_id, f.ion_type, f.ion_index, chargesOf(f), separate_charges, &pass.e);
+      if (w_on)
+      {
+        pass.rec_begin = gate->witness->records.size();
+        pass.admitted = witnessWalk(*gate, f.ion_type, f.ion_index, chargesOf(f), separate_charges, &pass.w_by_charge,
+                                    &pass.e, nullptr);
+        pass.rec_end = gate->witness->records.size();
+      }
+      else
+        pass.admitted = yieldWalk(*gate, precursor_id, f.ion_type, f.ion_index, chargesOf(f), separate_charges, &pass.e);
       return yield_pass.emplace(key, std::move(pass)).first->second;
     };
     // ADR-0069 (amended): the order a plan walks its candidates in, and sends its targets in. Strongest best-MS2 first;
@@ -906,6 +1039,18 @@ namespace OpenMS
     auto rankCandidates = [&](std::vector<const MappedFragment*>& v) {
       std::sort(v.begin(), v.end(), by_intensity);
       if (!rank_by_yield) return;
+      if (w_on)
+      {
+        // ADR-0076: greedily by W at the next rank, provisional; add_target decides each at its actual rank.
+        witnessGreedyOrder(*gate->witness, v, [&](const MappedFragment* f, int rank) {
+          const std::vector<const FragmentObservation*>& cs = chargesOf(*f);
+          if (cs.empty()) return WitnessRecord{};
+          const FragmentObservation* o = cs.front();
+          return gate->witness->score(f->ion_type, f->ion_index, o->frag_charge, o->params.collision_energy,
+                                      o->stage1_scores, rank);
+        });
+        return;
+      }
       for (const MappedFragment* f : v) yieldPassOf(*f);
       std::stable_sort(v.begin(), v.end(), [&](const MappedFragment* a, const MappedFragment* b) {
         const YieldPass& pa = yieldPassOf(*a);
@@ -919,9 +1064,16 @@ namespace OpenMS
       const FragmentKey key{f->ion_type, f->ion_index};
       if (chosen.count(key)) return false;
       if (yield_on && yieldPassOf(*f).admitted.empty()) return true;   // yield-refused: the next candidate takes the place
-      if (gate != nullptr && !room.admit(key)) return true;
+      if (gate != nullptr && !room.admit(key))
+      {
+        // ADR-0076: the W walk admitted it, the cleavage cap did not: it takes no place and no rank.
+        if (w_on) witnessMark(*gate->witness, yieldPassOf(*f).rec_begin, yieldPassOf(*f).rec_end, "capped", "cleavage_cap");
+        return true;
+      }
       chosen.insert(key);
       targets.push_back(f);
+      // ADR-0076: the target takes its place, so the plan's rank advances by the MS3 commands it adds.
+      if (w_on) gate->witness->admitted += witnessCommands(*gate->witness, yieldPassOf(*f).admitted.size(), separate_charges);
       return static_cast<int>(targets.size()) < budget;  // false once the budget is full
     };
 
@@ -1159,6 +1311,13 @@ namespace OpenMS
         t.stage0_params = o->params;
         t.stage1_scores = o->stage1_scores;
         t.notches = frag_notches;  // empty unless fragment_charges == Multiplexed
+        if (w_on)
+        {
+          // ADR-0076: the record the W walk made for this charge (untested ones included).
+          const auto& byc = yieldPassOf(*f).w_by_charge;
+          const auto w = byc.find(std::abs(o->frag_charge));
+          if (w != byc.end()) t.witness = w->second;
+        }
         out.push_back(std::move(t));
       }
       // One fragment consumed, however many targets it produced.
@@ -1392,7 +1551,22 @@ namespace OpenMS
     // ADR-0069 (amended): under rank_by yield every mass gets its verdict here, before the walk, and the pool is
     // re-ranked: tested masses by predicted bond yield, then the untested ones (no ion index) in intensity order.
     const bool rank_by_yield = gate != nullptr && gate->yield != nullptr && gate->yield->rank_by == YieldRank::Yield;
-    if (rank_by_yield)
+    // ADR-0076: under model w every mass is decided in the walk below, at the plan's running rank; rank_by yield only
+    // orders the pool first (greedily by W at the next rank, provisional).
+    const bool w_on = gate != nullptr && gate->yield != nullptr && gate->yield->model == YieldModel::W && gate->witness != nullptr;
+    if (w_on)
+    {
+      gate->witness->default_ce1 = m.winner_params.collision_energy;   // a raw mass replays the winner MS2
+      gate->witness->uncovered_bonds = nullptr;   // no ion model of the masses' bonds in this mode
+      if (rank_by_yield)
+        witnessGreedyOrder(*gate->witness, pool, [&](const PoolEntry& e, int rank) {
+          const std::pair<std::string, int> label = labelFor(*e.peak);
+          const ChargeRecord& c = e.charges.front();
+          return gate->witness->score(label.first, label.second, c.charge, m.winner_params.collision_energy,
+                                      c.stage1_scores, rank);
+        });
+    }
+    else if (rank_by_yield)
     {
       const bool separate = config_.characterization().fragment_charges == ChargeAcquisitionMode::Separate;
       for (PoolEntry& e : pool)
@@ -1421,22 +1595,45 @@ namespace OpenMS
       // ADR-0069: yield-refused -- before the cap, so it takes no slot; not emitted, not stamped. A mass that matches no
       // ion (label index 0) is admitted untested.
       std::vector<ChargeRecord> yield_admitted;
-      if (rank_by_yield)
+      std::map<int, std::shared_ptr<const WitnessRecord>> w_by_charge;   // ADR-0076
+      size_t rec_begin = 0;
+      const bool separate = config_.characterization().fragment_charges == ChargeAcquisitionMode::Separate;
+      if (w_on)
+      {
+        rec_begin = gate->witness->records.size();
+        yield_admitted = witnessWalk(*gate, label.first, label.second, e.charges, separate, &w_by_charge, nullptr, nullptr);
+        if (yield_admitted.empty()) continue;
+      }
+      else if (rank_by_yield)
       {
         if (e.yield_refused) continue;
         yield_admitted = e.yield_admitted;
       }
       else if (gate != nullptr && gate->yield != nullptr)
       {
-        yield_admitted = yieldWalk(*gate, precursor_id, label.first, label.second, e.charges,
-                                   config_.characterization().fragment_charges == ChargeAcquisitionMode::Separate);
+        yield_admitted = yieldWalk(*gate, precursor_id, label.first, label.second, e.charges, separate);
         if (yield_admitted.empty()) continue;
       }
       // Capped (ADR-0066): a new cleavage with no room left is skipped -- not emitted, not stamped.
-      if (gate != nullptr && !room.admit(e.cleavage)) continue;
+      if (gate != nullptr && !room.admit(e.cleavage))
+      {
+        if (w_on) witnessMark(*gate->witness, rec_begin, gate->witness->records.size(), "capped", "cleavage_cap");
+        continue;
+      }
 
+      const size_t emitted_before = out.size();
       emitRawMassTarget_(m, pr, label.first, label.second, "exhaustive", out, gate != nullptr ? &e.charges : nullptr,
                          (gate != nullptr && gate->yield != nullptr) ? &yield_admitted : nullptr);
+      if (w_on)
+      {
+        // ADR-0076: each emitted charge carries its record; the plan's rank advances by the commands it adds.
+        for (size_t i = emitted_before; i < out.size(); ++i)
+        {
+          const auto w = w_by_charge.find(std::abs(out[i].frag_charge));
+          if (w != w_by_charge.end()) out[i].witness = w->second;
+        }
+        gate->witness->admitted += witnessCommands(*gate->witness, yield_admitted.size(), separate);
+      }
 
       // Stamped only now: after every filter, and after the mass has actually become a target. The set
       // is monotone and dispatched-but-never-returned counts as done, so a stamp made any earlier is a
@@ -1598,7 +1795,26 @@ namespace OpenMS
     // ADR-0069 (amended): under rank_by yield every record gets its verdict here, at the winner path's ion, and the
     // pool is re-ranked: tested records by predicted bond yield, then the untested ones in the records' order.
     const bool rank_by_yield = gate != nullptr && gate->yield != nullptr && gate->yield->rank_by == YieldRank::Yield;
-    if (rank_by_yield)
+    // ADR-0076: under model w every record is decided in the walk below, at the plan's running rank, at the winner
+    // path's ion; rank_by yield only orders the pool first (greedily by W at the next rank, provisional).
+    const bool w_on = gate != nullptr && gate->yield != nullptr && gate->yield->model == YieldModel::W && gate->witness != nullptr;
+    auto ionOfRecord = [](const DiscriminatingRecord& rec) -> std::pair<std::string, int> {
+      const std::optional<Refine::Path::Ion>& yion = rec.target.ion_a;
+      return {yion ? std::string(1, yion->type) : std::string(kUnassignedIonType), yion ? yion->index : 0};
+    };
+    if (w_on)
+    {
+      gate->witness->default_ce1 = m.winner_params.collision_energy;
+      gate->witness->uncovered_bonds = nullptr;
+      if (rank_by_yield)
+        witnessGreedyOrder(*gate->witness, pool, [&](const PoolEntry& e, int rank) {
+          const std::pair<std::string, int> ion = ionOfRecord(*e.rec);
+          const ChargeRecord& c = e.charges.front();
+          return gate->witness->score(ion.first, ion.second, c.charge, m.winner_params.collision_energy,
+                                      c.stage1_scores, rank);
+        });
+    }
+    else if (rank_by_yield)
     {
       const bool separate = config_.characterization().fragment_charges == ChargeAcquisitionMode::Separate;
       for (PoolEntry& e : pool)
@@ -1628,7 +1844,17 @@ namespace OpenMS
       // ADR-0069: yield-refused -- before the cap, so it takes no slot; not dispatched, not stamped. Tested at the winner
       // path's ion; a mass only the second path explains has no ion index and is admitted untested.
       std::vector<ChargeRecord> yield_admitted;
-      if (rank_by_yield)
+      std::map<int, std::shared_ptr<const WitnessRecord>> w_by_charge;   // ADR-0076
+      size_t rec_begin = 0;
+      const bool separate = config_.characterization().fragment_charges == ChargeAcquisitionMode::Separate;
+      if (w_on)
+      {
+        const std::pair<std::string, int> wion = ionOfRecord(rec);
+        rec_begin = gate->witness->records.size();
+        yield_admitted = witnessWalk(*gate, wion.first, wion.second, e.charges, separate, &w_by_charge, nullptr, nullptr);
+        if (yield_admitted.empty()) continue;
+      }
+      else if (rank_by_yield)
       {
         if (e.yield_refused) continue;
         yield_admitted = e.yield_admitted;
@@ -1637,12 +1863,15 @@ namespace OpenMS
       {
         const std::optional<Refine::Path::Ion>& yion = rec.target.ion_a;
         yield_admitted = yieldWalk(*gate, precursor_id, yion ? std::string(1, yion->type) : std::string(kUnassignedIonType),
-                                   yion ? yion->index : 0, e.charges,
-                                   config_.characterization().fragment_charges == ChargeAcquisitionMode::Separate);
+                                   yion ? yion->index : 0, e.charges, separate);
         if (yield_admitted.empty()) continue;
       }
       // Capped (ADR-0066): a new cleavage with no room left is skipped -- not dispatched, not stamped.
-      if (gate != nullptr && !room.admit(e.cleavage)) continue;
+      if (gate != nullptr && !room.admit(e.cleavage))
+      {
+        if (w_on) witnessMark(*gate->witness, rec_begin, gate->witness->records.size(), "capped", "cleavage_cap");
+        continue;
+      }
       // Labelled with the winner path's ion only. A mass only the second path explains goes out unassigned ('u'/0, as
       // planExhaustive_ labels a mass with no ion identity), so the generic MS3 return path does not match and fold
       // path b's claim against the winner's (path a's) context; recordDiscriminatingScan still finds the record by mass
@@ -1651,8 +1880,18 @@ namespace OpenMS
       const std::string ion_type = ion ? std::string(1, ion->type) : std::string(kUnassignedIonType);
       const int ion_index = ion ? ion->index : 0;
 
+      const size_t emitted_before = out.size();
       emitRawMassTarget_(m, pr, ion_type, ion_index, "discriminating", out, gate != nullptr ? &e.charges : nullptr,
                          (gate != nullptr && gate->yield != nullptr) ? &yield_admitted : nullptr);
+      if (w_on)
+      {
+        for (size_t i = emitted_before; i < out.size(); ++i)
+        {
+          const auto w = w_by_charge.find(std::abs(out[i].frag_charge));
+          if (w != w_by_charge.end()) out[i].witness = w->second;
+        }
+        gate->witness->admitted += witnessCommands(*gate->witness, yield_admitted.size(), separate);
+      }
 
       rec.dispatched = true;
       m.dispatched_nominal_masses.insert(e.nominal);
