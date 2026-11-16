@@ -27,6 +27,7 @@
 #include <cstring>
 #include <tuple>      // msnSequence (ADR-0071)
 #include <cmath>      // std::llround
+#include <limits>     // the W gate's missing inputs (ADR-0076)
 #include <vector>
 #include <map>
 #include <set>
@@ -1460,6 +1461,342 @@ namespace
       if (c.msn_level >= 2 && c.num_stages > 0)
         s.emplace_back(c.msn_level, c.stages[0].charge_state, std::llround(c.stages[0].precursor_mz * 1e4));
     return s;
+  }
+}
+
+// ===== The W gate (ADR-0076), helpers at file scope ==================================================================
+namespace
+{
+  std::vector<std::string> wSplitOn(const std::string& s, char sep)
+  {
+    std::vector<std::string> out;
+    size_t b = 0;
+    for (size_t i = 0; i <= s.size(); ++i)
+      if (i == s.size() || s[i] == sep)
+      {
+        out.push_back(s.substr(b, i - b));
+        b = i + 1;
+      }
+    return out;
+  }
+
+  /// One candidate of an [MS3-W] line: "<ion>/<charge>:w=<w>,<verdict>[,reason=..],<name>=<value>,...".
+  struct WCand
+  {
+    std::string ion;   ///< ion type and index, as "b12"
+    int charge = 0;
+    double w = -1.0;
+    std::string verdict, reason;
+    std::map<std::string, std::string> f;   ///< every other field, by name
+    double num(const std::string& k) const
+    {
+      const auto it = f.find(k);
+      return (it == f.end() || it->second == "nan") ? std::numeric_limits<double>::quiet_NaN() : std::stod(it->second);
+    }
+  };
+
+  /// One [MS3-W] line: its fields before candidates= (stage, ms1, parent, gate, sha, threshold, the parent's inputs),
+  /// and its candidates in order. A tracking id is three characters of an alphabet without a space, so a field ends at
+  /// the next space; its key ends at its first '='.
+  struct WLine
+  {
+    std::map<std::string, std::string> f;
+    std::vector<WCand> cands;
+    std::string get(const std::string& k) const
+    {
+      const auto it = f.find(k);
+      return it == f.end() ? std::string() : it->second;
+    }
+    double num(const std::string& k) const
+    {
+      const std::string v = get(k);
+      return (v.empty() || v == "nan") ? std::numeric_limits<double>::quiet_NaN() : std::stod(v);
+    }
+    const WCand* cand(const std::string& ion, int charge) const
+    {
+      for (const WCand& c : cands)
+        if (c.ion == ion && c.charge == charge) return &c;
+      return nullptr;
+    }
+  };
+
+  std::vector<WLine> wLines(const std::string& events)
+  {
+    std::vector<WLine> out;
+    std::istringstream in(events);
+    std::string line;
+    while (std::getline(in, line))
+    {
+      const size_t at = line.find("[MS3-W] ");
+      if (at == std::string::npos) continue;
+      if (!line.empty() && line.back() == '\r') line.pop_back();
+      WLine l;
+      std::string head = line.substr(at + 8);
+      std::string cands;
+      const size_t c = head.find(" candidates=");
+      if (c != std::string::npos)
+      {
+        cands = head.substr(c + 12);
+        head = head.substr(0, c);
+      }
+      for (const std::string& tok : wSplitOn(head, ' '))
+      {
+        const size_t eq = tok.find('=');
+        if (eq != std::string::npos) l.f[tok.substr(0, eq)] = tok.substr(eq + 1);
+      }
+      if (!cands.empty())
+        for (const std::string& one : wSplitOn(cands, ';'))
+        {
+          const std::vector<std::string> parts = wSplitOn(one, ',');
+          if (parts.size() < 2) continue;
+          const size_t slash = parts[0].find('/'), colon = parts[0].find(":w=");
+          if (slash == std::string::npos || colon == std::string::npos) continue;
+          WCand k;
+          k.ion = parts[0].substr(0, slash);
+          k.charge = std::stoi(parts[0].substr(slash + 1, colon - slash - 1));
+          k.w = std::stod(parts[0].substr(colon + 3));
+          k.verdict = parts[1];
+          for (size_t i = 2; i < parts.size(); ++i)
+          {
+            const size_t eq = parts[i].find('=');
+            if (eq == std::string::npos) continue;
+            const std::string key = parts[i].substr(0, eq);
+            if (key == "reason")
+              k.reason = parts[i].substr(eq + 1);
+            else
+              k.f[key] = parts[i].substr(eq + 1);
+          }
+          l.cands.push_back(std::move(k));
+        }
+      out.push_back(std::move(l));
+    }
+    return out;
+  }
+
+  /// A threshold that both admits and refuses on the plans of @p lines: the middle of the widest gap between their
+  /// tested W. W reads a wall clock (x_plan_age), so a second run repeats a W only to the clock's jitter; the widest gap
+  /// keeps the threshold far from every value. 0 when fewer than two distinct W were tested.
+  double wThresholdBetween(const std::vector<WLine>& lines)
+  {
+    std::vector<double> ws;
+    for (const WLine& l : lines)
+      if (l.get("stage") == "plan")
+        for (const WCand& c : l.cands)
+          if (c.w >= 0) ws.push_back(c.w);
+    std::sort(ws.begin(), ws.end());
+    ws.erase(std::unique(ws.begin(), ws.end()), ws.end());
+    double gap = 0.0, t = 0.0;
+    for (size_t i = 1; i < ws.size(); ++i)
+      if (ws[i] - ws[i - 1] > gap)
+      {
+        gap = ws[i] - ws[i - 1];
+        t = 0.5 * (ws[i] + ws[i - 1]);
+      }
+    return t;
+  }
+
+  /// The MS3's fragment charge and ion of a scan description ("...@<charge><ion type><ion index>"); "" when it has none.
+  std::pair<int, std::string> wIonOf(const ScanCommand& c)
+  {
+    const std::string d(c.scan_description);
+    const size_t at = d.rfind('@');
+    if (at == std::string::npos) return {0, std::string()};
+    size_t i = at + 1;
+    while (i < d.size() && std::isdigit(static_cast<unsigned char>(d[i]))) ++i;
+    const int z = (i > at + 1) ? std::stoi(d.substr(at + 1, i - at - 1)) : 0;
+    return {z, d.substr(i)};
+  }
+
+  std::string wParentOf(const ScanCommand& c)
+  {
+    const char* const b = c.parent_scan_id;
+    return std::string(b, std::find(b, b + sizeof(c.parent_scan_id), '\0'));
+  }
+
+  /// yield_gate_row_equals_decision's recipe (per-proteoform cytC fragments, three targets) under model w at
+  /// @p threshold, over a 60 min run.
+  std::string wCytcJson(const std::string& dir, double threshold)
+  {
+    nlohmann::json j = nlohmann::json::parse(ms3_mode1_json);
+    j["deconvolution"]["tqscore_threshold"] = 0.0;
+    j["identification"]["characterization"] = {{"mode", "fragments"}, {"max_targets", 3}, {"per_proteoform", true},
+                                               {"yield_gate", {{"model", "w"}, {"threshold", threshold}}}};
+    j["global"] = {{"duration", 60.0}};
+    j["runtime"] = {{"log_dir", dir}};
+    return j.dump();
+  }
+
+  /// The same cytC recipe, ungoverned, with an MS3 CE sweep of three variants (25, 30, 35) and a Monitor scan while it
+  /// runs, under model w at a threshold every tested candidate passes. The Monitor interval (30 s) outlasts the drive,
+  /// so the one Monitor scan of each sweep episode is its anchor, sent before any variant.
+  std::string wSweepJson(const std::string& dir)
+  {
+    nlohmann::json j = nlohmann::json::parse(ms3_mode1_json);
+    j["deconvolution"]["tqscore_threshold"] = 0.0;
+    j["identification"]["characterization"] = {
+        {"mode", "fragments"},
+        {"max_targets", 3},
+        {"exploration",
+         {{"metric", "mass_count"}, {"ce_min", 25.0}, {"ce_max", 35.0}, {"ce_step", 5.0},
+          {"monitor_ms1", {{"enabled", true}, {"interval_ms", 30000}}}}},
+        {"yield_gate", {{"model", "w"}, {"threshold", 1e-6}}}};
+    j["global"] = {{"duration", 60.0}};
+    j["runtime"] = {{"log_dir", dir}};
+    return j.dump();
+  }
+
+  struct WRun
+  {
+    std::string events;
+    AcqResult acq;
+    std::vector<WLine> lines;
+  };
+
+  /// The whole cytC drive of yield_gate_row_equals_decision on @p cfg, its events captured.
+  WRun runWCytc(const std::string& cfg)
+  {
+    WRun r;
+    auto ms1 = loadTsvScans(ms1_cytc_tsv_path);
+    auto ms2 = loadTsvScans(ms2_cytc_fresh_tsv_path);
+    if (ms1.empty() || ms2.empty()) return r;
+    {
+      EventCapture cap;
+      {
+        FLASHIda ida(const_cast<char*>(cfg.c_str()));
+        r.acq = runInterleaved(&ida, ms1, ms2, nullptr, 4000);
+      }
+      r.events = cap.str();
+    }
+    r.lines = wLines(r.events);
+    return r;
+  }
+
+  /// An MS3 row of scan_commands.tsv: its ids, ion, fragment charge (the first ','-value of the last ';'-group) and
+  /// the two gate columns.
+  struct WRow
+  {
+    std::string tracking_id, parent, ion, desc, pby;
+    int charge = 0;
+    double w = -2.0;
+  };
+
+  std::vector<WRow> wMs3Rows(const std::string& dir)
+  {
+    std::vector<WRow> out;
+    auto t = TSVFile::parse(dir + "/scan_commands.tsv");
+    if (t.colIndex("witness_probability") < 0) return out;
+    for (const auto& row : t.rows)
+    {
+      if (cell(t, row, "ms_level") != "3") continue;
+      WRow r;
+      r.tracking_id = cell(t, row, "tracking_id");
+      r.parent = cell(t, row, "parent_tracking_id");
+      r.ion = cell(t, row, "ion_type") + cell(t, row, "ion_index");
+      r.desc = cell(t, row, "scan_description");
+      r.pby = cell(t, row, "predicted_bond_yield");
+      const std::string z = cell(t, row, "charge");
+      const std::string last = z.substr(z.rfind(';') == std::string::npos ? 0 : z.rfind(';') + 1);
+      r.charge = std::abs(std::stoi(last.substr(0, last.find(','))));
+      r.w = std::stod(cell(t, row, "witness_probability"));
+      out.push_back(r);
+    }
+    return out;
+  }
+
+  /// The last verdict the lines gave the MS3 of @p parent on @p ion at @p charge that sends it (admitted at a plan, kept
+  /// at a re-score, or untested); null when none did.
+  const WCand* wLastSendable(const std::vector<WLine>& lines, const std::string& parent, const std::string& ion, int charge)
+  {
+    const WCand* last = nullptr;
+    for (const WLine& l : lines)
+    {
+      if (l.get("parent") != parent) continue;
+      const WCand* c = l.cand(ion, charge);
+      if (c != nullptr && (c->verdict == "admitted" || c->verdict == "kept" || c->verdict == "untested")) last = c;
+    }
+    return last;
+  }
+
+  /// One cytC MS2 under model w at @p threshold, with an MS1 answered while its MS3 wait. Six surveys are answered and
+  /// their MS2 sent but not answered; the latest MS2 and two idle surveys are held. The first idle survey is answered
+  /// before the MS2 (with a survey of another sample, E. coli, when @p other_first, else with cytC's own survey), the
+  /// MS2 is answered (its plan queues its MS3), and the second idle survey is answered with the other of the two: its
+  /// row re-scores the queued MS3 before any is sent. Then the queue is drained, nothing answered.
+  struct WHeld
+  {
+    bool ok = false;
+    std::string dir, events, parent, rescore_ms1;
+    std::vector<WLine> lines;
+    std::vector<ScanCommand> sent_ms3;
+    const WLine* line(const std::string& stage) const
+    {
+      for (const WLine& l : lines)
+        if (l.get("stage") == stage && l.get("parent") == parent && (stage == "plan" || l.get("ms1") == rescore_ms1))
+          return &l;
+      return nullptr;
+    }
+    bool sent(const std::string& ion, int charge) const
+    {
+      for (const ScanCommand& c : sent_ms3)
+        if (wParentOf(c) == parent && wIonOf(c) == std::make_pair(charge, ion)) return true;
+      return false;
+    }
+  };
+
+  WHeld runHeld(const std::string& tag, double threshold, bool other_first)
+  {
+    WHeld h;
+    h.dir = freshLogDir(tag);
+    auto ms1 = loadTsvScans(ms1_cytc_tsv_path);
+    auto ms2 = loadTsvScans(ms2_cytc_fresh_tsv_path);
+    auto other = loadTsvScans(kItmtMs1);
+    if (ms1.size() < 6 || ms2.empty() || other.empty()) return h;
+    const std::vector<ScanData> surveys(ms1.begin(), ms1.begin() + 6);
+    const std::string cfg = wCytcJson(h.dir, threshold);
+    {
+      EventCapture cap;
+      {
+        FLASHIda ida(const_cast<char*>(cfg.c_str()));
+        const AcqResult acq = runInterleaved(&ida, surveys, {});
+        std::set<int> fed;
+        for (const ScanCommand& c : acq.ms1_cmds) fed.insert(c.scan_id);
+        std::vector<ScanCommand> idle;
+        for (const ScanCommand& c : acq.all_cmds)
+          if (c.msn_level == 1 && !c.is_agc && roleOf(c) == ScanRole::Survey && fed.count(c.scan_id) == 0) idle.push_back(c);
+        if (acq.ms2_cmds.empty() || idle.size() < 2) return h;
+        const ScanCommand held = acq.ms2_cmds.back();
+        h.parent = ScanCommandQueue::encode(held.scan_id);
+        // cytC's own survey: the one the held MS2 descends from.
+        ScanData cytc = surveys.back();
+        for (size_t i = 0; i < acq.ms1_cmds.size() && i < surveys.size(); ++i)
+          if (ScanCommandQueue::encode(acq.ms1_cmds[i].scan_id) == wParentOf(held)) cytc = surveys[i];
+        ScanData first = other_first ? other[0] : cytc;
+        ScanData second = other_first ? cytc : other[0];
+        first.rt = surveys.back().rt + 1.0;
+        second.rt = surveys.back().rt + 2.0;
+        auto feedMs1 = [&ida](const ScanCommand& c, const ScanData& s) {
+          ida.processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1, c.scan_description, c.faims_cv,
+                          instrumentScanNumberOf(s));
+          ida.waitForSearchIdle();
+        };
+        feedMs1(idle[0], first);
+        feedMs2(ida, held, ms2[0]);
+        ida.waitForSearchIdle();
+        feedMs1(idle[1], second);
+        h.rescore_ms1 = ScanCommandQueue::encode(idle[1].scan_id);
+        for (int i = 0; i < 400; ++i)
+        {
+          ScanCommand c{};
+          if (ida.getNextScanCommand(c) != 1) break;
+          if (c.msn_level == 3) h.sent_ms3.push_back(c);
+          if (c.msn_level <= 1 && c.priority == 3) break;   // the idle survey: the queue is drained
+        }
+        h.ok = true;
+      }
+      h.events = cap.str();
+    }
+    h.lines = wLines(h.events);
+    return h;
   }
 }
 
@@ -4637,6 +4974,424 @@ START_SECTION(quant_ms3_yield_refused_hands_on)
   TEST_EQUAL(ranked.quant_ms3.size(), 1)
   ABORT_IF(ranked.quant_ms3.size() != 1)
   TEST_EQUAL(rowE(d3, ranked.quant_ms3[0]) >= e_off - 1e-3, true)
+}
+END_SECTION
+
+// ===== The W gate (ADR-0076) end to end ===========================================================================
+//
+// The threshold of each section is learned from the fixture: a first run at a threshold every tested candidate passes
+// gives the W the model returns on it, and the second runs at the middle of their widest gap, so it both admits and
+// refuses. W reads a wall clock (x_plan_age, milliseconds in a test), which the widest gap keeps far from any value.
+
+// T20. Every MS3 row's witness_probability is the W the gate last sent it at (admitted at its plan, or kept at a
+// re-score), at or above the threshold; every refused candidate's W is below it and none is acquired; every other row,
+// and every predicted_bond_yield, is -1. Every line names the shipped model.
+//
+// FAILS UNDER: a row whose W is not the decision value, a refused MS3 acquired, a W row on an MS3 no W gate scored, or
+// the bond-yield column written under model w.
+START_SECTION(w_row_equals_decision)
+{
+  const WRun cal = runWCytc(wCytcJson(freshLogDir("w_gate_cal"), 1e-6));
+  const double t = wThresholdBetween(cal.lines);
+  TEST_EQUAL(t > 0.0, true)
+  ABORT_IF(t <= 0.0)
+  const std::string dir = freshLogDir("w_gate_cytc");
+  const WRun run = runWCytc(wCytcJson(dir, t));
+  ABORT_IF(run.lines.empty())
+
+  int admitted = 0, refused = 0;
+  for (const WLine& l : run.lines)
+  {
+    TEST_EQUAL(l.get("sha"), "47f0babe")
+    TEST_EQUAL(l.get("gate"), "characterization")
+    TEST_EQUAL(std::abs(l.num("threshold") - t) <= 1e-9, true)
+    for (const WCand& c : l.cands)
+    {
+      if (c.verdict == "admitted" || c.verdict == "kept") TEST_EQUAL(c.w >= t, true)
+      if (c.verdict == "refused" || c.verdict == "withdrawn") TEST_EQUAL(c.w >= 0.0 && c.w < t, true)
+      admitted += (c.verdict == "admitted") ? 1 : 0;
+      refused += (c.verdict == "refused") ? 1 : 0;
+    }
+  }
+  TEST_EQUAL(admitted > 0, true)   // non-vacuity: the threshold admits ...
+  TEST_EQUAL(refused > 0, true)    // ... and refuses
+
+  const std::vector<WRow> rows = wMs3Rows(dir);
+  TEST_EQUAL(rows.empty(), false)
+  for (const WRow& r : rows)
+  {
+    TEST_EQUAL(r.pby, std::string("-1"))
+    const WCand* c = wLastSendable(run.lines, r.parent, r.ion, r.charge);
+    TEST_EQUAL(c != nullptr, true)
+    if (c == nullptr) continue;
+    if (c->verdict == "untested")
+    {
+      TEST_EQUAL(r.w, -1.0)
+    }
+    else
+    {
+      TEST_EQUAL(std::abs(r.w - c->w) <= 1e-6, true)   // the row prints 6 decimals, the line 8
+    }
+  }
+  // A refused candidate is never acquired.
+  for (const WLine& l : run.lines)
+    for (const WCand& c : l.cands)
+      if (c.verdict == "refused")
+        for (const WRow& r : rows) TEST_EQUAL(r.parent == l.get("parent") && r.ion == c.ion && r.charge == c.charge, false)
+  // Every other row is -1.
+  auto tsv = TSVFile::parse(dir + "/scan_commands.tsv");
+  for (const auto& row : tsv.rows)
+    if (cell(tsv, row, "ms_level") != "3") TEST_EQUAL(cell(tsv, row, "witness_probability"), std::string("-1"))
+}
+END_SECTION
+
+// T21. One [MS3-W] stage=plan line per parent MS2 that planned W-scored candidates, naming an MS2 the run acquired, each
+// candidate once; every MS3 row descends from a parent with its line.
+//
+// FAILS UNDER: a line per target or per planner pass, a candidate recorded twice (a cached verdict re-scored), or an
+// MS3 sent from a plan that wrote no line.
+START_SECTION(w_one_line_per_parent)
+{
+  const std::string dir = freshLogDir("w_gate_lines");
+  const WRun run = runWCytc(wCytcJson(dir, 1e-6));
+  std::set<std::string> ms2_ids;
+  for (const ScanCommand& c : run.acq.ms2_cmds) ms2_ids.insert(ScanCommandQueue::encode(c.scan_id));
+  std::map<std::string, int> plans;
+  for (const WLine& l : run.lines)
+  {
+    if (l.get("stage") != "plan") continue;
+    ++plans[l.get("parent")];
+    TEST_EQUAL(ms2_ids.count(l.get("parent")), 1)
+    std::set<std::pair<std::string, int>> seen;
+    for (const WCand& c : l.cands) TEST_EQUAL(seen.insert({c.ion, c.charge}).second, true)
+  }
+  TEST_EQUAL(plans.size() >= 2, true)   // non-vacuity: cytC is identified, and planned, more than once
+  for (const auto& [parent, n] : plans) TEST_EQUAL(n, 1)
+  for (const WRow& r : wMs3Rows(dir)) TEST_EQUAL(plans.count(r.parent), 1)
+}
+END_SECTION
+
+// T22. The prior counts cross selections: the fixture answers every MS2 with the same cytC spectrum, so every plan's
+// placed candidates sit on one (protein, start_pos, end_pos). The n-th plan counts the parents of the earlier ones and
+// its own, so n_ms2_prior rises by at least one per plan and never exceeds the MS2 identification rows; the MS3
+// answered under that key are counted too.
+//
+// FAILS UNDER: a count kept per selection (n_ms2_prior 1 at every plan), the parent not counted (0 at the first), or an
+// MS3 received but never counted under its planned key.
+START_SECTION(w_prior_counts_cross_selections)
+{
+  const std::string dir = freshLogDir("w_gate_priors");
+  const WRun run = runWCytc(wCytcJson(dir, 1e-6));
+  std::vector<double> ms2_prior, ms3_prior;
+  for (const WLine& l : run.lines)
+  {
+    if (l.get("stage") != "plan") continue;
+    double a = 0.0, b = 0.0;
+    for (const WCand& c : l.cands)
+    {
+      if (std::isnan(c.num("n_ms2_prior"))) continue;
+      a = std::max(a, c.num("n_ms2_prior"));
+      b = std::max(b, c.num("n_ms3_prior"));
+    }
+    ms2_prior.push_back(a);
+    ms3_prior.push_back(b);
+  }
+  ABORT_IF(ms2_prior.size() < 2)
+  TEST_EQUAL(ms2_prior.front(), 1.0)   // the first plan: its own parent
+  for (size_t i = 1; i < ms2_prior.size(); ++i) TEST_EQUAL(ms2_prior[i] > ms2_prior[i - 1], true)
+  int id_rows = 0;
+  auto idf = TSVFile::parse(dir + "/identification.tsv");
+  for (const auto& row : idf.rows) id_rows += (cell(idf, row, "ms_level") == "2") ? 1 : 0;
+  TEST_EQUAL(ms2_prior.back() <= id_rows, true)
+  TEST_EQUAL(ms3_prior.front(), 0.0)
+  TEST_EQUAL(ms3_prior.back() >= 1.0, true)
+}
+END_SECTION
+
+// T23. An MS1 that arrives while a plan's MS3 wait re-scores them: its row's fresh x_ms1_plan and x_plan_age, and the
+// MS3 of other parents queued ahead. A first pass, at a threshold every candidate passes, finds the order of the two
+// MS1 (cytC's survey, a survey of another sample) in which the second lowers the rank-1 candidate's W; at a threshold
+// half-way the plan admits it and the re-score withdraws it, and it is never sent. Every re-scored verdict is on its
+// side of the threshold; a kept MS3 is sent.
+//
+// FAILS UNDER: no re-score at an MS1 row, a withdrawal that leaves the command queued, or a kept MS3 dropped.
+START_SECTION(w_rescore_withdraws)
+{
+  struct Cal
+  {
+    bool other_first = false;
+    std::string ion;
+    int charge = 0;
+    double w_plan = -1.0, w_rescore = -1.0;
+  };
+  std::vector<Cal> cals;
+  for (const bool other_first : {false, true})
+  {
+    const WHeld h = runHeld(other_first ? "w_rescore_cal_a" : "w_rescore_cal_b", 1e-6, other_first);
+    ABORT_IF(!h.ok)
+    const WLine* plan = h.line("plan");
+    const WLine* rescore = h.line("rescore");
+    ABORT_IF(plan == nullptr || rescore == nullptr)
+    for (const WCand& c : plan->cands)
+      if (c.verdict == "admitted" && c.num("x_rank") == 1.0)
+        if (const WCand* r = rescore->cand(c.ion, c.charge)) cals.push_back({other_first, c.ion, c.charge, c.w, r->w});
+  }
+  const Cal* pick = nullptr;
+  for (const Cal& c : cals)
+    if (c.w_plan - c.w_rescore > 2e-3 && (pick == nullptr || c.w_plan - c.w_rescore > pick->w_plan - pick->w_rescore)) pick = &c;
+  TEST_EQUAL(pick != nullptr, true)   // the premise: one of the two MS1 lowers W
+  ABORT_IF(pick == nullptr)
+  const double t = 0.5 * (pick->w_plan + pick->w_rescore);
+
+  const WHeld h = runHeld("w_rescore_withdraws", t, pick->other_first);
+  ABORT_IF(!h.ok)
+  const WLine* plan = h.line("plan");
+  const WLine* rescore = h.line("rescore");
+  ABORT_IF(plan == nullptr || rescore == nullptr)
+  const WCand* p = plan->cand(pick->ion, pick->charge);
+  const WCand* r = rescore->cand(pick->ion, pick->charge);
+  ABORT_IF(p == nullptr || r == nullptr)
+  TEST_EQUAL(p->verdict, "admitted")
+  TEST_EQUAL(r->verdict, "withdrawn")
+  TEST_EQUAL(r->reason, "below_threshold")
+  TEST_EQUAL(h.sent(pick->ion, pick->charge), false)
+  int withdrawn = 0;
+  for (const WCand& c : rescore->cands)
+  {
+    if (c.verdict == "withdrawn")
+    {
+      ++withdrawn;
+      TEST_EQUAL(c.w < t, true)
+      TEST_EQUAL(h.sent(c.ion, c.charge), false)
+    }
+    else
+    {
+      TEST_EQUAL(c.verdict, "kept")
+      TEST_EQUAL(c.w >= t, true)
+      TEST_EQUAL(h.sent(c.ion, c.charge), true)
+    }
+  }
+  TEST_EQUAL(withdrawn >= 1, true)
+}
+END_SECTION
+
+// T24. A kept MS3's row prints the W of its re-score, not its plan's. Both orders of the two MS1, at a threshold every
+// candidate passes: each re-score reads the MS1 just answered (x_ms1_plan > 0 after cytC's survey, 0 after the other
+// sample's), counts no MS3 of its own plan ahead of it (x_queue_ahead 0: only this plan's MS3 are queued), and each
+// sent MS3's witness_probability is its re-scored W. Some W moves between the plan and the re-score.
+//
+// FAILS UNDER: the command's W not updated at a re-score, a re-score reading the plan's MS1, or siblings counted in
+// x_queue_ahead (whether they count would depend on a millisecond boundary).
+START_SECTION(w_rescore_updates_row)
+{
+  int moved = 0, checked = 0;
+  for (const bool other_first : {false, true})
+  {
+    const WHeld h = runHeld(other_first ? "w_rescore_row_a" : "w_rescore_row_b", 1e-6, other_first);
+    ABORT_IF(!h.ok)
+    const WLine* plan = h.line("plan");
+    const WLine* rescore = h.line("rescore");
+    ABORT_IF(plan == nullptr || rescore == nullptr)
+    TEST_EQUAL(other_first ? rescore->num("x_ms1_plan") > 0.0 : rescore->num("x_ms1_plan") == 0.0, true)
+    auto tsv = TSVFile::parse(h.dir + "/scan_commands.tsv");
+    for (const WCand& c : rescore->cands)
+    {
+      TEST_EQUAL(c.verdict, "kept")
+      TEST_EQUAL(c.num("x_queue_ahead"), 0.0)
+      const WCand* p = plan->cand(c.ion, c.charge);
+      ABORT_IF(p == nullptr)
+      moved += (std::abs(p->w - c.w) > 1e-6) ? 1 : 0;
+      for (const ScanCommand& s : h.sent_ms3)
+      {
+        if (wParentOf(s) != h.parent || wIonOf(s) != std::make_pair(c.charge, c.ion)) continue;
+        for (const auto& row : tsv.rows)
+          if (cell(tsv, row, "tracking_id") == ScanCommandQueue::encode(s.scan_id))
+          {
+            TEST_EQUAL(std::abs(std::stod(cell(tsv, row, "witness_probability")) - c.w) <= 1e-6, true)
+            ++checked;
+          }
+      }
+    }
+  }
+  TEST_EQUAL(checked > 0, true)
+  TEST_EQUAL(moved > 0, true)   // non-vacuity: a row that kept its plan's W would fail somewhere
+}
+END_SECTION
+
+// T25. The MS1 state is read from every MS1 row, a Monitor scan's included: under an MS3 CE sweep with monitor_ms1, a
+// Monitor scan goes out while the sweep's variants wait, and its row re-scores them (the line names it as ms1=), with
+// the cytC mass it re-reads (the Monitor answers with the last survey) and a fresh plan age.
+//
+// FAILS UNDER: the last-MS1 state set only from survey rows (no re-score names a Monitor scan).
+START_SECTION(w_ms1_state_reads_monitor_rows)
+{
+  const WRun run = runWCytc(wSweepJson(freshLogDir("w_gate_monitor")));
+  TEST_EQUAL(run.acq.monitor_cmds.empty(), false)   // the premise: the sweep's Monitor scans went out
+  std::set<std::string> monitors;
+  for (const ScanCommand& c : run.acq.monitor_cmds) monitors.insert(ScanCommandQueue::encode(c.scan_id));
+  int by_monitor = 0;
+  for (const WLine& l : run.lines)
+  {
+    if (l.get("stage") != "rescore" || monitors.count(l.get("ms1")) == 0) continue;
+    ++by_monitor;
+    TEST_EQUAL(l.num("x_ms1_plan") > 0.0, true)
+    TEST_EQUAL(l.num("x_plan_age") >= 0.0 && l.num("x_plan_age") < 60.0, true)
+  }
+  TEST_EQUAL(by_monitor > 0, true)
+}
+END_SECTION
+
+// T26. A CE sweep's variants share one verdict, and a target takes as many ranks as it sends MS3: with three variants
+// per target the admitted candidates of a plan are scored at ranks 1, 4, 7, every one at the sweep's first energy
+// (cid3 25), and each target's variant rows carry one W.
+//
+// FAILS UNDER: a verdict per variant, a rank that advances by one per target, or cid3 read from another variant.
+START_SECTION(w_sweep_variants_share_a_verdict)
+{
+  const std::string dir = freshLogDir("w_gate_sweep");
+  const WRun run = runWCytc(wSweepJson(dir));
+  int plans = 0;
+  for (const WLine& l : run.lines)
+  {
+    if (l.get("stage") != "plan") continue;
+    ++plans;
+    std::vector<double> ranks;
+    for (const WCand& c : l.cands)
+    {
+      if (c.verdict == "untested") continue;
+      TEST_EQUAL(c.num("cid3"), 25.0)
+      TEST_EQUAL(std::fmod(c.num("x_rank") - 1.0, 3.0), 0.0)
+      if (c.verdict == "admitted") ranks.push_back(c.num("x_rank"));
+    }
+    std::sort(ranks.begin(), ranks.end());
+    for (size_t i = 0; i < ranks.size(); ++i) TEST_EQUAL(ranks[i], 1.0 + 3.0 * static_cast<double>(i))
+  }
+  TEST_EQUAL(plans > 0, true)
+  std::map<std::string, std::vector<double>> variants;   // parent + ion + charge -> the variants' W
+  for (const WRow& r : wMs3Rows(dir))
+    if (r.desc.size() > 3 && r.desc[3] == 'E') variants[r.parent + "|" + r.ion + "|" + std::to_string(r.charge)].push_back(r.w);
+  TEST_EQUAL(variants.empty(), false)
+  for (const auto& [key, ws] : variants)
+  {
+    TEST_EQUAL(ws.size(), 3)
+    for (double w : ws) TEST_EQUAL(std::abs(w - ws.front()) <= 1e-9, true)
+  }
+}
+END_SECTION
+
+// T27. The quantification MS3 under model w (quant_ms3_yield_refused_hands_on's iodoTMT fixture): at a threshold every
+// candidate passes, the identification buys its Q MS3, on a line gate=quantification, and its row carries the W it
+// was admitted at. Above every W the gate tested, nothing tested is bought.
+//
+// FAILS UNDER: the quantification block's model ignored (bought above every W), or its row not carrying W.
+START_SECTION(w_quant_q_ms3)
+{
+  auto withW = [](const std::string& dir, double threshold) {
+    nlohmann::json j = nlohmann::json::parse(quantMs3Json(dir, "ms3", 10.0));
+    j["quantification"]["ms3_yield_gate"] = {{"model", "w"}, {"threshold", threshold}};
+    j["global"] = {{"duration", 60.0}};
+    return j.dump();
+  };
+  auto ionOf = [](const ScanCommand& c) { return wIonOf(c).second; };
+
+  const std::string d1 = freshLogDir("w_quant_ms3_low");
+  std::string log;
+  QuantMs3Run low;
+  {
+    EventCapture cap;
+    low = runQuantMs3(d1, withW(d1, 1e-6));
+    log = cap.str();
+  }
+  std::vector<WLine> lines;
+  for (const WLine& l : wLines(log))
+    if (l.get("gate") == "quantification") lines.push_back(l);
+  TEST_EQUAL(lines.empty(), false)
+  ABORT_IF(lines.empty())
+  TEST_EQUAL(low.quant_ms3.size(), 1)
+  ABORT_IF(low.quant_ms3.size() != 1)
+  double best = -1.0, bought_w = -2.0;
+  for (const WLine& l : lines)
+    for (const WCand& c : l.cands)
+    {
+      best = std::max(best, c.w);
+      // The last W that sent it: admitted at its plan, or kept at a re-score before it went out.
+      if ((c.verdict == "admitted" || c.verdict == "kept") && c.ion == ionOf(low.quant_ms3[0])) bought_w = c.w;
+    }
+  TEST_EQUAL(bought_w >= 0.0, true)
+  auto tsv = TSVFile::parse(d1 + "/scan_commands.tsv");
+  for (const auto& row : tsv.rows)
+    if (cell(tsv, row, "tracking_id") == ScanCommandQueue::encode(low.quant_ms3[0].scan_id))
+      TEST_EQUAL(std::abs(std::stod(cell(tsv, row, "witness_probability")) - bought_w) <= 1e-6, true)
+
+  ABORT_IF(best < 0.0 || best >= 1.0)
+  const std::string d2 = freshLogDir("w_quant_ms3_high");
+  std::string log2;
+  QuantMs3Run high;
+  {
+    EventCapture cap;
+    high = runQuantMs3(d2, withW(d2, 0.5 * (best + 1.0)));
+    log2 = cap.str();
+  }
+  std::map<std::string, std::string> verdict_of;
+  for (const WLine& l : wLines(log2))
+  {
+    TEST_EQUAL(l.get("gate"), "quantification")
+    for (const WCand& c : l.cands) verdict_of[c.ion] = c.verdict;
+  }
+  TEST_EQUAL(verdict_of.empty(), false)
+  for (const ScanCommand& c : high.quant_ms3) TEST_EQUAL(verdict_of[ionOf(c)], "untested")
+}
+END_SECTION
+
+// T28. An input the engine cannot fill leaves the candidate untested and admitted: an exhaustive MS3 of an unidentified
+// MS2 (the cytC precursor against a ubiquitin reference) has no ion and no identification score. Every candidate is
+// untested, with W -1 and the first missing input named; its MS3 are sent, each row -1; none is re-scored.
+//
+// FAILS UNDER: a missing input defaulted (W computed from a made-up value), or an untested MS3 refused or re-scored.
+START_SECTION(w_missing_input_untested)
+{
+  auto ms1 = loadTsvScans(ms1_cytc_tsv_path);
+  auto ms2 = loadTsvScans(ms2_cytc_fresh_tsv_path);
+  ABORT_IF(ms1.empty() || ms2.empty())
+  const std::string dir = freshLogDir("w_gate_untested");
+  nlohmann::json j = nlohmann::json::parse(ms3_mode1_json);
+  j["deconvolution"]["tqscore_threshold"] = 0.0;
+  j["identification"]["reference"] = {{"sequence", "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"}};
+  j["identification"]["characterization"] = {{"mode", "exhaustive"}, {"max_targets", 3},
+                                             {"yield_gate", {{"model", "w"}, {"threshold", 0.5}}}};
+  j["global"] = {{"duration", 60.0}};
+  j["runtime"] = {{"log_dir", dir}};
+  const std::string cfg = j.dump();
+  const std::map<std::string, std::vector<ScanData>> no_ms3_fixtures;   // record every MS3, answer none
+  std::vector<WLine> lines;
+  AcqResult acq;
+  {
+    EventCapture cap;
+    {
+      FLASHIda ida(const_cast<char*>(cfg.c_str()));
+      acq = runInterleaved(&ida, ms1, ms2, &no_ms3_fixtures, 4000);
+    }
+    lines = wLines(cap.str());
+  }
+  TEST_EQUAL(acq.ms3_cmds.empty(), false)
+  int untested = 0;
+  for (const WLine& l : lines)
+  {
+    TEST_EQUAL(l.get("stage"), "plan")   // never re-scored
+    for (const WCand& c : l.cands)
+    {
+      TEST_EQUAL(c.verdict, "untested")
+      TEST_EQUAL(c.w, -1.0)
+      TEST_EQUAL(c.reason.rfind("missing_input=", 0) == 0 && c.reason.size() > 14, true)
+      ++untested;
+    }
+  }
+  TEST_EQUAL(untested > 0, true)
+  for (const WRow& r : wMs3Rows(dir))
+  {
+    TEST_EQUAL(r.w, -1.0)
+    TEST_EQUAL(r.pby, std::string("-1"))
+  }
 }
 END_SECTION
 
