@@ -403,6 +403,14 @@ namespace OpenMS
     /// purity a charge is ranked by, an exploration MS2's window and, through the copy buildMS3 takes, an MS3's
     /// stage 0. Negative is refused at load.
     double max_isolation_width = 0.0;
+    /// precursor_selection.charge_check (ADR-0078): true, false or a block {min_score, max_dz, min_resolvability}; absent and
+    /// false are off, today's behaviour. On, a candidate admitted at its anchor charge has that charge measured from the
+    /// isotope spacing of its isolation window on the survey (ChargeCheck.h); a confident change 1..max_dz away swaps it to the
+    /// survey's PeakGroup at the measured charge or, under single / separate with no such PeakGroup, remeasures its mass there.
+    bool charge_check = false;
+    double charge_check_min_score = 0.30;        ///< comb score below which a measurement changes nothing
+    int charge_check_max_dz = 3;                 ///< the largest charge change acted on; beyond it, inconsistent
+    double charge_check_min_resolvability = 2.5; ///< isotope spacing / FWHM at the anchor charge below which nothing is checked
     // NOTE: there is no hcd_energy here any more. The precursor_selection.HCDEnergy key was deleted
     // (ADR-0014) because its only export, PrecursorSelection::getIsolationWindows(), had zero callers
     // repo-wide. Do not confuse it with ScanCommand::hcd_energy, which is alive and unrelated: that

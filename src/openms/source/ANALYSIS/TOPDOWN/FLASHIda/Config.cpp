@@ -508,8 +508,47 @@ namespace OpenMS
          "precursor_charges", "strict_inclusion", "tie_threshold",
          "rank_by", "max_precursors", "min_precursor_charge", "additional_scans", "exploration",
          "snr_threshold", "max_charge_states", "min_charge_states",
-         "log_target_rt_window", "log_target_charges", "charge_selection", "max_isolation_width"},
+         "log_target_rt_window", "log_target_charges", "charge_selection", "max_isolation_width", "charge_check"},
         "precursor_selection");
+    // ADR-0078: the charge check. true is the block with its defaults; false and absent are off.
+    if (ps.contains("charge_check") && !ps["charge_check"].is_null())
+    {
+      const auto& cc = ps["charge_check"];
+      if (cc.is_boolean())
+        targeting_.charge_check = cc.get<bool>();
+      else if (cc.is_object())
+      {
+        rejectUnknownKeys(cc, {"min_score", "max_dz", "min_resolvability"}, "precursor_selection.charge_check");
+        targeting_.charge_check = true;
+        if (cc.contains("min_score") && !cc["min_score"].is_null())
+        {
+          const auto& v = cc["min_score"];
+          if (!v.is_number() || !std::isfinite(v.get<double>()) || v.get<double>() < 0.0 || v.get<double>() > 1.0)
+            throw std::invalid_argument("Config: precursor_selection.charge_check.min_score must be a number in [0, 1] (the comb "
+                                        "score a change needs); got " + v.dump() + " (ADR-0078).");
+          targeting_.charge_check_min_score = v.get<double>();
+        }
+        if (cc.contains("max_dz") && !cc["max_dz"].is_null())
+        {
+          const auto& v = cc["max_dz"];
+          if (!v.is_number_integer() || v.get<int>() < 1)
+            throw std::invalid_argument("Config: precursor_selection.charge_check.max_dz must be an integer >= 1 (the largest "
+                                        "charge change acted on); got " + v.dump() + " (ADR-0078).");
+          targeting_.charge_check_max_dz = v.get<int>();
+        }
+        if (cc.contains("min_resolvability") && !cc["min_resolvability"].is_null())
+        {
+          const auto& v = cc["min_resolvability"];
+          if (!v.is_number() || !std::isfinite(v.get<double>()) || v.get<double>() <= 0.0)
+            throw std::invalid_argument("Config: precursor_selection.charge_check.min_resolvability must be a number > 0 "
+                                        "(isotope spacing over peak width at the anchor charge); got " + v.dump() + " (ADR-0078).");
+          targeting_.charge_check_min_resolvability = v.get<double>();
+        }
+      }
+      else
+        throw std::invalid_argument("Config: precursor_selection.charge_check must be true, false or a block {\"min_score\", "
+                                    "\"max_dz\", \"min_resolvability\"}; got " + cc.dump() + " (ADR-0078).");
+    }
     targeting_.rt_window = ps.value("rt_window", 180.0);
     targeting_.consider_all_charges = ps.value("consider_all_charges", false);
     targeting_.precursor_charges = parseChargeMode(ps, "precursor_charges", "precursor_selection");
