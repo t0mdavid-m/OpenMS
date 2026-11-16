@@ -80,6 +80,7 @@ target_link_libraries(FLASHIda_ProcessScan_test nlohmann_json::nlohmann_json)
 target_link_libraries(FLASHIda_LegacyConfig_test nlohmann_json::nlohmann_json)
 target_link_libraries(FLASHIda_Replan_test nlohmann_json::nlohmann_json)
 target_link_libraries(FLASHIda_ConsoleView_test nlohmann_json::nlohmann_json)
+target_link_libraries(FLASHIda_Ms3WitnessModel_test nlohmann_json::nlohmann_json)   # ADR-0076: mutates the model JSON
 
 if (WITH_HDF5)
   target_link_libraries(HDF5_test HDF5::HDF5)
