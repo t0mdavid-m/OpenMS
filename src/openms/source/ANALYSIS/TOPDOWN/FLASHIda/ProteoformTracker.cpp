@@ -1203,8 +1203,11 @@ namespace OpenMS
     }
 
     // The plan's ranking within the chosen set (the executor dispatches in this order): strongest best-MS2 first, or
-    // highest predicted bond yield first under rank_by yield.
-    rankCandidates(targets);
+    // highest predicted bond yield first under rank_by yield. ADR-0076: not under model w. The walk added the targets
+    // in the order it ranked them, and W's x_rank is the MS3's position in the order the plan's commands are written,
+    // so the plan is sent in walk order (a re-rank here re-scored them past the walk's last rank and sent them in
+    // another order than their W was computed at).
+    if (!w_on) rankCandidates(targets);
     // ADR-0073: the same targets, sent in turns between groups. The emit loop below sends `targets` in this order and
     // keeps a fragment's charges together, so under separate a fragment takes one turn.
     if (config_.characterization().send_order == Ms3SendOrder::Interleaved)
