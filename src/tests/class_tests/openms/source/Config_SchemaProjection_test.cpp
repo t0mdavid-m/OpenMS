@@ -2039,7 +2039,9 @@ END_SECTION
 
 START_SECTION(w_in_quant_block)
 {
-  const std::string ident = std::string(R"("global": { "duration": 60 }, )") + IDENT_TH;
+  // IDENT_TH's text (the macro is #undef'd before this section).
+  const std::string ident = std::string(R"("global": { "duration": 60 }, )")
+                            + R"("identification": { "reference": { "sequence": "PEPTCIDEK" }, "threshold": 10 },)";
   Config c(q3Cfg(R"("scan": "ms3", "ms3_yield_gate": { "model": "w", "threshold": 0.5 })", ident));
   TEST_EQUAL(c.quantification().ms3_yield_gate.has_value(), true)
   TEST_EQUAL((int)c.quantification().ms3_yield_gate->model, (int)YieldModel::W)
