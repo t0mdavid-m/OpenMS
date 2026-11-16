@@ -289,6 +289,18 @@ namespace OpenMS
     }
   }
 
+  /// The score an anchor at @p charge is admitted and recorded at: the charge's OWN qscore, not a sibling's. The pair used
+  /// to be bound together and then the charge alone reassigned by inclusion matching, so a scan could be logged and excluded
+  /// on the score of a charge it never isolated. getAllQscores() is empty for a PeakGroup that never went through
+  /// updateQscore, and the fallback is the path a synthetic one takes. Shared by the authored anchor and a charge check's
+  /// forced anchor (ADR-0078).
+  inline double anchorScore(const PeakGroup& pg, int charge)
+  {
+    const std::unordered_map<int, float> per_charge_qscores = pg.getAllQscores();
+    auto qs_it = per_charge_qscores.find(charge);
+    return qs_it != per_charge_qscores.end() ? (double)qs_it->second : pg.getQscore();
+  }
+
   /// Pick the anchor charge of one candidate.
   ///
   /// Under an AUTHORED charge set the anchor is drawn from the SET rather than from the envelope, so
@@ -338,14 +350,8 @@ namespace OpenMS
         return out;
       }
 
-      // The anchor's OWN qscore, not a sibling's. The pair used to be bound together and then the
-      // charge alone reassigned by inclusion matching, so a scan could be logged and excluded on the
-      // score of a charge it never isolated. getAllQscores() is empty for a PeakGroup that never went
-      // through updateQscore, and the fallback below is the path a synthetic one takes.
-      const std::unordered_map<int, float> per_charge_qscores = pg.getAllQscores();
-      auto qs_it = per_charge_qscores.find(charge);
       out.charge = charge;
-      out.score  = qs_it != per_charge_qscores.end() ? (double)qs_it->second : pg.getQscore();
+      out.score  = anchorScore(pg, charge);
       out.reason = AdmissionReason::Admitted;
       return out;
     }
