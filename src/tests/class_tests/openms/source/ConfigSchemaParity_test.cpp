@@ -75,6 +75,8 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   TEST_REAL_SIMILAR(cfg.targeting().snr_threshold, j["precursor_selection"]["snr_threshold"].get<double>())
   TEST_EQUAL(cfg.targeting().max_charge_states, j["precursor_selection"]["max_charge_states"].get<int>())
   TEST_EQUAL(cfg.targeting().min_charge_states, j["precursor_selection"]["min_charge_states"].get<int>())
+  // ADR-0077: the reference's 1.5 against the reader's default 0 catches an ignored key.
+  TEST_REAL_SIMILAR(cfg.targeting().max_isolation_width, j["precursor_selection"]["max_isolation_width"].get<double>())
   // targeting is a string enum on the wire and an int in the struct, so the parity check has to
   // map rather than compare directly. Mapping taken from the CODE (PrecursorSelection.cpp:138-141).
   {

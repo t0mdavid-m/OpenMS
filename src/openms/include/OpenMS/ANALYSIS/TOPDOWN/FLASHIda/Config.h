@@ -397,6 +397,12 @@ namespace OpenMS
     /// so the last charge of a split envelope presents size 1 and the floor would refuse exactly
     /// the charge that ADR needed to recover.
     int min_charge_states = 1;
+    /// precursor_selection.max_isolation_width -- the widest MS2 isolation window, in Th, for every charge
+    /// (ADR-0077). 0 = no cap, the default. A window wider than this (the measured span plus
+    /// optimal_window_margin_ per side) is narrowed to it around the span's centre: the anchor, every notch, the
+    /// purity a charge is ranked by, an exploration MS2's window and, through the copy buildMS3 takes, an MS3's
+    /// stage 0. Negative is refused at load.
+    double max_isolation_width = 0.0;
     // NOTE: there is no hcd_energy here any more. The precursor_selection.HCDEnergy key was deleted
     // (ADR-0014) because its only export, PrecursorSelection::getIsolationWindows(), had zero callers
     // repo-wide. Do not confuse it with ScanCommand::hcd_energy, which is alive and unrelated: that

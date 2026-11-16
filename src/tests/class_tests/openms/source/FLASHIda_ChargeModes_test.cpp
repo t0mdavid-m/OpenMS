@@ -102,7 +102,9 @@ namespace
                      // ADR-0059. Emitted unconditionally at its default ("snr").
                      const std::string& charge_selection = "snr",
                      // The level-1 charge floor. Emitted unconditionally at its default (0 = no floor).
-                     int min_precursor_charge = 0)
+                     int min_precursor_charge = 0,
+                     // ADR-0077. Emitted unconditionally at its default (0 = no cap).
+                     double max_isolation_width = 0.0)
   {
     return std::string(R"JSON({
   "deconvolution": {
@@ -134,7 +136,8 @@ namespace
     "precursor_charges": ")JSON" + precursor_charges + R"JSON(",
     "max_charge_states": )JSON" + std::to_string(max_charge_states) + R"JSON(,
     "min_charge_states": )JSON" + std::to_string(min_charge_states) + R"JSON(,
-    "charge_selection": ")JSON" + charge_selection + R"JSON("
+    "charge_selection": ")JSON" + charge_selection + R"JSON(",
+    "max_isolation_width": )JSON" + std::to_string(max_isolation_width) + R"JSON(
   },
   "ms_settings": {
     "ms1": {
@@ -958,6 +961,104 @@ START_SECTION(multiplexed_wire_respects_max_charge_states)
   });
   TEST_EQUAL(compared > 0, true)
   TEST_EQUAL(mismatches, 0)
+}
+END_SECTION
+
+// ADR-0077: precursor_selection.max_isolation_width caps an MS2 window at a fixed width, the same for every
+// charge. The helper is the measured span plus the margin per side, at most the cap; 0 is no cap.
+START_SECTION(ms2_isolation_width_is_capped)
+{
+  TEST_REAL_SIMILAR(ms2IsolationWidth(500.0, 503.0, 1.5), 1.5)   // 3.0 + 0.8 = 3.8 > 1.5: capped
+  TEST_REAL_SIMILAR(ms2IsolationWidth(500.0, 500.5, 1.5), 1.3)   // 0.5 + 0.8 = 1.3 < 1.5: untouched
+  TEST_REAL_SIMILAR(ms2IsolationWidth(500.0, 503.0, 0.0), 3.8)   // 0 = no cap
+  TEST_EXCEPTION(std::invalid_argument,
+                 Config(cfgFor("single", "none", "", 10, false, 0, 1, "snr", 0, /*max_isolation_width=*/-1.0)))
+}
+END_SECTION
+
+// ADR-0077 end to end: under a cap no MS2 window (anchor or notch) is wider than it, a capped window keeps the
+// centre the uncapped one has, and an MS3 built on a capped MS2 isolates the same capped stage 0.
+START_SECTION(multiplexed_wire_respects_max_isolation_width)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+  const double cap = 1.5;
+
+  // Uncapped, some window is wider than the cap -- else everything below is vacuous.
+  const std::string uncapped_cfg = cfgFor("multiplexed");
+  FLASHIda uncapped(const_cast<char*>(uncapped_cfg.c_str()));
+  AcqResult ua = runMode(uncapped, scans);
+  double uncapped_widest = 0.0;
+  for (const auto& c : ua.ms2_cmds)
+  {
+    uncapped_widest = std::max(uncapped_widest, c.stages[0].isolation_width);
+    auto [first, count] = notchesForStage(c, 0);
+    for (int k = 0; k < count; ++k) uncapped_widest = std::max(uncapped_widest, first[k].isolation_width);
+  }
+  TEST_EQUAL(uncapped_widest > cap, true)
+
+  // End to end: no window of any MS2 exceeds the cap, and some sit exactly at it.
+  const std::string capped_cfg = cfgFor("multiplexed", "none", "", 10, false, 0, 1, "snr", 0, cap);
+  FLASHIda capped(const_cast<char*>(capped_cfg.c_str()));
+  AcqResult ca = runMode(capped, scans);
+  TEST_EQUAL(ca.ms2_cmds.size() > 0, true)
+  int over = 0, at_cap = 0;
+  for (const auto& c : ca.ms2_cmds)
+  {
+    std::vector<double> widths{c.stages[0].isolation_width};
+    auto [first, count] = notchesForStage(c, 0);
+    for (int k = 0; k < count; ++k) widths.push_back(first[k].isolation_width);
+    for (double w : widths)
+    {
+      if (w > cap + 1e-9) ++over;
+      if (std::abs(w - cap) < 1e-9) ++at_cap;
+    }
+  }
+  TEST_EQUAL(over, 0)
+  TEST_EQUAL(at_cap > 0, true)
+
+  // The same PeakGroup and set, built under both configs: same centres, width min(uncapped, cap), and an MS3
+  // on the capped MS2 inherits its stage 0 (anchor and notches) unchanged; its fragment stage is not capped.
+  const Config uncapped_config{uncapped_cfg};
+  int compared = 0;
+  forEachSurvey(capped_cfg, scans, [&](const Config& cfg, PrecursorSelection& ps, int n, int) {
+    ScanCommandQueue qa(uncapped_config);
+    ScanCommandQueue qb(cfg);
+    const auto& sel = ps.selectedPeakGroups();
+    for (int i = 0; i < n; ++i)
+    {
+      const std::vector<int>& set = ps.triggerAcquisitionSets()[i];
+      const int z = ps.triggerCharges()[i];
+      const ScanCommand a = qa.buildMS2(sel[i], z, cfg.level(2).scans[0], 2, 1, &set);
+      const ScanCommand b = qb.buildMS2(sel[i], z, cfg.level(2).scans[0], 2, 1, &set);
+      TEST_REAL_SIMILAR(b.stages[0].precursor_mz, a.stages[0].precursor_mz)
+      TEST_REAL_SIMILAR(b.stages[0].isolation_width, std::min(a.stages[0].isolation_width, cap))
+      auto [na, ca_count] = notchesForStage(a, 0);
+      auto [nb, cb_count] = notchesForStage(b, 0);
+      TEST_EQUAL(cb_count, ca_count)
+      for (int k = 0; k < std::min(ca_count, cb_count); ++k)
+      {
+        TEST_EQUAL(nb[k].charge_state, na[k].charge_state)
+        TEST_REAL_SIMILAR(nb[k].precursor_mz, na[k].precursor_mz)
+        TEST_REAL_SIMILAR(nb[k].isolation_width, std::min(na[k].isolation_width, cap))
+      }
+
+      const ScanCommand m = qb.buildMS3(b, ScanConfig{}, 600.0, 3, 2.0, b.scan_id);
+      TEST_REAL_SIMILAR(m.stages[0].precursor_mz, b.stages[0].precursor_mz)
+      TEST_REAL_SIMILAR(m.stages[0].isolation_width, b.stages[0].isolation_width)
+      auto [nm, cm_count] = notchesForStage(m, 0);
+      TEST_EQUAL(cm_count, cb_count)
+      for (int k = 0; k < std::min(cm_count, cb_count); ++k)
+      {
+        TEST_EQUAL(nm[k].charge_state, nb[k].charge_state)
+        TEST_REAL_SIMILAR(nm[k].precursor_mz, nb[k].precursor_mz)
+        TEST_REAL_SIMILAR(nm[k].isolation_width, nb[k].isolation_width)
+      }
+      TEST_REAL_SIMILAR(m.stages[1].isolation_width, 2.0)
+      ++compared;
+    }
+  });
+  TEST_EQUAL(compared > 0, true)
 }
 END_SECTION
 

@@ -684,7 +684,7 @@ FLASHIda::FLASHIda(char* arg) :
         const auto picks = selection_.rechooseCharges(nominal, {}, covered, multiplexed ? cap : 1);
         if (picks.empty()) continue;
         if (multiplexed && static_cast<int>(picks.size()) < min_set) continue;
-        ScanCommand rewritten = ScanCommandQueue::reisolate(r, picks, optimal_window_margin_, 'R');
+        ScanCommand rewritten = ScanCommandQueue::reisolate(r, picks, config_.targeting().max_isolation_width, 'R');
         const double half = rewritten.stages[0].isolation_width / 2.0;
         const double lo = rewritten.stages[0].precursor_mz - half;
         const double hi = rewritten.stages[0].precursor_mz + half;

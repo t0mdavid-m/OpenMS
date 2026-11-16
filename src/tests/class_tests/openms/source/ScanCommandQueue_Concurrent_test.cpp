@@ -1067,7 +1067,8 @@ START_SECTION(reisolate_matches_buildMS2_geometry)
     const ScanCommand expected = q.buildMS2(pg, set.front(), sc, 0, 0, &set, 'R');
     std::vector<std::pair<int, const PeakGroup*>> picks;
     for (int z : set) picks.emplace_back(z, &pg);
-    const ScanCommand got = ScanCommandQueue::reisolate(r, picks, optimal_window_margin_, 'R');
+    // 0.0: no cap, as q's config has none (precursor_selection.max_isolation_width, ADR-0077).
+    const ScanCommand got = ScanCommandQueue::reisolate(r, picks, 0.0, 'R');
 
     TEST_EQUAL(got.scan_id, r.scan_id)
     TEST_EQUAL(got.stages[0].charge_state, expected.stages[0].charge_state)

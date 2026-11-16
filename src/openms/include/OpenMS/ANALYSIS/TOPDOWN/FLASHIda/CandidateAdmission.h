@@ -138,6 +138,9 @@ namespace OpenMS
     /// The survey's raw spectrum, which isolation purity is measured on. nullptr = no purity (-1),
     /// which only the Purity rule reads.
     const MSSpectrum* raw = nullptr;
+    /// precursor_selection.max_isolation_width (ADR-0077; 0 = no cap): the window each charge's purity is read
+    /// over is the one buildMS2 commands. A caller that leaves it 0 under a configured cap ranks on a wider window.
+    double max_isolation_width = 0.0;
   };
 
   /// Everything the admission decision needs, past the anchor.
@@ -183,6 +186,7 @@ namespace OpenMS
     int    min_charge_states = 1;    ///< 1 = no floor. Fanned out: the ACQUIRED set size; single: the resolved charges. Siblings exempt.
     ChargeSelection charge_selection = ChargeSelection::Snr;  ///< ranks the set; same rule as the anchor
     const MSSpectrum* raw = nullptr; ///< the survey's raw spectrum, for isolation purity
+    double max_isolation_width = 0.0; ///< as AnchorContext's (ADR-0077; 0 = no cap)
     std::string where;               ///< short label for selectNotches' clamp message
   };
 
@@ -305,7 +309,7 @@ namespace OpenMS
     {
       int   charge = -1;
       std::vector<NotchCandidate> named;
-      const std::vector<NotchCandidate> all = peakGroupNotchCandidates(pg, optimal_window_margin_, ctx.raw);
+      const std::vector<NotchCandidate> all = peakGroupNotchCandidates(pg, ctx.max_isolation_width, ctx.raw);
       float best_snr = -1.0f;
       for (int c : ctx.authored)
       {
@@ -357,7 +361,7 @@ namespace OpenMS
     }
 
     // The resolved charges at or above the floor: the candidates every rule, the notches and the separate set read.
-    std::vector<NotchCandidate> cands = peakGroupNotchCandidates(pg, optimal_window_margin_, ctx.raw);
+    std::vector<NotchCandidate> cands = peakGroupNotchCandidates(pg, ctx.max_isolation_width, ctx.raw);
     cands.erase(std::remove_if(cands.begin(), cands.end(),
                                [&ctx](const NotchCandidate& n) { return ctx.min_charge > 0 && n.charge < ctx.min_charge; }),
                 cands.end());
@@ -419,7 +423,7 @@ namespace OpenMS
     std::vector<int> out {anchor_charge};
     if (!ctx.fan_out) return out;
 
-    std::vector<NotchCandidate> notch_candidates = peakGroupNotchCandidates(pg, optimal_window_margin_, ctx.raw);
+    std::vector<NotchCandidate> notch_candidates = peakGroupNotchCandidates(pg, ctx.max_isolation_width, ctx.raw);
     if (ctx.has_authored)
     {
       notch_candidates.erase(
@@ -462,7 +466,7 @@ namespace OpenMS
   /// count, because `max_charge_states` bounds what is acquired and is inert under `single`.
   inline int resolvedChargeCount(const PeakGroup& pg, int anchor_charge, const AdmissionContext& ctx)
   {
-    std::vector<NotchCandidate> candidates = peakGroupNotchCandidates(pg, optimal_window_margin_);
+    std::vector<NotchCandidate> candidates = peakGroupNotchCandidates(pg, ctx.max_isolation_width);
     if (ctx.has_authored)
     {
       candidates.erase(std::remove_if(candidates.begin(), candidates.end(),

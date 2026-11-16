@@ -201,11 +201,15 @@ namespace OpenMS
     // The margin is also what keeps a charge resolved at a SINGLE isotope (mz2 == mz1) from handing the
     // metric a zero-width window to sum over. Nothing downstream turns this width into a scan range any
     // more -- a pre-scan reads out its level's configured range (ADR-0044).
+    //
+    // An MS2 window is capped at precursor_selection.max_isolation_width (ADR-0077), as buildMS2 caps the
+    // window it commands; the MS3 fragment window is not.
     auto [mz1, mz2] = pg.getMzRange(charge);
     double precursor_mz = (mz1 + mz2) / 2.0;
     double isolation_width = (msn_level >= 3)
                                ? std::max(mz2 - mz1, 2.0)
-                               : (mz2 - mz1) + 2.0 * optimal_window_margin_;
+                               : capMs2IsolationWidth((mz2 - mz1) + 2.0 * optimal_window_margin_,
+                                                      config_.targeting().max_isolation_width);
     double precursor_mass = pg.getMonoMass();
 
     ExplorationGroup group;

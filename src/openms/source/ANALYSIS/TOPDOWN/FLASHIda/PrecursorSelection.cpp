@@ -510,6 +510,7 @@ namespace OpenMS
           anchor_ctx.min_charge = config_.level(ms_level).min_charge;
           anchor_ctx.charge_selection = config_.targeting().charge_selection;
           anchor_ctx.raw = &deconv_.deconvolvedMS1().getOriginalSpectrum();
+          anchor_ctx.max_isolation_width = config_.targeting().max_isolation_width;
 
           const AnchorChoice anchor = pickAnchor(pg, anchor_ctx);
           if (anchor.reason != AdmissionReason::Admitted) { continue; }
@@ -555,6 +556,7 @@ namespace OpenMS
 
             mz1 -= optimal_window_margin_;
             mz2 += optimal_window_margin_;
+            capTriggerWindow(mz1, mz2, center_mz, config_.targeting().max_isolation_width);
             int integer_mz = (int)round(center_mz);
 
             int nominal_mass = SpectralDeconvolution::getNominalMass(mass);
@@ -742,6 +744,7 @@ namespace OpenMS
             adm_ctx.min_charge_states = config_.targeting().min_charge_states;
             adm_ctx.charge_selection = config_.targeting().charge_selection;
             adm_ctx.raw = &deconv_.deconvolvedMS1().getOriginalSpectrum();
+            adm_ctx.max_isolation_width = config_.targeting().max_isolation_width;
             adm_ctx.where = "MS2 z=" + std::to_string(charge);
 
             const AdmissionVerdict verdict = admitCandidate(pg, charge, score, adm_ctx);
@@ -947,6 +950,7 @@ namespace OpenMS
                 e_center_mz = (e_mz1 + e_mz2) / 2.0;
                 e_mz1 -= optimal_window_margin_;
                 e_mz2 += optimal_window_margin_;
+                capTriggerWindow(e_mz1, e_mz2, e_center_mz, config_.targeting().max_isolation_width);
               }
 
               memory_.id_mass_map_[memory_.window_id_] = nominal_mass;
@@ -1147,7 +1151,7 @@ namespace OpenMS
     std::vector<std::pair<NotchCandidate, const PeakGroup*>> cands;
     for (const PeakGroup* pg : findSpecies(nominal))
     {
-      for (const NotchCandidate& n : peakGroupNotchCandidates(*pg, optimal_window_margin_, &raw))
+      for (const NotchCandidate& n : peakGroupNotchCandidates(*pg, config_.targeting().max_isolation_width, &raw))
       {
         if (n.charge <= 0 || n.mz <= 0 || n.width <= 0) continue; // not isolatable
         if (n.snr < config_.targeting().snr_threshold) continue;  // below noise

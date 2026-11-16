@@ -255,14 +255,14 @@ namespace OpenMS
   //
   // Factored out of buildMS2 byte for byte, so a bought R a newer survey re-isolates (reisolate) carries
   // exactly the window buildMS2 would command for the same PeakGroup and charge -- one geometry, not two.
+  // The width is ms2IsolationWidth (NotchSelection.h): the span plus the margin per side, at most @p max_width
+  // (precursor_selection.max_isolation_width, ADR-0077), around the span's own centre.
 
-  void ScanCommandQueue::applyIsolation_(ScanCommand& cmd, const PeakGroup& pg, int charge, double margin)
+  void ScanCommandQueue::applyIsolation_(ScanCommand& cmd, const PeakGroup& pg, int charge, double max_width)
   {
     auto [mz1, mz2] = pg.getMzRange(charge);
     double center_mz = (mz1 + mz2) / 2.0;
-    mz1 -= margin;
-    mz2 += margin;
-    double iso_width = mz2 - mz1;
+    double iso_width = ms2IsolationWidth(mz1, mz2, max_width);
 
     cmd.stages[0].precursor_mz = center_mz;
     cmd.stages[0].isolation_width = iso_width;
@@ -303,13 +303,13 @@ namespace OpenMS
   }
 
   ScanCommand ScanCommandQueue::reisolate(const ScanCommand& r, const std::vector<std::pair<int, const PeakGroup*>>& picks,
-                                          double margin, char marker)
+                                          double max_width, char marker)
   {
     ScanCommand cmd = r;
     if (picks.empty() || picks.front().second == nullptr) return cmd;
     const int anchor = picks.front().first;
     const PeakGroup& anchor_pg = *picks.front().second;
-    applyIsolation_(cmd, anchor_pg, anchor, margin);
+    applyIsolation_(cmd, anchor_pg, anchor, max_width);
 
     // Stage 0's notches are the rest of the picks, each measured on the PeakGroup that resolved it (ADR-0036
     // siblings can split one species' charges across PeakGroups). The old set is cleared first: a rewrite with
@@ -318,7 +318,7 @@ namespace OpenMS
     for (size_t k = 1; k < picks.size(); ++k)
     {
       if (picks[k].second == nullptr) continue;
-      const auto found = notchesFor_(peakGroupNotchCandidates(*picks[k].second, margin), anchor, {picks[k].first});
+      const auto found = notchesFor_(peakGroupNotchCandidates(*picks[k].second, max_width), anchor, {picks[k].first});
       notches.insert(notches.end(), found.begin(), found.end());
     }
     for (int j = 0; j < MAX_NOTCHES_PER_STAGE; ++j) cmd.notches[j] = Notch{};
@@ -458,7 +458,7 @@ namespace OpenMS
     cmd.scan_rate[sizeof(cmd.scan_rate) - 1] = '\0';
 
     // Isolation window from peak group m/z range
-    applyIsolation_(cmd, pg, charge, optimal_window_margin_);
+    applyIsolation_(cmd, pg, charge, config_.targeting().max_isolation_width);
     const double center_mz = cmd.stages[0].precursor_mz;
 
     // CE and activation from scan_config
@@ -487,7 +487,7 @@ namespace OpenMS
     // here from config, so there is still exactly one ranking and one cap.
     if (config_.targeting().precursor_charges == ChargeAcquisitionMode::Multiplexed)
     {
-      std::vector<NotchCandidate> notch_candidates = peakGroupNotchCandidates(pg, optimal_window_margin_);
+      std::vector<NotchCandidate> notch_candidates = peakGroupNotchCandidates(pg, config_.targeting().max_isolation_width);
       std::vector<NotchCandidate> notches;
       if (acquisition_set != nullptr && !acquisition_set->empty())
       {

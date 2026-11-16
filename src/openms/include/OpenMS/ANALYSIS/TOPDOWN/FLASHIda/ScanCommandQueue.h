@@ -131,10 +131,11 @@ namespace OpenMS
     /// Re-isolate @p r on a newer survey (survey re-planning: the bought R a newer survey adjusts). A copy of
     /// @p r -- same scan id, parent, scan parameters and FAIMS CV -- whose stage-0 anchor is `picks[0]` and whose
     /// stage-0 notches are `picks[1..]`, each measured on the PeakGroup that resolved it with the geometry
-    /// buildMS2 uses (@p margin is optimal_window_margin_). The precursor fields and the scan_description are
-    /// rewritten from the anchor's PeakGroup, keeping @p r's 3-char id: a stale `@z` would otherwise reach the
-    /// instrument and every log. Static and lock-free -- it mints nothing. Empty @p picks returns @p r unchanged.
-    static ScanCommand reisolate(const ScanCommand& r, const std::vector<std::pair<int, const PeakGroup*>>& picks, double margin,
+    /// buildMS2 uses (@p max_width is precursor_selection.max_isolation_width, ADR-0077; 0 = no cap). The
+    /// precursor fields and the scan_description are rewritten from the anchor's PeakGroup, keeping @p r's 3-char
+    /// id: a stale `@z` would otherwise reach the instrument and every log. Static and lock-free -- it mints
+    /// nothing. Empty @p picks returns @p r unchanged.
+    static ScanCommand reisolate(const ScanCommand& r, const std::vector<std::pair<int, const PeakGroup*>>& picks, double max_width,
                                  char marker);
 
     /// Every charge @p cmd isolates at its precursor stage: the anchor first, then stage 0's notches (multiplexed).
@@ -589,9 +590,10 @@ namespace OpenMS
     /// the dropped scan ids in @p r; the caller has already chosen the units and gathered their groups.
     void dropUnits_(const std::set<int>& leaving, ReplanResult& r);
 
-    /// buildMS2's stage-0 anchor geometry: the centre of @p pg's measured m/z range at @p charge, that range
-    /// widened by @p margin on each side, and the charge. Shared with reisolate.
-    static void applyIsolation_(ScanCommand& cmd, const PeakGroup& pg, int charge, double margin);
+    /// buildMS2's stage-0 anchor geometry: the centre of @p pg's measured m/z range at @p charge, the width
+    /// ms2IsolationWidth gives that range (the margin per side, at most @p max_width; 0 = no cap), and the
+    /// charge. Shared with reisolate.
+    static void applyIsolation_(ScanCommand& cmd, const PeakGroup& pg, int charge, double max_width);
 
     /// The notches for an explicit charge list: each member of @p charges but @p anchor_charge, in @p charges
     /// order, taken from @p candidates; a charge absent from them is skipped.

@@ -200,6 +200,41 @@ namespace OpenMS
   /// zero-width "DefineMZRange".
   inline constexpr double optimal_window_margin_ = 0.4;
 
+  /// An MS2 window of uncapped width @p width, at most @p max_width Th wide
+  /// (precursor_selection.max_isolation_width, ADR-0077; 0 = no cap). The centre is not this function's: every
+  /// caller keeps the centre of the measured span, so a capped window shrinks symmetrically.
+  ///
+  /// MS2 only. An MS3's stage 0 is a copy of its parent MS2's (buildMS3), so it is capped through that
+  /// command; an MS3's stage 1 (the fragment window) and FragmentAnalysis's fragment windows are not capped.
+  /// A cap below 2 * optimal_window_margin_ undercuts the margin's floor, which is allowed: the cap is > 0,
+  /// so the window never has zero width.
+  inline double capMs2IsolationWidth(double width, double max_width)
+  {
+    return (max_width > 0 && width > max_width) ? max_width : width;
+  }
+
+  /// The MS2 isolation width of a measured m/z span [@p lo, @p hi]: the span widened by optimal_window_margin_
+  /// per side, at most @p max_width (capMs2IsolationWidth). The one geometry of an MS2 window: the anchor
+  /// (ScanCommandQueue::applyIsolation_), its notches and the purity they are ranked by
+  /// (peakGroupNotchCandidates) and the selector's trigger windows all compute it here, so the window a metric
+  /// reads is the window the instrument is told to isolate (ADR-0026).
+  inline double ms2IsolationWidth(double lo, double hi, double max_width)
+  {
+    return capMs2IsolationWidth((hi + optimal_window_margin_) - (lo - optimal_window_margin_), max_width);
+  }
+
+  /// The same cap on a window held as edges: [@p lo, @p hi] (already widened by the margin) narrowed to
+  /// @p max_width around @p centre when it is wider; otherwise left exactly as it is. PrecursorSelection's
+  /// trigger windows (triggerLeft/RightIsolationMzs) are held this way.
+  inline void capTriggerWindow(double& lo, double& hi, double centre, double max_width)
+  {
+    if (max_width > 0 && hi - lo > max_width)
+    {
+      lo = centre - max_width / 2.0;
+      hi = centre + max_width / 2.0;
+    }
+  }
+
   /// Every observed charge of one MS1 PeakGroup, as notch candidates with MEASURED geometry.
   ///
   /// Shared by PrecursorSelection (which records the acquired set for charge-keyed exclusion) and
@@ -208,14 +243,16 @@ namespace OpenMS
   /// actually isolated — two independent walks of the same PeakGroup is exactly how the exclusion
   /// side and the geometry side would drift apart.
   ///
-  /// @p margin is optimal_window_margin_ above, applied symmetrically as it is for the anchor stage,
-  /// so a notch's width is computed the same way the cascade stage's is.
+  /// A notch's width is ms2IsolationWidth, the anchor stage's own geometry: the span plus
+  /// optimal_window_margin_ per side, at most @p max_width Th (precursor_selection.max_isolation_width,
+  /// ADR-0077; 0 = no cap). Every production caller passes the configured value, or the purity a charge is
+  /// ranked by would be read over a window wider than the one commanded.
   ///
   /// @p raw is the survey's raw spectrum. When given, each candidate's isolation purity is measured
   /// over exactly the window it would be commanded with (FragmentAnalysis::windowPurity); without it
   /// purity stays -1, which only the Purity rule reads. qscore is the charge's own per-charge qscore,
   /// falling back to the PeakGroup's qscore for one that never went through updateQscore.
-  inline std::vector<NotchCandidate> peakGroupNotchCandidates(const PeakGroup& pg, double margin,
+  inline std::vector<NotchCandidate> peakGroupNotchCandidates(const PeakGroup& pg, double max_width,
                                                               const MSSpectrum* raw = nullptr)
   {
     std::vector<NotchCandidate> cands;
@@ -228,7 +265,7 @@ namespace OpenMS
       NotchCandidate n;
       n.charge = c;
       n.mz = (lo + hi) / 2.0;
-      n.width = (hi + margin) - (lo - margin);
+      n.width = ms2IsolationWidth(lo, hi, max_width);
       n.snr = pg.getChargeSNR(c);
       n.intensity = static_cast<double>(pg.getChargeIntensity(c));
       const auto qs = qscores.find(c);

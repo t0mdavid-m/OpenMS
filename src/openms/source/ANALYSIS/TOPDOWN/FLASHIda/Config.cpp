@@ -508,7 +508,7 @@ namespace OpenMS
          "precursor_charges", "strict_inclusion", "tie_threshold",
          "rank_by", "max_precursors", "min_precursor_charge", "additional_scans", "exploration",
          "snr_threshold", "max_charge_states", "min_charge_states",
-         "log_target_rt_window", "log_target_charges", "charge_selection"},
+         "log_target_rt_window", "log_target_charges", "charge_selection", "max_isolation_width"},
         "precursor_selection");
     targeting_.rt_window = ps.value("rt_window", 180.0);
     targeting_.consider_all_charges = ps.value("consider_all_charges", false);
@@ -533,6 +533,12 @@ namespace OpenMS
     targeting_.snr_threshold = ps.value("snr_threshold", 1.0);
     targeting_.max_charge_states = ps.value("max_charge_states", 0);
     targeting_.min_charge_states = ps.value("min_charge_states", 1);
+
+    // ADR-0077: the widest MS2 isolation window, in Th, for every charge. 0 = no cap.
+    targeting_.max_isolation_width = ps.value("max_isolation_width", 0.0);
+    if (targeting_.max_isolation_width < 0.0)
+      throw std::invalid_argument("Config: precursor_selection.max_isolation_width must be >= 0 Th (0 means no cap); got " +
+                                  std::to_string(targeting_.max_isolation_width) + ".");
 
     // targeting: int -> string enum. Values map to the CODE, not the doc comments -- 2 is in-depth
     // and 3 is exclusion (PrecursorSelection.cpp:136-139 logs exactly that), while MethodConfig.cs,
