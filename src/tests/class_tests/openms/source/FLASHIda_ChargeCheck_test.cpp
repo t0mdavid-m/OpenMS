@@ -34,14 +34,28 @@
 
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ChargeCheck.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PrecursorSelection.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
+#include "FLASHIda_EventCapture.h"
+#include "FLASHIda_TestAccess.h"
+#include "FLASHIda_TestHelpers.h"
 
 #include <algorithm>
 #include <chrono>
+#include <climits>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <memory>
+#include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -204,6 +218,161 @@ namespace
 
   const std::string FI_MYO = "../../FlashIDA/test-data/charge_check/myo_ox_windows.tsv";
   const std::string FI_CA = "../../FlashIDA/test-data/charge_check/ca2_windows.tsv";
+
+  // ---- Selection (ADR-0078 push 3) ---------------------------------------------------------------------------------------
+  //
+  // A synthetic survey run through the engine's own selection (FLASHIdaTestAccess::selectFromSurvey): the true species T
+  // (12000 Da, z 12-16) and another species O (20000 Da, z 15-20) as raw centroids, and PeakGroups over them. W is T's
+  // z 14 window mislabelled z 13, the survey deconvolution's error: same peaks, mass about M * 13 / 14. On these windows
+  // (simulated with the prototype first) W's window measures z 14 at score 0.475, resolvability 5.2 (changed); T's anchor
+  // z 12 confirms at 0.368; O's anchor z 15 sits below the resolvability gate (2.33).
+  constexpr double M_T = 12000.0;
+  constexpr double M_O = 20000.0;
+  const std::vector<int> APEX_K = {5, 6, 7};   // the isotopes a synthetic PeakGroup resolves per charge, near the apex
+
+  double isoMz(double M, int z, int k)
+  {
+    return (M + z * PROTON + k * ISO) / z;
+  }
+
+  /// W's mass: what the survey deconvolution makes of T's z 14 window read at z 13.
+  double massW()
+  {
+    return 13.0 * (isoMz(M_T, 14, APEX_K.front()) - PROTON) - APEX_K.front() * ISO;
+  }
+
+  /// A PeakGroup of mono mass @p mono resolving, per (true charge, label), the true species' isotopes APEX_K of that charge
+  /// under the label. Its representative (anchor) charge is the first label.
+  PeakGroup peakGroupOf(double mono, const std::vector<std::pair<int, int>>& true_and_label, double M_true, double qscore)
+  {
+    int lo = INT_MAX, hi = 0;
+    for (const auto& tl : true_and_label)
+    {
+      lo = std::min(lo, tl.second);
+      hi = std::max(hi, tl.second);
+    }
+    PeakGroup pg(lo, hi, true);
+    pg.setMonoisotopicMass(mono);
+    for (const auto& [t, l] : true_and_label)
+    {
+      for (int k : APEX_K)
+      {
+        FLASHHelperClasses::LogMzPeak lp;
+        lp.mz = isoMz(M_true, t, k);
+        lp.abs_charge = l;
+        lp.intensity = 1e5f;
+        pg.push_back(lp);
+      }
+      pg.setChargeSNR(l, 10.0f);
+      pg.setChargeIsotopeCosine(l, 0.99f);
+    }
+    pg.setQscore(qscore);
+    pg.setRepAbsCharge(true_and_label.front().second);
+    return pg;
+  }
+
+  PeakGroup pgT(double q) { return peakGroupOf(M_T, {{12, 12}, {13, 13}, {14, 14}, {15, 15}, {16, 16}}, M_T, q); }
+  PeakGroup pgW(double q) { return peakGroupOf(massW(), {{14, 13}}, M_T, q); }
+  /// W with siblings: T's z 13 and z 12 windows under labels 12 and 11.
+  PeakGroup pgWSiblings(double q) { return peakGroupOf(massW(), {{14, 13}, {13, 12}, {12, 11}}, M_T, q); }
+  PeakGroup pgO(double q) { return peakGroupOf(M_O, {{15, 15}, {16, 16}, {17, 17}, {18, 18}, {19, 19}, {20, 20}}, M_O, q); }
+
+  MSSpectrum rawSurvey()
+  {
+    Points pts;
+    for (int z = 12; z <= 16; ++z)
+      for (const auto& p : envelope(M_T, z)) pts.push_back(p);
+    for (int z = 15; z <= 20; ++z)
+      for (const auto& p : envelope(M_O, z, 0.8)) pts.push_back(p);
+    return spectrumOf(pts);
+  }
+
+  int nominalOf(double mass) { return SpectralDeconvolution::getNominalMass(mass); }
+
+  /// A selection config. @p charge_check: "" leaves the key out, else its JSON value.
+  std::string selectionConfig(const std::string& charge_check, const std::string& precursor_charges = "single",
+                              int max_precursors = 2, const std::string& targeting = "none", const std::string& inclusion = "",
+                              bool exploration = false)
+  {
+    std::string ps = "\"rt_window\": 180, \"targeting\": \"" + targeting + "\", \"strict_inclusion\": false, "
+                     "\"rank_by\": \"qscore\", \"max_precursors\": " + std::to_string(max_precursors) + ", "
+                     "\"precursor_charges\": \"" + precursor_charges + "\"";
+    if (!charge_check.empty()) ps += ", \"charge_check\": " + charge_check;
+    if (exploration)
+      ps += ", \"exploration\": {\"metric\": \"mass_count\", \"ce_min\": 20, \"ce_max\": 40, \"ce_step\": 5, \"activations\": [\"HCD\"]}";
+    return std::string("{\n")
+           + "  \"deconvolution\": {\"score_threshold\": 0.0, \"tqscore_threshold\": 0.3, \"min_charge\": 4, \"max_charge\": 50,"
+             " \"min_mass\": 500, \"max_mass\": 50000, \"tol\": [10, 10, 10]},\n"
+             "  \"faims\": {\"cv_values\": [], \"max_cv_skip\": 0},\n"
+             "  \"scheduling\": {\"cycle_time\": {\"enabled\": false, \"value_ms\": 60000},"
+             " \"scan_timeout\": {\"enabled\": true, \"value_ms\": 30000}, \"agc_interval_seconds\": 30},\n"
+             "  \"files\": {\"target_logs\": [], \"inclusion_list\": \"" + inclusion + "\"},\n"
+             "  \"precursor_selection\": {" + ps + "},\n"
+             "  \"ms_settings\": {\"ms1\": {\"analyzer\": \"Orbitrap\", \"first_mass\": 500, \"last_mass\": 2000, \"resolution\": 120000,"
+             " \"agc_target\": 800000, \"max_it\": 246},"
+             " \"ms2\": {\"analyzer\": \"Orbitrap\", \"activation\": \"HCD\", \"collision_energy\": 29, \"resolution\": 120000}},\n"
+             "  \"quantification\": {\"enabled\": false, \"reporter_mz_tol\": 0.002, \"fold_change_threshold\": 1.4}\n"
+             "}\n";
+  }
+
+  /// One selection engine, kept across surveys (S3 needs its acquisition memory).
+  struct Rig
+  {
+    std::unique_ptr<Config> cfg;
+    std::unique_ptr<Deconvolution> deconv;
+    std::unique_ptr<PrecursorSelection> ps;
+    explicit Rig(const std::string& json)
+    {
+      cfg = std::make_unique<Config>(json);
+      deconv = std::make_unique<Deconvolution>(*cfg, cfg->toleranceList());
+      ps = std::make_unique<PrecursorSelection>(*cfg, *deconv);
+    }
+  };
+
+  /// What one survey's selection decided, read off PrecursorSelection's public outputs.
+  struct Selected
+  {
+    std::vector<double> mass;     // the selected PeakGroups' mono masses
+    std::vector<int> charge;      // trigger (geometry) charges
+    std::vector<std::optional<PrecursorSelection::Relabel>> relabel;
+    std::vector<std::optional<ChargeCheck::Record>> check;
+    std::set<int> species;        // journal species keys
+    size_t survey_level = 0;      // journal survey-level stamps
+    std::string events;
+  };
+
+  Selected selectOn(Rig& rig, const std::vector<PeakGroup>& pgs, double rt)
+  {
+    Selected s;
+    EventCapture cap;
+    FLASHIdaTestAccess::selectFromSurvey(*rig.ps, pgs, rawSurvey(), rt);
+    const PrecursorSelection& ps = *rig.ps;
+    for (size_t i = 0; i < ps.selectedPeakGroups().size(); ++i) s.mass.push_back(ps.selectedPeakGroups()[i].getMonoMass());
+    s.charge = ps.triggerCharges();
+    s.relabel = ps.triggerRelabels();
+    s.check = ps.triggerChargeChecks();
+    for (const auto& kv : ps.journal().species) s.species.insert(kv.first);
+    s.survey_level = ps.journal().survey_level.size();
+    s.events = cap.str();
+    return s;
+  }
+
+  bool near(double a, double b, double tol = 1e-3) { return std::abs(a - b) <= tol; }
+
+  bool statusIs(const Selected& s, size_t i, CC status)
+  {
+    return i < s.check.size() && s.check[i].has_value() && s.check[i]->status == status;
+  }
+
+  /// An inclusion list in the test's own log directory (rows: mass, charge set or -1).
+  std::string inclusionList(const std::string& tag, const std::vector<std::pair<double, std::string>>& rows)
+  {
+    const std::string path = freshLogDir(tag) + "/inclusion.tsv";
+    std::ofstream out(path);
+    out << "mass\tcharge\trt_start\trt_end\tpriority\n";
+    for (const auto& [m, z] : rows) out << std::fixed << std::setprecision(4) << m << "\t" << z << "\t0\t100000\t1\n";
+    return path;
+  }
 } // namespace
 
 START_TEST(FLASHIda_ChargeCheck, "$Id$")
@@ -478,6 +647,237 @@ START_SECTION(replay_ecoli_when_supplied)
     TEST_EQUAL(c.changed <= c.windows / 100, true)
     TEST_EQUAL(c.false_alarms <= 2, true)
   }
+}
+END_SECTION
+
+// S1. The wrong PeakGroup W ranks first and the true T is in the survey: W is swapped to T at the measured z 14, and only T
+// is written -- its journal key, not W's.
+// FAILS UNDER: a check after the stamps (W's key in the journal), a swap that keeps W's mass, or a window moved off the
+// measured peak (an anchor re-picked by charge_selection would be T's z 12).
+START_SECTION(S1_swap_to_the_survey_species_at_the_measured_charge)
+{
+  Rig rig(selectionConfig("true", "single", 1));
+  const Selected s = selectOn(rig, {pgW(0.95), pgT(0.90)}, 60.0);
+  TEST_EQUAL(s.mass.size(), 1)
+  if (s.mass.size() == 1)
+  {
+    TEST_EQUAL(near(s.mass[0], M_T), true)
+    TEST_EQUAL(s.charge[0], 14)
+    TEST_EQUAL(s.relabel[0].has_value(), false)
+    TEST_EQUAL(statusIs(s, 0, CC::Swapped), true)
+    if (s.check[0])
+    {
+      TEST_EQUAL(s.check[0]->z_meas, 14)
+      TEST_EQUAL(s.check[0]->checked_charge, 13)
+      TEST_EQUAL(near(s.check[0]->checked_mass, massW()), true)
+    }
+  }
+  TEST_EQUAL(s.species.count(nominalOf(M_T)), 1)
+  TEST_EQUAL(s.species.count(nominalOf(massW())), 0)
+  TEST_EQUAL(s.survey_level, 0)
+  TEST_EQUAL(s.events.find("[CHARGE-CHECK]") != std::string::npos && s.events.find("status=swapped") != std::string::npos, true)
+}
+END_SECTION
+
+// S2. T ranks first and is acquired (confirmed at its anchor z 12); W's swap then lands on a species this survey already
+// acquired and adds nothing (ADR-0036's ledger), so W is dropped: one acquisition, no second one under W's mass.
+// FAILS UNDER: a swap that skips the ledger guard (T acquired twice), or W kept after a refused swap.
+START_SECTION(S2_swap_onto_an_acquired_species_adds_nothing)
+{
+  Rig rig(selectionConfig("true", "single", 2));
+  const Selected s = selectOn(rig, {pgT(0.95), pgW(0.90)}, 60.0);
+  TEST_EQUAL(s.mass.size(), 1)
+  if (s.mass.size() == 1)
+  {
+    TEST_EQUAL(near(s.mass[0], M_T), true)
+    TEST_EQUAL(s.charge[0], 12)
+    TEST_EQUAL(statusIs(s, 0, CC::Confirmed), true)
+  }
+  TEST_EQUAL(s.species.count(nominalOf(massW())), 0)
+  TEST_EQUAL(s.events.find("status=swap_refused") != std::string::npos, true)
+}
+END_SECTION
+
+// S3. T was acquired on an earlier survey (its exclusion bars are armed). On the next survey W's swap meets T's bar and is
+// refused, T itself is barred, and the slot goes to the next species, O -- the true species is excluded, not bought again
+// under a wrong mass.
+// FAILS UNDER: a check whose swap ignores exclusion, or a refused swap that still spends the slot.
+START_SECTION(S3_a_refused_swap_frees_the_slot)
+{
+  Rig rig(selectionConfig("true", "single", 1));
+  const Selected first = selectOn(rig, {pgT(0.95)}, 60.0);
+  TEST_EQUAL(first.mass.size(), 1)
+  const Selected s = selectOn(rig, {pgW(0.95), pgT(0.90), pgO(0.85)}, 70.0);
+  TEST_EQUAL(s.mass.size(), 1)
+  if (s.mass.size() == 1) TEST_EQUAL(near(s.mass[0], M_O), true)
+  TEST_EQUAL(s.species.count(nominalOf(massW())), 0)
+  TEST_EQUAL(s.species.count(nominalOf(M_T)), 0)
+}
+END_SECTION
+
+// S4. No species at the measured charge, precursor_charges single: W is remeasured -- its window and geometry charge stay
+// (13), the command is relabelled to z 14 and M_W * 14 / 13, and every key is the remeasured mass's. In-depth mode walks the
+// list twice; the second pass does not acquire it again.
+// FAILS UNDER: a relabel that moves the window, keys left on W's mass, or a second remeasure in the back-fill pass.
+START_SECTION(S4_remeasure_under_single)
+{
+  const double m_out = massW() * 14.0 / 13.0;
+  for (const std::string targeting : {"none", "in_depth"})
+  {
+    Rig rig(selectionConfig("true", "single", 2, targeting));
+    const Selected s = selectOn(rig, {pgW(0.95)}, 60.0);
+    TEST_EQUAL(s.mass.size(), 1)
+    if (s.mass.size() == 1)
+    {
+      TEST_EQUAL(near(s.mass[0], massW()), true)   // the PeakGroup, whose window the command isolates
+      TEST_EQUAL(s.charge[0], 13)
+      TEST_EQUAL(s.relabel[0].has_value(), true)
+      if (s.relabel[0])
+      {
+        TEST_EQUAL(s.relabel[0]->charge, 14)
+        TEST_EQUAL(near(s.relabel[0]->mass, m_out), true)
+      }
+      TEST_EQUAL(statusIs(s, 0, CC::Remeasured), true)
+      TEST_EQUAL(rig.ps->triggerNominal(0), nominalOf(m_out))
+    }
+    TEST_EQUAL(s.species.count(nominalOf(m_out)), 1)
+    TEST_EQUAL(s.species.count(nominalOf(massW())), 0)
+  }
+}
+END_SECTION
+
+// S5. precursor_charges separate, no species to swap to: W's set {13, 12, 11} is remeasured charge by charge at
+// c * 14 / 13. 13 -> 14 and 12 -> 12.92 (within 0.1, acquired as 13) are kept; 11 -> 11.85 is dropped and logged.
+// FAILS UNDER: siblings acquired at their refuted charges, or a sibling relabelled by rounding alone.
+START_SECTION(S5_remeasure_under_separate_keeps_integer_siblings)
+{
+  Rig rig(selectionConfig("true", "separate", 2));
+  const Selected s = selectOn(rig, {pgWSiblings(0.95)}, 60.0);
+  std::set<std::pair<int, int>> got;   // (geometry, label)
+  for (size_t i = 0; i < s.charge.size(); ++i)
+  {
+    TEST_EQUAL(statusIs(s, i, CC::Remeasured), true)
+    if (i < s.relabel.size() && s.relabel[i]) got.insert({s.charge[i], s.relabel[i]->charge});
+  }
+  TEST_EQUAL(got.size(), 2)
+  TEST_EQUAL(got.count({13, 14}), 1)
+  TEST_EQUAL(got.count({12, 13}), 1)
+  TEST_EQUAL(s.events.find("dropped_siblings=11") != std::string::npos, true)
+}
+END_SECTION
+
+// S6, S8. Nothing to swap to where a command cannot be relabelled -- multiplexed (its notches are W's refuted charges) or an
+// MS2 sweep (the sweep group rebuilds from the PeakGroup): W is acquired as selected, logged unverified_no_species.
+// FAILS UNDER: a remeasure on either path.
+START_SECTION(S6_S8_no_species_under_multiplexed_or_a_sweep)
+{
+  for (int path = 0; path < 2; ++path)
+  {
+    Rig rig(path == 0 ? selectionConfig("true", "multiplexed", 2) : selectionConfig("true", "single", 2, "none", "", true));
+    const Selected s = selectOn(rig, {path == 0 ? pgWSiblings(0.95) : pgW(0.95)}, 60.0);
+    TEST_EQUAL(s.mass.size(), 1)
+    if (s.mass.size() == 1)
+    {
+      TEST_EQUAL(s.charge[0], 13)
+      TEST_EQUAL(s.relabel[0].has_value(), false)
+      TEST_EQUAL(statusIs(s, 0, CC::UnverifiedNoSpecies), true)
+    }
+    TEST_EQUAL(s.species.count(nominalOf(massW())), 1)
+  }
+}
+END_SECTION
+
+// S7. Authored charges decide (Q6). (a) T's row names 14: W swaps to T at 14. (b) T's row names only 12: the measured 14 is
+// refused, W is kept at 13 and logged inconsistent. (c) W's own row names 13 and nothing is there to swap to: no remeasure
+// of an authored species, W kept, inconsistent.
+// FAILS UNDER: a swap to an unnamed charge, or a remeasure that moves an authored species off its named charge.
+START_SECTION(S7_authored_charges_decide)
+{
+  {
+    const std::string incl = inclusionList("cc_sel_s7a", {{M_T, "14"}, {massW(), "-1"}});
+    Rig rig(selectionConfig("true", "single", 1, "inclusion", incl));
+    const Selected s = selectOn(rig, {pgW(0.95), pgT(0.90)}, 60.0);
+    TEST_EQUAL(s.mass.size(), 1)
+    if (s.mass.size() == 1)
+    {
+      TEST_EQUAL(near(s.mass[0], M_T), true)
+      TEST_EQUAL(s.charge[0], 14)
+      TEST_EQUAL(statusIs(s, 0, CC::Swapped), true)
+    }
+  }
+  {
+    const std::string incl = inclusionList("cc_sel_s7b", {{M_T, "12"}, {massW(), "-1"}});
+    Rig rig(selectionConfig("true", "single", 1, "inclusion", incl));
+    const Selected s = selectOn(rig, {pgW(0.95), pgT(0.90)}, 60.0);
+    TEST_EQUAL(s.mass.size(), 1)
+    if (s.mass.size() == 1)
+    {
+      TEST_EQUAL(near(s.mass[0], massW()), true)
+      TEST_EQUAL(s.charge[0], 13)
+      TEST_EQUAL(statusIs(s, 0, CC::Inconsistent), true)
+    }
+  }
+  {
+    const std::string incl = inclusionList("cc_sel_s7c", {{massW(), "13"}});
+    Rig rig(selectionConfig("true", "single", 1, "inclusion", incl));
+    const Selected s = selectOn(rig, {pgW(0.95)}, 60.0);
+    TEST_EQUAL(s.mass.size(), 1)
+    if (s.mass.size() == 1)
+    {
+      TEST_EQUAL(s.charge[0], 13)
+      TEST_EQUAL(s.relabel[0].has_value(), false)
+      TEST_EQUAL(statusIs(s, 0, CC::Inconsistent), true)
+    }
+  }
+}
+END_SECTION
+
+// S9. A species whose window confirms its charge is acquired as selected, with its record.
+// FAILS UNDER: a confirmed species changed or dropped.
+START_SECTION(S9_confirmed_is_unchanged)
+{
+  Rig rig(selectionConfig("true", "single", 2));
+  const Selected s = selectOn(rig, {pgT(0.95)}, 60.0);
+  TEST_EQUAL(s.mass.size(), 1)
+  if (s.mass.size() == 1)
+  {
+    TEST_EQUAL(s.charge[0], 12)
+    TEST_EQUAL(s.relabel[0].has_value(), false)
+    TEST_EQUAL(statusIs(s, 0, CC::Confirmed), true)
+    if (s.check[0])
+    {
+      TEST_EQUAL(s.check[0]->checked_charge, 12)
+      TEST_EQUAL(near(s.check[0]->checked_mass, M_T), true)
+    }
+  }
+}
+END_SECTION
+
+// S10. The check off -- the key absent, or false -- selects S1's survey exactly as before ADR-0078: W at its own z 13, no
+// record, no relabel, W's key in the journal, no [CHARGE-CHECK] line.
+// FAILS UNDER: anything of the check reaching selection with the key off.
+START_SECTION(S10_off_selects_as_before)
+{
+  std::vector<Selected> runs;
+  for (const std::string value : {"", "false"})
+  {
+    Rig rig(selectionConfig(value, "single", 1));
+    runs.push_back(selectOn(rig, {pgW(0.95), pgT(0.90)}, 60.0));
+  }
+  for (const Selected& s : runs)
+  {
+    TEST_EQUAL(s.mass.size(), 1)
+    if (s.mass.size() == 1)
+    {
+      TEST_EQUAL(near(s.mass[0], massW()), true)
+      TEST_EQUAL(s.charge[0], 13)
+      TEST_EQUAL(s.relabel[0].has_value(), false)
+      TEST_EQUAL(s.check[0].has_value(), false)
+    }
+    TEST_EQUAL(s.species.count(nominalOf(massW())), 1)
+    TEST_EQUAL(s.events.find("[CHARGE-CHECK]"), std::string::npos)
+  }
+  TEST_EQUAL(runs[0].species == runs[1].species && runs[0].charge == runs[1].charge, true)
 }
 END_SECTION
 

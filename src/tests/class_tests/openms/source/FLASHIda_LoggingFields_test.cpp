@@ -67,7 +67,7 @@ START_SECTION(schema_column_counts)
   auto r = TSVFile::parse(dir + "/scan_results.tsv");
   auto i = TSVFile::parse(dir + "/identification.tsv");
 
-  TEST_EQUAL(c.headers.size(), 39)   // E6: + scan_description; P5: + precursor_id; + ms3_proteoform (wide MS3 fragment); ADR-0012: + faims_enabled;
+  TEST_EQUAL(c.headers.size(), 46)   // E6: + scan_description; P5: + precursor_id; + ms3_proteoform (wide MS3 fragment); ADR-0012: + faims_enabled;
                                      // ADR-0026 d6: + first_mass/last_mass (32 -> 34). Inserted between faims_enabled and
                                      // enqueue_ts, so every c.colIndex pinned below and c.headers.back() are unchanged --
                                      // that they still pass IS the proof the insertion point was the only admissible one.
@@ -76,6 +76,7 @@ START_SECTION(schema_column_counts)
                                      // ADR-0069: + predicted_bond_yield (36 -> 37), in the same gap, for the same reason.
                                      // ADR-0072: + max_it (37 -> 38), in the same gap, for the same reason.
                                      // ADR-0076: + witness_probability (38 -> 39), after predicted_bond_yield, same reason.
+                                     // ADR-0078: + the 7 charge_check columns (39 -> 46), after max_it, same reason.
   // E5: + ms_level; F5: + winner_tracking_id; slim-down: -5 id-payload cols (34->29); per-charge
   // deconv output replaced 4 columns (masses/intensities/min_charge/max_charge) with 3
   // (masses/charges/intensities), min and max being derivable from the charge list (29->28); then

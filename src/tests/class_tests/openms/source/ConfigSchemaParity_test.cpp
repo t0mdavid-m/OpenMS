@@ -90,6 +90,14 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   // --- the MS1 selection keys, which moved here out of selection_strategy.ms1 ---
   TEST_EQUAL(cfg.level(1).max_targets, j["precursor_selection"]["max_precursors"].get<int>())
   TEST_EQUAL(cfg.level(1).min_charge, j["precursor_selection"]["min_precursor_charge"].get<int>())
+  // --- precursor_selection.charge_check (ADR-0078: the charge check) ---
+  // The reference authors the block with every value off its default.
+  TEST_EQUAL(j["precursor_selection"]["charge_check"].is_object(), true)
+  TEST_EQUAL(cfg.targeting().charge_check, true)
+  TEST_REAL_SIMILAR(cfg.targeting().charge_check_min_score, j["precursor_selection"]["charge_check"]["min_score"].get<double>())
+  TEST_EQUAL(cfg.targeting().charge_check_max_dz, j["precursor_selection"]["charge_check"]["max_dz"].get<int>())
+  TEST_REAL_SIMILAR(cfg.targeting().charge_check_min_resolvability,
+                    j["precursor_selection"]["charge_check"]["min_resolvability"].get<double>())
 
   // --- identification.flashtnt (genuine FLASHTnT Params; ADR-0061 moved them out of TargetingConfig) ---
   TEST_EQUAL(cfg.identification().flashtnt.min_length, j["identification"]["flashtnt"]["min_length"].get<int>())

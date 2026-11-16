@@ -240,6 +240,21 @@ namespace OpenMS
       return (int)s.selected_peak_groups_.size();
     }
 
+    /// selectFrom with the survey's centroids (ADR-0078): @p raw becomes the deconvolved survey's original spectrum, the
+    /// one the charge check reads its windows from. Resolution is the config's ms_settings.ms1 (filterAndRank's fallback).
+    static int selectFromSurvey(PrecursorSelection& s, const std::vector<PeakGroup>& peak_groups, const MSSpectrum& raw,
+                                double rt)
+    {
+      s.filterAndRank(nullptr, nullptr, 0, rt, 1, 0.0);
+      DeconvolvedSpectrum& ms1 = s.deconv_.deconvolvedMS1();
+      ms1.clear();
+      for (const PeakGroup& pg : peak_groups) ms1.push_back(pg);
+      ms1.setOriginalSpectrum(raw);
+      s.selected_peak_groups_.clear();
+      s.filterPeakGroupsUsingMassExclusion_(1, rt);
+      return (int)s.selected_peak_groups_.size();
+    }
+
     /// Retention time stamped on each of the two MS1 deconvolution results. This is the ONLY
     /// observable that separates the two MS1 arms unconditionally.
     ///
