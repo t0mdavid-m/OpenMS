@@ -1681,6 +1681,15 @@ namespace OpenMS
         throw std::invalid_argument(
             "Config: a yield gate with model \"w\" cannot run with identification.characterization.fragment_charges "
             "\"multiplexed\": W was fitted on MS3 that isolate one fragment charge state (ADR-0076).");
+      // W's x_rank is an MS3's position in the order its plan's commands are written; random and interleaved send a
+      // plan in another order than the walk ranked it. The Q MS3 is never reordered, so only the characterization
+      // gate is concerned.
+      if (characterization_.yield_gate && characterization_.yield_gate->model == YieldModel::W
+          && characterization_.send_order != Ms3SendOrder::Ranked)
+        throw std::invalid_argument(
+            "Config: identification.characterization.order must be \"ranked\" under a yield gate with model \"w\": "
+            "the model's x_rank is an MS3's position in the order its plan is sent, and \"random\" and \"interleaved\" "
+            "send it in another order than it was ranked (ADR-0076).");
     }
 
     // --- charge-set bounds (ADR-0040) -----------------------------------------------------------

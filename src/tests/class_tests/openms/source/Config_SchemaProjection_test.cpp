@@ -2067,6 +2067,23 @@ START_SECTION(w_refuses_multiplexed)
 }
 END_SECTION
 
+// ADR-0076: W's x_rank is an MS3's position in the order its plan is sent, so under model w the characterization plan
+// must be sent as ranked: order random or interleaved is refused; ranked (and absent) is accepted, and bond_yield keeps
+// both orders.
+// FAILS UNDER: a W-gated plan sent in another order than its ranks were computed at.
+START_SECTION(w_refuses_reordered_sends)
+{
+  const std::string gate = R"({ "model": "w", "threshold": 0.5 })";
+  for (const std::string order : {"random", "interleaved"})
+    TEST_EQUAL(contains(refineMessage(wCfg(gate, "60", R"("order": ")" + order + R"(", )")),
+                        "identification.characterization.order must be \"ranked\" under a yield gate with model \"w\""),
+               true)
+  TEST_EQUAL(Config(wCfg(gate, "60", R"("order": "ranked", )")).characterization().yield_gate.has_value(), true)
+  TEST_EQUAL(Config(wCfg(R"({ "model": "bond_yield" })", "60", R"("order": "random", )")).characterization().yield_gate.has_value(),
+             true)
+}
+END_SECTION
+
 // ---------------------------------------------------------------------------------------------
 // exploration.order: when a sweep acquires its grid points. Absent or null: ascending, the grid order every sweep had.
 // "random": each triggered sweep in its own reproducible order. Set per level, in each level's own block; anything else
