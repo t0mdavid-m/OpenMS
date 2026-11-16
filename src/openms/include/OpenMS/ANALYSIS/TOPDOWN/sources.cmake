@@ -19,6 +19,7 @@ set(sources_list_h
         FLASHIda/FAIMS.h
         FLASHIda/AnnotatorMetrics.h
         FLASHIda/ChanceMatch.h
+        FLASHIda/ChargeCheck.h
         FLASHIda/KineticModel.h
         FLASHIda/Refine.h
         FLASHIda/RefineSettings.h
