@@ -477,6 +477,7 @@ set(analysis_executables_list
   FLASHIda_Ms3WitnessModel_test
   FLASHIda_AnnotatorMetrics_test
   FLASHIda_ChanceMatch_test
+  FLASHIda_ChargeCheck_test
   MS3FragmentMatcher_test
   MS3FragmentMatcher_identification_test
   FragmentAnalysis_test
