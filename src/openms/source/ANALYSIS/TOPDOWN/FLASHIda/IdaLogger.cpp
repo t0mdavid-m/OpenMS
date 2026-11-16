@@ -477,7 +477,8 @@ namespace OpenMS
     // ADR-0069: predicted_bond_yield. Recomputed from this command's own logged values by the function the planner
     // decided with (yieldInputsOf(ms3) == yieldInputsOf(ms_ctx, scores, ion): FLASHIda_Ms3YieldModel_test), under the
     // gate of the MS3's kind -- 'Q' the quantification gate, any other MS3 the characterization gate. -1 on every row
-    // no yield gate tested: not an MS3, its gate unset, or a target with no ion index.
+    // no yield gate tested: not an MS3, its gate unset or on model w (ADR-0076: W decides, never E), or a target with
+    // no ion index.
     std::string predicted_bond_yield = "-1";
     if (cmd.msn_level == 3)
     {
@@ -485,7 +486,7 @@ namespace OpenMS
       const std::optional<YieldGateConfig>& yg = (role && *role == ScanRole::Quantification)
                                                      ? config_.quantification().ms3_yield_gate
                                                      : config_.characterization().yield_gate;
-      if (yg)
+      if (yg && yg->model == YieldModel::BondYield)
       {
         const YieldPrediction pred = predictBondYield(yg->coefficients, yieldInputsOf(cmd));
         if (pred.tested)
