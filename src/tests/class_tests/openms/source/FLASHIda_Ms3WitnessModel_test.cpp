@@ -17,6 +17,7 @@
 #include <OpenMS/CONCEPT/ClassTest.h>
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms3WitnessModel.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms3WitnessGate.h>   // the inputs read off the logs
 
 #include <cmath>
 #include <fstream>
@@ -262,6 +263,37 @@ START_SECTION(transforms_follow_the_training)
   TEST_EQUAL(std::isinf(toFloat32(1e40)), true)
   TEST_EQUAL(std::string(witnessRawName(kWRtFrac)), "x_rt_frac")
   TEST_EQUAL(std::string(witnessRawName(kWFragN)), "frag_N")
+
+  // The inputs read off the logs, by the training's definitions (inputs_from_log.py, ms3_esm 8.2).
+  // has_shift: a '[' after the leading <...> global modification; the <...> itself is not a shift.
+  TEST_EQUAL(proformaHasShift("<[Carbamidomethyl]@C>PEPCK"), false)
+  TEST_EQUAL(proformaHasShift("<[Carbamidomethyl]@C>PEP[+15.995]CK"), true)
+  TEST_EQUAL(proformaHasShift("[Acetyl]-GDVEK"), true)
+  TEST_EQUAL(proformaHasShift("GDVEK"), false)
+  // The letters: the <...> removed, every [...] removed (nested ones too), every other non-letter dropped.
+  TEST_EQUAL(proformaLetters("<[Carbamidomethyl]@C>[Acetyl]-GD(VE)[+1.2]K"), "GDVEK")
+  TEST_EQUAL(proformaLetters("PEP[Phospho[+79.97]]TK"), "PEPTK")
+  TEST_EQUAL(proformaLetters(""), "")
+  // Placement: an N-terminal fragment is the first L letters of the parent's stretch, a C-terminal one the last L.
+  TEST_EQUAL(witnessPlaced("GDVEKGKK", "GDV", true), true)
+  TEST_EQUAL(witnessPlaced("GDVEKGKK", "GKK", false), true)
+  TEST_EQUAL(witnessPlaced("GDVEKGKK", "GKK", true), false)
+  TEST_EQUAL(witnessPlaced("GDVEKGKK", "DVE", true), false)     // inside the stretch, at neither terminus
+  TEST_EQUAL(witnessPlaced("GDV", "GDVEK", true), false)        // longer than the stretch
+  TEST_EQUAL(witnessPlaced("GDVEKGKK", "", true), false)
+  // Printed precision: a stage-scored column at 6 significant digits, a mass (and id_score) at 4 decimals.
+  TEST_EQUAL(asLoggedSig6(250163.37), 250163.0)
+  TEST_EQUAL(asLoggedSig6(0.123456789), 0.123457)
+  TEST_EQUAL(asLoggedSig6(1234567.0), 1.23457e6)
+  TEST_EQUAL(asLoggedFixed4(12357.123456), 12357.1235)
+  TEST_EQUAL(std::isnan(asLoggedSig6(std::numeric_limits<double>::quiet_NaN())), true)
+  // x_ms1_plan: the largest summed intensity within 10 ppm of the mass at 0 or +-1.00335 Da, else 0.
+  WitnessLastMs1 ms1;
+  ms1.masses = {{12357.1, 4.0e6}, {12358.10335, 9.0e6}, {12355.5, 7.0e6}, {12357.1 * (1 + 2e-5), 8.0e6}};
+  TEST_EQUAL(witnessMs1Plan(ms1, 12357.1), 9.0e6)                // the +1.00335 isotope is the larger
+  ms1.masses.erase(ms1.masses.begin() + 1);
+  TEST_EQUAL(witnessMs1Plan(ms1, 12357.1), 4.0e6)                // 20 ppm off does not count, nor 1.6 Da off
+  TEST_EQUAL(witnessMs1Plan(WitnessLastMs1{}, 12357.1), 0.0)
 }
 END_SECTION
 
