@@ -81,6 +81,12 @@ departure from the plan goes back to the owner. Ambiguous cases count as source 
   `predicted_bond_yield` is
   recomputed from the command (`Ms3YieldModel.h`), never stashed: keep the planner's inputs the ones `buildMS3`
   copies, or the drift test fails.
+- **`yield_gate.model: w` admits an MS3 at W ≥ its threshold** (ADR-0076; `Ms3WitnessModel.h` evaluates the shipped
+  trees, `Ms3WitnessGate.h` holds the inputs and the `[MS3-W]` line). Every input is read back at the precision its log
+  column prints. The walk scores each candidate at admitted + 1 and the verdict is made in `add_target` at the actual
+  rank (`witnessGreedyOrder` only orders). Every MS1 row (`writeRows_`) re-scores the registered, still-queued MS3
+  (`rescoreWitnessed_`); a withdrawal goes through the expired path. `ScanCommand::witness_probability` carries the
+  last W. A slot `witnessLine` prints once must hold one value for every record of the line.
 - **An MS2's MS3s are pushed by a search worker's apply**, not by `processScan` (ADR-0062): the
   "MS3 targeting" and "exploration MS2 return" push sites live in `finishRegularMS2_` and
   `finishVariantMS2_`. The pool exists only with an `identification` section, and `~FLASHIda` stops
