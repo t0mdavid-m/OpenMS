@@ -67,7 +67,7 @@ START_SECTION(schema_column_counts)
   auto r = TSVFile::parse(dir + "/scan_results.tsv");
   auto i = TSVFile::parse(dir + "/identification.tsv");
 
-  TEST_EQUAL(c.headers.size(), 38)   // E6: + scan_description; P5: + precursor_id; + ms3_proteoform (wide MS3 fragment); ADR-0012: + faims_enabled;
+  TEST_EQUAL(c.headers.size(), 39)   // E6: + scan_description; P5: + precursor_id; + ms3_proteoform (wide MS3 fragment); ADR-0012: + faims_enabled;
                                      // ADR-0026 d6: + first_mass/last_mass (32 -> 34). Inserted between faims_enabled and
                                      // enqueue_ts, so every c.colIndex pinned below and c.headers.back() are unchanged --
                                      // that they still pass IS the proof the insertion point was the only admissible one.
@@ -75,6 +75,7 @@ START_SECTION(schema_column_counts)
                                      // gap before enqueue_ts and for the same reason.
                                      // ADR-0069: + predicted_bond_yield (36 -> 37), in the same gap, for the same reason.
                                      // ADR-0072: + max_it (37 -> 38), in the same gap, for the same reason.
+                                     // ADR-0076: + witness_probability (38 -> 39), after predicted_bond_yield, same reason.
   // E5: + ms_level; F5: + winner_tracking_id; slim-down: -5 id-payload cols (34->29); per-charge
   // deconv output replaced 4 columns (masses/intensities/min_charge/max_charge) with 3
   // (masses/charges/intensities), min and max being derivable from the charge list (29->28); then
@@ -138,7 +139,8 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(c.colIndex("decision_survey_id"), 33)
   TEST_EQUAL(c.colIndex("isolation_purity"), 34)
   TEST_EQUAL(c.colIndex("predicted_bond_yield"), 35)          // ADR-0069: -1 on every row until a yield gate tests it
-  TEST_EQUAL(c.colIndex("max_it"), 36)                        // ADR-0072: the max_it sent; enqueue_ts stays last
+  TEST_EQUAL(c.colIndex("witness_probability"), 36)           // ADR-0076: -1 on every row until a W gate scores it
+  TEST_EQUAL(c.colIndex("max_it"), 37)                        // ADR-0072: the max_it sent; enqueue_ts stays last
   TEST_EQUAL(r.headers.front(), std::string("tracking_id"))
   TEST_EQUAL(r.colIndex("ms_level"), 1)
   TEST_EQUAL(r.headers.back(), std::string("search_ms"))      // ADR-0061 push 4b: the search block follows the kinetic one
@@ -236,6 +238,7 @@ START_SECTION(commands_ms2_columns)
     parent_ok = parent_ok && isTrackingId(cell(t, row, "parent_tracking_id"));  // == its MS1
     ion_ok    = ion_ok    && cell(t, row, "ion_type").empty() && (cell(t, row, "ion_index") == "0");
     pby_ok    = pby_ok    && (cell(t, row, "predicted_bond_yield") == "-1");  // ADR-0069: no yield gate tests an MS2
+    pby_ok    = pby_ok    && (cell(t, row, "witness_probability") == "-1");   // ADR-0076: no W gate scores an MS2
     maxit_ok  = maxit_ok  && (cell(t, row, "max_it") == "0.0000");            // ADR-0072: this config's ms2 sets none
     nosemi    = nosemi    && (cell(t, row, "charge").find(';') == std::string::npos)
                          && (cell(t, row, "qscore").find(';') == std::string::npos);  // single stage
@@ -304,6 +307,7 @@ START_SECTION(commands_ms3_two_stage)
 
     ion_ok = ion_ok && ionTypeOk(cell(t, row, "ion_type")) && (std::atoi(cell(t, row, "ion_index").c_str()) >= 1);
     pby_ok = pby_ok && (cell(t, row, "predicted_bond_yield") == "-1");  // ADR-0069: no yield_gate in this config
+    pby_ok = pby_ok && (cell(t, row, "witness_probability") == "-1");   // ADR-0076: no W gate in this config
     std::string parent = cell(t, row, "parent_tracking_id");
     parent_ok = parent_ok && isTrackingId(parent);  // == its MS2
 

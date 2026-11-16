@@ -80,8 +80,9 @@ START_SECTION([EXTRA] ScanCommand and IsolationStage struct layout)
   TEST_EQUAL(offsetof(ScanCommand, precursor_intensity_s1), 1424)
   TEST_EQUAL(offsetof(ScanCommand, peakgroup_intensity_s1), 1432)
   TEST_EQUAL(offsetof(ScanCommand, window_snr), 1440)
-  // Carved out of reserved_, which has now moved 1448 -> 1896 and shrunk 600 -> 152 across three
-  // changes (faims_enabled, ADR-0012; the two notch counts, ADR-0017; the notch array, ADR-0019).
+  // Carved out of reserved_, which has now moved 1448 -> 1904 and shrunk 600 -> 144 across four
+  // changes (faims_enabled, ADR-0012; the two notch counts, ADR-0017; the notch array, ADR-0019;
+  // witness_probability, ADR-0076).
   // Every offset above is unchanged and sizeof stays 2048; that is the whole point of consuming from
   // the tail.
   TEST_EQUAL(offsetof(ScanCommand, faims_enabled), 1448)
@@ -92,8 +93,10 @@ START_SECTION([EXTRA] ScanCommand and IsolationStage struct layout)
   TEST_EQUAL(offsetof(ScanCommand, pad4), 1460)
   TEST_EQUAL(offsetof(ScanCommand, notches), 1464)
   TEST_EQUAL(sizeof(ScanCommand::notches), 432)   // 18 * 24
-  TEST_EQUAL(offsetof(ScanCommand, reserved_), 1896)
-  TEST_EQUAL(sizeof(ScanCommand) - offsetof(ScanCommand, reserved_), 152)
+  // ADR-0076: witness_probability carved from the head of reserved_ (8-aligned at 1896), 152 -> 144.
+  TEST_EQUAL(offsetof(ScanCommand, witness_probability), 1896)
+  TEST_EQUAL(offsetof(ScanCommand, reserved_), 1904)
+  TEST_EQUAL(sizeof(ScanCommand) - offsetof(ScanCommand, reserved_), 144)
 
   // The two tens are DIFFERENT limits and must not be collapsed into one: MAX_ISOLATION_STAGES is
   // the instrument's ';'-axis cap (cascade depth), MAX_NOTCHES_PER_STAGE + 1 is its ','-axis cap

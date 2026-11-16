@@ -124,6 +124,10 @@ namespace OpenMS
                              // row no yield gate tested (MS1, MS2, an MS3 with its gate off or no ion index). Same
                              // gap as above, for the same reason.
                              << "predicted_bond_yield\t"
+                             // ADR-0076: the witness probability W an MS3's `model: w` yield gate last decided it
+                             // at, carried on the command (ScanCommand::witness_probability); -1 on every row no W
+                             // gate scored. Same gap as above, for the same reason.
+                             << "witness_probability\t"
                              // ADR-0072: the command's maximum injection time (ms), as sent: for a multiplexed scan
                              // the scan's configured max_it shared across its stage-0 windows. 0 = unset (the
                              // instrument method's own maximum applies), a real value, as in first_mass. Same gap
@@ -492,6 +496,16 @@ namespace OpenMS
         }
       }
     }
+    // ADR-0076: witness_probability is the value the command carries -- the W its W gate last decided it at -- because
+    // W cannot be recomputed from the row (its inputs include engine state at planning). A command no W gate scored
+    // keeps the -1.0 default and prints -1, like predicted_bond_yield. Own stream, so no precision leaks into the row.
+    std::string witness_probability = "-1";
+    if (cmd.witness_probability >= 0.0)
+    {
+      std::ostringstream os;
+      os << std::fixed << std::setprecision(6) << cmd.witness_probability;
+      witness_probability = os.str();
+    }
 
     // MS3 scoring columns are 2-stage 'MS2-precursor;fragment'; sc/sci append ';v1' only for MS3.
     // MS1/MS2/followup rows (msn_level != 3) emit stage-0 only -> byte-identical to before.
@@ -563,6 +577,7 @@ namespace OpenMS
                          << quoteLogCell(decision_survey) << "\t"
                          << isolation_purity << "\t"
                          << predicted_bond_yield << "\t"  // ADR-0069: E the yield gate admitted it at, else -1
+                         << witness_probability << "\t"   // ADR-0076: W the W gate last decided it at, else -1
                          << mz(cmd.max_it) << "\t"        // ADR-0072: the value sent (a multiplexed scan's share); 0 = unset
                          << cmd.enqueue_timestamp_ms << "\n";
     commands_tsv_stream_.flush();

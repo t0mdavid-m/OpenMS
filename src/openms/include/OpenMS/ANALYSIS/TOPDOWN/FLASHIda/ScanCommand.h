@@ -106,7 +106,7 @@ namespace OpenMS
   ///       + 64 (data_type+scan_rate) + 4 (parent_scan_id) + 84 (stage-1 scoring) + 608 (reserved) = 2048.
   /// The trailing 608 covers window_snr (8 @1440) + faims_enabled (4 @1448) + stage0_notch_count
   /// (4 @1452) + stage1_notch_count (4 @1456) + pad4 (4 @1460) + notches (432 @1464)
-  /// + reserved_ (152 @1896):
+  /// + witness_probability (8 @1896) + reserved_ (144 @1904):
   /// new fields are carved OUT of reserved_ so the 2048 total and every existing offset stay fixed.
   struct OPENMS_DLLAPI ScanCommand
   {
@@ -215,7 +215,13 @@ namespace OpenMS
     /// 24-byte record buys 18 slots for less than the 800 bytes stages[20] would have cost.
     Notch notches[MAX_NOTCHES];
 
-    char reserved_[152];           ///< Reserved for future fields (consume from here, never change total size)
+    /// @1896 ADR-0076: the witness probability W the MS3's `model: w` yield gate last decided it at (planning, or
+    /// the latest re-score while it waited); -1.0 = no W gate scored this command. Carved from reserved_ (152 -> 144).
+    /// It travels with the command because W cannot be recomputed off the built command (its inputs include engine
+    /// state at planning: the queue, the last MS1, the prior counts), so scan_commands' witness_probability prints it.
+    double witness_probability = -1.0;
+
+    char reserved_[144];           ///< Reserved for future fields (consume from here, never change total size)
   };
   static_assert(sizeof(ScanCommand) == 2048, "ScanCommand must be 2048 bytes for P/Invoke");
 
