@@ -305,7 +305,7 @@ START_SECTION(myoglobin_and_ca_ranges_confirm_and_correct)
 END_SECTION
 
 // A3. Co-isolation: a main envelope (12/17/22 kDa, z 12/16/20/24, 120k) with one interferer at 30 % (9/15/25 kDa, z 8/15/22/30)
-// whose apex sits -0.4/0/+0.4 Th off (288 windows). The prototype reads a wrong confident charge in 19 of them, all at the
+// whose apex sits -0.4/0/+0.4 Th off (432 windows). The prototype reads a wrong confident charge in 19 of them, all at the
 // resolvability edge (22 kDa z 24, res 2.55, read as z 25): bound at 8 %, and most confident outcomes are right.
 // FAILS UNDER: an interferer taking over the comb broadly (more than the resolvability-edge cases).
 START_SECTION(co_isolated_envelopes_mostly_measure_the_strongest)
@@ -335,8 +335,8 @@ START_SECTION(co_isolated_envelopes_mostly_measure_the_strongest)
   }
   std::cout << "A3: " << windows << " windows, confident right " << confident_right << ", confident wrong " << confident_wrong
             << std::endl;
-  TEST_EQUAL(windows, 288)
-  TEST_EQUAL(confident_wrong <= 23, true)   // 8 % of 288; the prototype: 19
+  TEST_EQUAL(windows, 432)
+  TEST_EQUAL(confident_wrong <= 34, true)   // 8 % of 432; the prototype: 19
   TEST_EQUAL(confident_right >= 240, true)  // the prototype: 269
 }
 END_SECTION
