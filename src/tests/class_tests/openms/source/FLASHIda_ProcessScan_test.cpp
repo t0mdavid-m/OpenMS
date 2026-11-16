@@ -5362,24 +5362,26 @@ START_SECTION(w_quant_q_ms3)
 }
 END_SECTION
 
-// T28. An input the engine cannot fill leaves the candidate untested and admitted: an exhaustive MS3 of an unidentified
-// MS2 has no ion and no identification score. The fixture is FLASHIda_exploration_test's
-// unidentified_regular_ms2_dispatches_exhaustive_ms3 (the pinned cytC precursor, the method naming ubiquitin, one
-// group driven, every MS3 no-ion), with a W gate. Every untested candidate has W -1 and names its first missing input;
-// its MS3 is sent with the row -1 and is never re-scored.
+// T28. An input the engine cannot fill leaves the candidate untested and admitted. Exhaustive characterization of the
+// identified cytC targets the MS2's strongest masses, most of which match no ion (ms3_exhaustive_cytc: 41 of its 75 MS3
+// are no-ion): such a target has no ion index, so no L, and its W cannot be computed. Walked by intensity
+// (rank_by: intensity), the no-ion targets take their places among the tested ones. Every untested candidate has W -1
+// and names its first missing input, is sent with the row -1 and is never re-scored; every MS3 with an ion is tested
+// and its row carries W.
 //
-// FAILS UNDER: a missing input defaulted (W computed from a made-up value), or an untested MS3 refused or re-scored.
+// FAILS UNDER: a missing input defaulted (W computed from a made-up value), an untested MS3 refused or re-scored, or a
+// no-ion row carrying a W.
 START_SECTION(w_missing_input_untested)
 {
   auto ms1 = loadTsvScans(ms1_cytc_tsv_path);
   auto ms2 = loadTsvScans(ms2_cytc_fresh_tsv_path);
   ABORT_IF(ms1.empty() || ms2.empty())
   const std::string dir = freshLogDir("w_gate_untested");
-  nlohmann::json j = nlohmann::json::parse(inclusionPinCytc(ms3SelectionOnlyConfig()));
-  j["precursor_selection"].erase("exploration");
-  j["identification"]["reference"] = {{"sequence", "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"}};
-  j["identification"]["characterization"] = {{"mode", "exhaustive"}, {"max_targets", 3},
-                                             {"yield_gate", {{"model", "w"}, {"threshold", 0.5}}}};
+  nlohmann::json j = nlohmann::json::parse(ms3_mode1_json);
+  j["deconvolution"]["tqscore_threshold"] = 0.0;
+  j["identification"]["characterization"] = {
+      {"mode", "exhaustive"}, {"max_targets", 3},
+      {"yield_gate", {{"model", "w"}, {"threshold", 0.5}, {"rank_by", "intensity"}}}};
   j["global"] = {{"duration", 60.0}};
   j["runtime"] = {{"log_dir", dir}};
   const std::string cfg = j.dump();
@@ -5390,15 +5392,13 @@ START_SECTION(w_missing_input_untested)
     EventCapture cap;
     {
       FLASHIda ida(const_cast<char*>(cfg.c_str()));
-      const int budget = 256 + 64 * static_cast<int>(ms1.size() + 1);
-      acq = runInterleaved(&ida, ms1, std::vector<ScanData>{ms2[0]}, &no_ms3_fixtures, budget, /*single_group_only=*/true);
+      acq = runInterleaved(&ida, ms1, ms2, &no_ms3_fixtures, 4000);
     }
     lines = wLines(cap.str());
   }
-  TEST_EQUAL(acq.ms3_cmds.empty(), false)
   int no_ion = 0;
   for (const ScanCommand& c : acq.ms3_cmds) no_ion += wIonOf(c).second.empty() ? 1 : 0;
-  TEST_EQUAL(no_ion, static_cast<int>(acq.ms3_cmds.size()))   // the premise: nothing identified, every MS3 no-ion
+  TEST_EQUAL(no_ion > 0, true)   // the premise: no-ion targets are sent
   int untested = 0;
   std::set<std::pair<std::string, int>> untested_of;
   for (const WLine& l : lines)
@@ -5418,14 +5418,26 @@ START_SECTION(w_missing_input_untested)
   for (const WLine& l : lines)
     if (l.get("stage") == "rescore")
       for (const WCand& c : l.cands) TEST_EQUAL(untested_of.count({l.get("parent") + "|" + c.ion, c.charge}), 0)
-  // Sent, each row -1 in both gate columns.
-  const std::vector<WRow> rows = wMs3Rows(dir);
-  TEST_EQUAL(rows.empty(), false)
-  for (const WRow& r : rows)
+  // Sent: a no-ion row (empty ion_type) is -1; a row with an ion carries the W it was tested at. predicted_bond_yield
+  // is -1 on both under model w.
+  int no_ion_rows = 0, ion_rows = 0;
+  for (const WRow& r : wMs3Rows(dir))
   {
-    TEST_EQUAL(r.w, -1.0)
     TEST_EQUAL(r.pby, std::string("-1"))
+    const bool has_ion = !r.ion.empty() && !std::isdigit(static_cast<unsigned char>(r.ion[0]));
+    if (has_ion)
+    {
+      ++ion_rows;
+      TEST_EQUAL(r.w >= 0.5, true)
+    }
+    else
+    {
+      ++no_ion_rows;
+      TEST_EQUAL(r.w, -1.0)
+    }
   }
+  TEST_EQUAL(no_ion_rows > 0, true)
+  TEST_EQUAL(ion_rows > 0, true)   // non-vacuity: the same plans test the targets that have an ion
 }
 END_SECTION
 
