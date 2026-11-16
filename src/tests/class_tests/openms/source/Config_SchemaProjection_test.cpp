@@ -1964,6 +1964,108 @@ START_SECTION(yield_gate_parses_defaults_and_rejects)
 END_SECTION
 
 // ---------------------------------------------------------------------------------------------
+// ADR-0076: yield_gate.model. The W gate's configuration: a probability threshold the method must state, a run length,
+// coefficients read and unused, the value refused when misspelt, the quantification block too, and no multiplexing.
+const std::string kWMs3 = R"(, "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 35 })";
+// A characterization gate block `gate`, with global.duration `duration` (empty = no global block), characterization keys
+// `charact_extra` and precursor_selection keys `precursor_extra`.
+auto wCfg = [&kWMs3](const std::string& gate, const std::string& duration = "60", const std::string& charact_extra = "",
+               const std::string& precursor_extra = "") {
+  const std::string global = duration.empty() ? std::string() : R"("global": { "duration": )" + duration + " }, ";
+  return cfgJson(precursor_extra,
+                 global + R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "fragments", )"
+                     + charact_extra + R"("yield_gate": )" + gate + R"( } },)",
+                 kWMs3);
+};
+
+START_SECTION(w_needs_a_threshold_in_0_1)
+{
+  {
+    Config c(wCfg(R"({ "model": "w", "threshold": 0.835 })"));
+    TEST_EQUAL(c.characterization().yield_gate.has_value(), true)
+    TEST_EQUAL((int)c.characterization().yield_gate->model, (int)YieldModel::W)
+    TEST_REAL_SIMILAR(c.characterization().yield_gate->threshold, 0.835)
+    TEST_EQUAL((int)c.characterization().yield_gate->rank_by, (int)YieldRank::Yield)
+  }
+  // No threshold, or a null one: refused, never defaulted to bond_yield's 1 (which no W reaches).
+  TEST_EQUAL(contains(refineMessage(wCfg(R"({ "model": "w" })")),
+                      "identification.characterization.yield_gate.threshold is required under model \"w\""), true)
+  TEST_EQUAL(contains(refineMessage(wCfg(R"({ "model": "w", "threshold": null })")),
+                      "identification.characterization.yield_gate.threshold is required under model \"w\""), true)
+  // Outside (0, 1), including the C# layer's default of 1.
+  for (const std::string bad : {"0", "1", "1.5", "-0.2"})
+    TEST_EQUAL(contains(refineMessage(wCfg(R"({ "model": "w", "threshold": )" + bad + " }")),
+                        "threshold must be a witness probability in (0, 1)"), true)
+  // bond_yield keeps ADR-0069's rule and default.
+  TEST_REAL_SIMILAR(Config(wCfg(R"({ "model": "bond_yield" })")).characterization().yield_gate->threshold, 1.0)
+  TEST_EQUAL((int)Config(wCfg(R"({ "model": "bond_yield" })")).characterization().yield_gate->model, (int)YieldModel::BondYield)
+  TEST_EQUAL((int)Config(wCfg(R"({ "model": null })")).characterization().yield_gate->model, (int)YieldModel::BondYield)
+  TEST_EQUAL((int)Config(wCfg("{}")).characterization().yield_gate->model, (int)YieldModel::BondYield)
+}
+END_SECTION
+
+START_SECTION(w_needs_a_duration)
+{
+  // x_rt_frac divides by the run length: no global.duration, or 0, is refused under model w only.
+  TEST_EQUAL(contains(refineMessage(wCfg(R"({ "model": "w", "threshold": 0.5 })", "")),
+                      "needs global.duration > 0 minutes"), true)
+  TEST_EQUAL(contains(refineMessage(wCfg(R"({ "model": "w", "threshold": 0.5 })", "0")),
+                      "needs global.duration > 0 minutes"), true)
+  TEST_EQUAL(Config(wCfg(R"({ "model": "bond_yield" })", "")).characterization().yield_gate.has_value(), true)
+  TEST_REAL_SIMILAR(Config(wCfg(R"({ "model": "w", "threshold": 0.5 })", "67")).global().duration, 67.0)
+  // A present duration must be a finite number >= 0 (it used to be ignored when not a number).
+  TEST_EQUAL(contains(refineMessage(wCfg("{}", "\"67\"")), "global.duration must be a finite number of minutes >= 0"), true)
+  TEST_EQUAL(contains(refineMessage(wCfg("{}", "-5")), "global.duration must be a finite number of minutes >= 0"), true)
+}
+END_SECTION
+
+START_SECTION(w_ignores_coefficients)
+{
+  // Accepted and parsed (so a method can switch model back), and unused by the W gate.
+  Config c(wCfg(R"({ "model": "w", "threshold": 0.5, "intercept": -30.0, "fragment_iso_cos": 20.0 })"));
+  TEST_EQUAL((int)c.characterization().yield_gate->model, (int)YieldModel::W)
+  TEST_REAL_SIMILAR(c.characterization().yield_gate->coefficients.intercept, -30.0)
+  TEST_REAL_SIMILAR(c.characterization().yield_gate->coefficients.fragment_iso_cos, 20.0)
+}
+END_SECTION
+
+START_SECTION(unknown_model_refused)
+{
+  for (const std::string bad : {"\"W\"", "\"witness\"", "\"bond-yield\"", "1", "true"})
+    TEST_EQUAL(contains(refineMessage(wCfg(R"({ "model": )" + bad + R"(, "threshold": 0.5 })")),
+                        "identification.characterization.yield_gate.model must be \"bond_yield\" or \"w\""), true)
+}
+END_SECTION
+
+START_SECTION(w_in_quant_block)
+{
+  const std::string ident = std::string(R"("global": { "duration": 60 }, )") + IDENT_TH;
+  Config c(q3Cfg(R"("scan": "ms3", "ms3_yield_gate": { "model": "w", "threshold": 0.5 })", ident));
+  TEST_EQUAL(c.quantification().ms3_yield_gate.has_value(), true)
+  TEST_EQUAL((int)c.quantification().ms3_yield_gate->model, (int)YieldModel::W)
+  TEST_EQUAL(contains(refineMessage(q3Cfg(R"("scan": "ms3", "ms3_yield_gate": { "model": "w" })", ident)),
+                      "quantification.ms3_yield_gate.threshold is required under model \"w\""), true)
+  // The duration rule covers the quantification gate as well.
+  TEST_EQUAL(contains(refineMessage(q3Cfg(R"("scan": "ms3", "ms3_yield_gate": { "model": "w", "threshold": 0.5 })")),
+                      "needs global.duration > 0 minutes"), true)
+}
+END_SECTION
+
+START_SECTION(w_refuses_multiplexed)
+{
+  const std::string gate = R"({ "model": "w", "threshold": 0.5 })";
+  TEST_EQUAL(contains(refineMessage(wCfg(gate, "60", R"("fragment_charges": "multiplexed", )")),
+                      "cannot run with identification.characterization.fragment_charges \"multiplexed\""), true)
+  TEST_EQUAL(contains(refineMessage(wCfg(gate, "60", "", R"(, "precursor_charges": "multiplexed")")),
+                      "cannot run with precursor_selection.precursor_charges \"multiplexed\""), true)
+  // separate and single are fitted (one charge per scan); bond_yield is not restricted.
+  TEST_EQUAL(Config(wCfg(gate, "60", R"("fragment_charges": "separate", )")).characterization().yield_gate.has_value(), true)
+  TEST_EQUAL(Config(wCfg(R"({ "model": "bond_yield" })", "60", R"("fragment_charges": "multiplexed", )"))
+                 .characterization().yield_gate.has_value(), true)
+}
+END_SECTION
+
+// ---------------------------------------------------------------------------------------------
 // exploration.order: when a sweep acquires its grid points. Absent or null: ascending, the grid order every sweep had.
 // "random": each triggered sweep in its own reproducible order. Set per level, in each level's own block; anything else
 // throws naming the path (a typo must not silently keep the energy confounded with sweep position).

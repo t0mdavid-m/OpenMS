@@ -365,6 +365,9 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
     TEST_EQUAL(g.has_value(), true)
     TEST_EQUAL(jg.is_object(), true)
     if (!g || !jg.is_object()) return;
+    // ADR-0076: the C# layer writes model; the full reference keeps "bond_yield" (model "w" is refused there under its
+    // precursor_charges "multiplexed"), and Config_SchemaProjection_test covers "w".
+    TEST_EQUAL(jg["model"].get<std::string>(), std::string(g->model == YieldModel::W ? "w" : "bond_yield"))
     TEST_REAL_SIMILAR(g->threshold, jg["threshold"].get<double>())
     TEST_REAL_SIMILAR(g->coefficients.intercept, jg["intercept"].get<double>())
     TEST_REAL_SIMILAR(g->coefficients.fragment_intensity, jg["fragment_intensity"].get<double>())
