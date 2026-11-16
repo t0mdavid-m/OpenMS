@@ -431,6 +431,44 @@ namespace
   }
 }
 
+// ---- ADR-0076: the W walk, against a stub tree ------------------------------------------------------------------
+namespace
+{
+  // One tree, W by rank and isotope cosine only: rank (x_rank, input 33) >= 3 -> leaf -5 (W 0.0067); below, an isotope
+  // cosine (input 9) under 0.9 -> -5, under 0.98 -> +3 (W 0.9526), else +1 (W 0.7311). base_score 0.5: no intercept.
+  const char* kStubTree = R"({"learner":{"objective":{"name":"binary:logistic"},
+    "learner_model_param":{"num_feature":"36","base_score":"[5E-1]"},
+    "gradient_booster":{"name":"gbtree","model":{"gbtree_model_param":{"num_trees":"1"},"trees":[{
+      "left_children":[1,3,-1,-1,5,-1,-1],"right_children":[2,4,-1,-1,6,-1,-1],
+      "split_indices":[33,9,0,0,9,0,0],"split_conditions":[2.5,0.9,-5,-5,0.98,3,1],
+      "default_left":[0,0,0,0,0,0,0],"categories_nodes":[]}]}}}})";
+
+  /// A W gate on @p model: every plan-level input present, q0 = 7.
+  WitnessGate stubWitness(const WitnessModel& model, double threshold, bool rank_by_w)
+  {
+    WitnessGate wg;
+    wg.model = &model;
+    wg.threshold = threshold;
+    wg.rank_by_w = rank_by_w;
+    for (int slot : {kWZMs2, kWMassMs2, kWPrecIntensity, kWPrecQscore, kWPrecIsoCos, kWPrecSnr, kWIdScore, kWMs1Plan,
+                     kWMs2MassCount, kWMs2TicCoverage, kWMs2PrecursorShare, kWMs2FragmentCount, kWMs2TagCount, kWMs2Ions,
+                     kWPlanAge, kWRtFrac})
+      wg.ctx.parent[slot] = 1.0;
+    wg.cid3 = 25.0;
+    wg.queue_ahead = 7.0;
+    wg.fragment_proforma = [](const std::string&, int) { return std::string("PEPT"); };
+    return wg;
+  }
+
+  /// The record of @p ion_type @p ion_index in @p wg, or null.
+  const WitnessRecord* recordOf(const WitnessGate& wg, const std::string& ion_type, int ion_index)
+  {
+    for (const WitnessRecord& r : wg.records)
+      if (r.ion_type == ion_type && r.ion_index == ion_index) return &r;
+    return nullptr;
+  }
+}
+
 START_TEST(ProteoformTracker_Trajectory, "$Id$")
 
 /////////////////////////////////////////////////////////////
@@ -1614,6 +1652,137 @@ START_SECTION(interleaved_keeps_a_fragments_charges_together)
   ABORT_IF(ionsText(ranked) != "y6 y6 y5 b3 b3")
   TEST_EQUAL(keysOf(ranked) == keysOf(interleaved), true)
   TEST_STRING_EQUAL(ionsText(interleaved), "y6 y6 b3 b3 y5")
+}
+END_SECTION
+
+// ADR-0076 T1. The W walk scores each candidate at the plan's running rank (MS3 admitted so far + 1) and q0: the
+// strongest fragment (low isotope cosine) is refused at rank 1 and takes no rank, so the next two are admitted at ranks 1
+// and 2, and the fourth, at rank 3, is refused by the tree's rank split. Every record carries q0.
+// FAILS UNDER: a refusal that advances the rank (the third would be scored at rank 3 and refused), or a rank fixed in
+// the ungated order (the second would be scored at rank 2).
+START_SECTION(w_walk_ranks_by_admitted)
+{
+  const ScanCommand ctx = yieldCtx();
+  std::vector<std::pair<std::string, int>> order;
+  {
+    Config cfg{gateConfig("fragments", 10)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    feedGateWinner(tracker, 160, withIsoCos(FOUR_FRAGS, {}, 0.99));
+    for (const Ms3Target& t : tracker.planNextScans(160)) order.emplace_back(t.ion_type, t.ion_index);
+  }
+  ABORT_IF(order.size() != 4)
+
+  Config cfg{gateConfig("fragments", 3)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedGateWinner(tracker, 160, withIsoCos(FOUR_FRAGS, {order[0]}, 0.85));
+  const WitnessModel model = WitnessModel::parse(kStubTree, "stub");
+  YieldGateConfig yg;
+  yg.model = YieldModel::W;
+  yg.rank_by = YieldRank::Intensity;
+  yg.threshold = 0.5;
+  Ms3PlanGate gate = yieldGate(yg, ctx);
+  WitnessGate wg = stubWitness(model, 0.5, false);
+  gate.witness = &wg;
+  const std::vector<Ms3Target> plan = tracker.planNextScans(160, &gate);
+
+  TEST_EQUAL(plan.size(), 2)
+  TEST_EQUAL(planHas(plan, order[1].first, order[1].second), true)
+  TEST_EQUAL(planHas(plan, order[2].first, order[2].second), true)
+  TEST_EQUAL(planHas(plan, order[0].first, order[0].second), false)
+  TEST_EQUAL(planHas(plan, order[3].first, order[3].second), false)
+  TEST_EQUAL(wg.admitted, 2)
+  const WitnessRecord* r0 = recordOf(wg, order[0].first, order[0].second);
+  const WitnessRecord* r1 = recordOf(wg, order[1].first, order[1].second);
+  const WitnessRecord* r2 = recordOf(wg, order[2].first, order[2].second);
+  const WitnessRecord* r3 = recordOf(wg, order[3].first, order[3].second);
+  ABORT_IF(r0 == nullptr || r1 == nullptr || r2 == nullptr || r3 == nullptr)
+  TEST_EQUAL(r0->verdict, "refused")
+  TEST_EQUAL(r0->raw[kWRank], 1.0)
+  TEST_EQUAL(r1->verdict, "admitted")
+  TEST_EQUAL(r1->raw[kWRank], 1.0)
+  TEST_EQUAL(r2->verdict, "admitted")
+  TEST_EQUAL(r2->raw[kWRank], 2.0)
+  TEST_EQUAL(r3->verdict, "refused")
+  TEST_EQUAL(r3->raw[kWRank], 3.0)
+  for (const WitnessRecord& r : wg.records) TEST_EQUAL(r.raw[kWQueueAhead], 7.0)
+  // The plan's targets carry the record they were admitted at.
+  for (const Ms3Target& t : plan)
+  {
+    TEST_EQUAL(t.witness != nullptr, true)
+    if (t.witness) TEST_EQUAL(t.witness->w > 0.5, true)
+  }
+}
+END_SECTION
+
+// ADR-0076 T2. rank_by intensity walks strongest first and W only admits; rank_by yield walks greedily by W. The two
+// weakest fragments score the higher W (isotope cosine 0.97): budget 2 takes the two strongest by intensity, the two
+// weakest by W, in that order.
+// FAILS UNDER: rank_by yield ignored under model w, or the greedy order not used for the walk.
+START_SECTION(w_intensity_walk_keeps_order)
+{
+  const ScanCommand ctx = yieldCtx();
+  std::vector<std::pair<std::string, int>> order;
+  {
+    Config cfg{gateConfig("fragments", 10)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    feedGateWinner(tracker, 161, withIsoCos(FOUR_FRAGS, {}, 0.99));
+    for (const Ms3Target& t : tracker.planNextScans(161)) order.emplace_back(t.ion_type, t.ion_index);
+  }
+  ABORT_IF(order.size() != 4)
+  const WitnessModel model = WitnessModel::parse(kStubTree, "stub");
+  const std::vector<GateFrag> frags = withIsoCos(FOUR_FRAGS, {order[2], order[3]}, 0.97);
+  for (const bool by_w : {false, true})
+  {
+    Config cfg{gateConfig("fragments", 2)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    feedGateWinner(tracker, 161, frags);
+    YieldGateConfig yg;
+    yg.model = YieldModel::W;
+    yg.rank_by = by_w ? YieldRank::Yield : YieldRank::Intensity;
+    yg.threshold = 0.5;
+    Ms3PlanGate gate = yieldGate(yg, ctx);
+    WitnessGate wg = stubWitness(model, 0.5, by_w);
+    gate.witness = &wg;
+    const std::vector<Ms3Target> plan = tracker.planNextScans(161, &gate);
+    ABORT_IF(plan.size() != 2)
+    const size_t a = by_w ? 2 : 0;
+    TEST_EQUAL(plan[0].ion_type + std::to_string(plan[0].ion_index), order[a].first + std::to_string(order[a].second))
+    TEST_EQUAL(plan[1].ion_type + std::to_string(plan[1].ion_index),
+               order[a + 1].first + std::to_string(order[a + 1].second))
+  }
+}
+END_SECTION
+
+// ADR-0076 T3. Under separate every admitted charge is its own MS3 and takes the next rank: one fragment at two charges
+// is scored at ranks 1 and 2, both admitted, and the plan's rank is 2.
+// FAILS UNDER: one rank per fragment (both charges at rank 1).
+START_SECTION(w_separate_charges_take_ranks)
+{
+  const ScanCommand ctx = yieldCtx();
+  const std::vector<GateFrag> one{{"b", 5, 550.0, {2, 3}, 0.99}};
+  Config cfg{gateConfig("fragments", 1, "separate")};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedGateWinner(tracker, 162, one);
+  const WitnessModel model = WitnessModel::parse(kStubTree, "stub");
+  YieldGateConfig yg;
+  yg.model = YieldModel::W;
+  yg.rank_by = YieldRank::Intensity;
+  yg.threshold = 0.5;
+  Ms3PlanGate gate = yieldGate(yg, ctx);
+  WitnessGate wg = stubWitness(model, 0.5, false);
+  gate.witness = &wg;
+  const std::vector<Ms3Target> plan = tracker.planNextScans(162, &gate);
+  TEST_EQUAL(plan.size(), 2)
+  ABORT_IF(wg.records.size() != 2)
+  TEST_EQUAL(wg.records[0].raw[kWRank], 1.0)
+  TEST_EQUAL(wg.records[1].raw[kWRank], 2.0)
+  TEST_EQUAL(wg.records[0].charge != wg.records[1].charge, true)
+  TEST_EQUAL(wg.admitted, 2)
 }
 END_SECTION
 
