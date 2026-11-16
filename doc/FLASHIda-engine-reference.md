@@ -1406,6 +1406,18 @@ anchor plus `admissibleNotches` of the species' candidates, restricted to the au
 names one. A charge acquired on an earlier survey still counts. `max_charge_states` does not cap this
 count. It is computed only when `min_charge_states > 1`.
 
+**An MS2 window's width has one definition** (ADR-0077): `ms2IsolationWidth(lo, hi, max_width)` in
+`NotchSelection.h`, the measured span plus `optimal_window_margin_` per side, at most
+`precursor_selection.max_isolation_width` Th (`0` = no cap, the default), around the span's own centre.
+`applyIsolation_` (the anchor of `buildMS2` and `reisolate`) and `peakGroupNotchCandidates` (the notches,
+and the purity a charge is ranked by) compute it; `AnchorContext` and `AdmissionContext` carry the value
+into admission, and `PrecursorSelection` fills both. The selector's trigger windows go through
+`capTriggerWindow`, and an exploration MS2's `group.isolation_width` through `capMs2IsolationWidth`, each
+leaving an uncapped window's arithmetic exactly as it was. An MS3's stage 0 and its notches are a copy of the
+parent MS2's, so they carry its cap; stage 1 (the fragment window) is never capped. The contexts default to
+`0`, so a synthetic test context is uncapped; a new production context that forgets the field ranks on a
+window wider than the one commanded, and only under a configured cap.
+
 **The charge floor bounds every charge of a set, not only its anchor.** `selectNotches` takes it as a
 required argument (`min_charge`, after `snr_threshold`), so a caller cannot leave it out:
 `acquisitionChargeSet` and the `buildMS2` fallback pass level 1's (`min_precursor_charge`), the two

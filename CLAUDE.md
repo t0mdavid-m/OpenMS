@@ -251,6 +251,10 @@ keep reading pre-2026-09 run folders. The FLASHDeconv side is inside the boundar
   `ScanCommandQueue.cpp`, ADR-0072): the instrument applies `MaxIT` to each fill. Assign it after the
   stage-0 notches are written, from the scan config, never from another command; a builder that rewrites a
   copied command's notches reassigns it (`reisolate`). Stage-1 notches never divide.
+- **An MS2 window's width is `ms2IsolationWidth`** (`NotchSelection.h`, ADR-0077): the span plus
+  `optimal_window_margin_` per side, at most `precursor_selection.max_isolation_width` (0 = no cap), centre kept.
+  The anchor, `peakGroupNotchCandidates` (via the admission contexts' `max_isolation_width`), the trigger windows
+  and an exploration MS2 read it; an MS3's stage 0 is capped through the copy `buildMS3` takes. Stage 1 is not.
 - An inclusion row's authored charge set restricts, never extends, and re-keys exclusion to
   `(nominal mass, charge)` for those species only (ADR-0028).
 - MS3 needs the fragment's whole envelope (`PeakRecord::by_charge`).
