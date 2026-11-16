@@ -45,14 +45,16 @@ namespace OpenMS
       os << one.str();
     }
 
-    // Which raw slots the line writes once per plan, and which per candidate.
+    // Which raw slots the line writes once per line, and which per candidate. A slot is a parent's only if every record
+    // of a line holds the same value: queue_ahead differs per entry at a re-score, and cid3 and queue_ahead between a
+    // plan's Q MS3 and its characterization MS3, which share the line.
     const int kParentSlots[] = {kWZMs2,         kWMassMs2,        kWPrecIntensity,      kWPrecQscore,      kWPrecIsoCos,
                                 kWPrecSnr,      kWIdScore,        kWMs1Plan,            kWMs2MassCount,    kWMs2TicCoverage,
-                                kWMs2PrecursorShare, kWMs2FragmentCount, kWMs2TagCount, kWMs2Ions,         kWQueueAhead,
-                                kWPlanAge,      kWRtFrac,         kWCid3};
-    const int kCandidateSlots[] = {kWRank,      kWCe1,        kWIntensity, kWIsoCos,    kWQscore,      kWSnr,
-                                   kWChargeSnr, kWChargeCos,  kWChargeScore, kWPpmError, kWMassMs3,     kWHasShift,
-                                   kWNMs2Prior, kWNMs3Prior};
+                                kWMs2PrecursorShare, kWMs2FragmentCount, kWMs2TagCount, kWMs2Ions,
+                                kWPlanAge,      kWRtFrac};
+    const int kCandidateSlots[] = {kWRank,      kWQueueAhead, kWCe1,       kWCid3,      kWIntensity,   kWIsoCos,
+                                   kWQscore,    kWSnr,        kWChargeSnr, kWChargeCos, kWChargeScore, kWPpmError,
+                                   kWMassMs3,   kWHasShift,   kWNMs2Prior, kWNMs3Prior};
   } // namespace
 
   double asLoggedSig6(double v)
