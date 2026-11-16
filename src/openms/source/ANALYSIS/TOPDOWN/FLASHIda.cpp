@@ -50,6 +50,7 @@
 #include <climits>
 #include <cmath>
 #include <cstring>   // std::strncpy, a Window scan's parent_scan_id (ADR-0071)
+#include <deque>
 #include <functional>
 #include <iomanip>
 #include <iostream>
@@ -452,7 +453,7 @@ FLASHIda::FLASHIda(char* arg) :
     selection_.applyStamps(queue_.takeCommitted());
     selection_.applyStamps(survey_level_stamps_);
 
-    int n = selection_.filterAndRank(mzs, ints, length, rt, 1, faims_cv);
+    int n = selection_.filterAndRank(mzs, ints, length, rt, 1, faims_cv, parent_ctx.orbitrap_resolution);   // ADR-0078: the charge check's R
     // filterAndRank writes this survey's decisions in place, because admission reads them back within the
     // survey; undo them now that it is done. They live on as the journal: per species in that species' plan
     // unit (applied when the drain commits it), the survey-level rest held for the next survey's fold.
@@ -474,8 +475,8 @@ FLASHIda::FLASHIda(char* arg) :
     // order of first appearance and keep their commands in build order, which is the order they are queued in.
     std::vector<PlanUnit> units;
     std::map<int, size_t> unit_index_by_nominal;
-    auto unitFor = [&](const PeakGroup& pg, UnitRole role) -> PlanUnit& {
-      const int nominal = SpectralDeconvolution::getNominalMass(pg.getMonoMass());
+    auto unitFor = [&](int nominal, UnitRole role) -> PlanUnit& {
+      // The species key: selection's (PrecursorSelection::triggerNominal), the relabelled mass of a remeasured trigger.
       auto it = unit_index_by_nominal.find(nominal);
       if (it == unit_index_by_nominal.end())
       {
@@ -494,6 +495,30 @@ FLASHIda::FLASHIda(char* arg) :
       return units[it->second];
     };
 
+    // ADR-0078: trigger i's charge-check record (empty with the check off), and the record of a command no survey
+    // checked -- a re-planned remainder or a bought R -- under the check (NotChecked) and without it (empty).
+    auto checkOf = [&](int i) -> std::optional<ChargeCheck::Record> {
+      return i < (int)selection_.triggerChargeChecks().size() ? selection_.triggerChargeChecks()[i]
+                                                              : std::optional<ChargeCheck::Record>();
+    };
+    const std::optional<ChargeCheck::Record> not_checked =
+        config_.targeting().charge_check ? std::optional<ChargeCheck::Record>(ChargeCheck::Record{}) : std::optional<ChargeCheck::Record>();
+    // The source ida.log's ChargeRange reads for trigger i: its PeakGroup, or for a remeasured trigger a copy whose charge
+    // range is scaled by the measured over the anchor charge -- the PeakGroup's own range is in the charge space the check
+    // refuted. Copies live in a deque so the pointers ms2_sources keeps stay valid to writeIDALogEntry.
+    std::deque<PeakGroup> remeasured_sources;
+    auto sourceOf = [&](int i) -> const PeakGroup& {
+      const auto& rl = selection_.triggerRelabels();
+      const std::optional<ChargeCheck::Record> rec = checkOf(i);
+      if (i >= (int)rl.size() || !rl[i].has_value() || !rec || rec->checked_charge <= 0) return selected[i];
+      PeakGroup scaled = selected[i];
+      auto [lo, hi] = scaled.getAbsChargeRange();
+      const double f = static_cast<double>(rec->z_meas) / rec->checked_charge;
+      scaled.setAbsChargeRange(static_cast<int>(std::lround(lo * f)), static_cast<int>(std::lround(hi * f)));
+      remeasured_sources.push_back(scaled);
+      return remeasured_sources.back();
+    };
+
     // Shared MS2 planning: stamp the precursor_id, measure the window's purity on this survey, and put the
     // command in its species' unit and in the IDA-log record.
     // The precursor_id is stamped BEFORE replacePlan inserts the command: replacePlan releases queue_mutex_
@@ -503,7 +528,8 @@ FLASHIda::FLASHIda(char* arg) :
     // looking the mass back up in the deconvolved spectrum -- several PeakGroups routinely share
     // one mass in a survey (ADR-0036) and each carries a different charge subset, so a lookup
     // would pick one of them arbitrarily. See ADR-0035 decision 6.
-    auto plan_ms2_command = [&](PlanUnit& unit, const ScanCommand& c, int precursor_id, const PeakGroup& src)
+    auto plan_ms2_command = [&](PlanUnit& unit, const ScanCommand& c, int precursor_id, const PeakGroup& src,
+                                const std::optional<ChargeCheck::Record>& check)
     {
       setPrecursorForTracking_(c.scan_id, precursor_id);
       double purity = -1.0;
@@ -515,6 +541,7 @@ FLASHIda::FLASHIda(char* arg) :
       }
       unit.commands.push_back(c);
       unit.purity.push_back(purity);
+      unit.charge_check.push_back(check);
       ms2_commands.push_back(c);
       ms2_sources.push_back(&src);
     };
@@ -539,10 +566,10 @@ FLASHIda::FLASHIda(char* arg) :
         // An empty initiate returns before it mints a group (Exploration.cpp), so lastGroupId() would name the
         // previous one: only a sweep that produced commands owns a group.
         if (cmds.empty()) continue;
-        PlanUnit& unit = unitFor(selected[i], UnitRole::Sweep);
+        PlanUnit& unit = unitFor(selection_.triggerNominal(i), UnitRole::Sweep);
         unit.sweep_group_ids.push_back(exploration_.lastGroupId());
         for (const auto& c : cmds)
-          plan_ms2_command(unit, c, precursor_id, selected[i]);
+          plan_ms2_command(unit, c, precursor_id, selected[i], checkOf(i));
       }
     }
     else
@@ -576,21 +603,25 @@ FLASHIda::FLASHIda(char* arg) :
           // MS2 inherits the parent MS1's *processing* CV (the faims_cv arg), NOT parent_ctx.faims_cv:
           // in a FAIMS-skip run the MS1 command's stored CV differs from the CV it was processed at.
           cmd.faims_cv = faims_cv;
+          // ADR-0078: a remeasured trigger was built at its geometry charge (the window its PeakGroup resolved) and is
+          // acquired at the charge the charge check measured, its mass re-read there.
+          if (i < (int)selection_.triggerRelabels().size() && selection_.triggerRelabels()[i].has_value())
+            ScanCommandQueue::relabelMS2(cmd, selection_.triggerRelabels()[i]->mass, selection_.triggerRelabels()[i]->charge, marker);
           if (cmd.num_stages > 0)
           {
             const double half = cmd.stages[0].isolation_width / 2.0;
             cmd.window_snr = FragmentAnalysis::windowSnr(raw_ms1, cmd.stages[0].precursor_mz - half,
                                                          cmd.stages[0].precursor_mz + half, cmd.precursor_intensity);
           }
-          PlanUnit& unit = unitFor(selected[i], quant_owns_primary ? UnitRole::Quant : UnitRole::Plain);
-          plan_ms2_command(unit, cmd, precursor_id, selected[i]);
+          PlanUnit& unit = unitFor(selection_.triggerNominal(i), quant_owns_primary ? UnitRole::Quant : UnitRole::Plain);
+          plan_ms2_command(unit, cmd, precursor_id, sourceOf(i), checkOf(i));
 
           // Register the 'Q' with its species' group. addMember indexes on cmd.scan_id and reads the
           // window_snr/intensity set above -- both final here. It runs before replacePlan inserts the
           // command, so a unit the swap reconciles away has its group closed again below.
           if (marker == 'Q')
           {
-            const int nominal = SpectralDeconvolution::getNominalMass(selected[i].getMonoMass());
+            const int nominal = selection_.triggerNominal(i);
             auto git = quant_group_by_nominal.find(nominal);
             if (git == quant_group_by_nominal.end())
             {
@@ -662,7 +693,7 @@ FLASHIda::FLASHIda(char* arg) :
               cmd.window_snr = FragmentAnalysis::windowSnr(raw_ms1, cmd.stages[0].precursor_mz - half,
                                                            cmd.stages[0].precursor_mz + half, cmd.precursor_intensity);
             }
-            plan_ms2_command(rem, cmd, precursor_id, *pg);
+            plan_ms2_command(rem, cmd, precursor_id, *pg, not_checked);   // ADR-0078: a re-plan is never checked
           }
         }
         replace_remainder_of.push_back(old.unit_id);
@@ -690,7 +721,8 @@ FLASHIda::FLASHIda(char* arg) :
         const double hi = rewritten.stages[0].precursor_mz + half;
         rewritten.window_snr = FragmentAnalysis::windowSnr(raw_ms1, lo, hi, rewritten.precursor_intensity);
         adjust.push_back({r.scan_id, rewritten, parent_tracking_id,
-                          FragmentAnalysis::windowPurity(raw_ms1, lo, hi, rewritten.precursor_intensity)});
+                          FragmentAnalysis::windowPurity(raw_ms1, lo, hi, rewritten.precursor_intensity),
+                          config_.targeting().charge_check ? std::optional<ChargeCheck::Record>(ChargeCheck::Record{}) : std::optional<ChargeCheck::Record>()});   // ADR-0078: a re-plan is never checked
       }
     }
 

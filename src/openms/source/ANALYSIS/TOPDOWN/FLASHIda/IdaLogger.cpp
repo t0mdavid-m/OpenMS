@@ -133,6 +133,12 @@ namespace OpenMS
                              // instrument method's own maximum applies), a real value, as in first_mass. Same gap
                              // as above, for the same reason.
                              << "max_it\t"
+                             // ADR-0078: the charge check of the commanded precursor -- its status, the measured charge, the
+                             // spacing as a continuous charge, the comb score, the resolvability at the anchor charge, and the
+                             // anchor charge and mono mass selection first had (before a swap or a remeasure). Empty with the
+                             // check off and on every row no survey decided. Same gap as above, for the same reason.
+                             << "charge_check_status\tcharge_check_z\tcharge_check_z_cont\tcharge_check_score\t"
+                             << "charge_check_resolvability\tchecked_charge\tchecked_mass\t"
                              << "enqueue_ts\n";
         commands_tsv_stream_.flush();
       }
@@ -540,6 +546,25 @@ namespace OpenMS
       decision_survey = ScanCommandQueue::encode(decision->decision_survey_id);
       if (decision->isolation_purity >= 0.0) { isolation_purity = mz(decision->isolation_purity); }
     }
+    // ADR-0078: the charge check's record, the values selection decided on. Every cell empty with the check off (no record)
+    // and on every row no survey decided; a re-planned command's record is not_checked with the rest empty. Each value sets
+    // its own precision (a local stream, as mz() above): masses 4 decimals, the measurement 3.
+    std::string cc_status, cc_z, cc_z_cont, cc_score, cc_res, cc_checked_z, cc_checked_mass;
+    if (decision != nullptr && decision->charge_check.has_value())
+    {
+      const ChargeCheck::Record& r = *decision->charge_check;
+      auto d3 = [](double v) { std::ostringstream os; os << std::fixed << std::setprecision(3) << v; return os.str(); };
+      cc_status = ChargeCheck::toString(r.status);
+      if (r.status != ChargeCheck::Status::NotChecked)
+      {
+        cc_z = std::to_string(r.z_meas);
+        cc_z_cont = d3(r.z_cont);
+        cc_score = d3(r.score);
+        cc_res = d3(r.resolvability);
+        cc_checked_z = std::to_string(r.checked_charge);
+        cc_checked_mass = mz(r.checked_mass);
+      }
+    }
     // Every cell that carries a tracking id goes through quoteLogCell (LogCell.h): ids 8,836 to 17,671
     // begin with '"', which CSV-style readers take as an opening quote. A no-op for every other cell.
     commands_tsv_stream_ << quoteLogCell(id_str) << "\t"
@@ -580,6 +605,13 @@ namespace OpenMS
                          << predicted_bond_yield << "\t"  // ADR-0069: E the yield gate admitted it at, else -1
                          << witness_probability << "\t"   // ADR-0076: W the W gate last decided it at, else -1
                          << mz(cmd.max_it) << "\t"        // ADR-0072: the value sent (a multiplexed scan's share); 0 = unset
+                         << cc_status << "\t"             // ADR-0078: the charge check, empty when it is off
+                         << cc_z << "\t"
+                         << cc_z_cont << "\t"
+                         << cc_score << "\t"
+                         << cc_res << "\t"
+                         << cc_checked_z << "\t"
+                         << cc_checked_mass << "\t"
                          << cmd.enqueue_timestamp_ms << "\n";
     commands_tsv_stream_.flush();
   }

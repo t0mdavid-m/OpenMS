@@ -84,6 +84,20 @@ namespace OpenMS
       double resolvability = 0.0; ///< (1.00235 / z_cmd) / FWHM at the commanded m/z
     };
 
+    /// What one command's check decided, carried from selection to its scan_commands.tsv row (the decision record, like
+    /// isolation_purity). checked_charge / checked_mass are the candidate as selection first had it: the anchor charge and
+    /// mono mass before a swap or a remeasure, the command's own otherwise.
+    struct Record
+    {
+      Status status = Status::NotChecked;
+      int z_meas = 0;
+      double z_cont = 0.0;
+      double score = 0.0;
+      double resolvability = 0.0;
+      int checked_charge = 0;
+      double checked_mass = 0.0;
+    };
+
     /// The averagine isotope spacing the comb uses (Da): the prototype's, which the replay fixtures pin.
     constexpr double ISO_SPACING = 1.00235;
 

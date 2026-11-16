@@ -8,9 +8,11 @@
 
 #pragma once
 
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ChargeCheck.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 
 #include <map>
+#include <optional>
 #include <vector>
 
 namespace OpenMS
@@ -80,6 +82,8 @@ namespace OpenMS
     bool separate = false;            ///< precursor_charges == separate (remainder may be re-planned)
     std::vector<ScanCommand> commands; ///< the unit's MS2s / sweep variants, in push order
     std::vector<double> purity;        ///< index-parallel to commands: windowPurity on the decision survey
+    /// index-parallel to commands: what the charge check decided on the decision survey (ADR-0078); empty = check off
+    std::vector<std::optional<ChargeCheck::Record>> charge_check;
     std::vector<int> quant_group_ids;  ///< Quantification groups to close if dropped
     std::vector<int> sweep_group_ids;  ///< Exploration groups to drop if dropped
     SpeciesStamps stamps;

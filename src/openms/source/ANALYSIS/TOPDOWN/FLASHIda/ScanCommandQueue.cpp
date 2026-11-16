@@ -302,6 +302,13 @@ namespace OpenMS
     std::snprintf(cmd.scan_description, 16, "%s%c%s@%d", id_str.c_str(), marker, mass_tok.c_str(), charge);
   }
 
+  void ScanCommandQueue::relabelMS2(ScanCommand& cmd, double mono_mass, int charge, char marker)
+  {
+    if (cmd.num_stages > 0) cmd.stages[0].charge_state = charge;
+    cmd.mono_mass = mono_mass;
+    writeMs2Description_(cmd, encode(cmd.scan_id), marker, mono_mass, charge);
+  }
+
   ScanCommand ScanCommandQueue::reisolate(const ScanCommand& r, const std::vector<std::pair<int, const PeakGroup*>>& picks,
                                           double max_width, char marker)
   {
@@ -1358,6 +1365,7 @@ namespace OpenMS
         PlanUnit unsent = unit;
         unsent.commands.clear();
         unsent.purity.clear();
+        unsent.charge_check.clear();
         std::vector<int> already_sent; // a charge sent at the swap is never sent twice
         for (size_t k = 0; k < unit.commands.size(); ++k)
         {
@@ -1370,6 +1378,7 @@ namespace OpenMS
           }
           unsent.commands.push_back(cmd);
           unsent.purity.push_back(k < unit.purity.size() ? unit.purity[k] : -1.0);
+          unsent.charge_check.push_back(k < unit.charge_check.size() ? unit.charge_check[k] : std::optional<ChargeCheck::Record>());
         }
         if (unsent.commands.empty())
         {
@@ -1384,7 +1393,8 @@ namespace OpenMS
       for (size_t k = 0; k < unit.commands.size(); ++k)
       {
         const ScanCommand& cmd = unit.commands[k];
-        decision_info_[cmd.scan_id] = DecisionInfo{unit.decision_survey_id, k < unit.purity.size() ? unit.purity[k] : -1.0};
+        decision_info_[cmd.scan_id] = DecisionInfo{unit.decision_survey_id, k < unit.purity.size() ? unit.purity[k] : -1.0,
+                                                  k < unit.charge_check.size() ? unit.charge_check[k] : std::optional<ChargeCheck::Record>()};
         push_(cmd);
         unit_of_[cmd.scan_id] = unit.unit_id;
       }
@@ -1409,7 +1419,7 @@ namespace OpenMS
         syncEnergyMirrors_(cmd);
         cmd.enqueue_timestamp_ms = now_ms;
         *it = cmd;
-        decision_info_[a.scan_id] = DecisionInfo{a.decision_survey_id, a.isolation_purity};
+        decision_info_[a.scan_id] = DecisionInfo{a.decision_survey_id, a.isolation_purity, a.charge_check};
         ++r.adjusted;
         break;
       }
@@ -1422,7 +1432,10 @@ namespace OpenMS
     if (covered_charges.empty()) return; // nothing it may move to: it goes out as bought
     std::lock_guard<std::mutex> lock(queue_mutex_);
     adjustable_[scan_id] = AdjustableR{std::move(covered_charges), q_survey_id, nominal_mass};
-    decision_info_[scan_id] = DecisionInfo{q_survey_id, -1.0};
+    decision_info_[scan_id] = DecisionInfo{q_survey_id, -1.0,
+                                          // ADR-0078: a bought R is never checked
+                                          config_.targeting().charge_check ? std::optional<ChargeCheck::Record>(ChargeCheck::Record{})
+                                                                           : std::optional<ChargeCheck::Record>()};
   }
 
   ScanCommandQueue::Waiting ScanCommandQueue::waitingAt(double cv) const
@@ -1435,11 +1448,13 @@ namespace OpenMS
       PlanUnit copy = u;
       copy.commands.clear();
       copy.purity.clear();
+      copy.charge_check.clear();
       for (size_t k = 0; k < u.commands.size(); ++k)
       {
         if (unit_of_.count(u.commands[k].scan_id) == 0) continue; // already sent
         copy.commands.push_back(u.commands[k]);
         copy.purity.push_back(k < u.purity.size() ? u.purity[k] : -1.0);
+        copy.charge_check.push_back(k < u.charge_check.size() ? u.charge_check[k] : std::optional<ChargeCheck::Record>());
       }
       if (!copy.commands.empty()) w.committed_units.push_back(std::move(copy));
     }

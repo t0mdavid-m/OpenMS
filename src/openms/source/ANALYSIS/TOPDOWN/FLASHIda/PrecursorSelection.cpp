@@ -184,11 +184,14 @@ namespace OpenMS
   }
 
   int PrecursorSelection::filterAndRank(const double* mzs, const double* ints, int length,
-                                        double rt, int ms_level, double faims_cv)
+                                        double rt, int ms_level, double faims_cv, double survey_resolution)
   {
     journal_ = SelectionJournal();
     journal_seq_ = 0;
     acq_entry_valid_ = false;
+    // ADR-0078: the resolving power the charge check reads -- the survey command's own, else ms_settings.ms1's.
+    survey_r200_ = survey_resolution > 0.0 ? survey_resolution
+                   : (config_.level(1).scans.empty() ? 0.0 : static_cast<double>(config_.level(1).scans[0].resolution));
     if (ms_level != 1)
     {
       return 0;
@@ -222,6 +225,13 @@ namespace OpenMS
     // per spec deconvolution
     filterPeakGroupsUsingMassExclusion_(ms_level, rt);
     return (int)selected_peak_groups_.size();
+  }
+
+  int PrecursorSelection::triggerNominal(size_t i) const
+  {
+    if (i < trigger_relabels_.size() && trigger_relabels_[i].has_value())
+      return SpectralDeconvolution::getNominalMass(trigger_relabels_[i]->mass);
+    return SpectralDeconvolution::getNominalMass(selected_peak_groups_[i].getMonoMass());
   }
 
   void PrecursorSelection::collectInclusionTargets_(double rt)
@@ -308,6 +318,10 @@ namespace OpenMS
     trigger_ids_.reserve(mass_count);
     trigger_acquisition_sets_.clear();
     trigger_acquisition_sets_.reserve(mass_count);
+    trigger_relabels_.clear();
+    trigger_relabels_.reserve(mass_count);
+    trigger_charge_checks_.clear();
+    trigger_charge_checks_.reserve(mass_count);
 
     selected_peak_groups_.reserve(mass_count);
     // What THIS survey has already done to each species, keyed by nominal mass (ADR-0036).
@@ -322,6 +336,9 @@ namespace OpenMS
     // what was ACQUIRED (which the sibling's own set is reduced by, so the scans partition), and the
     // survey's best score (so a low-scoring sibling cannot lower the bar the next survey faces).
     SurveyLedger survey_ledger;
+    // ADR-0078: the candidates whose [CHARGE-CHECK] line this survey has written, by (nominal mass, anchor charge): a
+    // later pass revisits a candidate and must not log its decision twice.
+    std::set<std::pair<int, int>> charge_check_reported;
 
     std::set<double> current_selected_mzs;    // current selected mzs
     std::set<double> current_selected_masses; // current selected mzs
@@ -480,18 +497,36 @@ namespace OpenMS
           bool has_authored = false;
           const SpeciesSurveyRecord* seen = nullptr;
           AdmissionVerdict verdict;
+          // ADR-0078. The LABEL is what the candidate is acquired as -- charge, mass, every key -- and differs from the
+          // geometry (charge, the PeakGroup's window and envelope) only for a remeasured candidate.
+          int label_charge = 0;
+          bool relabel = false;
+          std::vector<int> label_charges;      // a relabelled candidate's verdict.acquisition_charges, as acquired
+          std::vector<int> dropped_siblings;   // a remeasured `separate` candidate's charges with no integer relabel
+          std::optional<ChargeCheck::Record> check;
+        };
+
+        // ADR-0078: a candidate evaluated at a charge the charge check measured rather than at the one pickAnchor chose.
+        // A swap is another PeakGroup at its own charge (geometry = label); a remeasure is the same PeakGroup's window
+        // acquired at the measured charge and the mass re-read at it (geometry = the anchor, label = the measurement).
+        struct AnchorOverride
+        {
+          int geometry_charge = 0;
+          int label_charge = 0;
+          double label_mass = 0.0;
         };
 
         // What one PeakGroup would be acquired as, decided and not yet written: the anchor, the geometry, the inclusion
         // match and the admission verdict. Pure -- every write to acquisition memory, the journal and the survey ledger
         // is commit's, and the exclusion-pass stamp sits between the two in the loop below. nullopt: the candidate is
-        // skipped before admission (each was a `continue` of the per-PeakGroup body).
-        auto evaluate = [&](const PeakGroup& pg) -> std::optional<Candidate>
+        // skipped before admission (each was a `continue` of the per-PeakGroup body). With @p ov (the charge check's
+        // swap or remeasure), the anchor is forced and every mass key is the override's.
+        auto evaluate = [&](const PeakGroup& pg, const AnchorOverride* ov) -> std::optional<Candidate>
         {
           // The AUTHORED CHARGE SET in force for this species (ADR-0028). Resolved from the mass
           // alone, so it is available BEFORE the anchor is picked -- which it has to be, because
           // under an authored set the anchor is drawn from the set rather than from the envelope.
-          const double mass_pg = pg.getMonoMass();
+          const double mass_pg = ov != nullptr ? ov->label_mass : pg.getMonoMass();
           const double delta_pg = 2 * config_.level(1).tolerance_ppm * mass_pg * 1e-6;
           const int nominal_pg = SpectralDeconvolution::getNominalMass(mass_pg);
           const std::vector<int> authored =
@@ -521,8 +556,29 @@ namespace OpenMS
           anchor_ctx.raw = &deconv_.deconvolvedMS1().getOriginalSpectrum();
           anchor_ctx.max_isolation_width = config_.targeting().max_isolation_width;
 
-          const AnchorChoice anchor = pickAnchor(pg, anchor_ctx);
-          if (anchor.reason != AdmissionReason::Admitted) { return std::nullopt; }
+          AnchorChoice anchor;
+          if (ov == nullptr)
+          {
+            anchor = pickAnchor(pg, anchor_ctx);
+            if (anchor.reason != AdmissionReason::Admitted) { return std::nullopt; }
+          }
+          else
+          {
+            // The forced anchor keeps pickAnchor's guards and drops only its ranking: the window must be one the
+            // PeakGroup resolved, the acquired charge must clear the floor and, under an authored set, be named and
+            // unspent, and the candidate must complete something this survey has not yet acquired of the species.
+            auto [lo, hi] = pg.getMzRange(ov->geometry_charge);
+            if (hi <= lo) { return std::nullopt; }
+            if (anchor_ctx.min_charge > 0 && ov->label_charge < anchor_ctx.min_charge) { return std::nullopt; }
+            if (has_authored
+                && (std::find(authored.begin(), authored.end(), ov->label_charge) == authored.end()
+                    || std::find(spent_charges.begin(), spent_charges.end(), ov->label_charge) != spent_charges.end()))
+              return std::nullopt;
+            if (!CandidateAdmissionDetail::completesSomething(pg, authored, anchor_ctx.min_charge, seen)) { return std::nullopt; }
+            anchor.charge = ov->geometry_charge;
+            anchor.score = anchorScore(pg, ov->geometry_charge);
+            anchor.reason = AdmissionReason::Admitted;
+          }
           // No budget check for the additional charges of THIS species under "separate": the slot was
           // already paid for by the per-PeakGroup guard above, and the mode's contract is the whole
           // SNR-positive envelope. The set is bounded by the observed charge range and the SNR gate.
@@ -551,7 +607,9 @@ namespace OpenMS
           if (config_.level(ms_level).min_charge > 0 && charge < config_.level(ms_level).min_charge)
             return std::nullopt;
 
-          double mass = pg.getMonoMass();
+          double mass = ov != nullptr ? ov->label_mass : pg.getMonoMass();
+          // The charge the candidate is acquired, matched and excluded at: the anchor, unless a remeasure relabels it.
+          const int label_charge = ov != nullptr ? ov->label_charge : charge;
 
           auto [mz1, mz2] = pg.getMzRange(charge);
 
@@ -618,7 +676,7 @@ namespace OpenMS
                     {
                       charges = &it->second;
                       charges_key = it->first;
-                      target_matched = std::find(charges->begin(), charges->end(), charge) != charges->end();
+                      target_matched = std::find(charges->begin(), charges->end(), label_charge) != charges->end();
                     }
                     else target_matched = true; // a mass with no charge list: matched on mass alone
                   }
@@ -726,7 +784,7 @@ namespace OpenMS
           adm_ctx.authored = authored;
           adm_ctx.spent_charges = spent_charges;
           adm_ctx.anchor_spent = selection_phase < selection_phase_end
-                                 && memory_.authored_acquired_rt_map_.count({nominal_mass, charge}) > 0;
+                                 && memory_.authored_acquired_rt_map_.count({nominal_mass, label_charge}) > 0;
           adm_ctx.mass_barred = selection_phase < selection_phase_end
                                 && memory_.tqscore_exceeding_mass_rt_map_.find(nominal_mass) != memory_.tqscore_exceeding_mass_rt_map_.end();
           adm_ctx.mz_barred = selection_phase < selection_phase_end
@@ -749,10 +807,37 @@ namespace OpenMS
           adm_ctx.max_isolation_width = config_.targeting().max_isolation_width;
           adm_ctx.where = "MS2 z=" + std::to_string(charge);
 
-          const AdmissionVerdict verdict = admitCandidate(pg, charge, score, adm_ctx);
+          AdmissionVerdict verdict = admitCandidate(pg, charge, score, adm_ctx);
 
-          return Candidate{&pg, charge, score, mass, mz1, mz2, center_mz, integer_mz,
-                           nominal_mass, charges, charges_key, authored, has_authored, seen, verdict};
+          Candidate out{&pg, charge, score, mass, mz1, mz2, center_mz, integer_mz,
+                        nominal_mass, charges, charges_key, authored, has_authored, seen, verdict};
+          out.label_charge = label_charge;
+          if (ov != nullptr && ov->geometry_charge != ov->label_charge && out.verdict.admit)
+          {
+            // ADR-0078, a remeasure: the set admission took is in the PeakGroup's charge space. Each member c is acquired
+            // at c * z_meas / z_cmd when that is within 0.1 of an integer at or above the floor (the anchor always is:
+            // it maps to z_meas); the rest are dropped. A `separate` set that falls below min_charge_states is refused.
+            std::vector<int> kept;
+            for (int c : out.verdict.acquisition_charges)
+            {
+              const double t = static_cast<double>(c) * ov->label_charge / ov->geometry_charge;
+              const int r = static_cast<int>(std::lround(t));
+              if (std::abs(t - r) > 0.1 || r < 1 || (anchor_ctx.min_charge > 0 && r < anchor_ctx.min_charge))
+              {
+                out.dropped_siblings.push_back(c);
+                continue;
+              }
+              kept.push_back(c);
+              out.label_charges.push_back(r);
+            }
+            out.verdict.acquisition_charges = kept;
+            out.relabel = true;
+            if (kept.empty()) out.verdict.admit = false;
+            if (config_.targeting().precursor_charges == ChargeAcquisitionMode::Separate && !out.verdict.is_sibling
+                && static_cast<int>(kept.size()) < std::max(1, config_.targeting().min_charge_states))
+              out.verdict.admit = false;
+          }
+          return out;
         };
 
         // Acquires an admitted candidate: its stamps, its journal entries, the survey ledger, and one emitted record per
@@ -775,6 +860,13 @@ namespace OpenMS
           const bool has_authored = cand.has_authored;
           const SpeciesSurveyRecord* const seen = cand.seen;
           const AdmissionVerdict& verdict = cand.verdict;
+          // ADR-0078: the charge a member of the set is acquired at -- itself, unless a remeasure relabels it.
+          auto labelOf = [&cand](int c) {
+            if (!cand.relabel) return c;
+            for (size_t k = 0; k < cand.verdict.acquisition_charges.size() && k < cand.label_charges.size(); ++k)
+              if (cand.verdict.acquisition_charges[k] == c) return cand.label_charges[k];
+            return cand.label_charge;
+          };
 
           SpeciesStamps& species_stamps = journal_.species[nominal_mass];
           species_stamps.nominal_mass = nominal_mass;
@@ -899,8 +991,8 @@ namespace OpenMS
             }
             for (int c : acquired_charges)
             {
-              if (std::find(rec.acquired.begin(), rec.acquired.end(), c) == rec.acquired.end())
-                rec.acquired.push_back(c);
+              if (std::find(rec.acquired.begin(), rec.acquired.end(), labelOf(c)) == rec.acquired.end())
+                rec.acquired.push_back(labelOf(c));
             }
           }
 
@@ -923,11 +1015,11 @@ namespace OpenMS
           // log_target_charges "reference": the acquired charge of an ida.log target is used up
           if (config_.targeting().mode == 1 && charges != nullptr)
           {
-            auto it = std::find(charges->begin(), charges->end(), charge);
+            auto it = std::find(charges->begin(), charges->end(), cand.label_charge);
             if (it != charges->end()) {
               charges->erase(it);
               species_stamps.species_level.push_back(
-                  stamp_(MemoryStamp::Kind::LegacyTargetChargeErase, nominal_mass, 0.0, charge, charges_key));
+                  stamp_(MemoryStamp::Kind::LegacyTargetChargeErase, nominal_mass, 0.0, cand.label_charge, charges_key));
             }
           }
 
@@ -968,7 +1060,7 @@ namespace OpenMS
             memory_.id_mass_map_[memory_.window_id_] = nominal_mass;
             memory_.id_mz_map_[memory_.window_id_] = (int)round(e_center_mz);
             memory_.id_qscore_map_[memory_.window_id_] = score;
-            memory_.id_charge_map_[memory_.window_id_] = emit_charge;
+            memory_.id_charge_map_[memory_.window_id_] = labelOf(emit_charge);
             // The set the geometry writer isolates. Under Multiplexed it is carried for EVERY row:
             // buildMS2 writes exactly these notches, so the cap (max_charge_states), the ranking
             // (charge_selection) and a sibling's reduction (ADR-0036) reach the wire as admission
@@ -985,6 +1077,9 @@ namespace OpenMS
 
             selected_peak_groups_.push_back(pg);
             trigger_charges_.push_back(emit_charge);
+            trigger_relabels_.push_back(cand.relabel ? std::optional<Relabel>(Relabel{labelOf(emit_charge), mass})
+                                                      : std::optional<Relabel>());
+            trigger_charge_checks_.push_back(cand.check);
             trigger_scores_.push_back(score);
 
             trigger_left_isolation_mzs_.push_back(e_mz1);
@@ -992,6 +1087,123 @@ namespace OpenMS
             current_selected_masses.insert(pg.getMonoMass());
             current_selected_mzs.insert(e_center_mz);
           }
+        };
+
+        // ADR-0078: the charge check of an admitted candidate, before anything of it is written. Measures the anchor's charge
+        // on the commanded window of this survey; a confident change 1..max_dz away swaps the candidate to the survey's
+        // PeakGroup at the measured charge whose window centre lies in the commanded window (the highest qscore if several),
+        // or, under single / separate with none (no MS2 sweep, no authored charges), remeasures it there. A swap or remeasure
+        // the selection refuses drops the candidate: the slot stays free and nothing of it is written. Anything else keeps the
+        // candidate, its record carried to the scan_commands row.
+        auto checkCharge = [&](Candidate c0) -> std::optional<Candidate>
+        {
+          ChargeCheck::Settings st;
+          st.min_score = config_.targeting().charge_check_min_score;
+          st.max_dz = config_.targeting().charge_check_max_dz;
+          st.min_resolvability = config_.targeting().charge_check_min_resolvability;
+          const ChargeCheck::Measurement m =
+              ChargeCheck::measure(deconv_.deconvolvedMS1().getOriginalSpectrum(), c0.mz1, c0.mz2, c0.center_mz, c0.charge,
+                                   survey_r200_, config_.deconvolution().min_charge, config_.deconvolution().max_charge, st);
+          ChargeCheck::Record rec;
+          rec.status = m.status;
+          rec.z_meas = m.z_meas;
+          rec.z_cont = m.z_cont;
+          rec.score = m.score;
+          rec.resolvability = m.resolvability;
+          rec.checked_charge = c0.charge;
+          rec.checked_mass = c0.mass;
+
+          const bool first = charge_check_reported.insert({c0.nominal_mass, c0.charge}).second;
+          auto say = [&](const char* status, double to_mass, const std::vector<int>& dropped) {
+            if (!first) return;
+            std::ostringstream ev;
+            ev << "[CHARGE-CHECK] rt=" << rt << " status=" << status << " mz=" << std::fixed << std::setprecision(4)
+               << c0.center_mz << " z=" << c0.charge << "->" << m.z_meas << " mass=" << c0.mass;
+            if (to_mass > 0.0) ev << "->" << to_mass;
+            ev << std::setprecision(3) << " score=" << m.score << " res=" << m.resolvability;
+            for (size_t k = 0; k < dropped.size(); ++k) ev << (k == 0 ? " dropped_siblings=" : ",") << dropped[k];
+            EventLine() << ev.str();
+          };
+
+          if (m.status != ChargeCheck::Status::Changed)
+          {
+            if (m.status == ChargeCheck::Status::Inconsistent) say("inconsistent", 0.0, {});
+            c0.check = rec;
+            return c0;
+          }
+
+          const PeakGroup* swap_to = nullptr;
+          for (const auto& other : deconv_.deconvolvedMS1())
+          {
+            if (&other == c0.pg) continue;
+            auto [lo, hi] = other.getMzRange(m.z_meas);
+            if (hi <= lo) continue;
+            const double centre = (lo + hi) / 2.0;
+            if (centre < c0.mz1 || centre > c0.mz2) continue;
+            if (swap_to == nullptr || other.getQscore() > swap_to->getQscore()) swap_to = &other;
+          }
+
+          if (swap_to != nullptr)
+          {
+            // An authored row decides the swap's charge (Q6): the measured charge must be one it names and has not spent.
+            const double mx = swap_to->getMonoMass();
+            const std::vector<int> authored_x = config_.targeting().mode == 1
+                                                    ? authoredChargesFor_(mx, 2 * config_.level(1).tolerance_ppm * mx * 1e-6)
+                                                    : std::vector<int>();
+            if (!authored_x.empty())
+            {
+              const std::vector<int> spent_x = spentAuthoredCharges_(SpectralDeconvolution::getNominalMass(mx));
+              if (std::find(authored_x.begin(), authored_x.end(), m.z_meas) == authored_x.end()
+                  || std::find(spent_x.begin(), spent_x.end(), m.z_meas) != spent_x.end())
+              {
+                rec.status = ChargeCheck::Status::Inconsistent;
+                say("inconsistent", mx, {});
+                c0.check = rec;
+                return c0;
+              }
+            }
+            const AnchorOverride ov{m.z_meas, m.z_meas, mx};
+            std::optional<Candidate> cx = evaluate(*swap_to, &ov);
+            if (!cx || !cx->verdict.admit)
+            {
+              say("swap_refused", mx, {});
+              return std::nullopt;
+            }
+            rec.status = ChargeCheck::Status::Swapped;
+            cx->check = rec;
+            say("swapped", mx, {});
+            return cx;
+          }
+
+          // Nothing to swap to: the remeasure, only where the command is built from this PeakGroup's own windows and no
+          // authored charge set decides the charge (M_out = M_cmd * z_meas / z_cmd, the spec's re-read reduced).
+          const double m_out = c0.mass * m.z_meas / c0.charge;
+          const bool authored_out = config_.targeting().mode == 1
+                                    && !authoredChargesFor_(m_out, 2 * config_.level(1).tolerance_ppm * m_out * 1e-6).empty();
+          if (c0.has_authored || authored_out)
+          {
+            rec.status = ChargeCheck::Status::Inconsistent;
+            say("inconsistent", m_out, {});
+            c0.check = rec;
+            return c0;
+          }
+          if (config_.targeting().precursor_charges == ChargeAcquisitionMode::Multiplexed || config_.hasExploration(2))
+          {
+            rec.status = ChargeCheck::Status::UnverifiedNoSpecies;
+            c0.check = rec;
+            return c0;
+          }
+          const AnchorOverride ov{c0.charge, m.z_meas, m_out};
+          std::optional<Candidate> cr = evaluate(*c0.pg, &ov);
+          if (!cr || !cr->verdict.admit)
+          {
+            say("remeasure_refused", m_out, cr ? cr->dropped_siblings : std::vector<int>());
+            return std::nullopt;
+          }
+          rec.status = ChargeCheck::Status::Remeasured;
+          cr->check = rec;
+          say("remeasured", m_out, cr->dropped_siblings);
+          return cr;
         };
 
         // Iterate over candidates (sorted by qscore)
@@ -1005,8 +1217,14 @@ namespace OpenMS
           // decided by precursor_charges at commit's emit loop, from the PeakGroup's own envelope -- never here. (This was a
           // one-element loop over the anchor ending in an unconditional break, the remains of charge_based_exclusion's
           // multi-charge list, gone since ADR-0021: that list let one proteoform consume a slot per charge.)
-          const std::optional<Candidate> c = evaluate(pg);
+          std::optional<Candidate> c = evaluate(pg, nullptr);
           if (!c) { continue; }
+          // ADR-0078: an admitted candidate's charge is measured before anything of it is written. Off, this is today's path.
+          if (config_.targeting().charge_check && c->verdict.admit)
+          {
+            c = checkCharge(std::move(*c));
+            if (!c) { continue; }
+          }
 
           // Acquisition memory is stamped once exclusion is cleared and BEFORE the qscore ledger
           // can refuse, so a candidate the ledger turns away still refreshes the record that keeps

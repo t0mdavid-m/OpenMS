@@ -67,6 +67,7 @@ namespace OpenMS
     ScanCommand rewritten{};
     int decision_survey_id = 0;
     double isolation_purity = -1.0;
+    std::optional<ChargeCheck::Record> charge_check; ///< ADR-0078: NotChecked when the check is on (a re-plan is never checked)
   };
 
   /// What a survey decided a command on, written when the command is planned and taken by the drain.
@@ -74,6 +75,7 @@ namespace OpenMS
   {
     int decision_survey_id = 0;
     double isolation_purity = -1.0;
+    std::optional<ChargeCheck::Record> charge_check; ///< ADR-0078: the charge check's record; empty = check off
   };
 
   /// What one replacePlan call did. The caller closes / drops the groups AFTER the queue lock is released.
@@ -137,6 +139,11 @@ namespace OpenMS
     /// nothing. Empty @p picks returns @p r unchanged.
     static ScanCommand reisolate(const ScanCommand& r, const std::vector<std::pair<int, const PeakGroup*>>& picks, double max_width,
                                  char marker);
+
+    /// A remeasured MS2 (ADR-0078): @p cmd was built from its PeakGroup at the geometry charge, so its window is the one that
+    /// PeakGroup resolved; it is acquired at @p charge and @p mono_mass, the charge check's measurement. Rewrites stage 0's
+    /// charge, the command's mono mass and the scan_description (same 3-char id, @p marker); nothing else.
+    static void relabelMS2(ScanCommand& cmd, double mono_mass, int charge, char marker);
 
     /// Every charge @p cmd isolates at its precursor stage: the anchor first, then stage 0's notches (multiplexed).
     /// What a dequeue commits, and what a quantification group's Q scans cover for the R it may buy.

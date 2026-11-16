@@ -35,6 +35,7 @@
 #pragma once
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ChargeCheck.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PlanUnit.h>
@@ -43,6 +44,7 @@
 #include <algorithm>
 #include <functional>
 #include <map>
+#include <optional>
 #include <set>
 #include <unordered_map>
 #include <utility>
@@ -107,10 +109,12 @@ namespace OpenMS
      * @param rt retention time in seconds
      * @param ms_level MS level
      * @param faims_cv FAIMS CV value (0.0 if FAIMS not enabled)
+     * @param survey_resolution the survey's resolving power at m/z 200, as its command set it (ADR-0078's charge check
+     *        reads it); 0 = ms_settings.ms1's
      * @return number of selected peak groups
      */
     int filterAndRank(const double* mzs, const double* ints, int length,
-                      double rt, int ms_level, double faims_cv);
+                      double rt, int ms_level, double faims_cv, double survey_resolution = 0.0);
 
     /// Access selected peak groups after filterAndRank (const)
     const DeconvolvedSpectrum& selectedPeakGroups() const { return selected_peak_groups_; }
@@ -144,6 +148,22 @@ namespace OpenMS
     /// and the charge_selection order, which a re-derivation there lost (ADR-0059; the same
     /// divergence ADR-0028 hit for one CI run when only this side was filtered).
     const std::vector<std::vector<int>>& triggerAcquisitionSets() const { return trigger_acquisition_sets_; }
+
+    /// A remeasured trigger's acquired charge and mass (ADR-0078), index-parallel to triggerCharges(); empty otherwise.
+    /// triggerCharges() stays the GEOMETRY charge -- the window is the one the PeakGroup resolved at it -- and the command is
+    /// relabelled after it is built (ScanCommandQueue::relabelMS2).
+    struct Relabel
+    {
+      int charge = 0;
+      double mass = 0.0;
+    };
+    const std::vector<std::optional<Relabel>>& triggerRelabels() const { return trigger_relabels_; }
+
+    /// Per trigger, what the charge check decided (ADR-0078); empty when precursor_selection.charge_check is off.
+    const std::vector<std::optional<ChargeCheck::Record>>& triggerChargeChecks() const { return trigger_charge_checks_; }
+
+    /// The species key of trigger @p i: the nominal mass of its relabelled mass, else of its PeakGroup's.
+    int triggerNominal(size_t i) const;
 
     /// Every acquisition-memory write the last filterAndRank made, as stamps: per admitted species, plus
     /// the survey-level ones no species owns (a candidate that cleared exclusion and was then refused).
@@ -215,6 +235,10 @@ namespace OpenMS
     std::vector<double> trigger_right_isolation_mzs_;
     std::vector<int> trigger_ids_;
     std::vector<std::vector<int>> trigger_acquisition_sets_;
+    std::vector<std::optional<Relabel>> trigger_relabels_;
+    std::vector<std::optional<ChargeCheck::Record>> trigger_charge_checks_;
+    /// The resolving power the current filterAndRank's charge check reads (ADR-0078).
+    double survey_r200_ = 0.0;
 
     /**
      * @brief ACQUISITION MEMORY: everything this class remembers ACROSS surveys.
