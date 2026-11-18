@@ -476,6 +476,7 @@ set(analysis_executables_list
   FLASHIda_ConsoleView_test
   FLASHIda_Ms3YieldModel_test
   FLASHIda_Ms3WitnessModel_test
+  FLASHIda_Ms3WGateV17_test
   FLASHIda_AnnotatorMetrics_test
   FLASHIda_ChanceMatch_test
   FLASHIda_ChargeCheck_test
