@@ -630,7 +630,7 @@ namespace
   }
 
   // ----------------------------------------------------------------------------
-  // JSON config builder writing all five log streams into one folder.  enable_ms3 emits the
+  // JSON config builder writing all six log streams into one folder.  enable_ms3 emits the
   // proven inclusion-pinned cytC MS3 recipe (target_mode=1 + inclusion_cytc.txt + the
   // M-starting proteoform + ms3 stage); callers feed ms1_cytc + ms2_cytc_fresh_scan57.
   //

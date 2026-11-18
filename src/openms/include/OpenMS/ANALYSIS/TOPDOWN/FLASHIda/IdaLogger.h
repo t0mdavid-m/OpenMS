@@ -118,10 +118,10 @@ namespace OpenMS
     static constexpr const char* kPooledIdentificationName = "pooled_identification.tsv";
     /// ADR-0079: the W gate's stream, one row per MS3 candidate a plan considered (sent or not); the sixth stream.
     static constexpr const char* kMs3GateName = "ms3_gate.tsv";
-    /// The event log (ADR-0065), beside the five streams but not one of them: no golden compares it.
+    /// The event log (ADR-0065), beside the six streams but not one of them: no golden compares it.
     static constexpr const char* kEventLogName = "events.log";
 
-    /// Construct from Config: open the five streams (append) under runtime().log_dir and write
+    /// Construct from Config: open the six streams (append) under runtime().log_dir and write
     /// the four TSV headers. Opens nothing when log_dir is empty.
     explicit IdaLogger(const Config& config);
 
@@ -351,7 +351,7 @@ namespace OpenMS
                              const DecisionInfo* decision = nullptr);
 
     /// Write one TSV row for a processScan result (ms_level is logged at scan_results col 1)
-    /// Returns the row's resolve_ts (steady-clock ms; ADR-0076 stamps the W gate's last MS1 with it).
+    /// Returns the row's resolve_ts (EngineClock ms; ADR-0079 stamps the MS1 buffer and the W gate's last MS1 with it).
     uint64_t writeScanResultRow(const ScanRowDescriptor& row);
 
     /// Write one identification.tsv row for an MS2 or MS3 scan with matched fragments
