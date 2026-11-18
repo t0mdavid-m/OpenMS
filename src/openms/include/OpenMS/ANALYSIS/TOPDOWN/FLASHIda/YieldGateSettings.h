@@ -59,5 +59,8 @@ namespace OpenMS
     double threshold = 1.0;
     YieldCoefficients coefficients;
     YieldRank rank_by = YieldRank::Yield;
+    /// ADR-0079, model w only: false = shadow mode -- W is computed, decided and logged (ms3_gate.tsv applied 0), and the
+    /// plan is sent as without the gate.
+    bool apply = true;
   };
 } // namespace OpenMS

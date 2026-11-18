@@ -116,6 +116,8 @@ namespace OpenMS
     static constexpr const char* kScanResultsName = "scan_results.tsv";
     static constexpr const char* kIdentificationName = "identification.tsv";
     static constexpr const char* kPooledIdentificationName = "pooled_identification.tsv";
+    /// ADR-0079: the W gate's stream, one row per MS3 candidate a plan considered (sent or not); the sixth stream.
+    static constexpr const char* kMs3GateName = "ms3_gate.tsv";
     /// The event log (ADR-0065), beside the five streams but not one of them: no golden compares it.
     static constexpr const char* kEventLogName = "events.log";
 
@@ -358,6 +360,9 @@ namespace OpenMS
     /// Write one pooled_identification.tsv row for a ProteoformModel update (trajectory log)
     void writePooledModelRow(const PooledModelDescriptor& r);
 
+    /// ADR-0079: write the ms3_gate.tsv rows of one MS3 plan's W gate, one per record (candidate target x CE variant).
+    void writeMs3GateRows(const WitnessGate& gate);
+
     /**
            @brief parse FLASHIda log file
            @param in_log_file input log file
@@ -386,6 +391,8 @@ namespace OpenMS
     mutable std::mutex identification_tsv_mutex_;
     std::ofstream pooled_stream_;
     mutable std::mutex pooled_mutex_;
+    std::ofstream ms3_gate_stream_;          ///< ADR-0079
+    mutable std::mutex ms3_gate_mutex_;
 
     /// One-shot latch for the "no instrument scan number was supplied" warning. Guarded by
     /// ida_log_mutex_, which writeIDALogEntry already holds. ONE warning per run, deliberately: it

@@ -9,10 +9,9 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms3WitnessGate.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/LogFormat.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
-#include <iomanip>
-#include <sstream>
 
 namespace OpenMS
 {
@@ -20,30 +19,17 @@ namespace OpenMS
   {
     const double kNaN = std::numeric_limits<double>::quiet_NaN();
 
-    // A raw value for the [MS3-W] line: as passed to the trees, enough digits to give it back exactly (the inputs are
-    // at most 6 significant digits or 4 decimals of a mass); "nan" when missing.
-    void put(std::ostringstream& os, double v)
+    /// Where a ProForma string's residues start: after a leading <...> (only when it is closed, as the reference's
+    /// regular expression ^<[^>]*> removes it).
+    size_t afterGlobalMods(const std::string& proforma)
     {
-      if (std::isnan(v))
+      if (!proforma.empty() && proforma[0] == '<')
       {
-        os << "nan";
-        return;
+        const size_t close = proforma.find('>');
+        if (close != std::string::npos) return close + 1;
       }
-      std::ostringstream one;
-      one << std::setprecision(12) << v;
-      os << one.str();
+      return 0;
     }
-
-    // Which raw slots the line writes once per line, and which per candidate. A slot is a parent's only if every record
-    // of a line holds the same value: queue_ahead differs per entry at a re-score, and cid3 and queue_ahead between a
-    // plan's Q MS3 and its characterization MS3, which share the line.
-    const int kParentSlots[] = {kWZMs2,         kWMassMs2,        kWPrecIntensity,      kWPrecQscore,      kWPrecIsoCos,
-                                kWPrecSnr,      kWIdScore,        kWMs1Plan,            kWMs2MassCount,    kWMs2TicCoverage,
-                                kWMs2PrecursorShare, kWMs2FragmentCount, kWMs2TagCount, kWMs2Ions,
-                                kWPlanAge,      kWRtFrac};
-    const int kCandidateSlots[] = {kWRank,      kWQueueAhead, kWCe1,       kWCid3,      kWIntensity,   kWIsoCos,
-                                   kWQscore,    kWSnr,        kWChargeSnr, kWChargeCos, kWChargeScore, kWPpmError,
-                                   kWMassMs3,   kWHasShift,   kWNMs2Prior, kWNMs3Prior};
   } // namespace
 
   double asLoggedSig6(double v)
@@ -60,15 +46,9 @@ namespace OpenMS
 
   std::string proformaLetters(const std::string& proforma)
   {
-    size_t i = 0;
-    if (!proforma.empty() && proforma[0] == '<')
-    {
-      const size_t close = proforma.find('>');
-      i = (close == std::string::npos) ? proforma.size() : close + 1;
-    }
     std::string out;
     int depth = 0;
-    for (; i < proforma.size(); ++i)
+    for (size_t i = afterGlobalMods(proforma); i < proforma.size(); ++i)
     {
       const char c = proforma[i];
       if (c == '[') ++depth;
@@ -78,23 +58,47 @@ namespace OpenMS
     return out;
   }
 
-  bool proformaHasShift(const std::string& proforma)
+  int proformaResidueCount(const std::string& proforma)
   {
-    size_t i = 0;
-    if (!proforma.empty() && proforma[0] == '<')
+    // inputs_from_log_v17.residues: re.sub(r"[^A-Z]", "", re.sub(r"\[[^\]]*\]", "", re.sub(r"^<[^>]*>", "", s)))
+    int n = 0;
+    size_t i = afterGlobalMods(proforma);
+    while (i < proforma.size())
     {
-      const size_t close = proforma.find('>');
-      i = (close == std::string::npos) ? proforma.size() : close + 1;
+      const char c = proforma[i];
+      if (c == '[')
+      {
+        const size_t close = proforma.find(']', i + 1);
+        if (close != std::string::npos)
+        {
+          i = close + 1;
+          continue;
+        }
+      }
+      if (c >= 'A' && c <= 'Z') ++n;
+      ++i;
     }
-    return proforma.find('[', i) != std::string::npos;
+    return n;
   }
 
-  bool witnessPlaced(const std::string& parent_letters, const std::string& fragment_letters, bool n_terminal)
+  bool proformaHasShift(const std::string& proforma) { return proforma.find('[', afterGlobalMods(proforma)) != std::string::npos; }
+
+  double loggedStage(const std::string& cell, int stage)
   {
-    const size_t L = fragment_letters.size();
-    if (L == 0 || L > parent_letters.size()) return false;
-    const size_t off = n_terminal ? 0 : parent_letters.size() - L;
-    return parent_letters.compare(off, L, fragment_letters) == 0;
+    std::vector<std::string> groups;
+    size_t s = 0;
+    while (true)
+    {
+      const size_t semi = cell.find(';', s);
+      groups.push_back(cell.substr(s, semi == std::string::npos ? std::string::npos : semi - s));
+      if (semi == std::string::npos) break;
+      s = semi + 1;
+    }
+    const std::string& g = stage >= 0 ? (static_cast<size_t>(stage) < groups.size() ? groups[static_cast<size_t>(stage)] : groups.back())
+                                      : groups.back();
+    const std::string anchor = g.substr(0, g.find(','));
+    if (anchor.empty()) return kNaN;
+    return parseLogged(anchor);
   }
 
   double witnessMs1Plan(const WitnessLastMs1& ms1, double mono_mass)
@@ -105,100 +109,102 @@ namespace OpenMS
       for (double off : kOffsets)
       {
         const double target = mono_mass + off;
-        if (target > 0 && std::fabs(mass - target) <= 10e-6 * target && intensity > best) best = intensity;
+        // inputs_from_log_v17: abs(mi - (mass + off)) <= 1e-5 * mass -- the tolerance on the precursor mass itself.
+        if (std::fabs(mass - target) <= 1e-5 * mono_mass && intensity > best) best = intensity;
       }
     return best;
   }
 
-  WitnessRecord WitnessGate::score(const std::string& ion_type, int ion_index, int charge, double ce1,
-                                   const FragmentAnalysis::FragmentScores& s1, int rank) const
+  size_t WitnessGate::scoreTarget(const WitnessCandidate& c, int planner_rank)
   {
-    WitnessRecord r;
-    r.ion_type = ion_type;
-    r.ion_index = ion_index;
-    r.charge = std::abs(charge);
-    r.raw = ctx.parent;
-    const char t = ion_type.empty() ? '\0' : static_cast<char>(std::tolower(static_cast<unsigned char>(ion_type[0])));
-    r.raw[kWFragN] = (t == 'a' || t == 'b' || t == 'c') ? 1.0 : ((t == 'x' || t == 'y' || t == 'z') ? 0.0 : kNaN);
-    r.raw[kWZMs3] = r.charge > 0 ? static_cast<double>(r.charge) : kNaN;
-    r.raw[kWCe1] = asLoggedSig6(ce1);
-    r.raw[kWCid3] = asLoggedSig6(cid3);
-    r.raw[kWIntensity] = asLoggedSig6(s1.precursor_intensity);
-    r.raw[kWL] = ion_index > 0 ? static_cast<double>(ion_index) : kNaN;
-    r.raw[kWIsoCos] = asLoggedSig6(s1.iso_cos);
-    r.raw[kWQscore] = asLoggedSig6(s1.qscore);
-    r.raw[kWSnr] = asLoggedSig6(s1.snr);
-    r.raw[kWMassMs3] = asLoggedFixed4(s1.mono_mass);
-    r.raw[kWChargeSnr] = asLoggedSig6(s1.charge_snr);
-    r.raw[kWChargeCos] = asLoggedSig6(s1.charge_cos);
-    r.raw[kWChargeScore] = asLoggedSig6(s1.charge_score);
-    r.raw[kWPpmError] = asLoggedSig6(s1.ppm_error);
-    r.raw[kWQueueAhead] = queue_ahead;
-    r.raw[kWRank] = static_cast<double>(rank);
+    ++candidates;
+    const size_t first = records.size();
+    const std::vector<std::pair<ScanCommand, std::string>> cmds = compose ? compose(c) : std::vector<std::pair<ScanCommand, std::string>>{};
+    const WitnessBonds b = bonds ? bonds(c.ion_type, c.ion_index) : WitnessBonds{};
+    const char t = c.ion_type.empty() ? '\0' : static_cast<char>(std::tolower(static_cast<unsigned char>(c.ion_type[0])));
+    const double frag_n = (t == 'a' || t == 'b' || t == 'c') ? 1.0 : ((t == 'x' || t == 'y' || t == 'z') ? 0.0 : kNaN);
 
-    // has_shift and the placement read the fragment's ProForma string, as scan_commands' ms3_proteoform writes it.
-    const std::string proforma = (fragment_proforma && ion_index > 0) ? fragment_proforma(ion_type, ion_index) : std::string();
-    r.raw[kWHasShift] = proforma.empty() ? kNaN : (proformaHasShift(proforma) ? 1.0 : 0.0);
-    const std::string letters = proformaLetters(proforma);
-    r.placed = ctx.has_key && !letters.empty() && !std::isnan(r.raw[kWFragN])
-               && witnessPlaced(ctx.parent_letters, letters, r.raw[kWFragN] == 1.0);
-    if (r.placed) r.key = ctx.key;
-    // The parent is one of the MS2 identifications under its own key (its row is written after its MS3 are planned).
-    r.raw[kWNMs2Prior] = r.placed ? static_cast<double>(ctx.prior_ms2 + 1) : 1.0;
-    r.raw[kWNMs3Prior] = r.placed ? static_cast<double>(ctx.prior_ms3) : 0.0;
-    r.uncovered = uncovered_bonds ? uncovered_bonds(ion_type, ion_index) : -1;
-
-    const int missing = r.raw.firstMissing();
-    if (missing >= 0 || model == nullptr)
-    {
-      r.verdict = "untested";
-      r.reason = std::string("missing_input=") + (missing >= 0 ? witnessRawName(missing) : "model");
+    auto blank = [&](int variant) {
+      WitnessRecord r;
+      r.candidate = candidates;
+      r.variant = variant;
+      r.planner_rank = planner_rank;
+      r.ion_type = c.ion_type;
+      r.ion_index = c.ion_index;
+      r.bonds = b;
+      r.raw.fill(kNaN);
+      r.x.fill(std::numeric_limits<float>::quiet_NaN());
       return r;
-    }
-    r.w = model->w(r.raw);
-    if (witnessAdmits(r.w, threshold))
-      r.verdict = "admitted";
-    else
+    };
+    if (cmds.empty())
     {
-      r.verdict = "refused";
-      r.reason = "below_threshold";
+      WitnessRecord r = blank(0);
+      r.failed_input = "command";
+      records.push_back(std::move(r));
     }
-    return r;
-  }
+    for (size_t v = 0; v < cmds.size(); ++v)
+    {
+      WitnessRecord r = blank(static_cast<int>(v));
+      r.cmd = cmds[v].first;
+      r.ms3_proteoform = cmds[v].second;
+      const ScanCommandCells cells = scanCommandCells(r.cmd);
+      auto& raw = r.raw;
+      // The candidate's own cells, as its scan_commands.tsv row would print them (inputs_from_log_v17.row_inputs).
+      raw[kW17FragN] = frag_n;
+      raw[kW17ZMs2] = loggedStage(cells.charge, 0);
+      raw[kW17ZMs3] = loggedStage(cells.charge, -1);
+      raw[kW17Ce1] = loggedStage(cells.collision_energy, 0);
+      raw[kW17Cid3] = loggedStage(cells.collision_energy, -1);
+      raw[kW17Intensity] = loggedStage(cells.precursor_intensity, -1);
+      raw[kW17L] = r.ms3_proteoform.empty() ? kNaN : static_cast<double>(proformaResidueCount(r.ms3_proteoform));
+      raw[kW17IsoCos] = loggedStage(cells.iso_cos, -1);
+      raw[kW17Qscore] = loggedStage(cells.qscore, -1);
+      raw[kW17Snr] = loggedStage(cells.snr, -1);
+      raw[kW17HasShift] = r.ms3_proteoform.empty() ? kNaN : (proformaHasShift(r.ms3_proteoform) ? 1.0 : 0.0);
+      raw[kW17MassMs2] = loggedStage(cells.mono_mass, 0);
+      raw[kW17MassMs3] = loggedStage(cells.mono_mass, -1);
+      raw[kW17PrecIntensity] = loggedStage(cells.precursor_intensity, 0);
+      raw[kW17PrecQscore] = loggedStage(cells.qscore, 0);
+      raw[kW17PrecIsoCos] = loggedStage(cells.iso_cos, 0);
+      raw[kW17PrecSnr] = loggedStage(cells.snr, 0);
+      raw[kW17ChargeSnr] = loggedStage(cells.charge_snr, -1);
+      raw[kW17ChargeCos] = loggedStage(cells.charge_cos, -1);
+      raw[kW17ChargeScore] = loggedStage(cells.charge_score, -1);
+      raw[kW17PpmError] = loggedStage(cells.ppm_error, -1);
+      // The parent's rows and the last MS1.
+      raw[kW17IdScore] = ctx.parent.id_score;
+      raw[kW17Ms1Plan] = ctx.x_ms1_plan;
+      raw[kW17Ms2MassCount] = ctx.parent.mass_count;
+      raw[kW17Ms2TicCoverage] = ctx.parent.tic_coverage;
+      raw[kW17Ms2PrecursorShare] = ctx.parent.precursor_share;
+      raw[kW17Ms2FragmentCount] = ctx.parent.fragment_count;
+      raw[kW17Ms2TagCount] = ctx.parent.tag_count;
+      raw[kW17Ms2Ions] = ctx.parent.ms2_ions;
 
-  std::string witnessLine(const WitnessGate& g, const char* stage, const std::string& extra,
-                          const std::vector<WitnessRecord>& records)
-  {
-    if (records.empty()) return std::string();
-    std::ostringstream os;
-    os << "[MS3-W] stage=" << stage << extra << " parent=" << g.ctx.parent_id << " gate=" << g.gate_name
-       << " model=w_ext sha=" << (g.model != nullptr ? g.model->sha8() : std::string("none")) << " threshold=";
-    put(os, g.threshold);
-    os << " walk=" << (g.rank_by_w ? "yield" : "intensity");
-    for (int slot : kParentSlots)
-    {
-      os << ' ' << witnessRawName(slot) << '=';
-      put(os, records.front().raw[slot]);   // the plan-level slots are the same in every record of the plan
-    }
-    os << " candidates=";
-    for (size_t i = 0; i < records.size(); ++i)
-    {
-      const WitnessRecord& r = records[i];
-      if (i > 0) os << ';';
-      os << r.ion_type << r.ion_index << '/' << r.charge << ":w=";
-      if (r.w < 0)
-        os << "-1";
-      else
-        os << std::fixed << std::setprecision(8) << r.w << std::defaultfloat;
-      os << ',' << r.verdict;
-      if (!r.reason.empty()) os << ",reason=" << r.reason;
-      os << ",unc=" << r.uncovered;
-      for (int slot : kCandidateSlots)
+      for (int i = 0; i < kW17RawCount && r.failed_input.empty(); ++i)
+        if (std::isnan(raw[static_cast<size_t>(i)])) r.failed_input = w17RawName(i);
+      r.x = w17ModelInputs(raw, ctx.pk3);
+      if (r.failed_input.empty())
       {
-        os << ',' << witnessRawName(slot) << '=';
-        put(os, r.raw[slot]);
+        if (model == nullptr)
+          r.failed_input = "model";
+        else
+        {
+          r.w = model->w(r.x);
+          if (!std::isfinite(r.w)) r.failed_input = "w";
+        }
       }
+      records.push_back(std::move(r));
     }
-    return os.str();
+    // One verdict per target: its largest W; none when any of its commands failed (SPEC 8).
+    bool failed = false;
+    double tw = -1.0;
+    for (size_t i = first; i < records.size(); ++i)
+    {
+      if (!records[i].failed_input.empty()) failed = true;
+      else tw = std::max(tw, records[i].w);
+    }
+    for (size_t i = first; i < records.size(); ++i) records[i].target_w = failed ? kNaN : tw;
+    return first;
   }
 } // namespace OpenMS

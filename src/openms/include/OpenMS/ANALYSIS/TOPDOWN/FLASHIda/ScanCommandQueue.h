@@ -39,7 +39,6 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms2Params.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms3Registry.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms3WitnessGate.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PlanUnit.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
@@ -448,42 +447,6 @@ namespace OpenMS
     /// Queue size for a given priority level (0-3)
     size_t queueSize(int priority) const;
 
-    // ---- the W gate's re-score (ADR-0076) -------------------------------------------------------------------
-    /// MS3 commands waiting in the queue (any priority), without the still-unsent commands of the proteoform @p exclude
-    /// matches (its governed swap withdraws them before it pushes the new plan); nullptr counts every queued MS3.
-    /// The W gate's q0 (x_queue_ahead).
-    size_t queuedMs3Count(const Ms3ProteoformKey* exclude) const;
-
-    /// Register the queued MS3 @p scan_id, which a W gate admitted, for the re-score at every MS1. Call after the push;
-    /// a command no longer queued is not registered. An entry leaves when its command leaves the queue (it is
-    /// dropped lazily by witnessedQueued).
-    void registerWitnessed(int scan_id, WitnessRegistration reg);
-
-    /// A registered MS3 still queued, as the re-score reads it.
-    struct WitnessedEntry
-    {
-      int scan_id = 0;
-      uint64_t enqueue_ms = 0;
-      size_t queue_ahead = 0;   ///< queued MS3 of other parents enqueued strictly before it (x_queue_ahead now)
-      WitnessRegistration reg;
-    };
-    /// Every registered MS3 still queued (never one already dequeued: a dequeue is a commit, ADR-0060), in scan id
-    /// order. Registrations whose command has left the queue are dropped here.
-    std::vector<WitnessedEntry> witnessedQueued();
-
-    /// What a re-score withdrew.
-    struct WitnessWithdrawal
-    {
-      std::vector<int> scan_ids;          ///< every command withdrawn (forgetTracking_, the MS3 context cache)
-      std::vector<int> sweep_groups;      ///< ungoverned sweep groups withdrawn whole (Exploration::dropGroup)
-      bool governed = false;              ///< a governed item went to the expired inbox: the caller undoes it
-    };
-    /// Apply a re-score in one queue_mutex_ hold: each (scan id, W) of @p keep writes the command's
-    /// witness_probability; each id of @p withdraw leaves the queue with the whole of its group -- the commands of its
-    /// registration group, or of its governed item, which then goes to the expired inbox (takeMs3Expired) as an
-    /// expired one does. A group with a command already dequeued is kept (a started sweep is not undone).
-    WitnessWithdrawal applyWitnessRescore(const std::vector<std::pair<int, double>>& keep, const std::vector<int>& withdraw);
-
   private:
     const Config& config_;
 
@@ -601,7 +564,6 @@ namespace OpenMS
       std::set<std::pair<int, int>> committed_owner_nominals;  ///< (precursor id, nominal) of committed items
     };
     std::map<int, Ms3Entry> ms3_entries_;
-    std::map<int, WitnessRegistration> witnessed_;   ///< ADR-0076: queued W-scored MS3 -> its registration
     std::unordered_map<int, std::pair<int, int>> ms3_item_of_;   ///< queued MS3 scan id -> (entry, item)
     std::vector<Ms3PlanItem> ms3_expired_inbox_;
     std::set<int> ms3_expired_entries_;   ///< the entries the inbox's items came from (their committed nominals at take)

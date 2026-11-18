@@ -216,11 +216,14 @@ namespace OpenMS
     /// MS2 context cache keyed by MS3 tracking ID (for non-exploration identification)
     std::unordered_map<int, Exploration::MS2Context> ms2_context_cache_;
 
-    /// ADR-0076: the W trees, loaded once when a yield gate says `model: w` (null otherwise); the prior counts behind
-    /// n_ms2_prior / n_ms3_prior; the last MS1 whose scan_results row was written. All under analysis_mutex_.
+    /// ADR-0079: the W trees, loaded once when a yield gate says `model: w` (null otherwise); the last MS1 whose
+    /// scan_results row was written; the MS1 buffer of the last 180 s (the gate's only new state); the parent-side values
+    /// each MS2's rows printed, by tracking id (a sweep winner's plan reads its own). All under analysis_mutex_.
     std::unique_ptr<WitnessModel> witness_model_;
-    WitnessPriorCounts witness_counts_;
     WitnessLastMs1 witness_last_ms1_;
+    Ms1Buffer ms1_buffer_;
+    std::unordered_map<std::string, WitnessParentRow> witness_parent_rows_;
+    std::deque<std::string> witness_parent_order_;   ///< insertion order, to bound witness_parent_rows_
 
     /// P5: monotonic, deterministic-per-run, base-10 precursor identity counter. A NEW id is allocated
     /// for each precursor selected at MS1 (allocPrecursorId_); carried by all of that precursor's
@@ -422,25 +425,31 @@ namespace OpenMS
     /// characterization.per_proteoform off. Caller holds analysis_mutex_.
     void undoExpiredMs3_();
 
-    /// ADR-0076: write one scan's scan_results row and identification rows, then keep the W gate's state: an MS2
-    /// identification row counts under its key, an MS1 row becomes the last MS1 and re-scores the queued W-gated MS3.
-    /// Every site that wrote these rows goes through here. Caller holds analysis_mutex_.
-    void writeRows_(const IdaLogger::ScanRowDescriptor& row, const std::vector<IdaLogger::IdRowDescriptor>& id_rows);
+    /// ADR-0079: an MS1 row's centroids and kind, for the W gate's buffer.
+    struct Ms1ForBuffer
+    {
+      const double* mz = nullptr;
+      const double* intensity = nullptr;
+      int length = 0;
+      SurveyKind kind;
+    };
 
-    /// ADR-0076: the parent-level W inputs of an MS2 about to plan its MS3 (null when no W gate is configured).
+    /// Write one scan's scan_results row and identification rows, then keep the W gate's state (ADR-0079): an MS1 row
+    /// becomes the last MS1 and, with @p ms1, enters the MS1 buffer at its resolve_ts; an MS2 row's parent-side values are
+    /// kept by its tracking id. Every site that wrote these rows goes through here. Caller holds analysis_mutex_.
+    void writeRows_(const IdaLogger::ScanRowDescriptor& row, const std::vector<IdaLogger::IdRowDescriptor>& id_rows,
+                    const Ms1ForBuffer* ms1 = nullptr);
+
+    /// ADR-0079: the plan-level W inputs of a regular MS2 about to plan its MS3 (null when no W gate is configured).
     std::unique_ptr<WitnessPlanContext> witnessContext_(const ScanCommand& parent_ctx, const DeconvolvedSpectrum* row_spec,
-                                                        const IdaLogger::ScanRowDescriptor& results_row, double rt,
+                                                        const IdaLogger::ScanRowDescriptor& results_row,
                                                         const std::string& parent_id_str);
-
-    /// ADR-0076: after an MS2's MS3 are pushed -- its one [MS3-W] line (both gates' candidates), and each W-scored
-    /// command still queued registered for the re-score (and, when placed on its parent's stretch, for n_ms3_prior).
-    void witnessAfterPlan_(int precursor_id, const std::shared_ptr<WitnessGate>& characterization,
-                           const std::vector<Exploration::WitnessCommand>& characterized,
-                           const std::shared_ptr<WitnessGate>& quantification,
-                           const std::vector<Exploration::WitnessCommand>& quantified);
-
-    /// ADR-0076: re-score every queued W-gated MS3 against the MS1 just resolved; withdraw the ones W now refuses.
-    void rescoreWitnessed_();
+    /// ADR-0079: the plan-level W inputs of an MS2-sweep winner about to plan its MS3, from its own logged rows.
+    std::unique_ptr<WitnessPlanContext> witnessWinnerContext_(const ScanCommand& winner_ms2);
+    /// ADR-0079: the plan time, the last MS1, the buffer selection and the eight peak features of a plan.
+    void fillWitnessPlan_(WitnessPlanContext& ctx, const ScanCommand& parent_ms2);
+    /// ADR-0079: after an MS3 plan is pushed -- its ms3_gate.tsv rows and its [MS3-W] line.
+    void witnessAfterPlan_(const std::shared_ptr<WitnessGate>& gate);
 
     /// Test seam between a governed MS3 plan and its swap (replaceMs3Plan), so a test can commit an MS3 in exactly
     /// that gap. Empty in production; only FLASHIda_TestAccess.h sets it.

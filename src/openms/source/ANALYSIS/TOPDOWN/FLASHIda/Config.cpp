@@ -42,6 +42,7 @@
 #include <OpenMS/CONCEPT/Exception.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -83,7 +84,7 @@ namespace
       throw std::invalid_argument("Config: " + path + " must be an object; got " + j.dump() + " (ADR-0069).");
     rejectUnknownKeys(j,
         {"model", "threshold", "intercept", "fragment_intensity", "precursor_intensity", "precursor_charge", "mass_ratio",
-         "fragment_iso_cos", "rank_by"},
+         "fragment_iso_cos", "rank_by", "apply"},
         path);
     OpenMS::YieldGateConfig g;
     // ADR-0076: model -- absent or null = bond_yield (ADR-0069 unchanged). Case-sensitive, never defaulted from an
@@ -118,12 +119,22 @@ namespace
       // reached, so a `model: w` block that kept the default would refuse every tested MS3.
       if (!j.contains("threshold") || j["threshold"].is_null())
         throw std::invalid_argument("Config: " + path + ".threshold is required under model \"w\": a witness "
-                                    "probability in (0, 1); the model's package names 0.5 and 0.835 as candidates and "
-                                    "chooses neither (ADR-0076).");
+                                    "probability in (0, 1); the model's package tests 0.3, 0.5 and 0.8 and chooses none "
+                                    "(ADR-0079).");
       if (!(g.threshold > 0.0 && g.threshold < 1.0))
         throw std::invalid_argument("Config: " + path + ".threshold must be a witness probability in (0, 1) under "
                                     "model \"w\"; got " + j["threshold"].dump() + " (ADR-0076).");
+      // ADR-0079: apply -- absent or null = true; false is the shadow mode.
+      if (j.contains("apply") && !j["apply"].is_null())
+      {
+        if (!j["apply"].is_boolean())
+          throw std::invalid_argument("Config: " + path + ".apply must be true or false; got " + j["apply"].dump() + " (ADR-0079).");
+        g.apply = j["apply"].get<bool>();
+      }
     }
+    else if (j.contains("apply") && !j["apply"].is_null())
+      throw std::invalid_argument("Config: " + path + ".apply is a key of model \"w\" only (the shadow mode of the W gate); "
+                                  "it has no meaning under bond_yield (ADR-0079).");
     else if (!(g.threshold > 0.0))
       throw std::invalid_argument("Config: " + path + ".threshold must be > 0 expected bonds; got " + j["threshold"].dump()
                                   + ". Delete the block to switch the gate off (ADR-0069).");
@@ -1707,34 +1718,47 @@ namespace OpenMS
 
   void Config::validate() const
   {
-    // --- the W gate (ADR-0076) ------------------------------------------------------------------
-    // Three states the trees were never fitted on, refused rather than evaluated: no run length (x_rt_frac divides the
-    // parent MS2's retention time by global.duration), and a co-isolated MS2 or MS3 (none of the 55,357 recorded
-    // commands had a notch; the inputs would describe the anchor charge only). Owner, 2026-11-16.
+    // --- the W gate (ADR-0079) ------------------------------------------------------------------
+    // W was fitted on MS3 of a b or y target after an HCD first stage and a CID MS3 stage, one charge state each, from the
+    // mapped planner of the fragments, coverage and ambiguity objectives (package 17, SPEC 1). Every method that can
+    // produce any other MS3 under model w is refused, never evaluated (owner, 2026-11-18).
     {
-      const bool w_gate = (characterization_.yield_gate && characterization_.yield_gate->model == YieldModel::W)
-                          || (quant_.ms3_yield_gate && quant_.ms3_yield_gate->model == YieldModel::W);
-      if (w_gate && !(global_.duration > 0.0))
+      if (quant_.ms3_yield_gate && quant_.ms3_yield_gate->model == YieldModel::W)
         throw std::invalid_argument(
-            "Config: a yield gate with model \"w\" needs global.duration > 0 minutes: the model's x_rt_frac is the "
-            "parent MS2's retention time over the run's length (ADR-0076).");
-      if (w_gate && targeting_.precursor_charges == ChargeAcquisitionMode::Multiplexed)
-        throw std::invalid_argument(
-            "Config: a yield gate with model \"w\" cannot run with precursor_selection.precursor_charges "
-            "\"multiplexed\": W was fitted on MS2 that isolate one charge state (ADR-0076).");
-      if (w_gate && characterization_.fragment_charges == ChargeAcquisitionMode::Multiplexed)
-        throw std::invalid_argument(
-            "Config: a yield gate with model \"w\" cannot run with identification.characterization.fragment_charges "
-            "\"multiplexed\": W was fitted on MS3 that isolate one fragment charge state (ADR-0076).");
-      // W's x_rank is an MS3's position in the order its plan's commands are written; random and interleaved send a
-      // plan in another order than the walk ranked it. The Q MS3 is never reordered, so only the characterization
-      // gate is concerned.
-      if (characterization_.yield_gate && characterization_.yield_gate->model == YieldModel::W
-          && characterization_.send_order != Ms3SendOrder::Ranked)
-        throw std::invalid_argument(
-            "Config: identification.characterization.order must be \"ranked\" under a yield gate with model \"w\": "
-            "the model's x_rank is an MS3's position in the order its plan is sent, and \"random\" and \"interleaved\" "
-            "send it in another order than it was ranked (ADR-0076).");
+            "Config: quantification.ms3_yield_gate cannot use model \"w\": W predicts that an MS3 shows a bond of its "
+            "target fragment, not reporter quality; use model \"bond_yield\" or no gate (ADR-0079).");
+      const bool w_gate = characterization_.yield_gate && characterization_.yield_gate->model == YieldModel::W;
+      auto refuse = [](const std::string& what) {
+        throw std::invalid_argument("Config: a yield gate with model \"w\" cannot run with " + what + " (ADR-0079).");
+      };
+      auto upper = [](std::string a) {
+        for (char& ch : a) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+        return a;
+      };
+      if (w_gate)
+      {
+        if (targeting_.precursor_charges == ChargeAcquisitionMode::Multiplexed)
+          refuse("precursor_selection.precursor_charges \"multiplexed\": W was fitted on MS2 that isolate one charge state");
+        if (characterization_.fragment_charges != ChargeAcquisitionMode::Single)
+          refuse("identification.characterization.fragment_charges \"separate\" or \"multiplexed\": W was fitted on MS3 of "
+                 "one fragment charge state per target");
+        if (characterization_.objective == CharacterizationObjective::Exhaustive
+            || characterization_.objective == CharacterizationObjective::Discriminating)
+          refuse("identification.characterization.mode \"exhaustive\" or \"discriminating\": their raw-mass targets and "
+                 "unidentified models cannot fill W's inputs");
+        if (characterization_.send_order != Ms3SendOrder::Ranked)
+          throw std::invalid_argument(
+              "Config: identification.characterization.order must be \"ranked\" under a yield gate with model \"w\": the "
+              "plan is sent in the order W ranks it, and \"random\" and \"interleaved\" send it in another (ADR-0079).");
+        for (const ScanConfig& sc : level(2).scans)
+          if (upper(sc.activation) != "HCD") refuse("an MS2 activation other than HCD (" + sc.activation + ")");
+        for (const std::string& a : level(2).activations)
+          if (upper(a) != "HCD") refuse("an MS2 exploration activation other than HCD (" + a + ")");
+        for (const ScanConfig& sc : level(3).scans)
+          if (upper(sc.activation) != "CID") refuse("an MS3 activation other than CID (" + sc.activation + ")");
+        for (const std::string& a : level(3).activations)
+          if (upper(a) != "CID") refuse("an MS3 exploration activation other than CID (" + a + ")");
+      }
     }
 
     // --- charge-set bounds (ADR-0040) -----------------------------------------------------------

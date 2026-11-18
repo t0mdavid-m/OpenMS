@@ -15,6 +15,7 @@ set(sources_list_h
         FLASHIda/ConsoleView.h
         FLASHIda/Deconvolution.h
         FLASHIda/Exploration.h
+        FLASHIda/EngineClock.h
         FLASHIda/EventLog.h
         FLASHIda/FAIMS.h
         FLASHIda/AnnotatorMetrics.h

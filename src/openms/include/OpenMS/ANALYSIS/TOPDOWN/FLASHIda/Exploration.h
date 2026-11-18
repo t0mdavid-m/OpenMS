@@ -48,6 +48,7 @@
 
 #include <cstdint>
 #include <map>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -191,14 +192,6 @@ namespace OpenMS
     };
 
     /// Result of initiateNextLevel: commands plus fragment matching metadata
-    /// ADR-0076: one command a W gate scored, and its record: what the caller registers for the re-score at every MS1.
-    struct WitnessCommand
-    {
-      int scan_id = 0;
-      int group = 0;                                 ///< the commands withdrawn together (a target's CE variants)
-      std::shared_ptr<const WitnessRecord> record;
-    };
-
     struct NextLevelResult
     {
       std::vector<ScanCommand> commands;
@@ -211,10 +204,9 @@ namespace OpenMS
       /// ADR-0066: the governed MS3 plan, when characterization.per_proteoform governs this dispatch (an identified
       /// model and an MS2 context). Engaged even when it holds no item: the empty plan still replaces the unsent one.
       std::optional<GovernedMs3> governed;
-      /// ADR-0076: the plan's W gate (its records are the [MS3-W] line) and the commands it scored; null / empty when
-      /// no `model: w` gate planned this dispatch.
+      /// ADR-0079: the plan's W gate (its records are the plan's ms3_gate.tsv rows); null when no `model: w` gate
+      /// planned this dispatch.
       std::shared_ptr<WitnessGate> witness;
-      std::vector<WitnessCommand> witnessed;
     };
 
     /// Result of feedResult: commands plus exploration per-variant metadata
@@ -312,6 +304,8 @@ namespace OpenMS
       /// whose pre-scans found a proteoform -- the command of the first such pre-scan (every pre-scan of a sweep
       /// isolates the same windows). The caller buys the sweep's Window scans from it, if they are on.
       std::optional<ScanCommand> window_ctx;
+      /// ADR-0079: the W gate of the MS3 plan a completing MS2 sweep's winner made; null when none.
+      std::shared_ptr<WitnessGate> witness;
     };
 
     /// The MEASURING half of initiateNextLevel (ADR-0062): the match and the report it shapes, computed
@@ -439,20 +433,24 @@ namespace OpenMS
                                     const FragmentAnalysis::SearchedPrSM* searched = nullptr) const;
 
     /// Everything from the dispatch gate on: tracker seeding, planNextScans, the MS3 builds.
-    /// @p witness_ctx (ADR-0076): the parent-level W inputs the caller filled; completed here from @p search (the
+    /// @p witness_ctx (ADR-0079): the plan-level W inputs the caller filled; completed here from @p search (the
     /// parent's identification) and handed to the plan's W gate. Null: no W gate plans this dispatch.
     NextLevelResult applyNextLevel(const NextLevelSearch& search, int msn_level, const DeconvolvedSpectrum& result,
                                    double faims_cv, ScanCommandQueue& queue, const ScanCommand* ms_ctx = nullptr,
                                    ProteoformTracker* tracker = nullptr, int precursor_id = 0,
                                    WitnessPlanContext* witness_ctx = nullptr);
 
-    /// ADR-0076: the parent-level W inputs the parent's identification gives (id_score, x_ms2_ions, the search's
-    /// fragment, tag and coverage counts, the prior-count key and its counts, the stretch letters), as the parent's
-    /// identification.tsv and scan_results.tsv rows print them.
+    /// ADR-0079: the parent-level W inputs the parent's identification gives (id_score, x_ms2_ions, the search's
+    /// fragment, tag and coverage counts), as the parent's identification.tsv and scan_results.tsv rows print them. A
+    /// sweep winner's context is left as its provider filled it (from the winner's own logged rows).
     static void completeWitnessContext(WitnessPlanContext& ctx, const NextLevelSearch& search);
 
-    /// ADR-0076: the trees `model: w` gates score with (owned by FLASHIda); null until set, and then no W gate runs.
+    /// ADR-0079: the trees `model: w` gates score with (owned by FLASHIda); null until set, and then no W gate runs.
     void setWitnessModel(const WitnessModel* model) { witness_model_ = model; }
+    /// ADR-0079: the plan-level W context of an MS3 plan whose parent is @p parent_ms2 (FLASHIda's buffer, clock and the
+    /// parent's logged rows); used where the MS3 of an MS2-sweep winner is planned. Null: no W context.
+    using WitnessContextProvider = std::function<std::unique_ptr<WitnessPlanContext>(const ScanCommand& parent_ms2)>;
+    void setWitnessContextProvider(WitnessContextProvider p) { witness_ctx_provider_ = std::move(p); }
 
     /// The acquiring tail of initiateNextLevel: plan the next-level targets from the precursor's FINALIZED
     /// ProteoformTracker model (planNextScans), build one MS3 command per target (or one per CE variant when
@@ -476,8 +474,6 @@ namespace OpenMS
     {
       std::vector<ScanCommand> commands;   ///< the quantification MS3s, most intense labelled fragment first
       std::string outcome = "none";        ///< bought | no_cysteine | no_labelled_fragment | yield_refused (ADR-0069) (identification.tsv quant_ms3)
-      std::shared_ptr<WitnessGate> witness;  ///< ADR-0076: the quantification W gate, as NextLevelResult's
-      std::vector<WitnessCommand> witnessed;
     };
 
     /// ADR-0064: the quantification MS3s an identification that closes out its species buys. Seeds the tracker model
@@ -488,8 +484,7 @@ namespace OpenMS
     /// @p quant_scan's parameters, priority 1. Nothing is pushed.
     QuantDispatch dispatchQuant(int precursor_id, const FragmentAnalysis::ProteoformMatch& frag_result,
                                 const DeconvolvedSpectrum& result, double faims_cv, ScanCommandQueue& queue,
-                                const ScanCommand& ms_ctx, ProteoformTracker& tracker, const ScanConfig& quant_scan, int n,
-                                const WitnessPlanContext* witness_ctx = nullptr);
+                                const ScanCommand& ms_ctx, ProteoformTracker& tracker, const ScanConfig& quant_scan, int n);
 
     /// Number of currently active exploration groups
     int activeGroupCount() const;
@@ -560,7 +555,8 @@ namespace OpenMS
 
     /// Maps tracking_id (int) -> {group_id, variant_index} for variant result routing
     std::unordered_map<int, VariantRef> variant_tracking_map_;
-    const WitnessModel* witness_model_ = nullptr;   ///< ADR-0076: setWitnessModel
+    const WitnessModel* witness_model_ = nullptr;   ///< ADR-0079: setWitnessModel
+    WitnessContextProvider witness_ctx_provider_;   ///< ADR-0079: setWitnessContextProvider
 
     /// Next group ID (monotonically increasing)
     int next_group_id_ = 1;

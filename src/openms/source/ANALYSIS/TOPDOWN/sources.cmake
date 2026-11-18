@@ -14,6 +14,7 @@ set(sources_list
         FLASHIda/ConsoleView.cpp
         FLASHIda/Deconvolution.cpp
         FLASHIda/Exploration.cpp
+        FLASHIda/EngineClock.cpp
         FLASHIda/EventLog.cpp
         FLASHIda/FAIMS.cpp
         FLASHIda/AnnotatorMetrics.cpp

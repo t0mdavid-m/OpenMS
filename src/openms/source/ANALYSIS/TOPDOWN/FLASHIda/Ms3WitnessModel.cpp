@@ -25,17 +25,6 @@ namespace OpenMS
 {
   namespace
   {
-    const char* const kRawNames[kWitnessRawCount] = {
-        "frag_N",          "z_ms2",            "z_ms3",           "ce1",
-        "cid3",            "intensity",        "L",               "id_score",
-        "iso_cos",         "qscore",           "snr",             "has_shift",
-        "n_ms2_prior",     "n_ms3_prior",      "mass_ms2",        "mass_ms3",
-        "x_prec_intensity", "x_prec_qscore",   "x_prec_iso_cos",  "x_prec_snr",
-        "x_ms1_plan",      "x_charge_snr",     "x_charge_cos",    "x_charge_score",
-        "x_ppm_error",     "x_ms2_mass_count", "x_ms2_tic_coverage", "x_ms2_precursor_share",
-        "x_ms2_fragment_count", "x_ms2_tag_count", "x_ms2_ions",  "x_queue_ahead",
-        "x_rank",          "x_plan_age",       "x_rt_frac"};
-
     const double kNaN = std::numeric_limits<double>::quiet_NaN();
 
     /// log10(max(value, 1)) of the value rounded to 32 bits, rounded to 32 bits (w_gate.py log10_floor1).
@@ -49,8 +38,8 @@ namespace OpenMS
     [[noreturn]] void refuse(const std::string& origin, const std::string& what)
     {
       throw std::invalid_argument("FLASHIda: the W model " + origin + " is not usable: " + what
-                                  + " (ADR-0076; share/OpenMS/FLASHIDA/ms3_w_gate.json is a byte copy of the ms3_esm "
-                                    "package's w_ext_v3.json).");
+                                  + " (ADR-0079; share/OpenMS/FLASHIDA/ms3_w_gate.json is a byte copy of the ms3_esm "
+                                    "package 17's w_v13.json).");
     }
 
     /// The member @p key of the object @p j; refuses when @p j is not an object or has no such member.
@@ -82,20 +71,6 @@ namespace OpenMS
     }
   } // namespace
 
-  const char* witnessRawName(int index)
-  {
-    return (index >= 0 && index < kWitnessRawCount) ? kRawNames[index] : "?";
-  }
-
-  WitnessRaw::WitnessRaw() { v.fill(kNaN); }
-
-  int WitnessRaw::firstMissing() const
-  {
-    for (int i = 0; i < kWitnessRawCount; ++i)
-      if (std::isnan(v[static_cast<size_t>(i)])) return i;
-    return -1;
-  }
-
   float toFloat32(double v)
   {
     if (std::isnan(v)) return std::numeric_limits<float>::quiet_NaN();
@@ -109,30 +84,6 @@ namespace OpenMS
       return v < 0 ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity();
     }
     return static_cast<float>(v);
-  }
-
-  std::array<float, kWitnessInputCount> witnessModelInputs(const WitnessRaw& raw)
-  {
-    std::array<float, kWitnessInputCount> x{};
-    const double z3 = raw[kWZMs3];
-    const double L = raw[kWL];
-    const double inten = raw[kWIntensity];
-    x[0] = toFloat32(raw[kWFragN]);
-    x[1] = toFloat32(raw[kWZMs2]);
-    x[2] = toFloat32(z3);
-    x[3] = (!std::isnan(L) && L != 0.0) ? toFloat32(z3 / L) : std::numeric_limits<float>::quiet_NaN();
-    x[4] = toFloat32(raw[kWCe1]);
-    x[5] = toFloat32(raw[kWCid3]);
-    // log10_intensity: of the raw value as given, not rounded to 32 bits first (w_gate.py model_inputs).
-    x[6] = std::isnan(inten) ? std::numeric_limits<float>::quiet_NaN() : toFloat32(std::log10(std::max(inten, 1.0)));
-    x[7] = toFloat32(L);
-    // Raw slots kWIdScore .. kWRtFrac are model columns 8 .. 35, in the same order.
-    for (int r = kWIdScore; r < kWitnessRawCount; ++r)
-    {
-      const bool log10_input = (r == kWIdScore || r == kWPrecIntensity || r == kWMs1Plan || r == kWMs2MassCount);
-      x[static_cast<size_t>(r + 1)] = log10_input ? log10Floor1(raw[r]) : toFloat32(raw[r]);
-    }
-    return x;
   }
 
   namespace
@@ -189,7 +140,20 @@ namespace OpenMS
     {
       refuse("FLASHIDA/ms3_w_gate.json", "not found under OPENMS_DATA_PATH (" + File::getOpenMSDataPath() + ")");
     }
-    return load(path);
+    std::ifstream in(path, std::ios::binary);
+    if (!in) refuse(path, "the file cannot be opened");
+    std::ostringstream buf;
+    buf << in.rdbuf();
+    return parseChecked(buf.str(), path);
+  }
+
+  WitnessModel WitnessModel::parseChecked(const std::string& bytes, const std::string& origin)
+  {
+    WitnessModel m = parse(bytes, origin, kWitnessInputCount);
+    if (m.sha256() != kWitnessModelSha256)
+      refuse(origin, "its SHA-256 is " + m.sha256() + ", not " + std::string(kWitnessModelSha256)
+                         + " (package 17's w_v13.json)");
+    return m;
   }
 
   WitnessModel WitnessModel::load(const std::string& path) { return load(path, kWitnessInputCount); }
@@ -216,8 +180,7 @@ namespace OpenMS
     }
     const nlohmann::json& learner = child(j, "learner", origin);
 
-    // The structure checks (owner, 2026-11-16: the structure, not a fixed SHA, so a refit with the same 36 inputs
-    // needs only a new file).
+    // The structure checks; the shipped loader also checks the file's SHA-256 (ADR-0079).
     const nlohmann::json& objective_name = child(child(learner, "objective", origin), "name", origin);
     if (!objective_name.is_string() || objective_name.get<std::string>() != "binary:logistic")
       refuse(origin, "the objective is not binary:logistic");
@@ -302,8 +265,6 @@ namespace OpenMS
     m.sha8_ = m.sha256_.substr(0, 8);
     return m;
   }
-
-  double WitnessModel::w(const std::array<float, kWitnessInputCount>& x) const { return wOf(x.data()); }
 
   double WitnessModel::wOf(const float* x) const
   {

@@ -76,6 +76,8 @@ namespace OpenMS
     Selection select(const std::string& parent_survey_id, uint64_t t) const;
 
     size_t size() const { return surveys_.size(); }
+    /// The buffered surveys, in resolve_ts order.
+    const std::deque<BufferedSurvey>& surveys() const { return surveys_; }
 
   private:
     std::deque<BufferedSurvey> surveys_;

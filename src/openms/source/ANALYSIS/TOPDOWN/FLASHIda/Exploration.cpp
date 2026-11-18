@@ -1010,10 +1010,14 @@ namespace OpenMS
         // The winner's own search (ADR-0061 push 4c): the next level is planned from the PrSM its worker found, so
         // no proteome search runs here, under the analysis lock. No search ran (the inline path): the inline matcher.
         const ExplorationVariant& winner = group.variants[best_idx];
+        // ADR-0079: the MS3 of a sweep winner are W-gated like a regular MS2's, the parent inputs from the winner's own
+        // logged rows (the provider).
+        std::unique_ptr<WitnessPlanContext> wctx = witness_ctx_provider_ ? witness_ctx_provider_(winner.cmd) : nullptr;
         auto next_nlr = initiateNextLevel(group.msn_level,
             winner.result, group.faims_cv, queue,
             &winner.cmd, tracker, precursor_id,  // P5: same precursor_id model key
-            winner.prsm ? &*winner.prsm : nullptr);
+            winner.prsm ? &*winner.prsm : nullptr, wctx.get());
+        info.witness = next_nlr.witness;
         info.commands.insert(info.commands.end(), next_nlr.commands.begin(), next_nlr.commands.end());
         // Carry the per-command MS2 contexts out ALONGSIDE the commands. Without this the MS3s this
         // branch dispatches are acquired but never identified: a fixed-CE MS3 returns on the REGULAR
@@ -1112,32 +1116,18 @@ namespace OpenMS
 
   void Exploration::completeWitnessContext(WitnessPlanContext& ctx, const NextLevelSearch& search)
   {
+    if (ctx.parent_path != "regular") return;   // a sweep winner's context comes from its own logged rows
     const FragmentAnalysis::ProteoformMatch& m = search.frag_result;
     // The parent's identification.tsv row exists only for a match with fragments (FLASHIda::finishRegularMS2_); its
-    // inputs are missing without one, so an MS3 of an unidentified parent (exhaustive) is untested.
+    // inputs are missing without one, so the MS3 of an unidentified parent fail.
     const bool row = search.ran && !m.proteoform_sequence.empty() && !m.fragments.empty();
     const double nan = std::numeric_limits<double>::quiet_NaN();
-    ctx.parent[kWIdScore] = row ? asLoggedFixed4(m.identification_score) : nan;          // fixed + 4, as the row
-    ctx.parent[kWMs2Ions] = row ? static_cast<double>(std::max<size_t>(m.fragments.size(), 1)) : nan;
+    ctx.parent.id_score = row ? asLoggedFixed4(m.identification_score) : nan;          // fixed + 4, as the row
+    ctx.parent.ms2_ions = row ? static_cast<double>(std::max<size_t>(m.fragments.size(), 1)) : nan;
     // scan_results' fragment / tag counts and tic_coverage, as finishRegularMS2_ writes them for an identification run.
-    ctx.parent[kWMs2FragmentCount] = search.ran ? static_cast<double>(m.total_match_count) : nan;
-    ctx.parent[kWMs2TagCount] = search.ran ? static_cast<double>(m.tag_count) : nan;
-    ctx.parent[kWMs2TicCoverage] = search.ran ? asLoggedSig6(search.tic_coverage) : nan;
-    ctx.has_key = row;
-    if (row)
-    {
-      ctx.key.protein = m.matched_protein;
-      ctx.key.start = m.region_start;
-      ctx.key.end = m.region_end;
-      ctx.parent_letters = proformaLetters(FragmentAnalysis::regionProForma(m));
-      if (ctx.counts != nullptr)
-      {
-        const auto a = ctx.counts->ms2.find(ctx.key);
-        ctx.prior_ms2 = (a == ctx.counts->ms2.end()) ? 0 : a->second;
-        const auto b = ctx.counts->ms3.find(ctx.key);
-        ctx.prior_ms3 = (b == ctx.counts->ms3.end()) ? 0 : b->second;
-      }
-    }
+    ctx.parent.fragment_count = search.ran ? static_cast<double>(m.total_match_count) : nan;
+    ctx.parent.tag_count = search.ran ? static_cast<double>(m.tag_count) : nan;
+    ctx.parent.tic_coverage = search.ran ? asLoggedSig6(search.tic_coverage) : nan;
   }
 
   // The measuring half (ADR-0062): reads only its arguments and the immutable Config, so a search worker
@@ -1266,7 +1256,7 @@ namespace OpenMS
   {
     NextLevelResult nlr;
     if (!search.ran) return nlr;
-    if (witness_ctx != nullptr) completeWitnessContext(*witness_ctx, search);   // ADR-0076
+    if (witness_ctx != nullptr) completeWitnessContext(*witness_ctx, search);   // ADR-0079
 
     const int next_level = msn_level + 1;
     const auto& this_cfg = config_.level(msn_level);
@@ -1330,8 +1320,7 @@ namespace OpenMS
     nlr.commands = std::move(dispatched.commands);
     nlr.ms3_contexts = std::move(dispatched.ms3_contexts);
     nlr.governed = std::move(dispatched.governed);   // ADR-0066: engaged only when per_proteoform governs the dispatch
-    nlr.witness = std::move(dispatched.witness);      // ADR-0076
-    nlr.witnessed = std::move(dispatched.witnessed);
+    nlr.witness = std::move(dispatched.witness);      // ADR-0079
     return nlr;
   }
 
@@ -1352,16 +1341,10 @@ namespace OpenMS
     }
   }
 
-  namespace
-  {
-    inline bool wgRankByW(const WitnessGate& g) { return g.rank_by_w; }
-  }
-
   Exploration::QuantDispatch Exploration::dispatchQuant(int precursor_id, const FragmentAnalysis::ProteoformMatch& frag_result,
                                                         const DeconvolvedSpectrum& result, double faims_cv, ScanCommandQueue& queue,
                                                         const ScanCommand& ms_ctx, ProteoformTracker& tracker,
-                                                        const ScanConfig& quant_scan, int n,
-                                                        const WitnessPlanContext* witness_ctx)
+                                                        const ScanConfig& quant_scan, int n)
   {
     QuantDispatch out;
     const bool identified = !frag_result.proteoform_sequence.empty() && !frag_result.fragments.empty();
@@ -1388,45 +1371,6 @@ namespace OpenMS
     };
     const std::optional<YieldGateConfig>& yield_gate = config_.quantification().ms3_yield_gate;
     bool yield_refused = false;   // ADR-0069: a fragment had an SNR-positive charge and the yield gate refused every one
-    // ADR-0076: under model w the quantification MS3's own W gate: stage 0 is the identification scan itself (no
-    // per-ion override), cid3 the quantification scan's energy, the rank the 'Q' MS3 bought so far.
-    const bool w_quant = yield_gate && yield_gate->model == YieldModel::W && witness_model_ != nullptr && witness_ctx != nullptr;
-    if (w_quant)
-    {
-      out.witness = std::make_shared<WitnessGate>();
-      WitnessGate& wg = *out.witness;
-      wg.model = witness_model_;
-      wg.threshold = yield_gate->threshold;
-      wg.rank_by_w = (yield_gate->rank_by == YieldRank::Yield);
-      wg.gate_name = "quantification";
-      wg.ctx = *witness_ctx;
-      wg.cid3 = quant_scan.collision_energy;
-      wg.queue_ahead = static_cast<double>(queue.queuedMs3Count(nullptr));
-      const std::string protein = config_.identification().proteinOr(proto_ctx.protein_sequence);
-      wg.fragment_proforma = [protein, proto_ctx](const std::string& ion_type, int ion_index) {
-        return MS3FragmentMatcher::fragmentProForma(protein, proto_ctx, ion_type.empty() ? '\0' : ion_type[0], ion_index);
-      };
-    }
-    // ADR-0076: the first SNR-positive charge of a candidate the W gate scores at rank @p rank; @p snr its window SNR.
-    // Its record is returned (empty verdict: no SNR-positive charge).
-    auto wScore = [&](const Ms3Target& candidate, int rank, Ms3Target& t, double& snr) -> WitnessRecord {
-      WitnessRecord last;
-      for (const Ms3Target& c : tracker.labelledFragmentCharges(precursor_id, candidate.ion_type, candidate.ion_index))
-      {
-        const double sn = windowSnrOf(c);
-        if (!(sn > 1.0)) continue;
-        WitnessRecord r = out.witness->score(c.ion_type, c.ion_index, c.frag_charge, ms_ctx.stages[0].collision_energy,
-                                             c.stage1_scores, rank);
-        if (r.verdict == "admitted" || r.verdict == "untested")
-        {
-          t = c;
-          snr = sn;
-          return r;
-        }
-        if (last.verdict.empty()) last = r;   // the strongest SNR-positive charge's refusal stands for the fragment
-      }
-      return last;
-    };
     // ADR-0069: the fragment's charges strongest first, each through the SNR test and then the yield test; the first to
     // pass both buys the MS3. None: the fragment is refused. @p any_snr: it had an SNR-positive charge.
     auto walkCharges = [&](const Ms3Target& candidate, Ms3Target& t, double& snr, double& e, bool& any_snr) {
@@ -1458,73 +1402,7 @@ namespace OpenMS
       cmd.window_snr = snr;
       out.commands.push_back(cmd);
     };
-    if (w_quant)
-    {
-      // ADR-0076: walk at the running rank. rank_by yield: at each step every remaining fragment is scored at the next
-      // rank and the highest admitted W is bought (untested after every tested one); intensity: strongest first.
-      std::vector<bool> done(candidates.size(), false);
-      std::vector<WitnessRecord> last(candidates.size());
-      for (size_t i = 0; i < candidates.size(); ++i)
-      {
-        Ms3Target probe;
-        double s = 0.0;
-        last[i] = wScore(candidates[i], 1, probe, s);
-        if (!last[i].verdict.empty()) ++eligible;   // eligible counts fragments with an SNR-positive charge
-      }
-      while (static_cast<int>(out.commands.size()) < n)
-      {
-        const int rank = static_cast<int>(out.commands.size()) + 1;
-        int pick = -1;
-        Ms3Target pick_t;
-        double pick_snr = 0.0;
-        WitnessRecord pick_r;
-        for (size_t i = 0; i < candidates.size(); ++i)
-        {
-          if (done[i]) continue;
-          Ms3Target t;
-          double s = 0.0;
-          WitnessRecord r = wScore(candidates[i], rank, t, s);
-          last[i] = r;
-          const bool take = (r.verdict == "admitted" || r.verdict == "untested");
-          if (!take) continue;
-          const bool better = pick < 0 || (wgRankByW(*out.witness)
-                                               ? ((r.verdict == "admitted" && pick_r.verdict != "admitted")
-                                                  || (r.verdict == pick_r.verdict && r.w > pick_r.w))
-                                               : false);
-          if (better)
-          {
-            pick = static_cast<int>(i);
-            pick_t = t;
-            pick_snr = s;
-            pick_r = r;
-          }
-          if (!wgRankByW(*out.witness)) break;   // strongest first: the first buyable fragment is bought
-        }
-        if (pick < 0) break;
-        done[static_cast<size_t>(pick)] = true;
-        buy(pick_t, pick_snr);
-        auto rec = std::make_shared<const WitnessRecord>(pick_r);
-        out.witness->records.push_back(pick_r);
-        out.commands.back().witness_probability = pick_r.w;
-        out.witnessed.push_back({out.commands.back().scan_id, 0, rec});
-        out.witness->admitted = static_cast<int>(out.commands.size());
-      }
-      // Every fragment not bought: its last scoring, refused or out of budget.
-      for (size_t i = 0; i < candidates.size(); ++i)
-      {
-        if (done[i] || last[i].verdict.empty()) continue;
-        WitnessRecord r = last[i];
-        if (r.verdict == "admitted" || r.verdict == "untested")
-        {
-          r.verdict = "refused";
-          r.reason = "budget";
-        }
-        else
-          yield_refused = true;
-        out.witness->records.push_back(r);
-      }
-    }
-    else if (yield_gate && yield_gate->rank_by == YieldRank::Yield)
+    if (yield_gate && yield_gate->rank_by == YieldRank::Yield)
     {
       // ADR-0069 (amended): every labelled fragment is walked first, then the buyable ones are taken by predicted
       // bond yield, highest first (stable: equal yields keep the strongest-first order), up to n.
@@ -1593,6 +1471,26 @@ namespace OpenMS
     return out;
   }
 
+  namespace
+  {
+    /// ADR-0079: stamp the tracking ids of a target's sent commands on its ms3_gate.tsv rows, each command on the row of
+    /// its CE variant (matched by the MS3 stage's collision energy: a sweep may send its grid in another order).
+    void markWitnessSent(WitnessGate& wg, const Ms3Target& target, const std::vector<ScanCommand>& sent)
+    {
+      for (const ScanCommand& cmd : sent)
+      {
+        const double ce = cmd.num_stages >= 2 ? cmd.stages[1].collision_energy : -1.0;
+        for (WitnessRecord& r : wg.records)
+        {
+          if (r.ion_type != target.ion_type || r.ion_index != target.ion_index || !r.tracking_id.empty()) continue;
+          if (r.cmd.num_stages >= 2 && r.cmd.stages[1].collision_energy != ce) continue;
+          r.tracking_id = ScanCommandQueue::encode(cmd.scan_id);
+          break;
+        }
+      }
+    }
+  } // namespace
+
   Exploration::NextLevelResult Exploration::dispatchFromModel(int precursor_id, const DeconvolvedSpectrum& result,
       double faims_cv, ScanCommandQueue& queue, const ScanCommand* ms_ctx, ProteoformTracker* tracker,
       MS3FragmentMatcher::ProteoformContext proto_ctx, const ScanConfig& next_scan_config, int charge_floor,
@@ -1653,8 +1551,9 @@ namespace OpenMS
         }
       }
 
-      // ADR-0076: under model w the plan's W gate, from the parent-level inputs the caller completed. Without a context
-      // (the refine re-dispatch, an MS3 after an MS2 sweep) or a model, the walk admits every target untested.
+      // ADR-0079: under model w the plan's W gate, from the plan-level inputs the caller completed. Its candidates'
+      // commands are composed here -- one per CE variant under MS3 exploration -- exactly as the builds below make them,
+      // without a tracking id, so their logged cells are the gate's inputs.
       if (yield_gated && config_.characterization().yield_gate->model == YieldModel::W && witness_model_ != nullptr
           && witness_ctx != nullptr)
       {
@@ -1663,24 +1562,40 @@ namespace OpenMS
         WitnessGate& wg = *nlr.witness;
         wg.model = witness_model_;
         wg.threshold = yg.threshold;
+        wg.apply = yg.apply;
         wg.rank_by_w = (yg.rank_by == YieldRank::Yield);
-        wg.gate_name = "characterization";
+        wg.max_targets = config_.level(2).max_targets;
         wg.ctx = *witness_ctx;
+        std::vector<ScanConfig> variant_configs;
         if (config_.hasExploration(next_level))
         {
-          // One verdict per target, at its first variant (owner, 2026-11-16): cid3 is the sweep's first grid energy
-          // (its first sent one under order ascending), and the rank advances by the whole sweep.
-          const std::vector<VariantParams> variants = buildVariants_(config_.level(next_level), next_scan_config);
-          wg.cid3 = variants.empty() ? next_scan_config.collision_energy : variants.front().collision_energy;
-          wg.ms3_per_target = std::max<int>(1, static_cast<int>(variants.size()));
+          // initiate's grid: the level's first scan with its overrides, one config per variant (CE, reaction time,
+          // activation), in grid order.
+          const auto& lcfg = config_.level(next_level);
+          ScanConfig base = lcfg.scans[0];
+          base.applyOverrides(lcfg.overrides);
+          for (const VariantParams& vp : buildVariants_(lcfg, base))
+          {
+            ScanConfig vc = base;
+            vc.collision_energy = static_cast<int>(vp.collision_energy);
+            vc.reaction_time = vp.reaction_time;
+            vc.activation = vp.activation;
+            variant_configs.push_back(vc);
+          }
         }
         else
-          wg.cid3 = next_scan_config.collision_energy;
-        // q0: MS3 queued now, without this proteoform's unsent ones (a governed plan withdraws them before its push).
-        wg.queue_ahead = static_cast<double>(queue.queuedMs3Count(gov ? &gov->key : nullptr));
-        const std::string protein = config_.identification().proteinOr(proto_ctx.protein_sequence);
-        wg.fragment_proforma = [protein, proto_ctx](const std::string& ion_type, int ion_index) {
-          return MS3FragmentMatcher::fragmentProForma(protein, proto_ctx, ion_type.empty() ? '\0' : ion_type[0], ion_index);
+          variant_configs.push_back(next_scan_config);
+        const ScanCommand parent = *ms_ctx;
+        wg.compose = [&queue, parent, variant_configs, proto_ctx](const WitnessCandidate& c) {
+          std::vector<std::pair<ScanCommand, std::string>> out;
+          for (const ScanConfig& vc : variant_configs)
+          {
+            ScanCommandQueue::ComposedMS3 m = queue.composeMS3(parent, vc, c.frag_mz, std::abs(c.charge), c.iso_width,
+                                                                 parent.scan_id, c.ion_type.empty() ? '\0' : c.ion_type[0],
+                                                                 c.ion_index, 1, c.stage1_scores, &c.stage0_params, proto_ctx);
+            out.emplace_back(m.cmd, m.ms3_proteoform);
+          }
+          return out;
         };
         gate.witness = nlr.witness.get();
       }
@@ -1765,14 +1680,10 @@ namespace OpenMS
           auto sub_cmds = initiate(next_level, frag_pg, frag_charge, queue, &result.getOriginalSpectrum(), ms_ctx,
                                    ion_type, target.ion_index, proto_ctx, target.stage1_scores, &target.stage0_params,
                                    &target.notches);
-          // ADR-0076: one verdict per target -- every variant carries its W and is withdrawn with its sweep.
-          if (target.witness)
-            for (ScanCommand& sc : sub_cmds)
-            {
-              sc.witness_probability = target.witness->w;
-              const auto v = variant_tracking_map_.find(sub_cmds.front().scan_id);
-              nlr.witnessed.push_back({sc.scan_id, v != variant_tracking_map_.end() ? v->second.group_id : 0, target.witness});
-            }
+          // ADR-0079: one verdict per target -- every variant carries the target's W.
+          if (target.witness_w >= 0.0)
+            for (ScanCommand& sc : sub_cmds) sc.witness_probability = target.witness_w;
+          if (nlr.witness) markWitnessSent(*nlr.witness, target, sub_cmds);
           if (gov)
           {
             if (!sub_cmds.empty()) gov->items.push_back(makeItem(target, frag_charge, sub_cmds));   // one group, one item
@@ -1822,12 +1733,9 @@ namespace OpenMS
                                            ion_type, target.ion_index, 1, target.stage1_scores, &target.stage0_params,
                                            proto_ctx, &target.notches);
           cmd.faims_cv = faims_cv;
-          // ADR-0076: the W the gate admitted this charge at (-1: untested); re-scored at every MS1 while it waits.
-          if (target.witness)
-          {
-            cmd.witness_probability = target.witness->w;
-            nlr.witnessed.push_back({cmd.scan_id, 0, target.witness});
-          }
+          // ADR-0079: the W the gate sent this target at (-1: no W gate).
+          if (target.witness_w >= 0.0) cmd.witness_probability = target.witness_w;
+          if (nlr.witness) markWitnessSent(*nlr.witness, target, {cmd});
 
           // Item 2: stamp the MS3 fragment-window SNR onto the command before push (same inputs/formula
           // as the legacy direct path — computed over the MS2 source spectrum).

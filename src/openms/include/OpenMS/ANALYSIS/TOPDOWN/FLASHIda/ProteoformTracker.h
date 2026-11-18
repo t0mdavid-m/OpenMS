@@ -101,9 +101,9 @@ namespace OpenMS
     /// == Multiplexed. Empty in every other mode. The tracker selects them because buildMS3 receives
     /// only scalars and has no access to the model's per-charge observations (ADR-0016).
     std::vector<NotchCandidate> notches;
-    /// ADR-0076: the W gate's record of this target's charge (its raw values, W and verdict) when a `model: w` yield
-    /// gate scored it; null otherwise. Carried to the command (ScanCommand::witness_probability) and to the re-score.
-    std::shared_ptr<const WitnessRecord> witness;
+    /// ADR-0079: the target's W (its largest over its CE variants) when a `model: w` yield gate scored it; -1 otherwise.
+    /// Carried to the command (ScanCommand::witness_probability).
+    double witness_w = -1.0;
   };
 
   /// Key identifying a fragment ion: (ion_type, ion_index)

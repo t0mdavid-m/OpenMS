@@ -34,6 +34,8 @@
 
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/LogFormat.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EngineClock.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/AnnotatorMetrics.h>   // the worker's own annotation under explained_signal (ADR-0074)
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 
@@ -269,16 +271,18 @@ FLASHIda::FLASHIda(char* arg) :
     if (config_.level(2).monitor_ms1_enabled || config_.level(3).monitor_ms1_enabled || config_.identification().window_scan)
       monitor_deconv_ = std::make_unique<Deconvolution>(config_, config_.toleranceList());
 
-    // ADR-0076: the W trees, read once from share/OpenMS/FLASHIDA/ms3_w_gate.json when a yield gate says model w. A
-    // missing or unusable file refuses here (std::invalid_argument naming the path and the check): the run does not
-    // start with a gate the method asked for and the engine cannot evaluate.
+    // ADR-0079: the W trees, read once from share/OpenMS/FLASHIDA/ms3_w_gate.json when a yield gate says model w. A
+    // missing, unusable or other file (its SHA-256 is checked) refuses here (std::invalid_argument naming the path and the
+    // check): the run does not start with a gate the method asked for and the engine cannot evaluate.
     {
       const auto& cg = config_.characterization().yield_gate;
       const auto& qg = config_.quantification().ms3_yield_gate;
       if ((cg && cg->model == YieldModel::W) || (qg && qg->model == YieldModel::W))
       {
         witness_model_ = std::make_unique<WitnessModel>(WitnessModel::loadShipped());
-        exploration_.setWitnessModel(witness_model_.get());   // every [MS3-W] line names its sha
+        exploration_.setWitnessModel(witness_model_.get());
+        // ADR-0079: an MS2-sweep winner's MS3 plan reads its context here (called under analysis_mutex_).
+        exploration_.setWitnessContextProvider([this](const ScanCommand& winner) { return witnessWinnerContext_(winner); });
       }
     }
 
@@ -1019,29 +1023,44 @@ FLASHIda::FLASHIda(char* arg) :
     undoMs3Items_(expired.items, expired.committed_owner_nominals);
   }
 
-  void FLASHIda::writeRows_(const IdaLogger::ScanRowDescriptor& row, const std::vector<IdaLogger::IdRowDescriptor>& id_rows)
+  void FLASHIda::writeRows_(const IdaLogger::ScanRowDescriptor& row, const std::vector<IdaLogger::IdRowDescriptor>& id_rows,
+                            const Ms1ForBuffer* ms1)
   {
     const uint64_t resolve_ts = logger_.writeScanResultRow(row);
     for (const auto& r : id_rows) logger_.writeIdentificationRow(r);
-    if (!witness_model_) return;   // ADR-0076: the state below is the W gate's only
+    if (!witness_model_) return;   // ADR-0079: the state below is the W gate's only
 
-    // n_ms2_prior: every MS2 identification row, its first per tracking id, under (protein, start_pos, end_pos) as the
-    // row writes them (an MS2 row's region is its match's).
-    std::set<std::string> counted;
-    for (const auto& r : id_rows)
+    if (row.ms_level == 2)
     {
-      if (r.ms_level != 2 || !counted.insert(r.tracking_id).second) continue;
-      if (r.match.proteoform_sequence.empty() || r.match.fragments.empty()) continue;   // the writer skips it too
-      WitnessPriorKey key;
-      key.protein = r.match.matched_protein;
-      key.start = r.match.region_start >= 0 ? r.match.region_start : r.ctx.start_pos;
-      key.end = r.match.region_start >= 0 ? r.match.region_end : r.ctx.end_pos;
-      ++witness_counts_.ms2[key];
+      // The parent side of a later MS3 plan of this MS2 (a sweep winner's): its rows as printed -- scan_results'
+      // counts, share and coverage, the first identification row the writer writes (one with a proteoform and fragments).
+      WitnessParentRow p;
+      p.mass_count = static_cast<double>(row.mass_count);
+      p.precursor_share = asLoggedSig6(row.precursor_share);
+      p.tic_coverage = asLoggedSig6(row.tic_coverage);
+      p.fragment_count = static_cast<double>(row.fragment_count);
+      p.tag_count = static_cast<double>(row.tag_count);
+      for (const auto& r : id_rows)
+      {
+        if (r.ms_level != 2 || r.tracking_id != row.tracking_id) continue;
+        if (r.match.proteoform_sequence.empty() || r.match.fragments.empty()) continue;   // the writer skips it too
+        p.id_score = asLoggedFixed4(r.match.identification_score);
+        p.ms2_ions = static_cast<double>(std::max<size_t>(r.match.fragments.size(), 1));
+        break;
+      }
+      if (witness_parent_rows_.emplace(row.tracking_id, p).second)
+      {
+        witness_parent_order_.push_back(row.tracking_id);
+        while (witness_parent_order_.size() > 20000)
+        {
+          witness_parent_rows_.erase(witness_parent_order_.front());
+          witness_parent_order_.pop_front();
+        }
+      }
     }
 
     // The last MS1: any MS1 row (a survey, a Monitor or a Window MS1, any CV), its masses and summed per-charge
-    // intensities as the row prints them, stamped with the row's resolve_ts. Then every queued W-gated MS3 is
-    // re-scored against it.
+    // intensities as the row prints them, stamped with the row's resolve_ts. With its centroids, it enters the buffer.
     if (row.ms_level == 1)
     {
       witness_last_ms1_.resolve_ts = resolve_ts;
@@ -1057,160 +1076,114 @@ FLASHIda::FLASHIda(char* arg) :
             if (pg.getChargeIntensity(z) > 0) sum += asLoggedSig6(pg.getChargeIntensity(z));
           witness_last_ms1_.masses.emplace_back(asLoggedSig6(pg.getMonoMass()), sum);
         }
-      rescoreWitnessed_();
+      if (ms1 != nullptr)
+      {
+        // SPEC 3: every centroid as received with intensity > 0, m/z ascending, 64-bit; the ion current their sum.
+        BufferedSurvey s;
+        s.tracking_id = row.tracking_id;
+        s.resolve_ts = resolve_ts;
+        s.kind = ms1->kind;
+        s.mz.reserve(static_cast<size_t>(std::max(ms1->length, 0)));
+        s.intensity.reserve(static_cast<size_t>(std::max(ms1->length, 0)));
+        bool sorted = true;
+        for (int i = 0; i < ms1->length; ++i)
+        {
+          if (!(ms1->intensity[i] > 0)) continue;
+          if (!s.mz.empty() && ms1->mz[i] < s.mz.back()) sorted = false;
+          s.mz.push_back(ms1->mz[i]);
+          s.intensity.push_back(ms1->intensity[i]);
+          s.ion_current += ms1->intensity[i];
+        }
+        if (!sorted)
+        {
+          std::vector<size_t> o(s.mz.size());
+          for (size_t i = 0; i < o.size(); ++i) o[i] = i;
+          std::stable_sort(o.begin(), o.end(), [&s](size_t a, size_t b) { return s.mz[a] < s.mz[b]; });
+          std::vector<double> mz(o.size()), it(o.size());
+          for (size_t i = 0; i < o.size(); ++i)
+          {
+            mz[i] = s.mz[o[i]];
+            it[i] = s.intensity[o[i]];
+          }
+          s.mz.swap(mz);
+          s.intensity.swap(it);
+        }
+        s.centroid_count = s.mz.size();
+        ms1_buffer_.add(std::move(s));
+      }
     }
+  }
+
+  void FLASHIda::fillWitnessPlan_(WitnessPlanContext& ctx, const ScanCommand& parent_ms2)
+  {
+    ctx.eval_start = std::chrono::steady_clock::now();
+    ctx.plan_ts = EngineClock::nowMs();
+    ctx.survey_id = std::string(parent_ms2.parent_scan_id);
+    ctx.mass_ms2 = parent_ms2.num_stages > 0 ? asLoggedFixed4(parent_ms2.mono_mass) : std::numeric_limits<double>::quiet_NaN();
+    // x_ms1_plan: the last MS1 row (any kind) resolved at or before t; missing before the first one.
+    if (witness_last_ms1_.resolve_ts > 0 && witness_last_ms1_.resolve_ts <= ctx.plan_ts)
+    {
+      ctx.x_ms1_plan = witnessMs1Plan(witness_last_ms1_, ctx.mass_ms2);
+      ctx.last_ms1_id = witness_last_ms1_.tracking_id;
+      ctx.last_ms1_ts = witness_last_ms1_.resolve_ts;
+    }
+    // SPEC 3-5: the surveys of the parent's survey kind in [t - 180 s, t], and the precursor's eight peak features.
+    const Ms1Buffer::Selection sel = ms1_buffer_.select(ctx.survey_id, ctx.plan_ts);
+    ctx.buffer_kind_from = sel.kind_from;
+    ctx.scan_range_lo = sel.lo;
+    ctx.scan_range_hi = sel.hi;
+    ctx.buffer_surveys = sel.surveys.size();
+    ctx.buffer_centroids = sel.centroids;
+    if (!sel.surveys.empty())
+    {
+      ctx.buffer_first_resolve_ts = sel.surveys.front()->resolve_ts;
+      ctx.buffer_last_resolve_ts = sel.surveys.back()->resolve_ts;
+      ctx.buffer_last_survey_id = sel.surveys.back()->tracking_id;
+    }
+    ctx.pk3 = std::isnan(ctx.mass_ms2) ? PeakFeatures{180.0, 180.0, 180.0, static_cast<double>(sel.surveys.size()), 0, 0, 0, 0}
+                                      : planPeakFeatures(sel, ctx.mass_ms2, ctx.plan_ts);
   }
 
   std::unique_ptr<WitnessPlanContext> FLASHIda::witnessContext_(const ScanCommand& parent_ctx,
                                                                 const DeconvolvedSpectrum* row_spec,
-                                                                const IdaLogger::ScanRowDescriptor& results_row, double rt,
+                                                                const IdaLogger::ScanRowDescriptor& results_row,
                                                                 const std::string& parent_id_str)
   {
     if (!witness_model_) return nullptr;
     auto ctx = std::make_unique<WitnessPlanContext>();
-    WitnessRaw& p = ctx->parent;
-    // Stage 0 of every MS3 is this command (buildMS3 copies it): scan_commands' first ';'-value of each field.
-    p[kWZMs2] = parent_ctx.num_stages > 0 ? static_cast<double>(std::abs(parent_ctx.stages[0].charge_state))
-                                          : std::numeric_limits<double>::quiet_NaN();
-    p[kWMassMs2] = asLoggedFixed4(parent_ctx.mono_mass);
-    p[kWPrecIntensity] = asLoggedSig6(parent_ctx.precursor_intensity);
-    p[kWPrecQscore] = asLoggedSig6(parent_ctx.qscore);
-    p[kWPrecIsoCos] = asLoggedSig6(parent_ctx.iso_cos);
-    p[kWPrecSnr] = asLoggedSig6(parent_ctx.snr);
-    // The parent MS2's scan_results row: its mass count and precursor share (both known before its search).
-    p[kWMs2MassCount] = static_cast<double>(row_spec != nullptr ? row_spec->size() : 0);
-    p[kWMs2PrecursorShare] = asLoggedSig6(results_row.precursor_share);
-    // The last MS1 resolved (any kind): its intensity of the precursor mass, and the time since it.
-    p[kWMs1Plan] = witnessMs1Plan(witness_last_ms1_, p[kWMassMs2]);
-    if (witness_last_ms1_.resolve_ts > 0)
-    {
-      const uint64_t now = static_cast<uint64_t>(
-          std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
-      p[kWPlanAge] = static_cast<double>(now >= witness_last_ms1_.resolve_ts ? now - witness_last_ms1_.resolve_ts : 0) / 1000.0;
-    }
-    // x_rt_frac: the parent's retention time as scan_results prints it (minutes), over the method's run length.
-    p[kWRtFrac] = asLoggedSig6(rt / 60.0) / config_.global().duration;
     ctx->parent_id = parent_id_str;
-    ctx->counts = &witness_counts_;
+    ctx->parent_path = "regular";
+    // The parent MS2's scan_results row: its mass count and precursor share (both known before its search); the rest
+    // of its row and its identification row are completed from the search (Exploration::completeWitnessContext).
+    ctx->parent.mass_count = static_cast<double>(row_spec != nullptr ? row_spec->size() : 0);
+    ctx->parent.precursor_share = asLoggedSig6(results_row.precursor_share);
+    fillWitnessPlan_(*ctx, parent_ctx);
     return ctx;
   }
 
-  void FLASHIda::witnessAfterPlan_(int precursor_id, const std::shared_ptr<WitnessGate>& characterization,
-                                   const std::vector<Exploration::WitnessCommand>& characterized,
-                                   const std::shared_ptr<WitnessGate>& quantification,
-                                   const std::vector<Exploration::WitnessCommand>& quantified)
+  std::unique_ptr<WitnessPlanContext> FLASHIda::witnessWinnerContext_(const ScanCommand& winner_ms2)
   {
-    // One line for the MS2: the quantification MS3's candidates first (they are pushed first), then the plan's.
-    std::vector<WitnessRecord> records;
-    if (quantification) records.insert(records.end(), quantification->records.begin(), quantification->records.end());
-    if (characterization) records.insert(records.end(), characterization->records.begin(), characterization->records.end());
-    const WitnessGate* head = characterization ? characterization.get() : quantification.get();
-    if (head != nullptr && !records.empty()) EventLine() << witnessLine(*head, "plan", std::string(), records);
-
-    auto enrol = [&](const std::shared_ptr<WitnessGate>& gate, const std::vector<Exploration::WitnessCommand>& cmds) {
-      if (!gate) return;
-      // What the re-score needs of the gate: its threshold, name, model and the plan-level inputs; not the planner's
-      // functions (they hold references into this plan's model).
-      auto kept = std::make_shared<WitnessGate>();
-      kept->model = gate->model;
-      kept->threshold = gate->threshold;
-      kept->rank_by_w = gate->rank_by_w;
-      kept->gate_name = gate->gate_name;
-      kept->ctx = gate->ctx;
-      kept->ctx.counts = nullptr;
-      kept->cid3 = gate->cid3;
-      for (const Exploration::WitnessCommand& c : cmds)
-      {
-        if (!c.record) continue;
-        if (c.record->placed) witness_counts_.planned_ms3[c.scan_id] = c.record->key;
-        if (c.record->w < 0) continue;   // untested: admitted as it was, never re-scored
-        WitnessRegistration reg;
-        reg.record = c.record;
-        reg.gate = kept;
-        reg.group = c.group;
-        reg.precursor_id = precursor_id;
-        queue_.registerWitnessed(c.scan_id, std::move(reg));
-      }
-    };
-    enrol(quantification, quantified);
-    enrol(characterization, characterized);
+    if (!witness_model_) return nullptr;
+    auto ctx = std::make_unique<WitnessPlanContext>();
+    ctx->parent_id = ScanCommandQueue::encode(winner_ms2.scan_id);
+    ctx->parent_path = "sweep_winner";
+    const auto it = witness_parent_rows_.find(ctx->parent_id);
+    if (it != witness_parent_rows_.end()) ctx->parent = it->second;   // not found: every parent input missing -> failed
+    fillWitnessPlan_(*ctx, winner_ms2);
+    return ctx;
   }
 
-  void FLASHIda::rescoreWitnessed_()
+  void FLASHIda::witnessAfterPlan_(const std::shared_ptr<WitnessGate>& gate)
   {
-    std::vector<ScanCommandQueue::WitnessedEntry> entries = queue_.witnessedQueued();
-    if (entries.empty() || witness_last_ms1_.resolve_ts == 0) return;
-    const uint64_t now = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
-    // One verdict per group (a target's CE variants share their record): the group's first entry decides.
-    std::map<int, const ScanCommandQueue::WitnessedEntry*> head_of_group;
-    for (const auto& e : entries)
-      if (e.reg.group != 0 && head_of_group.count(e.reg.group) == 0) head_of_group[e.reg.group] = &e;
-
-    std::vector<std::pair<int, double>> keep;
-    std::vector<int> withdraw;
-    std::map<std::string, std::pair<const WitnessGate*, std::vector<WitnessRecord>>> lines;   // parent id -> records
-    for (const auto& e : entries)
-    {
-      const ScanCommandQueue::WitnessedEntry& d = (e.reg.group != 0) ? *head_of_group[e.reg.group] : e;
-      if (&d != &e && e.reg.group != 0)
-      {
-        // A sibling variant: it follows its group's head (decided on that entry's own pass below).
-        continue;
-      }
-      WitnessRecord r = *e.reg.record;
-      WitnessRaw& raw = r.raw;
-      // The state at planning, as of now: the time since this MS1, its intensity of the precursor mass, the MS3 ahead
-      // in the queue, and the prior counts (the parent's own row has been written by now).
-      raw[kWPlanAge] = static_cast<double>(now >= witness_last_ms1_.resolve_ts ? now - witness_last_ms1_.resolve_ts : 0) / 1000.0;
-      raw[kWMs1Plan] = witnessMs1Plan(witness_last_ms1_, raw[kWMassMs2]);
-      raw[kWQueueAhead] = static_cast<double>(e.queue_ahead);
-      if (r.placed)
-      {
-        const auto a = witness_counts_.ms2.find(r.key);
-        const auto b = witness_counts_.ms3.find(r.key);
-        raw[kWNMs2Prior] = static_cast<double>(a == witness_counts_.ms2.end() ? 1 : std::max(1, a->second));
-        raw[kWNMs3Prior] = static_cast<double>(b == witness_counts_.ms3.end() ? 0 : b->second);
-      }
-      r.w = e.reg.gate->model->w(raw);
-      std::vector<int> members{e.scan_id};
-      if (e.reg.group != 0)
-        for (const auto& x : entries)
-          if (x.reg.group == e.reg.group && x.scan_id != e.scan_id) members.push_back(x.scan_id);
-      if (witnessAdmits(r.w, e.reg.gate->threshold))
-      {
-        r.verdict = "kept";
-        r.reason.clear();
-        for (int id : members) keep.emplace_back(id, r.w);
-      }
-      else
-      {
-        r.verdict = "withdrawn";
-        r.reason = "below_threshold";
-        withdraw.push_back(e.scan_id);
-      }
-      auto& line = lines[e.reg.gate->ctx.parent_id];
-      line.first = e.reg.gate.get();
-      line.second.push_back(std::move(r));
-    }
-
-    const ScanCommandQueue::WitnessWithdrawal out = queue_.applyWitnessRescore(keep, withdraw);
-    for (const auto& [parent, gr] : lines)
-      EventLine() << witnessLine(*gr.first, "rescore", " ms1=" + witness_last_ms1_.tracking_id, gr.second);
-    if (!out.scan_ids.empty())
-    {
-      forgetTracking_(out.scan_ids);
-      for (int id : out.scan_ids)
-      {
-        ms2_context_cache_.erase(id);
-        witness_counts_.planned_ms3.erase(id);
-      }
-    }
-    for (const int g : out.sweep_groups)
-      if (!exploration_.dropGroup(g))
-        EventLine(EventLevel::Warn) << "[MS3-W-INVARIANT] group=" << g << " not dropped (unknown, or a variant was received)";
-    if (!out.sweep_groups.empty()) publishExplorationState_();
-    if (out.governed) undoExpiredMs3_();
+    if (!gate) return;
+    logger_.writeMs3GateRows(*gate);
+    int sent = 0;
+    for (const WitnessRecord& r : gate->records) sent += r.tracking_id.empty() ? 0 : 1;
+    EventLine() << "[MS3-W] parent=" << gate->ctx.parent_id << " path=" << gate->ctx.parent_path
+                << " candidates=" << gate->candidates << " rows=" << gate->records.size() << " sent_commands=" << sent
+                << " threshold=" << formatSig6(gate->threshold) << " apply=" << (gate->apply ? 1 : 0)
+                << " model=" << (gate->model != nullptr ? gate->model->sha8() : std::string("none"))
+                << " buffer_surveys=" << gate->ctx.buffer_surveys << " eval_us=" << gate->eval_us;
   }
 
   int FLASHIda::waitForSearchIdle()
@@ -1288,8 +1261,8 @@ FLASHIda::FLASHIda(char* arg) :
       // scan number), so one attribution line precedes it naming the precursor, the scan's tracking id and number.
       // ADR-0062: a search worker already ran the measuring half (searchNextLevel) on a copy of this
       // spectrum; only the acquiring half runs here. Inline (no pool) it is today's single call.
-      // ADR-0076: the parent-level W inputs, when a yield gate says model w (completed from the search's match inside).
-      std::unique_ptr<WitnessPlanContext> wctx = witnessContext_(parent_ctx, row_spec, results_row, rt, parent_id_str);
+      // ADR-0079: the plan-level W inputs, when a yield gate says model w (completed from the search's match inside).
+      std::unique_ptr<WitnessPlanContext> wctx = witnessContext_(parent_ctx, row_spec, results_row, parent_id_str);
       if (searched != nullptr)
       {
         ms3_targeting = exploration_.applyNextLevel(*searched, 2, match_spec, parent_ctx.faims_cv, queue_, &parent_ctx,
@@ -1303,8 +1276,6 @@ FLASHIda::FLASHIda(char* arg) :
         ms3_targeting = exploration_.initiateNextLevel(2, match_spec, parent_ctx.faims_cv, queue_, &parent_ctx,
                                                        &tracker_, precursor_id, nullptr, wctx.get());
       }
-      std::shared_ptr<WitnessGate> quant_witness;                 // ADR-0076
-      std::vector<Exploration::WitnessCommand> quant_witnessed;
       // ADR-0064: an identification that closes out its species buys its quantification MS3s, pushed BEFORE the
       // characterization MS3s so they go first within MS3 priority (d.6). Decided on the close-out's own predicate,
       // read before the close-out below records the species: once per close-out, never again by its later scans.
@@ -1315,9 +1286,7 @@ FLASHIda::FLASHIda(char* arg) :
       {
         Exploration::QuantDispatch quant_ms3 = exploration_.dispatchQuant(
             precursor_id, ms3_targeting.proteoform_match, match_spec, parent_ctx.faims_cv, queue_, parent_ctx, tracker_,
-            config_.quantification().ms3_quant_scan, config_.quantification().ms3_targets, wctx.get());
-        quant_witness = quant_ms3.witness;
-        quant_witnessed = quant_ms3.witnessed;
+            config_.quantification().ms3_quant_scan, config_.quantification().ms3_targets);
         for (auto& c : quant_ms3.commands)
         {
           stampAndPush_(c, precursor_id);
@@ -1343,8 +1312,8 @@ FLASHIda::FLASHIda(char* arg) :
       }
       // ADR-0066: a governed MS3 plan is swapped in as the proteoform's live plan (its contexts cached there).
       if (ms3_targeting.governed) commands_pushed += pushGovernedMs3_(*ms3_targeting.governed, precursor_id, child_ids);
-      // ADR-0076: the one [MS3-W] line of this MS2, and the W-scored commands registered for the re-score.
-      witnessAfterPlan_(precursor_id, ms3_targeting.witness, ms3_targeting.witnessed, quant_witness, quant_witnessed);
+      // ADR-0079: the plan's ms3_gate.tsv rows and its [MS3-W] line.
+      witnessAfterPlan_(ms3_targeting.witness);
     }
 
     // ADR-0061 d.7: a searched MS2 whose FLASHTnT number reaches the threshold closes its species out, keyed on the
@@ -1528,6 +1497,7 @@ FLASHIda::FLASHIda(char* arg) :
     // ADR-0066: the group's governed next-level plan, swapped in; its inserted ids join the group's children.
     int governed_pushed = 0;
     if (expl_result.governed) governed_pushed = pushGovernedMs3_(*expl_result.governed, precursor_id, expl_result.child_ids);
+    witnessAfterPlan_(expl_result.witness);   // ADR-0079: a sweep winner's MS3 plan
     // ADR-0071 amendment: a completed MS2 sweep one of whose pre-scans found a proteoform, and which sends no
     // production scan (that scan buys as any 'R' does), buys its Window scans once, here, on the completing pre-scan.
     int window_bought = 0;
@@ -1789,16 +1759,6 @@ FLASHIda::FLASHIda(char* arg) :
     const std::optional<ScanRole> cmd_role = roleOf(parent_ctx);
     const bool is_quant_scan = (cmd_role == ScanRole::Quantification);
     std::vector<std::string> child_ids;
-    // ADR-0076: n_ms3_prior counts an MS3 under the key it was placed under at planning once it is received.
-    if (ms_level == 3 && witness_model_)
-    {
-      const auto placed = witness_counts_.planned_ms3.find(parent_ctx.scan_id);
-      if (placed != witness_counts_.planned_ms3.end())
-      {
-        ++witness_counts_.ms3[placed->second];
-        witness_counts_.planned_ms3.erase(placed);
-      }
-    }
 
     // Carriers for the file-backed TSV rows (scan_results + identification): each branch fills these,
     // and they are written once after the branch dispatch below. The IDA log, the [TRACK-*] stdout
@@ -2106,6 +2066,7 @@ FLASHIda::FLASHIda(char* arg) :
         // ADR-0066: a governed plan, swapped in (an MS3 group's completion makes none today; kept with the other sites).
         int governed_pushed = 0;
         if (expl_result.governed) governed_pushed = pushGovernedMs3_(*expl_result.governed, precursor_id, expl_result.child_ids);
+        witnessAfterPlan_(expl_result.witness);   // ADR-0079: a sweep winner's MS3 plan
         // Seed the parent-MS2 context of the production MS3 a completed MS3 group re-acquires (overrides
         // set); that scan is not a variant, so it returns on the regular MS3 path and needs the lookup.
         for (const auto& [ms3_scan_id, parent_ms2_context] : expl_result.ms2_context_cache)
@@ -2347,7 +2308,23 @@ FLASHIda::FLASHIda(char* arg) :
     // Do not add a cross-file interleaving assertion without revisiting this.
     // Every scan that reaches here was dispatched into a branch that filled results_row; the only
     // level that leaves without a row (MS1 selection==None) returned above, so write unconditionally.
-    writeRows_(results_row, id_rows);
+    // ADR-0079: an MS1 row hands the W gate's buffer its centroids and its kind, the five cells scan_commands.tsv logs
+    // for its command.
+    if (ms_level == 1 && witness_model_)
+    {
+      Ms1ForBuffer ms1;
+      ms1.mz = mzs;
+      ms1.intensity = ints;
+      ms1.length = length;
+      ms1.kind.scan_type = roleNameOf(parent_ctx);
+      ms1.kind.faims_cv = formatSig6(parent_ctx.faims_cv);
+      ms1.kind.faims_enabled = std::to_string(parent_ctx.faims_enabled);
+      ms1.kind.first_mass = formatFixed4(parent_ctx.first_mass);
+      ms1.kind.last_mass = formatFixed4(parent_ctx.last_mass);
+      writeRows_(results_row, id_rows, &ms1);
+    }
+    else
+      writeRows_(results_row, id_rows);
     return return_code;
   }
 

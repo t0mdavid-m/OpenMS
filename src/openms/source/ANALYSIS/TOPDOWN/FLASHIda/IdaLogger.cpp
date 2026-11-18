@@ -35,6 +35,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ChanceMatch.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EngineClock.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/LogCell.h>
@@ -51,6 +52,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <cmath>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -276,6 +278,27 @@ namespace OpenMS
                        // ADR-0061 push 4b, APPENDED: the accession of the protein the model's winner chose.
                        << "protein\n";
         pooled_stream_.flush();
+      }
+    }
+    if (!dir.empty())
+    {
+      // ADR-0079: the W gate's stream. Opened in every run, so a method without a W gate writes its header only.
+      ms3_gate_stream_.open(dir + kMs3GateName, std::ios::app);
+      if (ms3_gate_stream_.is_open())
+      {
+        ms3_gate_stream_ << "parent_tracking_id\tcandidate\tvariant\ttracking_id\tparent_path\tsurvey_tracking_id\t"
+                         << "plan_ts\teval_us\tn_candidates\tmax_targets\tgate_version\tmodel_sha8\tthreshold\tapplied\t"
+                         << "planner_rank\tw_rank\ttarget_w\tw\tdecision\treason\tfailed_input\tin_sent\troom_before\t"
+                         // The candidate's command, as scan_commands.tsv would print it (LogFormat.h).
+                         << "mono_mass\tcharge\tprecursor_mz\tisolation_width\tqscore\tcharge_cos\tcharge_snr\tiso_cos\tsnr\t"
+                         << "charge_score\tactivation\tcollision_energy\tppm_error\tprecursor_intensity\tpeakgroup_intensity\t"
+                         << "ion_type\tion_index\tms3_proteoform\tscan_description\tfirst_mass\tlast_mass";
+        for (int i = 0; i < kW17InputCount; ++i) ms3_gate_stream_ << "\tin_" << w17InputName(i);
+        for (int i = 30; i < kW17InputCount; ++i) ms3_gate_stream_ << "\t" << w17InputName(i);
+        ms3_gate_stream_ << "\tbuffer_kind_from\tscan_range_lo\tscan_range_hi\tbuffer_surveys\tbuffer_first_resolve_ts\t"
+                         << "buffer_last_resolve_ts\tbuffer_last_survey_id\tbuffer_centroids\tlast_ms1_tracking_id\t"
+                         << "last_ms1_resolve_ts\tn_uncovered\tuncovered_bonds\tcovered_bonds\n";
+        ms3_gate_stream_.flush();
       }
     }
   }
@@ -553,11 +576,10 @@ namespace OpenMS
 
   uint64_t IdaLogger::writeScanResultRow(const ScanRowDescriptor& row)
   {
-    // ADR-0076: the row's resolve_ts is returned (the W gate's last MS1 is stamped with it); with no stream open, the
-    // time the row would have been written.
-    if (!results_tsv_stream_.is_open())
-      return static_cast<uint64_t>(
-          std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+    // ADR-0079: the row's resolve_ts is the W gate's clock (EngineClock: the steady clock, advanced only by a test) and
+    // is returned -- the MS1 buffer and the last MS1 are stamped with it; with no stream open, the time the row would
+    // have been written.
+    if (!results_tsv_stream_.is_open()) return EngineClock::nowMs();
     std::lock_guard<std::mutex> lk(results_tsv_mutex_);
 
     // Alias the descriptor fields so the row-building body below is unchanged (byte-identical output).
@@ -583,9 +605,7 @@ namespace OpenMS
     const std::string& reaction_time = row.reaction_time;
     const std::string& winner_tracking_id = row.winner_tracking_id;
 
-    auto now = std::chrono::steady_clock::now();
-    uint64_t resolve_ts = std::chrono::duration_cast<std::chrono::milliseconds>(
-        now.time_since_epoch()).count();
+    uint64_t resolve_ts = EngineClock::nowMs();
     uint64_t duration = (enqueue_ts > 0) ? (resolve_ts - enqueue_ts) : 0;
     uint64_t duration_received = (enqueue_ts > 0 && received_ts > 0) ? (received_ts - enqueue_ts) : 0;
     uint64_t queue_duration = (dequeue_ts > 0 && enqueue_ts > 0) ? (dequeue_ts - enqueue_ts) : 0;
@@ -1239,6 +1259,54 @@ namespace OpenMS
                                           + std::to_string(mass_cntr) + " precursor masses");
 
     return precursor_map_for_real_time_acquisition;
+  }
+
+
+  void IdaLogger::writeMs3GateRows(const WitnessGate& gate)
+  {
+    if (!ms3_gate_stream_.is_open() || gate.records.empty()) return;
+    std::lock_guard<std::mutex> lk(ms3_gate_mutex_);
+    const WitnessPlanContext& ctx = gate.ctx;
+    // Local streams for every value: nothing sticks to ms3_gate_stream_ (LogFormat.h's rule).
+    auto prec = [](double v, int digits) {
+      if (std::isnan(v)) return std::string("nan");
+      std::ostringstream os;
+      os << std::setprecision(digits) << v;
+      return os.str();
+    };
+    auto optW = [&](double v) { return std::isnan(v) ? std::string() : prec(v, 17); };
+    auto bondList = [](const std::vector<int>& b) {
+      std::string out;
+      for (size_t i = 0; i < b.size(); ++i) out += (i ? ";" : "") + std::to_string(b[i]);
+      return out;
+    };
+    const std::string sha8 = gate.model != nullptr ? gate.model->sha8() : std::string();
+    for (const WitnessRecord& r : gate.records)
+    {
+      const ScanCommandCells cells = scanCommandCells(r.cmd);
+      ms3_gate_stream_ << quoteLogCell(ctx.parent_id) << "\t" << r.candidate << "\t" << r.variant << "\t"
+                       << quoteLogCell(r.tracking_id) << "\t" << ctx.parent_path << "\t" << quoteLogCell(ctx.survey_id) << "\t"
+                       << ctx.plan_ts << "\t" << gate.eval_us << "\t" << gate.candidates << "\t" << gate.max_targets << "\t"
+                       << 17 << "\t" << sha8 << "\t" << formatSig6(gate.threshold) << "\t" << (gate.apply ? 1 : 0) << "\t"
+                       << r.planner_rank << "\t" << r.w_rank << "\t" << optW(r.target_w) << "\t" << optW(r.w) << "\t"
+                       << r.decision << "\t" << r.reason << "\t" << r.failed_input << "\t" << r.in_sent << "\t" << r.room_before << "\t"
+                       << cells.mono_mass << "\t" << cells.charge << "\t" << cells.precursor_mz << "\t" << cells.isolation_width << "\t"
+                       << cells.qscore << "\t" << cells.charge_cos << "\t" << cells.charge_snr << "\t" << cells.iso_cos << "\t"
+                       << cells.snr << "\t" << cells.charge_score << "\t" << cells.activation << "\t" << cells.collision_energy << "\t"
+                       << cells.ppm_error << "\t" << cells.precursor_intensity << "\t" << cells.peakgroup_intensity << "\t"
+                       << r.ion_type << "\t" << r.ion_index << "\t" << r.ms3_proteoform << "\t" << quoteLogCell(r.cmd.scan_description)
+                       << "\t" << cells.first_mass << "\t" << cells.last_mass;
+      // The 38 inputs as passed to the trees (32-bit, 9 significant digits give each back exactly), then the eight
+      // peak features in 64 bits (17 digits).
+      for (int i = 0; i < kW17InputCount; ++i) ms3_gate_stream_ << "\t" << prec(static_cast<double>(r.x[static_cast<size_t>(i)]), 9);
+      for (size_t k = 0; k < 8; ++k) ms3_gate_stream_ << "\t" << prec(ctx.pk3[k], 17);
+      ms3_gate_stream_ << "\t" << ctx.buffer_kind_from << "\t" << formatSig6(ctx.scan_range_lo) << "\t" << formatSig6(ctx.scan_range_hi)
+                       << "\t" << ctx.buffer_surveys << "\t" << ctx.buffer_first_resolve_ts << "\t" << ctx.buffer_last_resolve_ts << "\t"
+                       << quoteLogCell(ctx.buffer_last_survey_id) << "\t" << ctx.buffer_centroids << "\t" << quoteLogCell(ctx.last_ms1_id)
+                       << "\t" << ctx.last_ms1_ts << "\t" << r.bonds.n_uncovered << "\t" << bondList(r.bonds.uncovered) << "\t"
+                       << bondList(r.bonds.covered) << "\n";
+    }
+    ms3_gate_stream_.flush();
   }
 
 }
