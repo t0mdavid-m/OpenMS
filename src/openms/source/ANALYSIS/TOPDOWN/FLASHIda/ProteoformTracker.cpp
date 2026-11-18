@@ -1582,7 +1582,6 @@ namespace OpenMS
         continue;
       }
 
-      const size_t emitted_before = out.size();
       emitRawMassTarget_(m, pr, label.first, label.second, "exhaustive", out, gate != nullptr ? &e.charges : nullptr,
                          (gate != nullptr && gate->yield != nullptr) ? &yield_admitted : nullptr);
 
@@ -1803,7 +1802,6 @@ namespace OpenMS
       const std::string ion_type = ion ? std::string(1, ion->type) : std::string(kUnassignedIonType);
       const int ion_index = ion ? ion->index : 0;
 
-      const size_t emitted_before = out.size();
       emitRawMassTarget_(m, pr, ion_type, ion_index, "discriminating", out, gate != nullptr ? &e.charges : nullptr,
                          (gate != nullptr && gate->yield != nullptr) ? &yield_admitted : nullptr);
 
