@@ -135,6 +135,49 @@ namespace OpenMS
     return x;
   }
 
+  namespace
+  {
+    const char* const kW17InputNames[kW17InputCount] = {
+        "frag_N", "z_ms2", "z_ms3", "z_ms3_per_res", "ce1", "cid3", "log10_intensity", "L", "id_score", "iso_cos", "qscore", "snr",
+        "has_shift", "mass_ms2", "mass_ms3", "x_prec_intensity", "x_prec_qscore", "x_prec_iso_cos", "x_prec_snr", "x_ms1_plan",
+        "x_charge_snr", "x_charge_cos", "x_charge_score", "x_ppm_error", "x_ms2_mass_count", "x_ms2_tic_coverage",
+        "x_ms2_precursor_share", "x_ms2_fragment_count", "x_ms2_tag_count", "x_ms2_ions", "pk3_since_start", "pk3_since_apex",
+        "pk3_since_last", "pk3_missed", "pk3_rel_max", "pk3_log_max", "pk3_trend", "pk3_n_seen"};
+    const char* const kW17RawNames[kW17RawCount] = {
+        "frag_N", "z_ms2", "z_ms3", "ce1", "cid3", "intensity", "L", "id_score", "iso_cos", "qscore", "snr", "has_shift", "mass_ms2",
+        "mass_ms3", "x_prec_intensity", "x_prec_qscore", "x_prec_iso_cos", "x_prec_snr", "x_ms1_plan", "x_charge_snr", "x_charge_cos",
+        "x_charge_score", "x_ppm_error", "x_ms2_mass_count", "x_ms2_tic_coverage", "x_ms2_precursor_share", "x_ms2_fragment_count",
+        "x_ms2_tag_count", "x_ms2_ions"};
+  } // namespace
+
+  const char* w17InputName(int index) { return (index >= 0 && index < kW17InputCount) ? kW17InputNames[index] : "?"; }
+  const char* w17RawName(int index) { return (index >= 0 && index < kW17RawCount) ? kW17RawNames[index] : "?"; }
+
+  std::array<float, kW17InputCount> w17ModelInputs(const std::array<double, kW17RawCount>& raw, const std::array<double, 8>& pk3)
+  {
+    std::array<float, kW17InputCount> x{};
+    const double z3 = raw[kW17ZMs3];
+    const double L = raw[kW17L];
+    const double inten = raw[kW17Intensity];
+    x[0] = toFloat32(raw[kW17FragN]);
+    x[1] = toFloat32(raw[kW17ZMs2]);
+    x[2] = toFloat32(z3);
+    x[3] = (!std::isnan(L) && L != 0.0) ? toFloat32(z3 / L) : std::numeric_limits<float>::quiet_NaN();
+    x[4] = toFloat32(raw[kW17Ce1]);
+    x[5] = toFloat32(raw[kW17Cid3]);
+    // log10_intensity: of the raw value as given, not rounded to 32 bits first (w_gate_v17.model_inputs).
+    x[6] = std::isnan(inten) ? std::numeric_limits<float>::quiet_NaN() : toFloat32(std::log10(std::max(inten, 1.0)));
+    x[7] = toFloat32(L);
+    // Raw slots kW17IdScore .. kW17Ms2Ions are model columns 8 .. 29, in the same order.
+    for (int r = kW17IdScore; r < kW17RawCount; ++r)
+    {
+      const bool log10_input = (r == kW17IdScore || r == kW17PrecIntensity || r == kW17Ms1Plan || r == kW17Ms2MassCount);
+      x[static_cast<size_t>(r + 1)] = log10_input ? log10Floor1(raw[static_cast<size_t>(r)]) : toFloat32(raw[static_cast<size_t>(r)]);
+    }
+    for (size_t k = 0; k < 8; ++k) x[30 + k] = toFloat32(pk3[k]);
+    return x;
+  }
+
   WitnessModel WitnessModel::loadShipped()
   {
     String path;
@@ -149,16 +192,18 @@ namespace OpenMS
     return load(path);
   }
 
-  WitnessModel WitnessModel::load(const std::string& path)
+  WitnessModel WitnessModel::load(const std::string& path) { return load(path, kWitnessInputCount); }
+
+  WitnessModel WitnessModel::load(const std::string& path, int num_features)
   {
     std::ifstream in(path, std::ios::binary);
     if (!in) refuse(path, "the file cannot be opened");
     std::ostringstream buf;
     buf << in.rdbuf();
-    return parse(buf.str(), path);
+    return parse(buf.str(), path, num_features);
   }
 
-  WitnessModel WitnessModel::parse(const std::string& bytes, const std::string& origin)
+  WitnessModel WitnessModel::parse(const std::string& bytes, const std::string& origin, int num_features)
   {
     nlohmann::json j;
     try
@@ -177,8 +222,8 @@ namespace OpenMS
     if (!objective_name.is_string() || objective_name.get<std::string>() != "binary:logistic")
       refuse(origin, "the objective is not binary:logistic");
     const nlohmann::json& lmp = child(learner, "learner_model_param", origin);
-    if (stringInt(child(lmp, "num_feature", origin), origin, "num_feature") != kWitnessInputCount)
-      refuse(origin, "num_feature is not " + std::to_string(kWitnessInputCount));
+    if (stringInt(child(lmp, "num_feature", origin), origin, "num_feature") != num_features)
+      refuse(origin, "num_feature is not " + std::to_string(num_features));
     const nlohmann::json& base_json = child(lmp, "base_score", origin);
     if (!base_json.is_string()) refuse(origin, "base_score is not a string");
     std::string base_text = base_json.get<std::string>();   // "[4.1593963E-1]" in XGBoost 3
@@ -208,6 +253,7 @@ namespace OpenMS
 
     WitnessModel m;
     m.origin_ = origin;
+    m.num_features_ = num_features;
     m.intercept_ = std::log(base / (1.0 - base));
     m.trees_.reserve(trees.size());
     for (size_t t = 0; t < trees.size(); ++t)
@@ -243,20 +289,23 @@ namespace OpenMS
         if (tr.left[i] <= static_cast<int32_t>(i) || tr.right[i] <= static_cast<int32_t>(i)
             || tr.left[i] >= static_cast<int32_t>(n) || tr.right[i] >= static_cast<int32_t>(n))
           refuse(origin, where + "node " + std::to_string(i) + " has a child out of order or out of range");
-        if (tr.feature[i] < 0 || tr.feature[i] >= kWitnessInputCount)
+        if (tr.feature[i] < 0 || tr.feature[i] >= num_features)
           refuse(origin, where + "node " + std::to_string(i) + " splits on input " + std::to_string(tr.feature[i])
-                             + ", not one of the " + std::to_string(kWitnessInputCount));
+                             + ", not one of the " + std::to_string(num_features));
       }
       m.trees_.push_back(std::move(tr));
     }
 
     QCryptographicHash hash(QCryptographicHash::Sha256);
     hash.addData(QByteArray::fromRawData(bytes.data(), static_cast<int>(bytes.size())));
-    m.sha8_ = hash.result().toHex().left(8).toStdString();
+    m.sha256_ = hash.result().toHex().toStdString();
+    m.sha8_ = m.sha256_.substr(0, 8);
     return m;
   }
 
-  double WitnessModel::w(const std::array<float, kWitnessInputCount>& x) const
+  double WitnessModel::w(const std::array<float, kWitnessInputCount>& x) const { return wOf(x.data()); }
+
+  double WitnessModel::wOf(const float* x) const
   {
     double sum = intercept_;
     for (const Tree& t : trees_)

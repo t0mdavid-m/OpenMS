@@ -95,6 +95,54 @@ namespace OpenMS
   /// @p v rounded to the nearest 32-bit float; NaN stays NaN, a value past the float range becomes +-infinity.
   OPENMS_DLLAPI float toFloat32(double v);
 
+  /// ADR-0079 (package 17): the 29 raw values of one candidate, in the order of the package's w_gate_v17.RAW. Slot 0 is
+  /// frag_N (1 for an a, b or c ion, 0 for x, y or z). NaN = missing.
+  enum W17Raw : int
+  {
+    kW17FragN = 0,
+    kW17ZMs2,
+    kW17ZMs3,
+    kW17Ce1,
+    kW17Cid3,
+    kW17Intensity,
+    kW17L,
+    kW17IdScore,
+    kW17IsoCos,
+    kW17Qscore,
+    kW17Snr,
+    kW17HasShift,
+    kW17MassMs2,
+    kW17MassMs3,
+    kW17PrecIntensity,
+    kW17PrecQscore,
+    kW17PrecIsoCos,
+    kW17PrecSnr,
+    kW17Ms1Plan,
+    kW17ChargeSnr,
+    kW17ChargeCos,
+    kW17ChargeScore,
+    kW17PpmError,
+    kW17Ms2MassCount,
+    kW17Ms2TicCoverage,
+    kW17Ms2PrecursorShare,
+    kW17Ms2FragmentCount,
+    kW17Ms2TagCount,
+    kW17Ms2Ions,
+    kW17RawCount   ///< 29
+  };
+  /// The number of model inputs of package 17: the 29 raw values with z_ms3_per_res derived, and the eight peak features.
+  constexpr int kW17InputCount = 38;
+  /// The package's name of model input @p index (w_gate_v17.INPUTS), "?" out of range.
+  OPENMS_DLLAPI const char* w17InputName(int index);
+  /// The package's name of raw value @p index (w_gate_v17.RAW; frag_N for slot 0), "?" out of range.
+  OPENMS_DLLAPI const char* w17RawName(int index);
+
+  /// The 38 model inputs (SPEC 7): frag_N; z_ms3_per_res = z_ms3 / L in 64 bits; log10_intensity = log10(max(v, 1)) in
+  /// 64 bits; id_score, x_prec_intensity, x_ms1_plan, x_ms2_mass_count rounded to 32 bits, then log10(max(v, 1)) in 64
+  /// bits; the eight peak features as computed; every value rounded to 32 bits at the end. A missing value stays NaN.
+  OPENMS_DLLAPI std::array<float, kW17InputCount> w17ModelInputs(const std::array<double, kW17RawCount>& raw,
+                                                               const std::array<double, 8>& peak_features);
+
   class OPENMS_DLLAPI WitnessModel
   {
   public:
@@ -106,7 +154,20 @@ namespace OpenMS
     static WitnessModel load(const std::string& path);
 
     /// Check and build a model from the bytes of an XGBoost JSON model file; @p origin names it in an error.
-    static WitnessModel parse(const std::string& bytes, const std::string& origin);
+    /// @p num_features: the inputs the file must declare (ADR-0079: 38 for package 17).
+    static WitnessModel parse(const std::string& bytes, const std::string& origin, int num_features = kWitnessInputCount);
+
+    /// Read and check the model file at @p path with @p num_features inputs.
+    static WitnessModel load(const std::string& path, int num_features);
+
+    /// W for the numFeatures() model inputs at @p x.
+    double wOf(const float* x) const;
+    /// W for the 38 inputs of package 17 (the model must have 38 features).
+    double w(const std::array<float, kW17InputCount>& x) const { return wOf(x.data()); }
+
+    int numFeatures() const { return num_features_; }
+    /// The SHA-256 of the bytes the model was built from, 64 hex digits.
+    const std::string& sha256() const { return sha256_; }
 
     /// The predicted W for the 36 model inputs @p x.
     double w(const std::array<float, kWitnessInputCount>& x) const;
@@ -131,6 +192,8 @@ namespace OpenMS
     };
     std::vector<Tree> trees_;
     double intercept_ = 0.0;             ///< ln(b / (1 - b)), b = base_score
+    int num_features_ = kWitnessInputCount;
+    std::string sha256_;
     std::string sha8_;
     std::string origin_;
   };
