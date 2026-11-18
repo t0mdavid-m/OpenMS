@@ -217,6 +217,9 @@ namespace OpenMS
     /// ADR-0079: forget the last MS1 the W gate knows, so the next plan finds none (x_ms1_plan missing: failed).
     static void forgetLastMs1(FLASHIda& f) { f.witness_last_ms1_ = WitnessLastMs1{}; }
 
+    /// ADR-0079: the tracking id of the last MS1 the W gate knows (x_ms1_plan's row).
+    static std::string lastMs1Id(const FLASHIda& f) { return f.witness_last_ms1_.tracking_id; }
+
     /// ADR-0079: the scan_type of every survey the MS1 buffer holds, in resolve order.
     static std::vector<std::string> ms1BufferKinds(const FLASHIda& f)
     {

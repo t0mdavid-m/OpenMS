@@ -4934,21 +4934,32 @@ START_SECTION(w17_no_rescore_after_ms1)
 }
 END_SECTION
 
-// x_ms1_plan reads the last MS1 row of any kind: with Monitor scans answered while MS3 wait, a plan made after one
-// names it as its last MS1.
-// FAILS UNDER: the last MS1 restricted to surveys.
+// x_ms1_plan reads the last MS1 row of any kind: the gate's last MS1 is the last MS1 row scan_results.tsv wrote, whatever
+// its role -- in this sweep run a Monitor scan, answered after the last plan's sweep was queued.
+// FAILS UNDER: the last MS1 restricted to surveys (it would stay on the last survey).
 START_SECTION(w_ms1_state_reads_monitor_rows)
 {
   const std::string dir = freshLogDir("w17_monitor_ms1");
-  const WRun run = runWCytc(wSweepJson(dir, 1e-6));
-  ABORT_IF(run.acq.monitor_cmds.empty())
+  auto ms1 = loadTsvScans(ms1_cytc_tsv_path);
+  auto ms2 = loadTsvScans(ms2_cytc_fresh_tsv_path);
+  ABORT_IF(ms1.empty() || ms2.empty())
+  const std::string cfg = wSweepJson(dir, 1e-6);
+  std::string last_known;
+  AcqResult a;
+  {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    a = runInterleaved(&ida, ms1, ms2, nullptr, 4000);
+    last_known = FLASHIdaTestAccess::lastMs1Id(ida);
+  }
+  ABORT_IF(a.monitor_cmds.empty())
+  const auto r = TSVFile::parse(dir + "/scan_results.tsv");
+  std::string last_row;
+  for (const auto& row : r.rows)
+    if (cell(r, row, "ms_level") == "1") last_row = cell(r, row, "tracking_id");
   std::set<std::string> monitors;
-  for (const ScanCommand& c : run.acq.monitor_cmds) monitors.insert(ScanCommandQueue::encode(c.scan_id));
-  const WGateRows g = wGateRows(dir);
-  ABORT_IF(g.rows.empty())
-  int after_monitor = 0;
-  for (size_t i = 0; i < g.rows.size(); ++i) after_monitor += monitors.count(g.at(i, "last_ms1_tracking_id")) ? 1 : 0;
-  TEST_EQUAL(after_monitor > 0, true)
+  for (const ScanCommand& c : a.monitor_cmds) monitors.insert(ScanCommandQueue::encode(c.scan_id));
+  TEST_EQUAL(last_known, last_row)
+  TEST_EQUAL(monitors.count(last_row), 1)   // non-vacuity: the last MS1 row is a Monitor scan
 }
 END_SECTION
 

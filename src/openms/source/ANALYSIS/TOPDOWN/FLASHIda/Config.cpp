@@ -1739,9 +1739,12 @@ namespace OpenMS
       {
         if (targeting_.precursor_charges == ChargeAcquisitionMode::Multiplexed)
           refuse("precursor_selection.precursor_charges \"multiplexed\": W was fitted on MS2 that isolate one charge state");
-        if (characterization_.fragment_charges != ChargeAcquisitionMode::Single)
-          refuse("identification.characterization.fragment_charges \"separate\" or \"multiplexed\": W was fitted on MS3 of "
-                 "one fragment charge state per target");
+        if (characterization_.fragment_charges == ChargeAcquisitionMode::Multiplexed)
+          refuse("identification.characterization.fragment_charges \"multiplexed\": W was fitted on MS3 that isolate one "
+                 "fragment charge state");
+        if (characterization_.fragment_charges == ChargeAcquisitionMode::Separate)
+          refuse("identification.characterization.fragment_charges \"separate\": every MS3 W was fitted on is the only "
+                 "charge of its target");
         if (characterization_.objective == CharacterizationObjective::Exhaustive
             || characterization_.objective == CharacterizationObjective::Discriminating)
           refuse("identification.characterization.mode \"exhaustive\" or \"discriminating\": their raw-mass targets and "
