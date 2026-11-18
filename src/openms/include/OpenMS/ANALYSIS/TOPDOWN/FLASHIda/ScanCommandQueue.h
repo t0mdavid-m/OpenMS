@@ -183,7 +183,7 @@ namespace OpenMS
     /// candidate's logged cells from it before deciding (ADR-0079).
     ComposedMS3 composeMS3(const ScanCommand& ms2_ctx, const ScanConfig& ms3_config,
                            double frag_mz, int frag_charge, double iso_width, int parent_scan_id,
-                           char ion_type = ' ', int frag_index = 0, int priority = 1,
+                           char ion_type = '\0', int frag_index = 0, int priority = 1,
                            const FragmentAnalysis::FragmentScores& frag_scores = {},
                            const Ms2Params* stage0_params = nullptr,
                            const MS3FragmentMatcher::ProteoformContext& proto_ctx = {},
