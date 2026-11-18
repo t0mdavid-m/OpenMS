@@ -26,6 +26,7 @@ set(sources_list_h
         FLASHIda/FragmentAnalysis.h
         FLASHIda/IdaLogger.h
         FLASHIda/LogCell.h
+        FLASHIda/LogFormat.h
         FLASHIda/MS3FragmentMatcher.h
         FLASHIda/Ms3WitnessGate.h
         FLASHIda/Ms3WitnessModel.h

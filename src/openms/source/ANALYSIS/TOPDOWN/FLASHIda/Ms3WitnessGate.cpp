@@ -7,6 +7,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms3WitnessGate.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/LogFormat.h>
 
 #include <cctype>
 #include <cmath>
@@ -18,18 +19,6 @@ namespace OpenMS
   namespace
   {
     const double kNaN = std::numeric_limits<double>::quiet_NaN();
-
-    double readBack(const std::string& s)
-    {
-      try
-      {
-        return std::stod(s);
-      }
-      catch (const std::exception&)
-      {
-        return kNaN;
-      }
-    }
 
     // A raw value for the [MS3-W] line: as passed to the trees, enough digits to give it back exactly (the inputs are
     // at most 6 significant digits or 4 decimals of a mass); "nan" when missing.
@@ -60,17 +49,13 @@ namespace OpenMS
   double asLoggedSig6(double v)
   {
     if (std::isnan(v)) return v;
-    std::ostringstream os;   // the default format every stage-scored scan_commands column and scan_results column uses
-    os << v;
-    return readBack(os.str());
+    return parseLogged(formatSig6(v));   // ADR-0079: the logger's own formatter (LogFormat.h), never a second copy
   }
 
   double asLoggedFixed4(double v)
   {
     if (std::isnan(v)) return v;
-    std::ostringstream os;
-    os << std::fixed << std::setprecision(4) << v;
-    return readBack(os.str());
+    return parseLogged(formatFixed4(v));
   }
 
   std::string proformaLetters(const std::string& proforma)

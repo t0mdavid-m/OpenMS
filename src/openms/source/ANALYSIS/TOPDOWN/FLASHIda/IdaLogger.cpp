@@ -38,6 +38,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/LogCell.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/LogFormat.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms3YieldModel.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
@@ -424,54 +425,8 @@ namespace OpenMS
     std::string id_str = ScanCommandQueue::encode(cmd.scan_id);
     std::string scan_type = scanTypeFromDescription_(cmd);
 
-    std::string charges, precursor_mzs, iso_widths, col_energies, activations;
-    std::string reaction_times, reagent_max_its, reagent_agc_targets;
-    for (int i = 0; i < cmd.num_stages; ++i)
-    {
-      if (i > 0) { charges += ";"; precursor_mzs += ";"; iso_widths += ";"; col_energies += ";"; activations += ";"; reaction_times += ";"; reagent_max_its += ";"; reagent_agc_targets += ";"; }
-      charges += std::to_string(cmd.stages[i].charge_state);
-      std::ostringstream mz_os, iw_os, ce_os;
-      mz_os << cmd.stages[i].precursor_mz;
-      iw_os << cmd.stages[i].isolation_width;
-      ce_os << cmd.stages[i].collision_energy;
-      precursor_mzs += mz_os.str();
-      iso_widths += iw_os.str();
-      col_energies += ce_os.str();
-      activations += cmd.stages[i].activation_type;
-
-      // Co-isolation notches, ','-joined INSIDE this stage's ';'-group -- the same two-axis grammar
-      // the wire uses, so scan_commands.tsv records what was actually commanded rather than only the
-      // anchor window. Only the charge-dependent geometry gains the axis: collision energy and
-      // activation are per fragmentation event and all notches of a stage share one.
-      // No notches (every mode but multiplexed) emits nothing here, so these columns stay
-      // byte-identical to the pre-notch format.
-      auto stage_notches = notchesForStage(cmd, i);
-      for (int n = 0; n < stage_notches.second; ++n)
-      {
-        std::ostringstream nmz_os, niw_os;
-        nmz_os << stage_notches.first[n].precursor_mz;
-        niw_os << stage_notches.first[n].isolation_width;
-        charges += "," + std::to_string(stage_notches.first[n].charge_state);
-        precursor_mzs += "," + nmz_os.str();
-        iso_widths += "," + niw_os.str();
-      }
-      std::ostringstream rt_os, rmi_os;
-      rt_os << cmd.stages[i].reaction_time;
-      rmi_os << cmd.stages[i].reagent_max_it;
-      reaction_times += rt_os.str();
-      reagent_max_its += rmi_os.str();
-      reagent_agc_targets += std::to_string(cmd.stages[i].reagent_agc_target);
-    }
-    // Stage-less commands (MS1 / AGC) populate no per-stage fields. Emit explicit
-    // placeholders so the row still serializes the full column count: a tab-split
-    // parser drops a trailing empty field, which would leave such rows one column
-    // short. Mirrors the empty-field guard in the ScanResults row writer.
-    if (cmd.num_stages == 0)
-    {
-      charges = precursor_mzs = iso_widths = col_energies = reaction_times =
-          reagent_max_its = reagent_agc_targets = "0";
-      activations = "none";
-    }
+    // ADR-0079: the per-stage and scored cells come from LogFormat.h, the one formatter the W gate reads its inputs through.
+    const ScanCommandCells cells = scanCommandCells(cmd);
 
     std::string parent_id(cmd.parent_scan_id);
     // The MS3's target ion, parsed off its scan_description by the one parser the yield model shares (Ms3YieldModel.h),
@@ -514,30 +469,10 @@ namespace OpenMS
       witness_probability = os.str();
     }
 
-    // MS3 scoring columns are 2-stage 'MS2-precursor;fragment'; sc/sci append ';v1' only for MS3.
-    // MS1/MS2/followup rows (msn_level != 3) emit stage-0 only -> byte-identical to before.
-    auto sc = [&](double v0, double v1) {
-      std::ostringstream os; os << v0; if (cmd.msn_level == 3) { os << ';' << v1; } return os.str();
-    };
-    auto sci = [&](int v0, int v1) {
-      std::ostringstream os; os << v0; if (cmd.msn_level == 3) { os << ';' << v1; } return os.str();
-    };
-    // Scan-range bounds, formatted through a LOCAL stream like sc()/sci() above and for the same reason:
-    // std::fixed/setprecision are STICKY, and commands_tsv_stream_ is deliberately left at the stream default,
-    // so setting them on it here would reformat faims_cv on every SUBSEQUENT row (0 -> 0.0000) and move goldens
-    // for all 22 modes. The default is not sufficient on its own either: defaultfloat gives 6 SIGNIFICANT
-    // figures, so an isolation-bound edge of 1236.625 prints as "1236.62" -- 0.005 Th gone, which is exactly
-    // the resolution a reader needs to tell a bound window from a hand-override. fixed+4 holds 4 decimals at
-    // any m/z in range.
-    auto mz = [](double v) { std::ostringstream os; os << std::fixed << std::setprecision(4) << v; return os.str(); };
-    // mono_mass sets its OWN format (ADR-0046 decision 10). Through sc() it printed at the stream default --
-    // six SIGNIFICANT digits, "12351.4" for 12351.3933 -- the defect ADR-0035 decision 5 fixed in ida.log, and a
-    // logged value that was not the decision value. A LOCAL stream, like mz() above and for its reason. Stage-less
-    // rows (MS1 / AGC / monitor) keep their "0": there is no mass there, and "0.0000" would revalue every such row.
-    auto mass = [&](double v0, double v1) {
-      if (cmd.num_stages == 0) { return std::string("0"); }
-      std::ostringstream os; os << std::fixed << std::setprecision(4) << v0; if (cmd.msn_level == 3) { os << ';' << v1; } return os.str();
-    };
+    // Purity and the charge check's masses: fixed + 4, through LogFormat.h like every scored cell above. Never set a
+    // precision on commands_tsv_stream_ itself: std::fixed/setprecision are sticky and would reformat faims_cv on every
+    // later row.
+    auto mz = [](double v) { return formatFixed4(v); };
     // The decision columns. Tracking id 0 is never issued, so 0 means no survey; a purity below 0 is
     // windowPurity's "not measurable" and is left empty rather than logged as a fraction it is not.
     std::string decision_survey, isolation_purity;
@@ -573,38 +508,38 @@ namespace OpenMS
                          << quoteLogCell(parent_id) << "\t"
                          << precursor_id << "\t"          // P5: per-MS1-selection precursor identity
                          << cmd.priority << "\t"
-                         << mass(cmd.mono_mass, cmd.mono_mass_s1) << "\t"
-                         << charges << "\t"
-                         << precursor_mzs << "\t"
-                         << iso_widths << "\t"
-                         << sc(cmd.qscore, cmd.qscore_s1) << "\t"
-                         << sc(cmd.charge_cos, cmd.charge_cos_s1) << "\t"
-                         << sc(cmd.charge_snr, cmd.charge_snr_s1) << "\t"
-                         << sc(cmd.iso_cos, cmd.iso_cos_s1) << "\t"
-                         << sc(cmd.snr, cmd.snr_s1) << "\t"
-                         << sc(cmd.charge_score, cmd.charge_score_s1) << "\t"
-                         << activations << "\t"
-                         << col_energies << "\t"
-                         << sci(cmd.hcd_energy, cmd.hcd_energy_s1) << "\t"
-                         << reaction_times << "\t"
-                         << reagent_max_its << "\t"
-                         << reagent_agc_targets << "\t"
-                         << sc(cmd.ppm_error, cmd.ppm_error_s1) << "\t"
-                         << sc(cmd.precursor_intensity, cmd.precursor_intensity_s1) << "\t"
-                         << sc(cmd.peakgroup_intensity, cmd.peakgroup_intensity_s1) << "\t"
+                         << cells.mono_mass << "\t"
+                         << cells.charge << "\t"
+                         << cells.precursor_mz << "\t"
+                         << cells.isolation_width << "\t"
+                         << cells.qscore << "\t"
+                         << cells.charge_cos << "\t"
+                         << cells.charge_snr << "\t"
+                         << cells.iso_cos << "\t"
+                         << cells.snr << "\t"
+                         << cells.charge_score << "\t"
+                         << cells.activation << "\t"
+                         << cells.collision_energy << "\t"
+                         << cells.hcd_energy << "\t"
+                         << cells.reaction_time << "\t"
+                         << cells.reagent_max_it << "\t"
+                         << cells.reagent_agc_target << "\t"
+                         << cells.ppm_error << "\t"
+                         << cells.precursor_intensity << "\t"
+                         << cells.peakgroup_intensity << "\t"
                          << ion_type << "\t"
                          << ion_index << "\t"
                          << ms3_proteoform << "\t"        // wide MS3 fragment ProForma ("" for MS1/MS2/AGC)
                          << quoteLogCell(cmd.scan_description) << "\t"  // E6: raw descriptor (tab/newline-free by construction)
                          << cmd.faims_cv << "\t"
                          << cmd.faims_enabled << "\t"     // 0/1; disambiguates CV 0 from no FAIMS
-                         << mz(cmd.first_mass) << "\t"    // ADR-0026 d6: 0 = unset (instrument method default), a real value
-                         << mz(cmd.last_mass) << "\t"
+                         << cells.first_mass << "\t"    // ADR-0026 d6: 0 = unset (instrument method default), a real value
+                         << cells.last_mass << "\t"
                          << quoteLogCell(decision_survey) << "\t"
                          << isolation_purity << "\t"
                          << predicted_bond_yield << "\t"  // ADR-0069: E the yield gate admitted it at, else -1
                          << witness_probability << "\t"   // ADR-0076: W the W gate last decided it at, else -1
-                         << mz(cmd.max_it) << "\t"        // ADR-0072: the value sent (a multiplexed scan's share); 0 = unset
+                         << cells.max_it << "\t"        // ADR-0072: the value sent (a multiplexed scan's share); 0 = unset
                          << cc_status << "\t"             // ADR-0078: the charge check, empty when it is off
                          << cc_z << "\t"
                          << cc_z_cont << "\t"
@@ -681,14 +616,14 @@ namespace OpenMS
                         << instrument_duration << "\t"
                         << processing_duration << "\t"
                         << mass_count << "\t"
-                        << precursor_share << "\t"
+                        << formatSig6(precursor_share) << "\t"
                         // Identification yield. Emitted raw: results_tsv_stream_ is the one IdaLogger
                         // stream deliberately never given a precision, and both fixed/setprecision are
                         // sticky, so setting one here would reformat rt, precursor_share,
                         // exploration_score and the next row's deconv block. Two are ints anyway.
                         << row.tag_count << "\t"
                         << row.fragment_count << "\t"
-                        << row.tic_coverage << "\t"
+                        << formatSig6(row.tic_coverage) << "\t"
                         << exploration_group_id << "\t"
                         << exploration_metric << "\t"
                         << exploration_score << "\t"
@@ -736,7 +671,7 @@ namespace OpenMS
       for (size_t i = 0; i < deconv_spectrum->size(); i++)
       {
         if (i > 0) results_tsv_stream_ << ";";
-        results_tsv_stream_ << (*deconv_spectrum)[i].getMonoMass();
+        results_tsv_stream_ << formatSig6((*deconv_spectrum)[i].getMonoMass());   // ADR-0079: x_ms1_plan reads these cells
       }
       results_tsv_stream_ << "\t";
       // No std::fixed / setprecision here, deliberately: results_tsv_stream_ is the one IdaLogger stream
@@ -772,7 +707,7 @@ namespace OpenMS
           const float ci = (*deconv_spectrum)[i].getChargeIntensity(z);
           if (ci <= 0) continue;
           if (!first) results_tsv_stream_ << ",";
-          results_tsv_stream_ << ci;
+          results_tsv_stream_ << formatSig6(ci);
           first = false;
         }
       }
@@ -998,7 +933,7 @@ namespace OpenMS
       << precursor_ion << "\t"
       << proforma << "\t"
       // The Identification score (the close-out's number; -1 = not searched). fixed+4 in effect.
-      << match.identification_score << "\t"
+      << formatFixed4(match.identification_score) << "\t"
       // -1 on every MS3 row by POLICY, not because nothing tagged: MS3 exploration variants ARE tagged
       // (computeFragmentMatch_), but a tag count there measures the sub-fragment spectrum rather than
       // the precursor's identifiability, which is not what this column means. On MS2 rows 0 is a real

@@ -172,6 +172,27 @@ namespace OpenMS
                          /// quantification MS3 (ScanRole.h)
                          char marker = 'R');
 
+    /// ADR-0079: an MS3 command composed but not yet issued -- scan_id 0, a placeholder id in its description -- and
+    /// the prefixed fragment ProForma its scan_commands.tsv row will carry.
+    struct ComposedMS3
+    {
+      ScanCommand cmd{};
+      std::string ms3_proteoform;
+    };
+    /// buildMS3 without the tracking id: the same command field for field, taken by no lock. The W gate reads a
+    /// candidate's logged cells from it before deciding (ADR-0079).
+    ComposedMS3 composeMS3(const ScanCommand& ms2_ctx, const ScanConfig& ms3_config,
+                           double frag_mz, int frag_charge, double iso_width, int parent_scan_id,
+                           char ion_type = ' ', int frag_index = 0, int priority = 1,
+                           const FragmentAnalysis::FragmentScores& frag_scores = {},
+                           const Ms2Params* stage0_params = nullptr,
+                           const MS3FragmentMatcher::ProteoformContext& proto_ctx = {},
+                           const std::vector<NotchCandidate>* stage1_notches = nullptr,
+                           char marker = 'R') const;
+    /// Mint the tracking id of a composed MS3, write it into its description, stash its ProForma and log
+    /// [TRACK-CREATE]; returns the id. buildMS3 == composeMS3 + assignMS3Id.
+    int assignMS3Id(ComposedMS3& composed);
+
     /// Create an MS1 survey scan command from current config
     ScanCommand makeMS1() const;
 

@@ -548,25 +548,28 @@ namespace OpenMS
     return cmd;
   }
 
-  ScanCommand ScanCommandQueue::buildMS3(const ScanCommand& ms2_ctx, const ScanConfig& ms3_config,
+  ScanCommandQueue::ComposedMS3 ScanCommandQueue::composeMS3(const ScanCommand& ms2_ctx, const ScanConfig& ms3_config,
                                           double frag_mz, int frag_charge, double iso_width, int parent_scan_id,
                                           char ion_type, int frag_index, int priority,
                                           const FragmentAnalysis::FragmentScores& frag_scores,
                                           const Ms2Params* stage0_params,
                                           const MS3FragmentMatcher::ProteoformContext& proto_ctx,
-                                          const std::vector<NotchCandidate>* stage1_notches, char marker)
+                                          const std::vector<NotchCandidate>* stage1_notches, char marker) const
   {
-    std::lock_guard<std::mutex> lock(queue_mutex_);
-    ScanCommand cmd{};
-    int id = nextTrackingIdInt_();
-    cmd.scan_id = id;
-    // Render the wide MS3 fragment ProForma here (moved off the callers) and stash it for the
-    // scan_commands.tsv ms3_proteoform column (drained by takeMS3Proteoform). Inline write —
-    // queue_mutex_ is already held and is non-recursive.
+    // ADR-0079: composed WITHOUT a tracking id and without queue_mutex_ (a pure function of its arguments and the
+    // config), so the W gate can read a candidate's cells exactly as scan_commands.tsv would print them before it
+    // decides; assignMS3Id mints the id only for a command that is sent. scan_id stays 0 (never issued) and the
+    // description's 3-character id prefix is a placeholder until then.
+    ComposedMS3 out;
+    ScanCommand& cmd = out.cmd;
+    cmd = ScanCommand{};
+    const int id = 0;
+    // The wide MS3 fragment ProForma, stashed by assignMS3Id for the scan_commands.tsv ms3_proteoform column (drained
+    // by takeMS3Proteoform).
     const std::string ms3_proteoform = MS3FragmentMatcher::fragmentProForma(
         config_.identification().proteinOr(proto_ctx.protein_sequence), proto_ctx, ion_type, frag_index);
     // ADR-0067: prefixed with the search's fixed modifications (ProForma global modifications; empty: none)
-    if (!ms3_proteoform.empty()) ms3_cmd_proteoform_[id] = std::string(config_.identification().fixed_mods.proformaPrefix()) + ms3_proteoform;
+    if (!ms3_proteoform.empty()) out.ms3_proteoform = std::string(config_.identification().fixed_mods.proformaPrefix()) + ms3_proteoform;
     cmd.msn_level = 3;
     cmd.priority = priority;
     cmd.is_agc = 0;
@@ -680,10 +683,6 @@ namespace OpenMS
                     id_str.c_str(), marker, mass_tok.c_str(), frag_charge);
     }
 
-    EventLine() << "[TRACK-CREATE] id=" << id_str
-              << " ms_level=3"
-              << " frag_mz=" << frag_mz;
-
     // 2-stage scoring for the MS3 commands row: stage-0 = the MS2 precursor (carried from ms2_ctx),
     // stage-1 = the selected fragment precursor (frag_scores, re-computed from its PeakGroup).
     cmd.qscore               = ms2_ctx.qscore;               cmd.qscore_s1               = frag_scores.qscore;
@@ -701,7 +700,37 @@ namespace OpenMS
     // refreshes stages[0].collision_energy but left this pointing at the MS2's energy.
 
     syncEnergyMirrors_(cmd);
-    return cmd;
+    return out;
+  }
+
+  int ScanCommandQueue::assignMS3Id(ComposedMS3& composed)
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    ScanCommand& cmd = composed.cmd;
+    const int id = nextTrackingIdInt_();
+    cmd.scan_id = id;
+    // The description was composed with a 3-character placeholder id: every MS3 description starts with encode(id).
+    const std::string id_str = encode(id);
+    std::memcpy(cmd.scan_description, id_str.data(), 3);
+    // Inline write: queue_mutex_ is held and is non-recursive.
+    if (!composed.ms3_proteoform.empty()) ms3_cmd_proteoform_[id] = composed.ms3_proteoform;
+    EventLine() << "[TRACK-CREATE] id=" << id_str
+              << " ms_level=3"
+              << " frag_mz=" << cmd.stages[1].precursor_mz;
+    return id;
+  }
+
+  ScanCommand ScanCommandQueue::buildMS3(const ScanCommand& ms2_ctx, const ScanConfig& ms3_config,
+                                          double frag_mz, int frag_charge, double iso_width, int parent_scan_id,
+                                          char ion_type, int frag_index, int priority,
+                                          const FragmentAnalysis::FragmentScores& frag_scores,
+                                          const Ms2Params* stage0_params,
+                                          const MS3FragmentMatcher::ProteoformContext& proto_ctx,
+                                          const std::vector<NotchCandidate>* stage1_notches, char marker)
+  {
+    ComposedMS3 composed = composeMS3(ms2_ctx, ms3_config, frag_mz, frag_charge, iso_width, parent_scan_id, ion_type, frag_index, priority, frag_scores, stage0_params, proto_ctx, stage1_notches, marker);
+    assignMS3Id(composed);
+    return composed.cmd;
   }
 
   ScanCommand ScanCommandQueue::buildFollowUp(const ScanCommand& ctx,
