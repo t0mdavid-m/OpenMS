@@ -1424,7 +1424,7 @@ START_SECTION(ids_that_begin_with_a_quote_survive_every_stream_and_reader)
     else { rows.back().push_back(c); }
     return rows;
   };
-  for (const std::string name : {"scan_commands.tsv", "scan_results.tsv", "identification.tsv", "pooled_identification.tsv"})
+  for (const std::string name : {"scan_commands.tsv", "scan_results.tsv", "identification.tsv", "pooled_identification.tsv", "ms3_gate.tsv"})
   {
     const auto rows = csvRows(dir + "/" + name);
     const size_t n_lines = lines(dir + "/" + name).size();

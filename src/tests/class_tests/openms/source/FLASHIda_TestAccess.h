@@ -24,6 +24,7 @@
 #include <atomic>
 #include <cstddef>
 #include <functional>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -212,6 +213,17 @@ namespace OpenMS
     /// Is the monitor scan's private Deconvolution engine present? Null unless a level enables
     /// monitor_ms1, which is what makes the feature free when off.
     static bool hasMonitorDeconv(const FLASHIda& f) { return f.monitor_deconv_ != nullptr; }
+
+    /// ADR-0079: forget the last MS1 the W gate knows, so the next plan finds none (x_ms1_plan missing: failed).
+    static void forgetLastMs1(FLASHIda& f) { f.witness_last_ms1_ = WitnessLastMs1{}; }
+
+    /// ADR-0079: the scan_type of every survey the MS1 buffer holds, in resolve order.
+    static std::vector<std::string> ms1BufferKinds(const FLASHIda& f)
+    {
+      std::vector<std::string> out;
+      for (const BufferedSurvey& s : f.ms1_buffer_.surveys()) out.push_back(s.kind.scan_type);
+      return out;
+    }
 
     // ---- One survey's selection on chosen PeakGroups (PrecursorSelection) -------------------------
 

@@ -202,6 +202,30 @@ START_SECTION(schema_column_counts)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
+// ADR-0079 -- ms3_gate.tsv: opened in every run (a method without a W gate writes its header only), one row per MS3
+// candidate a W-gated plan considered; the header is the order the C++ writer emits.
+/////////////////////////////////////////////////////////////
+START_SECTION(ms3_gate_columns)
+{
+  const std::string dir = freshLogDir("lf_ms3_gate");
+  std::string json = buildJsonWithLogDir(dir, true);
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+  auto g = TSVFile::parse(dir + "/ms3_gate.tsv");
+  TEST_EQUAL(g.headers.size(), 103)   // 44 identity, plan, decision and command cells + 38 inputs + 8 peak features + 13
+  TEST_EQUAL(g.rows.size(), 0)        // no W gate: the header only
+  TEST_EQUAL(g.headers.front(), std::string("parent_tracking_id"))
+  TEST_EQUAL(g.colIndex("tracking_id"), 3)
+  TEST_EQUAL(g.colIndex("reason"), 19)
+  TEST_EQUAL(g.colIndex("mono_mass"), 23)
+  TEST_EQUAL(g.colIndex("in_frag_N"), 44)
+  TEST_EQUAL(g.colIndex("in_pk3_n_seen"), 81)
+  TEST_EQUAL(g.colIndex("pk3_since_start"), 82)
+  TEST_EQUAL(g.colIndex("buffer_kind_from"), 90)
+  TEST_EQUAL(g.headers.back(), std::string("covered_bonds"))
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
 // §C1 -- scan_commands.tsv : MS2 (recording) columns
 /////////////////////////////////////////////////////////////
 START_SECTION(commands_ms2_columns)

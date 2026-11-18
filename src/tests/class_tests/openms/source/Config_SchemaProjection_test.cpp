@@ -2004,21 +2004,6 @@ START_SECTION(w_needs_a_threshold_in_0_1)
 }
 END_SECTION
 
-START_SECTION(w_needs_a_duration)
-{
-  // x_rt_frac divides by the run length: no global.duration, or 0, is refused under model w only.
-  TEST_EQUAL(contains(refineMessage(wCfg(R"({ "model": "w", "threshold": 0.5 })", "")),
-                      "needs global.duration > 0 minutes"), true)
-  TEST_EQUAL(contains(refineMessage(wCfg(R"({ "model": "w", "threshold": 0.5 })", "0")),
-                      "needs global.duration > 0 minutes"), true)
-  TEST_EQUAL(Config(wCfg(R"({ "model": "bond_yield" })", "")).characterization().yield_gate.has_value(), true)
-  TEST_REAL_SIMILAR(Config(wCfg(R"({ "model": "w", "threshold": 0.5 })", "67")).global().duration, 67.0)
-  // A present duration must be a finite number >= 0 (it used to be ignored when not a number).
-  TEST_EQUAL(contains(refineMessage(wCfg("{}", "\"67\"")), "global.duration must be a finite number of minutes >= 0"), true)
-  TEST_EQUAL(contains(refineMessage(wCfg("{}", "-5")), "global.duration must be a finite number of minutes >= 0"), true)
-}
-END_SECTION
-
 START_SECTION(w_ignores_coefficients)
 {
   // Accepted and parsed (so a method can switch model back), and unused by the W gate.
@@ -2042,14 +2027,12 @@ START_SECTION(w_in_quant_block)
   // IDENT_TH's text (the macro is #undef'd before this section).
   const std::string ident = std::string(R"("global": { "duration": 60 }, )")
                             + R"("identification": { "reference": { "sequence": "PEPTCIDEK" }, "threshold": 10 },)";
-  Config c(q3Cfg(R"("scan": "ms3", "ms3_yield_gate": { "model": "w", "threshold": 0.5 })", ident));
-  TEST_EQUAL(c.quantification().ms3_yield_gate.has_value(), true)
-  TEST_EQUAL((int)c.quantification().ms3_yield_gate->model, (int)YieldModel::W)
-  TEST_EQUAL(contains(refineMessage(q3Cfg(R"("scan": "ms3", "ms3_yield_gate": { "model": "w" })", ident)),
-                      "quantification.ms3_yield_gate.threshold is required under model \"w\""), true)
-  // The duration rule covers the quantification gate as well.
-  TEST_EQUAL(contains(refineMessage(q3Cfg(R"("scan": "ms3", "ms3_yield_gate": { "model": "w", "threshold": 0.5 })")),
-                      "needs global.duration > 0 minutes"), true)
+  // ADR-0079: W predicts that an MS3 shows a bond of its target fragment, not reporter quality: model w is refused in
+  // the quantification block; bond_yield stays.
+  TEST_EQUAL(contains(refineMessage(q3Cfg(R"("scan": "ms3", "ms3_yield_gate": { "model": "w", "threshold": 0.5 })", ident)),
+                      "quantification.ms3_yield_gate cannot use model \"w\""), true)
+  TEST_EQUAL(Config(q3Cfg(R"("scan": "ms3", "ms3_yield_gate": { "model": "bond_yield" })", ident)).quantification().ms3_yield_gate.has_value(),
+             true)
 }
 END_SECTION
 
@@ -2060,8 +2043,11 @@ START_SECTION(w_refuses_multiplexed)
                       "cannot run with identification.characterization.fragment_charges \"multiplexed\""), true)
   TEST_EQUAL(contains(refineMessage(wCfg(gate, "60", "", R"(, "precursor_charges": "multiplexed")")),
                       "cannot run with precursor_selection.precursor_charges \"multiplexed\""), true)
-  // separate and single are fitted (one charge per scan); bond_yield is not restricted.
-  TEST_EQUAL(Config(wCfg(gate, "60", R"("fragment_charges": "separate", )")).characterization().yield_gate.has_value(), true)
+  // ADR-0079: separate is refused too (every recorded target had one charge); single is the fitted mode; bond_yield is
+  // not restricted.
+  TEST_EQUAL(contains(refineMessage(wCfg(gate, "60", R"("fragment_charges": "separate", )")),
+                      "cannot run with identification.characterization.fragment_charges"), true)
+  TEST_EQUAL(Config(wCfg(gate, "60", R"("fragment_charges": "single", )")).characterization().yield_gate.has_value(), true)
   TEST_EQUAL(Config(wCfg(R"({ "model": "bond_yield" })", "60", R"("fragment_charges": "multiplexed", )"))
                  .characterization().yield_gate.has_value(), true)
 }
@@ -2081,6 +2067,48 @@ START_SECTION(w_refuses_reordered_sends)
   TEST_EQUAL(Config(wCfg(gate, "60", R"("order": "ranked", )")).characterization().yield_gate.has_value(), true)
   TEST_EQUAL(Config(wCfg(R"({ "model": "bond_yield" })", "60", R"("order": "random", )")).characterization().yield_gate.has_value(),
              true)
+}
+END_SECTION
+
+// ADR-0079: W was fitted on b / y MS3 of the mapped fragments, coverage and ambiguity planners, an HCD first stage and a CID
+// MS3 stage. Every method that can make another MS3 under model w is refused at load; the three fitted objectives load.
+// FAILS UNDER: a W-gated plan of exhaustive or discriminating targets, or of another activation, evaluated.
+START_SECTION(w_refuses_unvalidated_modes)
+{
+  const std::string gate = R"({ "model": "w", "threshold": 0.5 })";
+  for (const std::string mode : {"exhaustive", "discriminating"})
+  {
+    const std::string cfg = cfgJson("", R"("global": { "duration": 60 }, "identification": { "reference": { "sequence": "PEPTIDEK" }, )"
+                                          + std::string(mode == "discriminating" ? R"("method": "refine", )" : "")
+                                          + R"("characterization": { "mode": ")" + mode + R"(", "yield_gate": )" + gate + R"( } },)",
+                                    kWMs3);
+    TEST_EQUAL(contains(refineMessage(cfg), "cannot run with identification.characterization.mode \"exhaustive\" or \"discriminating\""), true)
+  }
+  for (const std::string mode : {"fragments", "coverage", "ambiguity"})
+  {
+    const std::string cfg = cfgJson("", R"("global": { "duration": 60 }, "identification": { "reference": { "sequence": "PEPTIDEK" }, )"
+                                          R"("characterization": { "mode": ")" + mode + R"(", "yield_gate": )" + gate + R"( } },)",
+                                    kWMs3);
+    TEST_EQUAL(Config(cfg).characterization().yield_gate.has_value(), true)
+  }
+  // The MS3 stage must be CID, the MS2 stage HCD.
+  const std::string hcd_ms3 = R"(, "ms3": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35 })";
+  TEST_EQUAL(contains(refineMessage(cfgJson("", R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "fragments", "yield_gate": )"
+                                                    + gate + R"( } },)", hcd_ms3)),
+                      "an MS3 activation other than CID"), true)
+  // Model w no longer needs a run length (the engine-state inputs, x_rt_frac among them, are gone).
+  TEST_EQUAL(Config(wCfg(gate, "")).characterization().yield_gate.has_value(), true)
+}
+END_SECTION
+
+// ADR-0079: yield_gate.apply -- the shadow mode of the W gate. Absent: true. A boolean, and a key of model w only.
+START_SECTION(w_apply_flag)
+{
+  TEST_EQUAL(Config(wCfg(R"({ "model": "w", "threshold": 0.5 })")).characterization().yield_gate->apply, true)
+  TEST_EQUAL(Config(wCfg(R"({ "model": "w", "threshold": 0.5, "apply": false })")).characterization().yield_gate->apply, false)
+  TEST_EQUAL(Config(wCfg(R"({ "model": "w", "threshold": 0.5, "apply": true })")).characterization().yield_gate->apply, true)
+  TEST_EQUAL(contains(refineMessage(wCfg(R"({ "model": "w", "threshold": 0.5, "apply": "no" })")), "apply must be true or false"), true)
+  TEST_EQUAL(contains(refineMessage(wCfg(R"({ "model": "bond_yield", "apply": false })")), "apply is a key of model \"w\" only"), true)
 }
 END_SECTION
 
