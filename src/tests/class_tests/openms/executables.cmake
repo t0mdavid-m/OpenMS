@@ -466,6 +466,8 @@ set(analysis_executables_list
   KineticModel_test
   Refine_test
   FLASHIda_ProteomeSearch_test
+  # ADR-0080: the SPS quantification MS3 replayed on fi-ms3-mix_261110 (test-data-private/sps_quant_ms3, PRIVATE).
+  FLASHIda_SpsQuantMs3_test
   FixedModifications_test
   FLASHIda_LegacyConfig_test
   ConfigSchemaParity_test
