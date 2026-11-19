@@ -4273,6 +4273,135 @@ START_SECTION(authored_charge_species_buys_no_quant_ms3)
 }
 END_SECTION
 
+// ===== SPS quantification MS3 (ADR-0080) ==========================================================================
+namespace
+{
+  /// quantMs3Json with quantification.sps_windows set (@p sps < 0: the key left out).
+  std::string spsJson(const std::string& dir, int sps)
+  {
+    nlohmann::json j = nlohmann::json::parse(quantMs3Json(dir, "ms3", 10.0));
+    if (sps >= 0) j["quantification"]["sps_windows"] = sps;
+    return j.dump();
+  }
+
+  /// Whether constructing the engine on @p cfg throws.
+  bool engineRefuses(const std::string& cfg)
+  {
+    try
+    {
+      FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    }
+    catch (const std::exception&)
+    {
+      return true;
+    }
+    return false;
+  }
+
+  /// Every stage-1 window of a quantification MS3 as [lo, hi]: the anchor first, then its notches.
+  std::vector<std::pair<double, double>> stage1Windows(const ScanCommand& c)
+  {
+    std::vector<std::pair<double, double>> w;
+    w.emplace_back(c.stages[1].precursor_mz - c.stages[1].isolation_width / 2.0,
+                   c.stages[1].precursor_mz + c.stages[1].isolation_width / 2.0);
+    const auto notches = notchesForStage(c, 1);
+    for (int i = 0; i < notches.second; ++i)
+      w.emplace_back(notches.first[i].precursor_mz - notches.first[i].isolation_width / 2.0,
+                     notches.first[i].precursor_mz + notches.first[i].isolation_width / 2.0);
+    return w;
+  }
+}
+
+// T2. sps_windows is an integer from 1 to 10 (10 = the anchor plus a stage's nine notches); set under scan ms2, which
+// acquires no quantification MS3, it is a [CONFIG-WARN] -- paired with the same config without it.
+START_SECTION(sps_windows_config_rules)
+{
+  const std::string dir = freshLogDir("sps_config_rules");
+  TEST_EQUAL(engineRefuses(spsJson(dir, 0)), true)
+  TEST_EQUAL(engineRefuses(spsJson(dir, 11)), true)
+  TEST_EQUAL(engineRefuses(spsJson(dir, 10)), false)
+  TEST_EQUAL(engineRefuses(spsJson(dir, 1)), false)
+
+  auto ms2Cfg = [&dir](int sps) {
+    nlohmann::json j = nlohmann::json::parse(quantMs3Json(dir, "ms2", 10.0));
+    j["ms_settings"].erase("ms3_quant");   // so only sps_windows can raise the warning
+    j["ms_settings"]["ms2_quant"] = {{"analyzer", "Orbitrap"}, {"activation", "HCD"}, {"collision_energy", 80},
+                                     {"first_mass", 120}, {"last_mass", 140}};
+    if (sps >= 0) j["quantification"]["sps_windows"] = sps;
+    return j.dump();
+  };
+  std::string with, without;
+  {
+    EventCapture events;
+    TEST_EQUAL(engineRefuses(ms2Cfg(3)), false)
+    with = events.str();
+  }
+  {
+    EventCapture events;
+    TEST_EQUAL(engineRefuses(ms2Cfg(-1)), false)
+    without = events.str();
+  }
+  TEST_EQUAL(countOf(with, "[CONFIG-WARN] quantification.ms3_targets / quantification.sps_windows"), 1)
+  TEST_EQUAL(countOf(without, "[CONFIG-WARN] quantification.ms3_targets / quantification.sps_windows"), 0)
+}
+END_SECTION
+
+// T3. sps_windows 1 is ADR-0064's single-fragment MS3: the same commands as with the key left out, and no notch at
+// stage 1.
+START_SECTION(sps_windows_one_is_the_single_fragment_ms3)
+{
+  const std::string d1 = freshLogDir("sps_absent");
+  const QuantMs3Run a = runQuantMs3(d1, spsJson(d1, -1));
+  const std::string d2 = freshLogDir("sps_one");
+  const QuantMs3Run b = runQuantMs3(d2, spsJson(d2, 1));
+  TEST_EQUAL(a.quant_ms3.empty(), false)   // non-vacuity
+  TEST_EQUAL(a.quant_ms3.size(), b.quant_ms3.size())
+  for (size_t i = 0; i < std::min(a.quant_ms3.size(), b.quant_ms3.size()); ++i)
+  {
+    const ScanCommand& x = a.quant_ms3[i];
+    const ScanCommand& y = b.quant_ms3[i];
+    TEST_REAL_SIMILAR(x.stages[1].precursor_mz, y.stages[1].precursor_mz)
+    TEST_REAL_SIMILAR(x.stages[1].isolation_width, y.stages[1].isolation_width)
+    TEST_EQUAL(x.stages[1].charge_state, y.stages[1].charge_state)
+    TEST_EQUAL(notchesForStage(x, 1).second, 0)
+    TEST_EQUAL(notchesForStage(y, 1).second, 0)
+    TEST_STRING_EQUAL(std::string(x.scan_description), std::string(y.scan_description))
+  }
+}
+END_SECTION
+
+// T4. On the real YdfZ identification scan, sps_windows 10 keeps sps_windows 1's anchor and fills stage 1 with further
+// labelled fragment peaks: at most 10 windows, pairwise disjoint, each with a charge and at least buildMS3's 2 Th.
+START_SECTION(sps_windows_fills_stage1_on_ydfz)
+{
+  const std::string d1 = freshLogDir("sps_ydfz_1");
+  const QuantMs3Run n1 = runQuantMs3(d1, spsJson(d1, 1));
+  const std::string d10 = freshLogDir("sps_ydfz_10");
+  const QuantMs3Run n10 = runQuantMs3(d10, spsJson(d10, 10));
+  ABORT_IF(n1.quant_ms3.empty() || n10.quant_ms3.empty())
+  TEST_EQUAL(n1.quant_ms3.size(), n10.quant_ms3.size())
+  const ScanCommand& a = n1.quant_ms3[0];
+  const ScanCommand& s = n10.quant_ms3[0];
+  TEST_REAL_SIMILAR(s.stages[1].precursor_mz, a.stages[1].precursor_mz)
+  TEST_EQUAL(s.stages[1].charge_state, a.stages[1].charge_state)
+  TEST_STRING_EQUAL(std::string(s.scan_description).substr(3), std::string(a.scan_description).substr(3))
+  const auto notches = notchesForStage(s, 1);
+  TEST_EQUAL(notches.second >= 1, true)   // non-vacuity: YdfZ's pool has a further peak to isolate
+  TEST_EQUAL(1 + notches.second <= 10, true)
+  for (int i = 0; i < notches.second; ++i)
+  {
+    TEST_EQUAL(notches.first[i].charge_state > 0, true)
+    TEST_EQUAL(notches.first[i].isolation_width >= 2.0, true)
+  }
+  const auto w = stage1Windows(s);
+  bool disjoint = true;
+  for (size_t i = 0; i < w.size(); ++i)
+    for (size_t k = i + 1; k < w.size(); ++k)
+      disjoint = disjoint && !(w[i].first < w[k].second && w[k].first < w[i].second);
+  TEST_EQUAL(disjoint, true)
+}
+END_SECTION
+
 // ===== Per-proteoform MS3 re-planning (ADR-0066) end to end ======================================================
 //
 // The ms3_fragments_cytc recipe (inclusion-pinned cytC, objective fragments, budget 3) driven through runInterleaved
