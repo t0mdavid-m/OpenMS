@@ -703,6 +703,10 @@ namespace OpenMS
     /// ADR-0064. How many quantification MS3s one identification buys (the most intense eligible labelled
     /// fragments). Read only under scan ms3 / both.
     int ms3_targets = 1;
+    /// ADR-0080. Stage-1 windows of every quantification MS3, its anchor included (1-10): the anchor is ADR-0064/0069's
+    /// target, the rest the strongest unused labelled (fragment, charge) peaks. 1 = one window, ADR-0064 exactly. Read only
+    /// under scan ms3 / both.
+    int sps_windows = 1;
     /// ADR-0069. The quantification MS3's own yield gate (its scans use ms_settings.ms3_quant, so its own coefficients).
     /// Unset: no gate. Read only under scan ms3 / both.
     std::optional<YieldGateConfig> ms3_yield_gate;

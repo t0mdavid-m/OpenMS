@@ -978,7 +978,8 @@ namespace OpenMS
          "min_usable_scans",  // ADR-0056
          "channel_normalization",  // ADR-0057
          "scan", "ms3_targets",  // ADR-0064
-         "ms3_yield_gate"},  // ADR-0069
+         "ms3_yield_gate",  // ADR-0069
+         "sps_windows"},  // ADR-0080
         "quantification");
     quant_.enabled = quant.value("enabled", false);
     quant_.labelling = quant.value("labelling", std::string("tmt6plex"));
@@ -994,6 +995,17 @@ namespace OpenMS
         throw std::invalid_argument("Config: quantification.ms3_targets must be an integer >= 1: how many "
                                     "quantification MS3s one identification buys (ADR-0064).");
       quant_.ms3_targets = quant["ms3_targets"].get<int>();
+    }
+    // ADR-0080. Null-tolerant like ms3_targets. 10 = the anchor plus a stage's MAX_NOTCHES_PER_STAGE (9) notches
+    // (ScanCommand.h); the cap is the ABI's, so it is a literal here rather than a configurable bound.
+    if (quant.contains("sps_windows") && !quant["sps_windows"].is_null())
+    {
+      if (!quant["sps_windows"].is_number_integer() || quant["sps_windows"].get<int>() < 1
+          || quant["sps_windows"].get<int>() > 10)
+        throw std::invalid_argument("Config: quantification.sps_windows must be an integer from 1 to 10: the stage-1 "
+                                    "windows of a quantification MS3, its anchor included (10 = the anchor plus a "
+                                    "stage's 9 notches; ADR-0080).");
+      quant_.sps_windows = quant["sps_windows"].get<int>();
     }
     // ADR-0069: the quantification MS3's own yield gate. Absent or null = no gate.
     if (quant.contains("ms3_yield_gate") && !quant["ms3_yield_gate"].is_null())
@@ -1869,9 +1881,11 @@ namespace OpenMS
             "Config: quantification.scan is \"both\" but quantification.identify is \"none\": the screen would buy "
             "no identification scan, so no identification could ever buy a quantification MS3 (ADR-0064).");
     }
-    if (quant_.enabled && quant_.scan == QuantScan::Ms2 && (quant_.ms3_targets != 1 || quant_.has_ms3_quant_scan))
-      EventLine(EventLevel::Warn) << "[CONFIG-WARN] quantification.ms3_targets / ms_settings.ms3_quant are set but "
-                                     "quantification.scan is \"ms2\", which reads neither (ADR-0064).";
+    if (quant_.enabled && quant_.scan == QuantScan::Ms2
+        && (quant_.ms3_targets != 1 || quant_.has_ms3_quant_scan || quant_.sps_windows != 1))
+      EventLine(EventLevel::Warn) << "[CONFIG-WARN] quantification.ms3_targets / quantification.sps_windows / "
+                                     "ms_settings.ms3_quant are set but quantification.scan is \"ms2\", which reads "
+                                     "none of them (ADR-0064, ADR-0080).";
     if (quant_.enabled && quant_.scan == QuantScan::Ms2 && quant_.ms3_yield_gate)
       EventLine(EventLevel::Warn) << "[CONFIG-WARN] quantification.ms3_yield_gate is set but quantification.scan is "
                                      "\"ms2\", which acquires no quantification MS3 for it to gate (ADR-0069).";
