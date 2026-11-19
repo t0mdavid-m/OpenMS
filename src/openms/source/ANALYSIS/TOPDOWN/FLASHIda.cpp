@@ -1295,6 +1295,8 @@ FLASHIda::FLASHIda(char* arg) :
           commands_pushed++;
         }
         quant_ms3_outcome = quant_ms3.outcome;
+        // ADR-0080: the pool of a dispatch that bought, after its commands are pushed (their ids are minted by then).
+        if (!quant_ms3.commands.empty()) logger_.writeQuantMs3Rows(parent_id_str, precursor_id, quant_ms3.pool_rows);
       }
       for (auto& c : ms3_targeting.commands)
       {

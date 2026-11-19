@@ -300,6 +300,15 @@ namespace OpenMS
                          << "last_ms1_resolve_ts\tn_uncovered\tuncovered_bonds\tcovered_bonds\n";
         ms3_gate_stream_.flush();
       }
+      // ADR-0080: the SPS pool's stream. Opened in every run, so a method without a quantification MS3 writes its
+      // header only.
+      quant_ms3_stream_.open(dir + kQuantMs3Name, std::ios::app);
+      if (quant_ms3_stream_.is_open())
+      {
+        quant_ms3_stream_ << "parent_tracking_id\tprecursor_id\ttracking_id\twindow\tion_type\tion_index\tcharge\tmz\t"
+                          << "width\tms2_intensity\twindow_snr\tcys_positions\tpredicted_bond_yield\tstatus\n";
+        quant_ms3_stream_.flush();
+      }
     }
   }
 
@@ -1307,6 +1316,27 @@ namespace OpenMS
                        << bondList(r.bonds.covered) << "\n";
     }
     ms3_gate_stream_.flush();
+  }
+
+  void IdaLogger::writeQuantMs3Rows(const std::string& parent_id, int precursor_id,
+                                    const std::vector<Exploration::QuantPoolRow>& rows)
+  {
+    if (!quant_ms3_stream_.is_open() || rows.empty()) return;
+    std::lock_guard<std::mutex> lk(quant_ms3_mutex_);
+    // Every value through its own formatter: nothing sticks to quant_ms3_stream_ (LogFormat.h's rule). The values are the
+    // ones dispatchQuant tested and isolated.
+    for (const Exploration::QuantPoolRow& r : rows)
+    {
+      std::string cys;   // space-joined, like every list cell
+      for (size_t i = 0; i < r.cys_positions.size(); ++i) cys += (i ? " " : "") + std::to_string(r.cys_positions[i]);
+      quant_ms3_stream_ << quoteLogCell(parent_id) << "\t" << precursor_id << "\t"
+                        << (r.ms3_scan_id > 0 ? quoteLogCell(ScanCommandQueue::encode(r.ms3_scan_id)) : std::string()) << "\t"
+                        << r.window << "\t" << r.ion_type << "\t" << r.ion_index << "\t" << r.charge << "\t"
+                        << formatSig6(r.mz) << "\t" << formatSig6(r.width) << "\t" << formatSig6(r.ms2_intensity) << "\t"
+                        << formatSig6(r.window_snr) << "\t" << cys << "\t" << formatSig6(r.predicted_bond_yield) << "\t"
+                        << r.status << "\n";
+    }
+    quant_ms3_stream_.flush();
   }
 
 }

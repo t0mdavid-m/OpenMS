@@ -118,10 +118,13 @@ namespace OpenMS
     static constexpr const char* kPooledIdentificationName = "pooled_identification.tsv";
     /// ADR-0079: the W gate's stream, one row per MS3 candidate a plan considered (sent or not); the sixth stream.
     static constexpr const char* kMs3GateName = "ms3_gate.tsv";
-    /// The event log (ADR-0065), beside the six streams but not one of them: no golden compares it.
+    /// ADR-0080: the SPS pool's stream, one row per labelled (fragment, charge) peak of every quantification dispatch
+    /// that bought an MS3; the seventh stream.
+    static constexpr const char* kQuantMs3Name = "quant_ms3.tsv";
+    /// The event log (ADR-0065), beside the seven streams but not one of them: no golden compares it.
     static constexpr const char* kEventLogName = "events.log";
 
-    /// Construct from Config: open the six streams (append) under runtime().log_dir and write
+    /// Construct from Config: open the seven streams (append) under runtime().log_dir and write
     /// the four TSV headers. Opens nothing when log_dir is empty.
     explicit IdaLogger(const Config& config);
 
@@ -363,6 +366,11 @@ namespace OpenMS
     /// ADR-0079: write the ms3_gate.tsv rows of one MS3 plan's W gate, one per record (candidate target x CE variant).
     void writeMs3GateRows(const WitnessGate& gate);
 
+    /// ADR-0080: write the quant_ms3.tsv rows of one quantification dispatch (@p parent_id the identification scan),
+    /// one per SPS pool peak in pool order.
+    void writeQuantMs3Rows(const std::string& parent_id, int precursor_id,
+                           const std::vector<Exploration::QuantPoolRow>& rows);
+
     /**
            @brief parse FLASHIda log file
            @param in_log_file input log file
@@ -393,6 +401,8 @@ namespace OpenMS
     mutable std::mutex pooled_mutex_;
     std::ofstream ms3_gate_stream_;          ///< ADR-0079
     mutable std::mutex ms3_gate_mutex_;
+    std::ofstream quant_ms3_stream_;         ///< ADR-0080
+    mutable std::mutex quant_ms3_mutex_;
 
     /// One-shot latch for the "no instrument scan number was supplied" warning. Guarded by
     /// ida_log_mutex_, which writeIDALogEntry already holds. ONE warning per run, deliberately: it
