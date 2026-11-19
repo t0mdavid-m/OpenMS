@@ -766,6 +766,47 @@ namespace OpenMS
     return out;
   }
 
+  std::vector<SpsPeak> ProteoformTracker::labelledPeaks(int precursor_id, char residue) const
+  {
+    std::vector<SpsPeak> out;
+    auto it = models_.find(precursor_id);
+    if (it == models_.end()) return out;
+    const ProteoformModel& m = it->second;
+    const int P = static_cast<int>(m.proteoform_sequence.size());
+    const int ws = (m.region_start < 0) ? 0 : m.region_start;
+    for (const Ms3Target& frag : labelledFragments(precursor_id, residue))
+    {
+      const MappedFragment& f = m.fragments.at(FragmentKey{frag.ion_type, frag.ion_index});
+      // The labelled residues it spans, in labelledFragments' frame (cover is 1-based, region frame).
+      std::vector<int> cys;
+      const int a = ws + f.cover_start - 1, n = f.cover_end - f.cover_start + 1;
+      for (int i = std::max(a, 0); i < std::min(a + n, P); ++i)
+        if (m.proteoform_sequence[static_cast<size_t>(i)] == residue) cys.push_back(i + 1);
+      for (Ms3Target& t : labelledFragmentCharges(precursor_id, frag.ion_type, frag.ion_index))
+      {
+        // The observation this charge's target was built from: best_ms2, or its charge's entry of ms2_by_charge.
+        double intensity = 0.0;
+        if (f.best_ms2.has_value() && f.best_ms2->frag_charge == t.frag_charge && f.best_ms2->frag_mz == t.frag_mz)
+          intensity = f.best_ms2->intensity;
+        else
+          for (const auto& kv : f.ms2_by_charge)
+            if (kv.second.frag_charge == t.frag_charge && kv.second.frag_mz == t.frag_mz) intensity = kv.second.intensity;
+        SpsPeak p;
+        p.target = std::move(t);
+        p.intensity = intensity;
+        p.cys_positions = cys;
+        out.push_back(std::move(p));
+      }
+    }
+    std::stable_sort(out.begin(), out.end(), [](const SpsPeak& x, const SpsPeak& y) {
+      if (x.intensity != y.intensity) return x.intensity > y.intensity;
+      if (x.target.ion_type != y.target.ion_type) return x.target.ion_type < y.target.ion_type;
+      if (x.target.ion_index != y.target.ion_index) return x.target.ion_index < y.target.ion_index;
+      return std::abs(x.target.frag_charge) < std::abs(y.target.frag_charge);
+    });
+    return out;
+  }
+
   std::vector<Ms3Target> ProteoformTracker::planNextScans(int precursor_id, const Ms3PlanGate* gate)
   {
     // "This run fired no MS3" resolves to one of TEN causes below (seven return sites; the last one

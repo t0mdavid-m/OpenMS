@@ -1286,7 +1286,8 @@ FLASHIda::FLASHIda(char* arg) :
       {
         Exploration::QuantDispatch quant_ms3 = exploration_.dispatchQuant(
             precursor_id, ms3_targeting.proteoform_match, match_spec, parent_ctx.faims_cv, queue_, parent_ctx, tracker_,
-            config_.quantification().ms3_quant_scan, config_.quantification().ms3_targets);
+            config_.quantification().ms3_quant_scan, config_.quantification().ms3_targets,
+            config_.quantification().sps_windows);   // ADR-0080
         for (auto& c : quant_ms3.commands)
         {
           stampAndPush_(c, precursor_id);

@@ -52,6 +52,8 @@
 #include <cstring>
 #include <iostream>
 #include <optional>
+#include <set>
+#include <tuple>
 
 namespace OpenMS
 {
@@ -1344,7 +1346,7 @@ namespace OpenMS
   Exploration::QuantDispatch Exploration::dispatchQuant(int precursor_id, const FragmentAnalysis::ProteoformMatch& frag_result,
                                                         const DeconvolvedSpectrum& result, double faims_cv, ScanCommandQueue& queue,
                                                         const ScanCommand& ms_ctx, ProteoformTracker& tracker,
-                                                        const ScanConfig& quant_scan, int n)
+                                                        const ScanConfig& quant_scan, int n, int sps_windows)
   {
     QuantDispatch out;
     const bool identified = !frag_result.proteoform_sequence.empty() && !frag_result.fragments.empty();
@@ -1371,11 +1373,52 @@ namespace OpenMS
     };
     const std::optional<YieldGateConfig>& yield_gate = config_.quantification().ms3_yield_gate;
     bool yield_refused = false;   // ADR-0069: a fragment had an SNR-positive charge and the yield gate refused every one
+
+    // ADR-0080: the SPS pool. Every labelled (fragment, charge) peak is tested once, with the anchor's own tests (window
+    // SNR > 1, then the yield gate when set), and writes no event line, so events.log is ADR-0064's at sps_windows 1.
+    // A peak is keyed by (ion type, ion index, |charge|); `used` holds every peak an MS3 of this dispatch isolates, and
+    // the anchor walk below skips a used peak as if it had failed. At sps_windows 1 only anchors are used, and an anchor
+    // is never another fragment's charge, so the walk is ADR-0064/0069's exactly.
+    using PeakKey = std::tuple<std::string, int, int>;
+    auto keyOf = [](const Ms3Target& t) { return PeakKey{t.ion_type, t.ion_index, std::abs(t.frag_charge)}; };
+    auto windowOf = [](const Ms3Target& t) {
+      const double width = std::max(t.iso_width, 2.0);   // buildMS3's floor, the width windowSnrOf reads
+      return std::make_pair(t.frag_mz - width / 2.0, t.frag_mz + width / 2.0);
+    };
+    std::set<PeakKey> used;
+    const std::vector<SpsPeak> pool = tracker.labelledPeaks(precursor_id, 'C');
+    std::map<PeakKey, size_t> row_of;
+    out.pool_rows.reserve(pool.size());
+    for (const SpsPeak& p : pool)
+    {
+      QuantPoolRow r;
+      r.ion_type = p.target.ion_type;
+      r.ion_index = p.target.ion_index;
+      r.charge = std::abs(p.target.frag_charge);
+      r.mz = p.target.frag_mz;
+      r.width = std::max(p.target.iso_width, 2.0);
+      r.ms2_intensity = p.intensity;
+      r.window_snr = windowSnrOf(p.target);
+      r.cys_positions = p.cys_positions;
+      if (!(r.window_snr > 1.0)) r.status = "snr";
+      else if (yield_gate)
+      {
+        const YieldPrediction pred = predictBondYield(yield_gate->coefficients,
+                                                      yieldInputsOf(ms_ctx, p.target.stage1_scores, p.target.ion_index));
+        r.predicted_bond_yield = pred.e;
+        r.status = yieldAdmits(*yield_gate, pred) ? "candidate" : "yield";
+      }
+      else r.status = "candidate";
+      row_of.emplace(keyOf(p.target), out.pool_rows.size());
+      out.pool_rows.push_back(std::move(r));
+    }
+
     // ADR-0069: the fragment's charges strongest first, each through the SNR test and then the yield test; the first to
     // pass both buys the MS3. None: the fragment is refused. @p any_snr: it had an SNR-positive charge.
     auto walkCharges = [&](const Ms3Target& candidate, Ms3Target& t, double& snr, double& e, bool& any_snr) {
       for (const Ms3Target& c : tracker.labelledFragmentCharges(precursor_id, candidate.ion_type, candidate.ion_index))
       {
+        if (used.count(keyOf(c)) != 0) continue;   // ADR-0080: a window of an earlier MS3 of this dispatch
         const double s = windowSnrOf(c);
         if (!(s > 1.0)) continue;
         any_snr = true;
@@ -1393,13 +1436,65 @@ namespace OpenMS
       }
       return false;
     };
+    int windows_total = 0;   // ADR-0080: stage-1 windows over every MS3 bought, for the [QUANT-MS3] line
     auto buy = [&](const Ms3Target& t, double snr) {
       const char ion_type = t.ion_type.empty() ? '\0' : t.ion_type[0];
+      used.insert(keyOf(t));
+      // ADR-0080: windows 2..sps_windows, the strongest unused pool peaks that passed their tests and whose window
+      // overlaps none already chosen for this MS3. A peak skipped for an overlap here may still be a window of a later
+      // MS3 of this dispatch.
+      std::vector<NotchCandidate> fill;
+      std::vector<size_t> fill_rows;
+      if (sps_windows > 1)
+      {
+        std::vector<std::pair<double, double>> chosen{windowOf(t)};
+        for (size_t i = 0; i < pool.size() && static_cast<int>(fill.size()) + 1 < sps_windows; ++i)
+        {
+          QuantPoolRow& r = out.pool_rows[i];
+          if (r.status != "candidate" && r.status != "overlap") continue;
+          const Ms3Target& c = pool[i].target;
+          if (used.count(keyOf(c)) != 0) continue;
+          const std::pair<double, double> w = windowOf(c);
+          bool overlaps = false;
+          for (const auto& o : chosen) overlaps = overlaps || (w.first < o.second && o.first < w.second);
+          if (overlaps)
+          {
+            r.status = "overlap";
+            continue;
+          }
+          chosen.push_back(w);
+          used.insert(keyOf(c));
+          NotchCandidate nc;
+          nc.charge = std::abs(c.frag_charge);
+          nc.mz = c.frag_mz;
+          nc.width = w.second - w.first;
+          nc.snr = r.window_snr;
+          nc.intensity = pool[i].intensity;
+          fill.push_back(nc);
+          fill_rows.push_back(i);
+        }
+      }
       // Stage 0 is the identification scan's own isolation and activation (ADR-0003): no per-ion override.
       ScanCommand cmd = queue.buildMS3(ms_ctx, quant_scan, t.frag_mz, std::abs(t.frag_charge), t.iso_width, ms_ctx.scan_id,
-                                       ion_type, t.ion_index, 1, t.stage1_scores, nullptr, proto_ctx, nullptr, 'Q');
+                                       ion_type, t.ion_index, 1, t.stage1_scores, nullptr, proto_ctx,
+                                       fill.empty() ? nullptr : &fill, 'Q');
       cmd.faims_cv = faims_cv;
       cmd.window_snr = snr;
+      auto anchor_row = row_of.find(keyOf(t));
+      if (anchor_row != row_of.end())
+      {
+        out.pool_rows[anchor_row->second].status = "anchor";
+        out.pool_rows[anchor_row->second].window = 1;
+        out.pool_rows[anchor_row->second].ms3_scan_id = cmd.scan_id;
+      }
+      for (size_t k = 0; k < fill_rows.size(); ++k)
+      {
+        QuantPoolRow& r = out.pool_rows[fill_rows[k]];
+        r.status = "window";
+        r.window = static_cast<int>(k) + 2;
+        r.ms3_scan_id = cmd.scan_id;
+      }
+      windows_total += 1 + static_cast<int>(fill.size());
       out.commands.push_back(cmd);
     };
     if (yield_gate && yield_gate->rank_by == YieldRank::Yield)
@@ -1427,7 +1522,17 @@ namespace OpenMS
       for (const Buyable& b : buyable)
       {
         if (static_cast<int>(out.commands.size()) >= n) break;
-        buy(b.target, b.snr);
+        if (used.count(keyOf(b.target)) == 0)
+        {
+          buy(b.target, b.snr);
+          continue;
+        }
+        // ADR-0080: its charge became a window of an earlier MS3: the fragment is walked again, skipping used peaks,
+        // and keeps its place (never reached at sps_windows 1). It was counted eligible already.
+        Ms3Target t = b.target;
+        double snr = 0.0, e = 0.0;
+        bool any_snr = false;
+        if (walkCharges(b.target, t, snr, e, any_snr)) buy(t, snr);
       }
     }
     else
@@ -1439,6 +1544,7 @@ namespace OpenMS
         double snr = 0.0;
         if (!yield_gate)
         {
+          if (used.count(keyOf(t)) != 0) continue;   // ADR-0080: a window of an earlier MS3, as if it had failed
           snr = windowSnrOf(t);
           if (!(snr > 1.0)) continue;
           ++eligible;
@@ -1462,10 +1568,14 @@ namespace OpenMS
     // Nothing bought: yield_refused when the quantification yield gate refused an eligible fragment (ADR-0069), else no
     // labelled fragment was eligible.
     out.outcome = !out.commands.empty() ? "bought" : (yield_refused ? "yield_refused" : "no_labelled_fragment");
+    // ADR-0080: a peak that passed its tests and isolated nothing had no room (or, last, overlapped every MS3 it met).
+    for (QuantPoolRow& r : out.pool_rows)
+      if (r.status == "candidate") r.status = "no_room";
     {
       EventLine ev;
       ev << "[QUANT-MS3] precursor_id=" << precursor_id << " targets=" << out.commands.size()
          << " labelled=" << candidates.size() << " eligible=" << eligible << " budget=" << n;
+      if (sps_windows > 1) ev << " windows=" << windows_total;   // ADR-0080: only then, so sps_windows 1 logs ADR-0064's line
       if (out.commands.empty()) ev << " reason=" << out.outcome;
     }
     return out;

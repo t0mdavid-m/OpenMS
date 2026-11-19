@@ -106,6 +106,15 @@ namespace OpenMS
     double witness_w = -1.0;
   };
 
+  /// ADR-0080: one (fragment, charge) peak of the SPS pool -- a labelled fragment's single charge state, as
+  /// labelledFragmentCharges builds it, with the MS2 intensity it is ranked by and the labelled residues it carries.
+  struct SpsPeak
+  {
+    Ms3Target target;                ///< single-charge target (ion, index, m/z, charge, width, stage-1 scores)
+    double intensity = 0;            ///< this charge's MS2 intensity (FragmentObservation::intensity)
+    std::vector<int> cys_positions;  ///< 1-based positions of the labelled residue in proteoform_sequence it spans
+  };
+
   /// Key identifying a fragment ion: (ion_type, ion_index)
   using FragmentKey = std::pair<std::string, int>;
 
@@ -439,6 +448,11 @@ namespace OpenMS
     /// strongest MS2 intensity first, each as a single-charge Ms3Target built as labelledFragments builds best_ms2's
     /// (best_ms2 first on a tie). The quantification MS3's yield walk. Empty if the model or the fragment is unknown.
     std::vector<Ms3Target> labelledFragmentCharges(int precursor_id, const std::string& ion_type, int ion_index) const;
+
+    /// ADR-0080: the SPS pool before its per-charge tests -- every isolatable charge of every labelled fragment
+    /// (labelledFragments' rule, labelledFragmentCharges' targets), one SpsPeak each, ranked by MS2 intensity, then
+    /// ion type, ion index and charge (never hash order). Empty with no identified model.
+    std::vector<SpsPeak> labelledPeaks(int precursor_id, char residue) const;
 
     /// MS3 return under refine: pool pieces for the record whose mass matches @p fragment_mass; returns true when the
     /// round is complete (every dispatched record returned) and the decision has not fired yet.

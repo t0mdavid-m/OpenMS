@@ -470,10 +470,28 @@ namespace OpenMS
                                       const WitnessPlanContext* witness_ctx = nullptr);
 
     /// ADR-0064: what one identification bought at MS3 for quantification.
+    /// ADR-0080: one SPS pool peak of a quantification dispatch, as quant_ms3.tsv writes it.
+    struct QuantPoolRow
+    {
+      int ms3_scan_id = 0;          ///< tracking id of the MS3 it is a window of; 0 = not isolated
+      int window = 0;               ///< 1 = the anchor, 2.. = a fill window, 0 = not isolated
+      std::string ion_type;
+      int ion_index = 0;
+      int charge = 0;               ///< |frag_charge|
+      double mz = 0;
+      double width = 0;             ///< the window's width: max(iso_width, 2.0), as buildMS3 floors it
+      double ms2_intensity = 0;
+      double window_snr = 0;        ///< on the identification scan, the value the SNR test read
+      std::vector<int> cys_positions;
+      double predicted_bond_yield = -1.0;   ///< E the yield gate read; -1 with no gate
+      std::string status;           ///< anchor | window | overlap | snr | yield | no_room
+    };
+
     struct QuantDispatch
     {
       std::vector<ScanCommand> commands;   ///< the quantification MS3s, most intense labelled fragment first
       std::string outcome = "none";        ///< bought | no_cysteine | no_labelled_fragment | yield_refused (ADR-0069) (identification.tsv quant_ms3)
+      std::vector<QuantPoolRow> pool_rows; ///< ADR-0080: every pool peak in pool order (quant_ms3.tsv)
     };
 
     /// ADR-0064: the quantification MS3s an identification that closes out its species buys. Seeds the tracker model
@@ -482,9 +500,13 @@ namespace OpenMS
     /// in this MS2 (@p result's raw spectrum, the width the command will carry) is above 1, and builds up to @p n
     /// two-stage MS3s marked 'Q': stage 0 the MS2's own isolation and activation, stage 1 the fragment with
     /// @p quant_scan's parameters, priority 1. Nothing is pushed.
+    /// ADR-0080: each MS3's stage 1 has up to @p sps_windows windows: that target as the anchor, then the strongest
+    /// unused SPS pool peaks (ProteoformTracker::labelledPeaks with window SNR > 1 and, gated, an admitted yield) whose
+    /// windows overlap none already chosen for it. A peak taken as a window is never an anchor. At 1 it is ADR-0064.
     QuantDispatch dispatchQuant(int precursor_id, const FragmentAnalysis::ProteoformMatch& frag_result,
                                 const DeconvolvedSpectrum& result, double faims_cv, ScanCommandQueue& queue,
-                                const ScanCommand& ms_ctx, ProteoformTracker& tracker, const ScanConfig& quant_scan, int n);
+                                const ScanCommand& ms_ctx, ProteoformTracker& tracker, const ScanConfig& quant_scan, int n,
+                                int sps_windows);
 
     /// Number of currently active exploration groups
     int activeGroupCount() const;
