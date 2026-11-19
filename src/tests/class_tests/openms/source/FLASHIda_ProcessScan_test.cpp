@@ -1349,6 +1349,45 @@ namespace
   }
 }
 
+// ADR-0080: helpers of the SPS quantification MS3 sections.
+namespace
+{
+  /// quantMs3Json with quantification.sps_windows set (@p sps < 0: the key left out).
+  std::string spsJson(const std::string& dir, int sps)
+  {
+    nlohmann::json j = nlohmann::json::parse(quantMs3Json(dir, "ms3", 10.0));
+    if (sps >= 0) j["quantification"]["sps_windows"] = sps;
+    return j.dump();
+  }
+
+  /// Whether constructing the engine on @p cfg throws.
+  bool engineRefuses(const std::string& cfg)
+  {
+    try
+    {
+      FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    }
+    catch (const std::exception&)
+    {
+      return true;
+    }
+    return false;
+  }
+
+  /// Every stage-1 window of a quantification MS3 as [lo, hi]: the anchor first, then its notches.
+  std::vector<std::pair<double, double>> stage1Windows(const ScanCommand& c)
+  {
+    std::vector<std::pair<double, double>> w;
+    w.emplace_back(c.stages[1].precursor_mz - c.stages[1].isolation_width / 2.0,
+                   c.stages[1].precursor_mz + c.stages[1].isolation_width / 2.0);
+    const auto notches = notchesForStage(c, 1);
+    for (int i = 0; i < notches.second; ++i)
+      w.emplace_back(notches.first[i].precursor_mz - notches.first[i].isolation_width / 2.0,
+                     notches.first[i].precursor_mz + notches.first[i].isolation_width / 2.0);
+    return w;
+  }
+}
+
 // ===== The rescue scan (ADR-0068) ===================================================================================
 namespace
 {
@@ -4274,43 +4313,6 @@ START_SECTION(authored_charge_species_buys_no_quant_ms3)
 END_SECTION
 
 // ===== SPS quantification MS3 (ADR-0080) ==========================================================================
-namespace
-{
-  /// quantMs3Json with quantification.sps_windows set (@p sps < 0: the key left out).
-  std::string spsJson(const std::string& dir, int sps)
-  {
-    nlohmann::json j = nlohmann::json::parse(quantMs3Json(dir, "ms3", 10.0));
-    if (sps >= 0) j["quantification"]["sps_windows"] = sps;
-    return j.dump();
-  }
-
-  /// Whether constructing the engine on @p cfg throws.
-  bool engineRefuses(const std::string& cfg)
-  {
-    try
-    {
-      FLASHIda ida(const_cast<char*>(cfg.c_str()));
-    }
-    catch (const std::exception&)
-    {
-      return true;
-    }
-    return false;
-  }
-
-  /// Every stage-1 window of a quantification MS3 as [lo, hi]: the anchor first, then its notches.
-  std::vector<std::pair<double, double>> stage1Windows(const ScanCommand& c)
-  {
-    std::vector<std::pair<double, double>> w;
-    w.emplace_back(c.stages[1].precursor_mz - c.stages[1].isolation_width / 2.0,
-                   c.stages[1].precursor_mz + c.stages[1].isolation_width / 2.0);
-    const auto notches = notchesForStage(c, 1);
-    for (int i = 0; i < notches.second; ++i)
-      w.emplace_back(notches.first[i].precursor_mz - notches.first[i].isolation_width / 2.0,
-                     notches.first[i].precursor_mz + notches.first[i].isolation_width / 2.0);
-    return w;
-  }
-}
 
 // T2. sps_windows is an integer from 1 to 10 (10 = the anchor plus a stage's nine notches); set under scan ms2, which
 // acquires no quantification MS3, it is a [CONFIG-WARN] -- paired with the same config without it.
