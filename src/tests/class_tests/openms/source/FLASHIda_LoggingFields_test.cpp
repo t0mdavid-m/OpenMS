@@ -226,6 +226,27 @@ START_SECTION(ms3_gate_columns)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
+// ADR-0080 -- quant_ms3.tsv: opened in every run (a method without a quantification MS3 writes its header only), one
+// row per SPS pool peak of a dispatch that bought; the header is the order the C++ writer emits.
+/////////////////////////////////////////////////////////////
+START_SECTION(quant_ms3_columns)
+{
+  const std::string dir = freshLogDir("lf_quant_ms3");
+  std::string json = buildJsonWithLogDir(dir, true);
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+  auto q = TSVFile::parse(dir + "/quant_ms3.tsv");
+  TEST_EQUAL(q.headers.size(), 14)
+  TEST_EQUAL(q.rows.size(), 0)        // no quantification MS3: the header only
+  TEST_EQUAL(q.headers.front(), std::string("parent_tracking_id"))
+  TEST_EQUAL(q.colIndex("tracking_id"), 2)
+  TEST_EQUAL(q.colIndex("window"), 3)
+  TEST_EQUAL(q.colIndex("window_snr"), 10)
+  TEST_EQUAL(q.colIndex("cys_positions"), 11)
+  TEST_EQUAL(q.headers.back(), std::string("status"))
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
 // §C1 -- scan_commands.tsv : MS2 (recording) columns
 /////////////////////////////////////////////////////////////
 START_SECTION(commands_ms2_columns)
