@@ -1910,7 +1910,7 @@ FLASHIda::FLASHIda(char* arg) :
         // the highest member may itself carry that charge; capping at the anchor would discard real
         // fragments. Identical to stages[0].charge_state whenever there are no notches.
         int precursor_charge = maxIsolatedCharge(parent_ctx, 0);
-        deconv_.deconvolveMSn(mzs, ints, length, rt, precursor_mass, precursor_charge);
+        deconv_.deconvolveMSn(mzs, ints, length, rt, precursor_mass, precursor_charge, /*ms_level=*/2);
 
         // --- Quantification: measure THIS scan, and buy the identification scan (ADR-0038) -------
         // Gated on the scan's own mark, not on "is not a follow-up". Only a 'Q' is measured, so the
@@ -2144,7 +2144,7 @@ FLASHIda::FLASHIda(char* arg) :
         int ms3_mass_count = 0;
         if (mzs != nullptr && ints != nullptr && length > 0)
         {
-          deconv_.deconvolveMSn(mzs, ints, length, rt, precursor_mass, precursor_charge);
+          deconv_.deconvolveMSn(mzs, ints, length, rt, precursor_mass, precursor_charge, /*ms_level=*/3);
           ms3_mass_count = deconv_.hasStoredMS2()
               ? static_cast<int>(deconv_.storedMS2().size()) : 0;
         }

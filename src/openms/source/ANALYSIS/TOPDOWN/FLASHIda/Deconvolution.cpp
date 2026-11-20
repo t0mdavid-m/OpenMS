@@ -53,6 +53,11 @@ namespace OpenMS
     sd_defaults.setValue("min_mass", config.deconvolution().min_mass);
     sd_defaults.setValue("max_mass", config.deconvolution().max_mass);
     sd_defaults.setValue("tol", tolerance_ppm_values);
+    // Three entries each, one per MS level (order 1 of task v20): SpectralDeconvolution reads these lists at
+    // [ms_level - 1] without a bound, and its defaults hold two. MS1 and MS2 keep the defaults (0.85, 0.25); an MS3
+    // takes deconvolution.ms3_min_cos and the same SNR floor as MS2.
+    sd_defaults.setValue("min_cos", DoubleList {0.85, 0.85, config.deconvolution().ms3_min_cos});
+    sd_defaults.setValue("min_snr", DoubleList {0.25, 0.25, 0.25});
     fd_.setParameters(sd_defaults);
     fd_.calculateAveragine(false);
 
@@ -95,7 +100,7 @@ namespace OpenMS
   }
 
   int Deconvolution::deconvolveMSn(const double* mzs, const double* ints, int length,
-                                    double rt, double precursor_mass, int precursor_charge)
+                                    double rt, double precursor_mass, int precursor_charge, int ms_level)
   {
     // Clear previous state
     ms2_deconvolved_spectrum_.clear();
@@ -108,7 +113,8 @@ namespace OpenMS
     }
 
     // Create MSSpectrum from input
-    auto spec = makeMSSpectrum_(mzs, ints, length, rt, 2, "ms2_spectrum");
+    // The level selects SpectralDeconvolution's per-level tolerance, cosine and SNR: an MS3 at level 3.
+    auto spec = makeMSSpectrum_(mzs, ints, length, rt, ms_level, ms_level == 3 ? "ms3_spectrum" : "ms2_spectrum");
 
     // Create precursor PeakGroup - only set if precursor_mass > 0 AND precursor_charge != 0
     PeakGroup precursor_pg;

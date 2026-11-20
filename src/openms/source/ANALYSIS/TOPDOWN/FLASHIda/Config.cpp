@@ -467,7 +467,8 @@ namespace OpenMS
     // --- deconvolution section ---
     auto deconv = config.value("deconvolution", json::object());
     rejectUnknownKeys(deconv,
-        {"score_threshold", "tqscore_threshold", "min_charge", "max_charge", "min_mass", "max_mass", "tol"},
+        {"score_threshold", "tqscore_threshold", "min_charge", "max_charge", "min_mass", "max_mass", "tol",
+         "ms3_min_cos"},
         "deconvolution");
     targeting_.qscore_threshold = deconv.value("score_threshold", 0.0);
     targeting_.tqscore_threshold = deconv.value("tqscore_threshold", 0.9);
@@ -475,6 +476,19 @@ namespace OpenMS
     deconv_.max_charge = deconv.value("max_charge", 50);
     deconv_.min_mass = deconv.value("min_mass", 500.0);
     deconv_.max_mass = deconv.value("max_mass", 50000.0);
+    // The MS3 isotope cosine (order 1 of task v20). Refused outside [0.5, 1.0] here, with the key's name, rather than
+    // by SpectralDeconvolution's Param check, which would throw at construction naming only "min_cos".
+    if (deconv.contains("ms3_min_cos") && !deconv["ms3_min_cos"].is_null())
+    {
+      if (!deconv["ms3_min_cos"].is_number())
+        throw std::invalid_argument("Config: deconvolution.ms3_min_cos must be a number in [0.5, 1.0]; got "
+                                    + deconv["ms3_min_cos"].dump() + ".");
+      const double c = deconv["ms3_min_cos"].get<double>();
+      if (!(c >= 0.5 && c <= 1.0))
+        throw std::invalid_argument("Config: deconvolution.ms3_min_cos must be in [0.5, 1.0] (the range the "
+                                    "deconvolution accepts); got " + deconv["ms3_min_cos"].dump() + ".");
+      deconv_.ms3_min_cos = c;
+    }
 
     // Tolerance values: one entry per MS level, indexed by level-1
     std::vector<double> tol_values;

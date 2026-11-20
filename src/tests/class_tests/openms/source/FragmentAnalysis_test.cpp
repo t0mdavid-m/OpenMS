@@ -1091,6 +1091,61 @@ START_SECTION(deconvolveMSn_ignores_the_ms1_target_masses)
 }
 END_SECTION
 
+START_SECTION(an_ms3_is_deconvolved_at_level_3_with_its_own_cosine)
+{
+  // Order 1 of task v20: an MS3 is deconvolved at MS level 3, so SpectralDeconvolution reads the third entry of its
+  // per-level lists (tol, min_cos, min_snr) -- the cosine from deconvolution.ms3_min_cos -- and never the MS2 slot.
+  // Deconvolution gives every list three entries; SpectralDeconvolution's own defaults hold two.
+  auto scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms3_cytc2_b32_scan455.txt");
+  ABORT_IF(scans.empty())
+  const ScanData& s = scans[0];
+  const int n = static_cast<int>(s.mzs.size());
+
+  std::string strict_json(fragment_test_config);
+  const std::string tol_key = "\"tol\": [";
+  const size_t at = strict_json.find(tol_key);
+  ABORT_IF(at == std::string::npos)
+  strict_json.insert(at, "\"ms3_min_cos\": 0.95,
+    ");
+
+  Config loose_cfg{std::string(fragment_test_config)};   // ms3_min_cos absent: 0.5
+  Config strict_cfg{strict_json};
+  TEST_REAL_SIMILAR(loose_cfg.deconvolution().ms3_min_cos, 0.5)
+  TEST_REAL_SIMILAR(strict_cfg.deconvolution().ms3_min_cos, 0.95)
+
+  Deconvolution loose(loose_cfg, {10.0, 10.0, 10.0});
+  Deconvolution strict(strict_cfg, {10.0, 10.0, 10.0});
+  const int n_loose = loose.deconvolveMSn(s.mzs.data(), s.ints.data(), n, s.rt, 0.0, 0, 3);
+  const int n_strict = strict.deconvolveMSn(s.mzs.data(), s.ints.data(), n, s.rt, 0.0, 0, 3);
+  TEST_EQUAL(n_loose > 0, true)
+  TEST_EQUAL(loose.storedMS2().getOriginalSpectrum().getMSLevel(), 3)
+
+  // The level-3 cosine is the key's: every mass the strict engine keeps clears 0.95, and the loose engine keeps at
+  // least one mass the strict one could not have kept.
+  bool all_strict = true;
+  for (const PeakGroup& pg : strict.storedMS2()) all_strict = all_strict && pg.getIsotopeCosine() >= 0.95f;
+  TEST_EQUAL(all_strict, true)
+  bool loose_below_strict = false;
+  for (const PeakGroup& pg : loose.storedMS2()) loose_below_strict = loose_below_strict || pg.getIsotopeCosine() < 0.95f;
+  TEST_EQUAL(loose_below_strict, true)
+  TEST_EQUAL(n_loose >= n_strict, true)
+
+  // An MS2 call is untouched: level 2 by default, with the MS2 cosine.
+  loose.deconvolveMSn(s.mzs.data(), s.ints.data(), n, s.rt, 0.0, 0);
+  TEST_EQUAL(loose.storedMS2().getOriginalSpectrum().getMSLevel(), 2)
+
+  // The key is refused outside the range SpectralDeconvolution accepts, naming itself.
+  std::string low_json(fragment_test_config);
+  low_json.insert(low_json.find(tol_key), "\"ms3_min_cos\": 0.4,
+    ");
+  TEST_EXCEPTION(std::invalid_argument, Config{low_json})
+  std::string high_json(fragment_test_config);
+  high_json.insert(high_json.find(tol_key), "\"ms3_min_cos\": 1.1,
+    ");
+  TEST_EXCEPTION(std::invalid_argument, Config{high_json})
+}
+END_SECTION
+
 START_SECTION(the_ms1_target_masses_still_reach_the_next_survey)
 {
   // The other half of the contract: deconvolveMSn clears the targets on the shared engine and the caller sets

@@ -319,6 +319,9 @@ namespace OpenMS
     int max_charge = 50;
     double min_mass = 500.0;
     double max_mass = 50000.0;
+    /// deconvolution.ms3_min_cos: the isotope cosine an MS3 is deconvolved with, at MS level 3 (order 1 of task v20).
+    /// MS1 and MS2 keep SpectralDeconvolution's 0.85. In [0.5, 1.0], the range SpectralDeconvolution accepts.
+    double ms3_min_cos = 0.5;
   };
 
   /// FAIMS configuration values (runtime state lives on FLASHIda)

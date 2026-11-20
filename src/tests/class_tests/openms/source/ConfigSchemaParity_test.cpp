@@ -59,6 +59,7 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   TEST_EQUAL(cfg.deconvolution().max_charge, j["deconvolution"]["max_charge"].get<int>())
   TEST_REAL_SIMILAR(cfg.deconvolution().min_mass, j["deconvolution"]["min_mass"].get<double>())
   TEST_REAL_SIMILAR(cfg.deconvolution().max_mass, j["deconvolution"]["max_mass"].get<double>())
+  TEST_REAL_SIMILAR(cfg.deconvolution().ms3_min_cos, j["deconvolution"]["ms3_min_cos"].get<double>())
   TEST_REAL_SIMILAR(cfg.targeting().qscore_threshold, j["deconvolution"]["score_threshold"].get<double>())
   TEST_REAL_SIMILAR(cfg.targeting().tqscore_threshold, j["deconvolution"]["tqscore_threshold"].get<double>())
 

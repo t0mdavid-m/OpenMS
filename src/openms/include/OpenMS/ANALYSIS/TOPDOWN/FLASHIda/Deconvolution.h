@@ -58,7 +58,11 @@ namespace OpenMS
   {
   public:
     /// Constructor: initialise SpectralDeconvolution with explicit tolerance values
-    /// @param tolerance_ppm_values PPM tolerances indexed by MS level (index 0 = MS1, 1 = MS2, ...)
+    /// @param tolerance_ppm_values PPM tolerances indexed by MS level (index 0 = MS1, 1 = MS2, 2 = MS3)
+    ///
+    /// Every per-level list SpectralDeconvolution reads at [ms_level - 1] is given three entries here: tol from the
+    /// caller, min_cos {0.85, 0.85, deconvolution.ms3_min_cos} and min_snr {0.25, 0.25, 0.25}. Its own defaults have
+    /// two entries, which an MS3 deconvolved at level 3 would read past.
     Deconvolution(const Config& config, const DoubleList& tolerance_ppm_values);
 
     /**
@@ -85,10 +89,12 @@ namespace OpenMS
      * @param rt retention time in seconds
      * @param precursor_mass precursor monoisotopic mass (<=0 means no precursor)
      * @param precursor_charge precursor charge (0 means no precursor)
+     * @param ms_level the spectrum's MS level, 2 or 3: an MS3 is deconvolved with the level-3 tolerance, cosine and
+     *        SNR (order 1 of task v20), never with the MS2 slots
      * @return number of peak groups found
      */
     int deconvolveMSn(const double* mzs, const double* ints, int length,
-                      double rt, double precursor_mass, int precursor_charge);
+                      double rt, double precursor_mass, int precursor_charge, int ms_level = 2);
 
     /**
      * @brief Python-friendly overload of deconvolveMS2
@@ -135,7 +141,7 @@ namespace OpenMS
      * @param ints intensities
      * @param length number of peaks
      * @param rt retention time in seconds
-     * @param ms_level MS level (1 or 2)
+     * @param ms_level MS level (1, 2 or 3)
      * @param name spectrum name (may be nullptr)
      * @return populated MSSpectrum
      */

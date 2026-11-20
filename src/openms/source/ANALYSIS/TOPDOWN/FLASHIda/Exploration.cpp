@@ -431,7 +431,7 @@ namespace OpenMS
     if (!measured_only && mzs != nullptr && ints != nullptr && length > 0)
     {
       exploration_deconv_->deconvolveMSn(mzs, ints, length, rt,
-                                         group.precursor_mass, precursor_charge);
+                                         group.precursor_mass, precursor_charge, group.msn_level);
       in.deconv = exploration_deconv_->storedMS2();
       in.deconvolved = true;
     }
