@@ -1297,7 +1297,7 @@ START_SECTION(new_columns_carry_their_values)
   ABORT_IF(manifest.empty() || ms1.empty() || ms2.empty())
 
   const std::string dir = freshLogDir("lf_s4b");
-  std::string json = buildJsonWithLogDir(dir, true, "HCD", 50);
+  std::string json = withMs3OffsetStart(buildJsonWithLogDir(dir, true, "HCD", 50));   // ADR-0081: its fixtures' start
   FLASHIda ida(const_cast<char*>(json.c_str()));
   runFullCycle(&ida, ms1, ms2, &manifest);
 
@@ -1388,7 +1388,7 @@ START_SECTION(bond_coverage_is_logged_on_a_searched_ms2)
   ABORT_IF(manifest.empty() || ms1.empty() || ms2.empty())
 
   const std::string dir = freshLogDir("lf_bc");
-  std::string json = buildJsonWithLogDir(dir, true, "HCD", 50);
+  std::string json = withMs3OffsetStart(buildJsonWithLogDir(dir, true, "HCD", 50));   // ADR-0081: its fixtures' start
   FLASHIda ida(const_cast<char*>(json.c_str()));
   runFullCycle(&ida, ms1, ms2, &manifest);
 

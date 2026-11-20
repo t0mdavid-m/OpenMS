@@ -640,6 +640,20 @@ namespace
   // would silently force MS3 on and blank the activation string. Renaming makes every stale
   // call a named compile error instead.
   // ----------------------------------------------------------------------------
+  /// ADR-0081: @p json (a buildJsonWithLogDir config) with deconvolution.mass_offset_start_ppm.ms3 set to the start value of
+  /// the MS3 fixtures it is fed. The ms3_cytc_<ion>_scan* fixtures (buildMs3IonManifest) were acquired at an MS3 AGC target
+  /// of 5e7 and read about -187 ppm: -185 is the method's value for them.
+  inline std::string withMs3OffsetStart(std::string json, double ms3_ppm = -185.0)
+  {
+    const std::string tol = "\"tol\": [10, 10, 10]";
+    const size_t at = json.find(tol);
+    if (at == std::string::npos) return json;
+    std::ostringstream add;
+    add << ", \"mass_offset_start_ppm\": {\"ms3\": " << ms3_ppm << "}";
+    json.insert(at + tol.size(), add.str());
+    return json;
+  }
+
   inline std::string buildJsonWithLogDir(const std::string& log_dir,
                                          bool enable_ms3 = false,
                                          const std::string& ms2_activation = "HCD",

@@ -1577,7 +1577,7 @@ START_SECTION(results_ms3_real_fragment_data)
     // fragment ions, so emission stays exhaustive while keeping the section's runtime in check.
     // F9: capture identification.tsv too — the matched-fragment FLOOR now lives there (ms3_fragments), since
     // scan_results fragment_count is sentinelized to -1.
-    std::string json = buildJsonWithLogDir(dir, true, "HCD", 50);
+    std::string json = withMs3OffsetStart(buildJsonWithLogDir(dir, true, "HCD", 50));   // ADR-0081: its fixtures' start
     FLASHIda ida(const_cast<char*>(json.c_str()));
 
     // Mirror the shared harness wiring; feed the REAL per-ion MS3 spectrum keyed by the decoded descriptor ion.
