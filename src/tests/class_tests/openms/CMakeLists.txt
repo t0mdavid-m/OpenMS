@@ -83,6 +83,8 @@ target_link_libraries(FLASHIda_ConsoleView_test nlohmann_json::nlohmann_json)
 target_link_libraries(FLASHIda_Ms3WitnessModel_test nlohmann_json::nlohmann_json)   # ADR-0076: mutates the model JSON
 target_link_libraries(FLASHIda_Ms3WGateV17_test nlohmann_json::nlohmann_json)       # ADR-0079: reads the test vectors
 target_link_libraries(FLASHIda_SpsQuantMs3_test nlohmann_json::nlohmann_json)       # ADR-0080: edits the parsed config
+target_link_libraries(FLASHIda_MassOffset_test nlohmann_json::nlohmann_json)        # ADR-0081: reads the offset vectors
+target_link_libraries(FLASHIda_Replay_test nlohmann_json::nlohmann_json)            # engine build 1: reads the replay spec
 
 if (WITH_HDF5)
   target_link_libraries(HDF5_test HDF5::HDF5)
