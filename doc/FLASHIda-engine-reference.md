@@ -416,7 +416,17 @@ winner (`initiateNextLevel` inside `applyVariant`) still runs under the lock.
   `Exploration::dispatchQuant` before its characterization MS3s are pushed: `ProteoformTracker::labelledFragments`
   ('C', any ion type, not full length), window SNR > 1 on the MS2, the most intense `ms3_targets`, `buildMS3` with
   `ms_settings.ms3_quant` and marker `'Q'`. It returns on the regular MS3 branch, is read by
-  `Quantification::measure(..., 2, "ms3_quant")` (level 2: the extractor walks a one-spectrum experiment), and is never cached for annotation. The search fixes iodoTMT6plex on
+  `Quantification::measure(..., 2, "ms3_quant")` (level 2: the extractor walks a one-spectrum experiment), and is never cached for annotation.
+  **SPS** (ADR-0080): with `quantification.sps_windows` N > 1, `dispatchQuant(…, sps_windows)` scores
+  `ProteoformTracker::labelledPeaks` (one `SpsPeak` per observed charge of every labelled fragment, MS2 intensity
+  descending, then ion type, index, charge) once, without event lines: `snr` (window SNR ≤ 1), `yield` (gate refused),
+  else a candidate. The anchor walk is ADR-0064/0069's, except that it skips a peak in `used` (key: ion type, index,
+  |z|) as if it had failed. A bought anchor's MS3 takes windows 2..N from the candidates in pool order whose window
+  ([mz − w/2, mz + w/2], w = max(iso width, 2)) misses every window chosen so far (else `overlap`, still open to a later
+  MS3), as `NotchCandidate`s through `buildMS3`'s `stage1_notches` (stage-1 notches never divide `max_it`, ADR-0072).
+  Candidates left over become `no_room`. `QuantDispatch::pool_rows` goes to `IdaLogger::writeQuantMs3Rows` after the
+  commands are pushed, only when one was bought. `cys_positions` is 1-based in `proteoform_sequence`, the reference
+  sequence (a full UniProt entry gives UniProt numbering). The search fixes iodoTMT6plex on
   every C as an entry of the fixed-modification table: `Config` appends `iodoTMT6plex (C)` to `flashtnt.fixed_mod` under
   `readsAtMs3()` (ADR-0067 d.7), so FLASHTnT, every ladder, the MS3 matching, Refine and the logged ProForma carry it.
 - **The operator view** (ADR-0065 push 2): `PrecursorBoard board_` is fed at the drain's send, an MS2's return,
@@ -1128,8 +1138,8 @@ Traps worth internalizing before touching config code:
 
 ## Logging (`FLASHIda/IdaLogger.cpp`)
 
-Six append-only streams under **one folder**, `runtime.log_dir`, joined with the fixed basenames
-below (ADR-0079 added `ms3_gate.tsv`). All six open together or none do — an empty `log_dir` opens nothing, which is how a fixture
+Seven append-only streams under **one folder**, `runtime.log_dir`, joined with the fixed basenames
+below (ADR-0079 added `ms3_gate.tsv`, ADR-0080 `quant_ms3.tsv`). All seven open together or none do — an empty `log_dir` opens nothing, which is how a fixture
 with no `runtime` section (or `"runtime": {}`) logs nothing. `IdaLogger` never creates the
 directory: the host does, and a missing one leaves every stream silently closed. Note the authored
 `method.json` layer gives `""` the *opposite* meaning (`.` = the working directory) — ADR-0015.
@@ -1144,6 +1154,7 @@ the caller's responsibility.
 | `identification.tsv` | 52 | per-scan MS2/MS3 identification leaf (32→34: `tag_count` beside `flash_extender_score`, `fragment_qscores` inside the aligned fragment-mass table; →41 ADR-0049's Refine block `annotation_score`/`total_shift`/`second_total_shift`/`second_score`/`cut`/`n_levels`/`precursor_mass_difference`, **appended**, valued on the regular AND the exploration self-identification MS2 rows under `refine` and sentinel-valued everywhere else — `-1`, empty, empty, `-1`, `-1`, `-1`, empty. A real score of −1 is told from the sentinel by a non-empty `total_shift`; `flash_extender_score` and `tag_count` stay −1 under `refine`; →46 ADR-0061 push 4b's `protein`/`raw_score`/`identification_score`/`closed_out`/`inferred_precursor_mass` after that block on every row, only `protein` valued until push 4c; →47 ADR-0064's `quant_ms3`; →49 ADR-0074's `bond_coverage`/`explained_signal`, appended last, `-1.0000` where the row has no annotated PrSM; 2026-11-12 `identification_score` and `flash_extender_score` swap places, the Identification score next to `proteoform` (col 8) and the extension score after `raw_score` (col 44); →52 ADR-0075's `chance_p`/`chance_e`/`confirmation_p`, appended last, written from their log10 in scientific notation, `-1` where the row carries none — see *The chance-match p-value* below) |
 | `pooled_identification.tsv` | 20 | per-precursor cumulative proteoform trajectory (→20 ADR-0061 push 4b's `protein`, the accession the model's winner chose) |
 | `ms3_gate.tsv` | 103 | ADR-0079: one row per candidate target × CE variant of every `model: w` plan, sent or not (`IdaLogger::writeMs3GateRows`, from `FLASHIda::witnessAfterPlan_`): identity and plan time, evaluation time, threshold, model sha8, `applied` (0 in shadow mode), planner rank, rank by W, target W, W, decision and reason, the failed input, the cap's room; the candidate's command cells as `scan_commands.tsv` would print them; the 38 inputs (`in_*`, float32 to 9 digits); the 8 peak features in 64 bits; the buffer selection; the last MS1; the uncovered and covered bonds. Header only without a W gate. Ids relabeled and the clock cells, the time features and W masked in the goldens |
+| `quant_ms3.tsv` | 14 | ADR-0080: one row per SPS pool peak of every quantification dispatch that bought a `'Q'` MS3 (`IdaLogger::writeQuantMs3Rows`, from `FLASHIda.cpp` after the push): `parent_tracking_id`, `precursor_id`, `tracking_id` (empty when not isolated), `window` (1 = anchor, 0 = none), ion, charge, `mz`, `width`, `ms2_intensity`, `window_snr`, `cys_positions`, `predicted_bond_yield` (−1 ungated), `status` (`anchor | window | overlap | snr | yield | no_room`). Header only in every other run |
 
 - **An MS3 row's `ms2_fragments` / `ms2_fragment_masses` are in the Proteoform frame** (`CONTEXT.md`): the
   equivalent ion is labelled and weighed over the proteoform's own residues, `[region_start, region_end)`,

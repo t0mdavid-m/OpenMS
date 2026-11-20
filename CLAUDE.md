@@ -116,6 +116,11 @@ departure from the plan goes back to the owner. Ambiguous cases count as source 
 - **A shortfall buys a rescue set, one scan per `ms2_rescue` entry, once per precursor id** (ADR-0070,
   amending ADR-0068's per-detection cap): under `separate` each charge buys its own. Every scan of the
   set is registered with the queue before its push, so a close-out withdraws the ones still waiting.
+- **An SPS quantification MS3** (ADR-0080): `quantification.sps_windows` > 1 fills a `'Q'` MS3's stage 1 behind
+  ADR-0064's anchor with `ProteoformTracker::labelledPeaks` (every observed charge of every labelled fragment),
+  through `buildMS3`'s `stage1_notches`; `dispatchQuant`'s `used` set makes the anchor walk skip a peak an earlier MS3
+  of the dispatch took. The pool is scored without event lines, and `windows=` is on `[QUANT-MS3]` only above 1, so
+  `events.log` is ADR-0064's at 1. `quant_ms3.tsv` gets its rows after the commands are pushed (ids minted).
 - **Quantification** (ADR-0038/0039/0056): `Q` is the scan measured; a verdict buys an ordinary `R`.
   `quantification.identify` decides which verdicts buy; `enriched_in` is evaluated on
   `condition_means`, **never on `fold_change`** (−1 is a sentinel for an absent condition).
@@ -203,10 +208,11 @@ private `monitor_deconv_` (ADR-0042). **Do not merge the monitor engine into `de
 
 ## Logging (`FLASHIda/IdaLogger.cpp`)
 
-Five streams in `runtime.log_dir` (empty = nothing opens; the host creates the directory):
+Seven streams in `runtime.log_dir` (empty = nothing opens; the host creates the directory):
 `ida.log` (free text, decision record), `scan_commands.tsv` (46 columns, one row per dequeued
 command; what FLASHDeconv reads), `scan_results.tsv` (56), `identification.tsv` (52),
-`pooled_identification.tsv` (20). `IdaLogger` serialises each stream itself.
+`pooled_identification.tsv` (20), `ms3_gate.tsv` (103, ADR-0079) and `quant_ms3.tsv` (14, ADR-0080).
+`IdaLogger` serialises each stream itself.
 
 - **Every value written must set its own precision**: the ostream is sticky. `Mass=` and `AllMass=`
   are asserted identical (ADR-0035); `scan_commands` `mono_mass` has four decimals, and no golden can
