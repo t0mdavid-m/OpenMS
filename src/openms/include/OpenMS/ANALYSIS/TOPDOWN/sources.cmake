@@ -28,6 +28,8 @@ set(sources_list_h
         FLASHIda/IdaLogger.h
         FLASHIda/LogCell.h
         FLASHIda/LogFormat.h
+        FLASHIda/BuildInfo.h
+        FLASHIda/MassOffset.h
         FLASHIda/MS3FragmentMatcher.h
         FLASHIda/Ms1Buffer.h
         FLASHIda/Ms3WitnessGate.h

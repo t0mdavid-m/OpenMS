@@ -1020,7 +1020,8 @@ END_SECTION
 //     (pool_exhausted, candidate 0 stands) and runs the ambiguity branch in the same call, as section 7a's charge floor
 //     does from the config. The gate here is a charge floor of 2 over charge-1 records. The ambiguity plan of that call
 //     is empty on this fixture -- its containing fragments (b6..b11) are the very ions the a-only records are labelled
-//     with, also charge 1, so the same gate refuses them -- and says so (no_containing_fragment, an ambiguity reason).
+//     with, also charge 1, so the same gate refuses them -- and says so (containers_refused, an ambiguity reason: the
+//     containers exist and the gate's charge floor refused every one; engine build 1 split it from no_containing_fragment).
 //
 // FAILS UNDER: a refused record that still enters the pool (dispatched, no fall-through), or a fall-through that does
 // not plan ambiguity in the same call.
@@ -1049,7 +1050,9 @@ START_SECTION(governed_all_records_refused_falls_through_to_ambiguity)
   }
   std::cout << log;
   TEST_TRUE(log.find("[DISCRIMINATING] precursor_id=64 decided=fallthrough reason=pool_exhausted") != std::string::npos)
-  TEST_TRUE(log.find("[MS3-PLAN] precursor_id=64 targets=0 reason=no_containing_fragment") != std::string::npos)
+  TEST_TRUE(log.find("[MS3-PLAN] precursor_id=64 targets=0 reason=containers_refused containers=") != std::string::npos)
+  TEST_TRUE(log.find("refused_yield=0 refused_cap=0") != std::string::npos)   // the charge floor refused them, nothing else
+  TEST_TRUE(log.find("reason=no_containing_fragment") == std::string::npos)
   TEST_EQUAL(plan.size(), 0)
   TEST_EQUAL(m->refine->decided, true)
   TEST_EQUAL(m->refine->winner_candidate, 0)

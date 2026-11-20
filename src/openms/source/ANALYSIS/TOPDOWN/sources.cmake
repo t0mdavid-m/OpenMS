@@ -18,6 +18,7 @@ set(sources_list
         FLASHIda/EventLog.cpp
         FLASHIda/FAIMS.cpp
         FLASHIda/AnnotatorMetrics.cpp
+        FLASHIda/BuildInfo.cpp
         FLASHIda/ChanceMatch.cpp
         FLASHIda/ChargeCheck.cpp
         FLASHIda/KineticModel.cpp
@@ -60,6 +61,12 @@ set(sources)
 foreach (i ${sources_list})
     list(APPEND sources ${directory}/${i})
 endforeach (i)
+
+### Engine build 1: the CI run that built the engine (events.log [ENGINE]), on BuildInfo.cpp alone so a new run
+### recompiles one small file. A digits-only id; outside CI the file reports "local".
+if(DEFINED ENV{GITHUB_RUN_ID} AND "$ENV{GITHUB_RUN_ID}" MATCHES "^[0-9]+$")
+  set_source_files_properties(${directory}/FLASHIda/BuildInfo.cpp PROPERTIES COMPILE_DEFINITIONS "FLASHIDA_CI_RUN=$ENV{GITHUB_RUN_ID}")
+endif()
 
 ### pass source file list to the upper instance
 set(OpenMS_sources ${OpenMS_sources} ${sources})

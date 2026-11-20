@@ -987,6 +987,9 @@ namespace OpenMS
         return pa.e > pb.e;
       });
     };
+    // Engine build 1: why an ambiguity plan that had containers ended empty -- the containers refused by the gate's
+    // per-charge tests (charge floor, window SNR, the 2x rule), by the yield gate, or by the cleavage cap.
+    std::set<FragmentKey> containers_seen, refused_charge, refused_yield, refused_cap;
     auto add_target = [&](const MappedFragment* f) -> bool {
       if (f == nullptr || !f->best_ms2.has_value()) return false;
       const FragmentKey key{f->ion_type, f->ion_index};
@@ -997,8 +1000,16 @@ namespace OpenMS
         if (std::find(w_pool.begin(), w_pool.end(), f) == w_pool.end()) w_pool.push_back(f);
         return true;
       }
-      if (yield_walk_on && yieldPassOf(*f).admitted.empty()) return true;   // yield-refused: the next candidate takes the place
-      if (gate != nullptr && !room.admit(key)) return true;   // capped: no place, the next candidate is tried
+      if (yield_walk_on && yieldPassOf(*f).admitted.empty())
+      {
+        refused_yield.insert(key);
+        return true;   // yield-refused: the next candidate takes the place
+      }
+      if (gate != nullptr && !room.admit(key))
+      {
+        refused_cap.insert(key);
+        return true;   // capped: no place, the next candidate is tried
+      }
       chosen.insert(key);
       targets.push_back(f);
       return static_cast<int>(targets.size()) < budget;  // false once the budget is full
@@ -1039,6 +1050,11 @@ namespace OpenMS
         for (const auto& kv : m.fragments)
         {
           const MappedFragment& f = kv.second;
+          if (f.best_ms2.has_value() && f.ion_index < L && fragmentContains(f, rs_region, re_region))
+          {
+            containers_seen.insert(kv.first);
+            if (!eligible(f)) refused_charge.insert(kv.first);   // a container no charge of which the gate admits
+          }
           if (!eligible(f)) continue;
           if (!fragmentContains(f, rs_region, re_region)) continue;
           cands.push_back(&f);
@@ -1224,7 +1240,14 @@ namespace OpenMS
       if (obj == CharacterizationObjective::Fragments) return no_plan("no_mapped_fragment");
       // The run-B case: MS2 alone localized every modification, so there is no range left for an MS3
       // to narrow and zero targets is the correct answer, not a failure.
-      return no_plan(had_ambiguous_mod ? "no_containing_fragment" : "all_mods_localized");
+      if (!had_ambiguous_mod) return no_plan("all_mods_localized");
+      // Engine build 1: "no container" (nothing spans the range) is told from "containers, all refused".
+      if (containers_seen.empty()) return no_plan("no_containing_fragment");
+      const std::string refused = "containers_refused containers=" + std::to_string(containers_seen.size())
+                                  + " refused_charge=" + std::to_string(refused_charge.size())
+                                  + " refused_yield=" + std::to_string(refused_yield.size())
+                                  + " refused_cap=" + std::to_string(refused_cap.size());
+      return no_plan(refused.c_str());
     }
 
     // The plan's ranking within the chosen set (the executor dispatches in this order): strongest best-MS2 first, or

@@ -34,6 +34,7 @@
 
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/BuildInfo.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/LogFormat.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EngineClock.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/AnnotatorMetrics.h>   // the worker's own annotation under explained_signal (ADR-0074)
@@ -262,6 +263,18 @@ FLASHIda::FLASHIda(char* arg) :
   #endif
 
     engine_start_time_ = std::chrono::steady_clock::now();
+
+    // Engine build 1: which engine runs, with the settings a run's labels depend on, as the first line of events.log.
+    {
+      const DeconvolutionConfig& dc = config_.deconvolution();
+      const std::string sha = FLASHIdaBuildInfo::commit();
+      EventLine() << "[ENGINE] openms_commit=" << (sha.empty() ? std::string("unknown") : sha)
+                  << " ci_run=" << FLASHIdaBuildInfo::ciRun() << " ms3_level=3 ms3_min_cos=" << dc.ms3_min_cos
+                  << " tol_ms3_ppm=" << config_.level(3).tolerance_ppm
+                  << " mass_offset_start_ms2_ppm=" << dc.mass_offset_start_ms2_ppm
+                  << " mass_offset_start_ms3_ppm=" << dc.mass_offset_start_ms3_ppm
+                  << " ms3_vote=" << (dc.mass_offset_start_ms3_authored ? "armed" : "off");
+    }
 
     // The monitor scan's own deconvolution engine, built only if a level asks for one (ADR-0042).
     // In the ctor BODY rather than the init list deliberately: it is conditional, and a null pointer

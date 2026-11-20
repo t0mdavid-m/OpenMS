@@ -142,6 +142,9 @@ namespace OpenMS
                              // check off and on every row no survey decided. Same gap as above, for the same reason.
                              << "charge_check_status\tcharge_check_z\tcharge_check_z_cont\tcharge_check_score\t"
                              << "charge_check_resolvability\tchecked_charge\tchecked_mass\t"
+                             // Engine build 1: the scan's AGC target as sent (0 = unset, the instrument's default),
+                             // before enqueue_ts, which stays last.
+                             << "agc_target\t"
                              << "enqueue_ts\n";
         commands_tsv_stream_.flush();
       }
@@ -579,6 +582,7 @@ namespace OpenMS
                          << cc_res << "\t"
                          << cc_checked_z << "\t"
                          << cc_checked_mass << "\t"
+                         << cmd.agc_target << "\t"         // engine build 1: the AGC target as sent; 0 = unset
                          << cmd.enqueue_timestamp_ms << "\n";
     commands_tsv_stream_.flush();
   }
