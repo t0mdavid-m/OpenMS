@@ -470,6 +470,8 @@ set(analysis_executables_list
   FLASHIda_SpsQuantMs3_test
   # ADR-0081: the run mass offset against the analysis' vectors (test-data-private/mass_offset, PRIVATE).
   FLASHIda_MassOffset_test
+  # Engine build 1: the replay of recorded runs through the MS3 path and the mass offset (FLASHIDA_REPLAY_SPEC).
+  FLASHIda_Replay_test
   FixedModifications_test
   FLASHIda_LegacyConfig_test
   ConfigSchemaParity_test
