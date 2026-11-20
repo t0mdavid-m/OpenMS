@@ -21,10 +21,10 @@
 ///   - the matching inputs and the fallback vote: tools/v23/off_ref_impl.py (wide_errors, vote), with the v24 restart.
 namespace OpenMS
 {
-  /// The spreads of one raw error, per level, measured on the 12 E. coli runs (results/v24/off24/choices.json); Tom's
-  /// 0.58 and 1.63 ppm at the precision the analysis' test vectors were produced with.
-  constexpr double kMassOffsetSigmaMs3Ppm = 0.5787868575652204;
-  constexpr double kMassOffsetSigmaMs2Ppm = 1.6305928194273822;
+  /// The spreads of one raw error, per level, fixed in the engine as the owner decided (D171 3): MS3 0.58 ppm, MS2 1.63 ppm,
+  /// measured on the 12 E. coli runs (results/v24/off24/choices.json: 0.5788 and 1.6306). A dynamic estimate comes later.
+  constexpr double kMassOffsetSigmaMs3Ppm = 0.58;
+  constexpr double kMassOffsetSigmaMs2Ppm = 1.63;
   /// Reading A: the prior's width in ppm.
   constexpr double kMassOffsetPriorWidthPpm = 0.6;
   /// A confident MS3 matches at least this many distinct bonds; a confident MS2 at least this many fragments.

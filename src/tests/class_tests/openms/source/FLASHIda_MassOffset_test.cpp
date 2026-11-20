@@ -78,7 +78,7 @@ START_TEST(FLASHIda_MassOffset, "$Id$")
 
 START_SECTION(reading_a_estimate_is_the_posterior_mean)
 {
-  // Prior N(-25, 0.6^2); one error of -24 at sigma 0.5787868575652204: (-25/0.36 + -24/s^2) / (1/0.36 + 1/s^2)
+  // Prior N(-25, 0.6^2); one error of -24 at sigma 0.58: (-25/0.36 + -24/s^2) / (1/0.36 + 1/s^2)
   MassOffsetState st(-25.0, kMassOffsetSigmaMs3Ppm);
   TEST_REAL_SIMILAR(st.estimate(), -25.0)
   st.feed({-24.0});
@@ -103,13 +103,14 @@ START_SECTION(v24_reading_a_reproduces_every_scan)
   const json d = loadJson(kDir + "v24_offset24_test_vectors.json");
   ABORT_IF(!d.is_object())
   TEST_EQUAL(d["vectors"].size(), 5)
-  // The spreads the engine fixes are the ones the vectors were produced with.
-  TEST_REAL_SIMILAR(d["sigma_ppm"]["ms3"].get<double>(), kMassOffsetSigmaMs3Ppm)
-  TEST_REAL_SIMILAR(d["sigma_ppm"]["ms2"].get<double>(), kMassOffsetSigmaMs2Ppm)
+  // The engine's spreads are the owner's rounded 0.58 / 1.63 ppm (D171 3); the vectors were produced with the measured
+  // 0.5788 / 1.6306, so each sequence runs at its own spread -- the rule is what is pinned, exactly.
+  TEST_REAL_SIMILAR(kMassOffsetSigmaMs3Ppm, 0.58)
+  TEST_REAL_SIMILAR(kMassOffsetSigmaMs2Ppm, 1.63)
   int scans = 0, mismatches = 0;
   for (const json& v : d["vectors"])
   {
-    const double sigma = v["level"].get<int>() == 3 ? kMassOffsetSigmaMs3Ppm : kMassOffsetSigmaMs2Ppm;
+    const double sigma = v["sigma_ppm"].get<double>();
     MassOffsetState st(v["start_ppm"].get<double>(), sigma);
     for (const json& sc : v["scans"])
     {
