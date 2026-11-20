@@ -218,7 +218,8 @@ namespace
     for (const char* k : {"min_charge", "max_charge", "min_mass", "max_mass", "tol"})
       if (md.contains(k)) dc[k] = md[k];
     if (run.contains("ms3_min_cos")) dc["ms3_min_cos"] = run["ms3_min_cos"];
-    Config cfg(json {{"deconvolution", dc}}.dump());
+    // No ms_settings: rank_by "none" is the selection that needs none (the replay selects no precursor).
+    Config cfg(json {{"deconvolution", dc}, {"precursor_selection", {{"rank_by", "none"}}}}.dump());
     const DoubleList tol = cfg.toleranceList();
     Deconvolution deconv(cfg, tol);
     const double tol3 = tol.size() >= 3 ? tol[2] : 10.0;
@@ -346,7 +347,7 @@ START_SECTION(a_synthetic_ms3_replays_at_the_run_offset)
 
   // The replay's engine is built from a config holding only the run's deconvolution section, as replayRun builds it.
   json dc = {{"min_charge", 1}, {"max_charge", 50}, {"tol", {10, 10, 10}}};
-  Config cfg(json {{"deconvolution", dc}}.dump());
+  Config cfg(json {{"deconvolution", dc}, {"precursor_selection", {{"rank_by", "none"}}}}.dump());
   TEST_EQUAL(cfg.toleranceList().size(), 3)
   TEST_REAL_SIMILAR(cfg.deconvolution().ms3_min_cos, 0.5)
   Deconvolution deconv(cfg, cfg.toleranceList());
