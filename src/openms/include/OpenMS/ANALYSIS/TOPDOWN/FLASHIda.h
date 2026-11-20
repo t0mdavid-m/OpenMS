@@ -44,6 +44,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ProteoformTracker.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MassOffset.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PrecursorBoard.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PrecursorSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ProteomeSearch.h>
@@ -224,6 +225,10 @@ namespace OpenMS
     Ms1Buffer ms1_buffer_;
     std::unordered_map<std::string, WitnessParentRow> witness_parent_rows_;
     std::deque<std::string> witness_parent_order_;   ///< insertion order, to bound witness_parent_rows_
+
+    /// ADR-0081: the run's mass offset of each MS level, from deconvolution.mass_offset_start_ppm, and the MS3 fallback
+    /// vote. Under analysis_mutex_: a search reads the MS2 estimate copied into its job at submit.
+    MassOffsets mass_offsets_;
 
     /// P5: monotonic, deterministic-per-run, base-10 precursor identity counter. A NEW id is allocated
     /// for each precursor selected at MS1 (allocPrecursorId_); carried by all of that precursor's
@@ -505,6 +510,7 @@ namespace OpenMS
       IdaLogger::ScanRowDescriptor results_row{};   ///< the half-filled row; deconv_spectrum re-pointed at `spectrum`
       std::vector<std::string> child_ids;
       int commands_pushed = 0;
+      double ms2_offset_ppm = 0.0;              ///< ADR-0081: the MS2 estimate at submit (the worker holds no lock)
       Exploration::NextLevelSearch result;      ///< filled by the worker
       SearchTiming timing;
     };
@@ -517,6 +523,7 @@ namespace OpenMS
       int instrument_scan_number = 0;           ///< the scan the proteome search names its spectrum by (ADR-0061 push 4c)
       Exploration::VariantInput input;          ///< prepareVariant's copy (spectrum, share, slot); input.prsm by the worker
       IdaLogger::ScanRowDescriptor results_row{};
+      double ms2_offset_ppm = 0.0;              ///< ADR-0081: the MS2 estimate at submit (the worker holds no lock)
       FragmentAnalysis::ProteoformMatch match;  ///< filled by the worker
       SearchTiming timing;
     };
@@ -556,6 +563,9 @@ namespace OpenMS
     /// Whether @p match reaches identification.threshold for a commanded precursor of @p commanded_mass: the score half
     /// of closeOutIfIdentified_, with no side effect (ADR-0064 buys its quantification MS3 on the same call).
     bool reachesThreshold_(const FragmentAnalysis::ProteoformMatch& match, double commanded_mass) const;
+    /// ADR-0081: an MS2 identified at the threshold (@p match, matched at @p used_ppm) feeds the run's MS2 mass offset
+    /// when it has at least five matched fragments: their raw errors. Under analysis_mutex_ (an apply).
+    void feedMs2Offset_(const FragmentAnalysis::ProteoformMatch& match, const std::string& tracking_id, double used_ppm);
 
     /// ADR-0064: whether the species of @p mass is closed out within rt_window of @p rt by ANY Precursor, the closing
     /// one included -- so a species is quantified at MS3 once per close-out, not once per closing scan.

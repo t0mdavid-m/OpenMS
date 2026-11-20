@@ -709,16 +709,29 @@ namespace OpenMS
           ? tracker->buildWinnerProteoformContext(precursor_id)
           : group.proteoform_ctx;
       std::vector<FragmentAnalysis::ProteoformMatch> detailed_results;
+      // ADR-0081: every variant at the run's MS3 mass offset, and every variant then feeds it, in the group's order
+      // (decision 3 of engine build 1). No offsets (unit tests): 0, nothing fed.
+      const double offset_used = (mass_offsets_ != nullptr) ? mass_offsets_->ms3.estimate() : 0.0;
+      std::vector<MS3FragmentMatcher::OffsetEvidence> evidence;
       auto calibrated_scores = ProteoformTracker::scoreCalibratedVariants(
         variant_spectra,
         config_.identification().proteinOr(score_ctx.protein_sequence),
         score_ctx,
         group.fragment_ion_type,
         group.fragment_ion_index,
-        MS3FragmentMatcher::LOOSE_TOLERANCE_PPM,
+        offset_used,
         config_.level(group.msn_level).tolerance_ppm,
         &detailed_results,
-        config_.identification().fixed_mods);
+        config_.identification().fixed_mods,
+        &evidence);
+      if (mass_offsets_ != nullptr)
+        for (size_t vi = 0; vi < evidence.size() && vi < group.variants.size(); ++vi)
+        {
+          if (variant_spectra[vi] == nullptr) continue;
+          const MS3FragmentMatcher::OffsetEvidence& ev = evidence[vi];
+          mass_offsets_->onMs3(group.variants[vi].tracking_id, offset_used, ev.n_masses, ev.matched, ev.bonds,
+                               ev.raw_errors, ev.wide_errors);
+        }
 
       for (size_t vi = 0; vi < calibrated_scores.size(); ++vi)
       {

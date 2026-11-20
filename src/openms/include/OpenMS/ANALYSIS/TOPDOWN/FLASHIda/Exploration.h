@@ -39,6 +39,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/KineticModel.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MassOffset.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms3WitnessGate.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
@@ -447,6 +448,9 @@ namespace OpenMS
 
     /// ADR-0079: the trees `model: w` gates score with (owned by FLASHIda); null until set, and then no W gate runs.
     void setWitnessModel(const WitnessModel* model) { witness_model_ = model; }
+    /// ADR-0081: the run's mass offsets, owned by FLASHIda. An MS3 sweep scores its variants at the MS3 estimate and feeds
+    /// it. Read and written only under analysis_mutex_. Null (unit tests): offset 0, nothing fed.
+    void setMassOffsets(MassOffsets* offsets) { mass_offsets_ = offsets; }
     /// ADR-0079: the plan-level W context of an MS3 plan whose parent is @p parent_ms2 (FLASHIda's buffer, clock and the
     /// parent's logged rows); used where the MS3 of an MS2-sweep winner is planned. Null: no W context.
     using WitnessContextProvider = std::function<std::unique_ptr<WitnessPlanContext>(const ScanCommand& parent_ms2)>;
@@ -578,6 +582,7 @@ namespace OpenMS
     /// Maps tracking_id (int) -> {group_id, variant_index} for variant result routing
     std::unordered_map<int, VariantRef> variant_tracking_map_;
     const WitnessModel* witness_model_ = nullptr;   ///< ADR-0079: setWitnessModel
+    MassOffsets* mass_offsets_ = nullptr;           ///< ADR-0081: setMassOffsets
     WitnessContextProvider witness_ctx_provider_;   ///< ADR-0079: setWitnessContextProvider
 
     /// Next group ID (monotonically increasing)

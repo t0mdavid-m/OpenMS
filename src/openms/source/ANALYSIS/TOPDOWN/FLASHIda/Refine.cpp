@@ -838,7 +838,7 @@ namespace OpenMS
   // ======================================================================================================================
 
   Refine::PieceVerdict Refine::pieceTest(const DeconvolvedSpectrum& ms3, const String& sequence, const Path& a, const Path& b,
-                                         const Discriminating& target, double loose_ppm, double tight_ppm,
+                                         const Discriminating& target, double run_offset_ppm, double tight_ppm,
                                          const FixedModifications& fixed_mods)
   {
     using TM = MS3FragmentMatcher::TheoreticalMass;
@@ -899,16 +899,9 @@ namespace OpenMS
       if (shared.empty() || !within(t.mass, shared.back().mass)) shared.push_back(t);
     }
 
-    // calibration: a loose pass against the shared pieces only, the median signed ppm
-    std::vector<double> ppm;
-    MS3FragmentMatcher::matchSpectrum(ms3, shared, loose_ppm, &ppm);
-    if (!ppm.empty())
-    {
-      std::sort(ppm.begin(), ppm.end());
-      const size_t mid = ppm.size() / 2;
-      const double median = ppm.size() % 2 == 0 ? (ppm[mid - 1] + ppm[mid]) / 2.0 : ppm[mid];
-      out.correction = 1.0 / (1.0 + median * 1e-6);
-    }
+    // ADR-0081: the run's MS3 mass offset, the one offset the level uses (it replaced this scan's own median over its
+    // shared pieces)
+    out.correction = 1.0 / (1.0 + run_offset_ppm * 1e-6);
     DeconvolvedSpectrum corrected(0);
     for (Size i = 0; i < ms3.size(); ++i)
     {
@@ -922,8 +915,7 @@ namespace OpenMS
     auto fits = [&](const Side& own, const Side& other) {
       if (!own.has) return false;
       std::vector<FragmentAnalysis::ProteoformMatch> detail;
-      // loose = 0: calibrateAndScore's own pass 1 then matches nothing and leaves its correction at 1.0, so the only
-      // calibration is the shared-piece scaling above -- a path is never calibrated on the pieces whose fit is tested
+      // offset 0: the masses are already corrected by the run offset above, so calibrateAndScore must not correct again
       MS3FragmentMatcher::calibrateAndScore({&corrected}, seq, own.ctx, own.type, own.index, 0.0, tight_ppm, &detail, fixed_mods);
       if (detail.empty()) return false;
       int count = 0;

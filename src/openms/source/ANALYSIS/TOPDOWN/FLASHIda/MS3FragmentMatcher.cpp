@@ -9,6 +9,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ChanceMatch.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/EventLog.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MassOffset.h>
 #include <OpenMS/CHEMISTRY/Residue.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
 
@@ -281,6 +282,7 @@ namespace OpenMS
           {
             MatchDetail md;
             md.observed_mass = best_obs;
+            md.raw_mass = obs_mass;
             md.theoretical_index = static_cast<size_t>(best_theo_idx);
             md.theoretical_mass = theoretical[best_theo_idx].mass;
             md.ppm_error = signed_ppm;
@@ -568,16 +570,58 @@ namespace OpenMS
     return sum;
   }
 
+  MS3FragmentMatcher::OffsetEvidence MS3FragmentMatcher::offsetEvidence(const DeconvolvedSpectrum& spectrum,
+                                                                        const std::vector<TheoreticalMass>& theoretical,
+                                                                        double run_offset_ppm, double tolerance_ppm,
+                                                                        int fragment_length, std::vector<MatchDetail>* details)
+  {
+    OffsetEvidence ev;
+    ev.n_masses = static_cast<int>(spectrum.size());
+    if (spectrum.empty() || theoretical.empty()) return ev;
+
+    // One uniform offset: matchSpectrum's per-entry form with every entry at the run estimate.
+    const std::vector<double> offsets(theoretical.size(), run_offset_ppm);
+    std::vector<MatchDetail> local;
+    std::vector<MatchDetail>& md = details != nullptr ? *details : local;
+    const size_t first = md.size();
+    ev.matched = matchSpectrum(spectrum, theoretical, tolerance_ppm, nullptr, &md, &offsets);
+
+    std::vector<bool> covered(static_cast<size_t>(std::max(fragment_length, 1)) + 1, false);
+    for (size_t i = first; i < md.size(); ++i)
+    {
+      const MatchDetail& d = md[i];
+      ev.raw_errors.push_back((d.raw_mass - d.theoretical_mass) / d.theoretical_mass * 1e6);
+      if (d.ion_type.empty()) continue;
+      const char t = d.ion_type[0];
+      const int bond = (t == 'b' || t == 'a' || t == 'c') ? d.position : (fragment_length - d.position);
+      if (bond >= 1 && bond <= fragment_length - 1 && !covered[static_cast<size_t>(bond)])
+      {
+        covered[static_cast<size_t>(bond)] = true;
+        ++ev.bonds;
+      }
+    }
+
+    std::vector<double> masses, ladder;
+    masses.reserve(spectrum.size());
+    for (Size i = 0; i < spectrum.size(); ++i) masses.push_back(spectrum[i].getMonoMass());
+    ladder.reserve(theoretical.size());
+    for (const auto& t : theoretical) ladder.push_back(t.mass);
+    std::sort(ladder.begin(), ladder.end());
+    ev.wide_errors = MassOffsetVote::wideErrors(masses, ladder);
+    return ev;
+  }
+
   std::vector<double> MS3FragmentMatcher::calibrateAndScore(
     const std::vector<const DeconvolvedSpectrum*>& variant_spectra,
     const std::string& protein_sequence,
     const ProteoformContext& ctx,
     char fragment_ion_type,
     int fragment_ion_index,
-    double loose_tolerance_ppm,
+    double run_offset_ppm,
     double tight_tolerance_ppm,
     std::vector<FragmentAnalysis::ProteoformMatch>* detailed_results,
-    const FixedModifications& fixed_mods)
+    const FixedModifications& fixed_mods,
+    std::vector<OffsetEvidence>* evidence)
   {
     std::vector<double> scores(variant_spectra.size(), 0.0);
 
@@ -617,54 +661,11 @@ namespace OpenMS
     int prot_start_1based = ctx.region_start + subseq_start_1based;
     int prot_end_1based = prot_start_1based + fragment_ion_index - 1;
 
-    // Pass 1: loose matching for calibration, every error kept with the theoretical entry it fell on
-    std::vector<double> all_ppm_errors;
-    std::vector<MatchDetail> loose_details;
-    for (size_t vi = 0; vi < variant_spectra.size(); ++vi)
-    {
-      if (variant_spectra[vi] == nullptr || variant_spectra[vi]->empty()) continue;
-      matchSpectrum(*variant_spectra[vi], theoretical, loose_tolerance_ppm, &all_ppm_errors, &loose_details);
-    }
-
-    auto medianOf = [](const std::vector<double>& sorted) {
-      const size_t mid = sorted.size() / 2;
-      return sorted.size() % 2 == 0 ? (sorted[mid - 1] + sorted[mid]) / 2.0 : sorted[mid];
-    };
-
-    // The whole pool's median: the offset of every ion with no loose-pass error, and what the row and [MS3-SCORE] log
-    double correction_factor = 1.0;
-    double median_ppm = 0.0;
-    if (! all_ppm_errors.empty())
-    {
-      std::sort(all_ppm_errors.begin(), all_ppm_errors.end());
-      median_ppm = medianOf(all_ppm_errors);
-      correction_factor = 1.0 / (1.0 + median_ppm * 1e-6);
-    }
-
-    // ADR-0075: each ion's offset leaves out every error on that ion, in every variant. A sweep fragments one precursor
-    // several times, so the same mass returns in each variant; left in, its copies outvote the rest and pull the window
-    // onto themselves. An ion whose errors are the whole pool has no other ion to learn from and is not corrected.
-    std::vector<double> ion_offsets(theoretical.size(), median_ppm);
-    {
-      std::vector<std::vector<double>> own(theoretical.size());
-      for (const MatchDetail& md : loose_details) own[md.theoretical_index].push_back(md.ppm_error);
-      for (size_t ti = 0; ti < theoretical.size(); ++ti)
-      {
-        if (own[ti].empty()) continue;
-        if (own[ti].size() == all_ppm_errors.size())
-        {
-          ion_offsets[ti] = 0.0;
-          continue;
-        }
-        std::vector<double> rest = all_ppm_errors;   // sorted
-        for (double e : own[ti])
-        {
-          const auto it = std::lower_bound(rest.begin(), rest.end(), e);
-          if (it != rest.end() && *it == e) rest.erase(it);
-        }
-        ion_offsets[ti] = rest.empty() ? 0.0 : medianOf(rest);
-      }
-    }
+    // ADR-0081: every variant is matched once, every mass corrected by the run's MS3 offset. No variant, ion or sweep is
+    // calibrated on its own: the run estimate is the only offset the level uses.
+    const double correction_factor = 1.0 / (1.0 + run_offset_ppm * 1e-6);
+    const int fragment_length = static_cast<int>(subseq.size());
+    if (evidence != nullptr) evidence->assign(variant_spectra.size(), OffsetEvidence {});
 
     // Precompute protein prefix masses for detailed results
     std::vector<double> protein_prefix;
@@ -674,7 +675,7 @@ namespace OpenMS
       detailed_results->resize(variant_spectra.size());
       for (size_t vi = 0; vi < variant_spectra.size(); ++vi)
       {
-        (*detailed_results)[vi].ppm_offset = median_ppm;
+        (*detailed_results)[vi].ppm_offset = run_offset_ppm;
         (*detailed_results)[vi].correction_factor = correction_factor;
         // I1: store the MS3 fragment sub-range within the parent protein so identification.tsv reports
         // where the MS3 PRECURSOR maps, not the parent proteoform's full range. prot_start_1based /
@@ -692,7 +693,8 @@ namespace OpenMS
       }
     }
 
-    // Pass 2: match at tight tolerance, each ion at its own offset (ADR-0075)
+    // One match per variant at the tight tolerance, at the run offset
+    int total_matched = 0;
     for (size_t vi = 0; vi < variant_spectra.size(); ++vi)
     {
       if (variant_spectra[vi] == nullptr || variant_spectra[vi]->empty())
@@ -701,8 +703,11 @@ namespace OpenMS
       }
 
       std::vector<MatchDetail> details;
-      scores[vi] = static_cast<double>(
-        matchSpectrum(*variant_spectra[vi], theoretical, tight_tolerance_ppm, nullptr, &details, &ion_offsets));
+      OffsetEvidence ev = offsetEvidence(*variant_spectra[vi], theoretical, run_offset_ppm, tight_tolerance_ppm,
+                                         fragment_length, &details);
+      scores[vi] = static_cast<double>(ev.matched);
+      total_matched += ev.matched;
+      if (evidence != nullptr) (*evidence)[vi] = std::move(ev);
 
       if (detailed_results != nullptr)
       {
@@ -714,6 +719,7 @@ namespace OpenMS
           fm.ion_type = md.ion_type;
           fm.ion_index = md.position;
           fm.observed_mass = md.observed_mass;
+          fm.raw_mass = md.raw_mass;
           double offset = 0.0;
           computeEquivalentIon(protein_sequence, ctx,
                                fragment_ion_type, fragment_ion_index,
@@ -818,8 +824,8 @@ namespace OpenMS
       EventLine ev;
       ev << "[MS3-SCORE] precursor=" << fragment_ion_type << fragment_ion_index << " residues=" << prot_start_1based << "-"
          << prot_end_1based << " ptm_sites=" << rebased_ptms.size() << " theoretical=" << theoretical.size()
-         << " calibration_matches=" << all_ppm_errors.size() << " calibration_ppm=" << std::fixed << std::setprecision(2)
-         << median_ppm << " matched=";
+         << " calibration_matches=" << total_matched << " calibration_ppm=" << std::fixed << std::setprecision(2)
+         << run_offset_ppm << " matched=";
       for (size_t vi = 0; vi < scores.size(); ++vi) ev << (vi > 0 ? "," : "") << static_cast<int>(scores[vi]);
     }
     return scores;

@@ -468,7 +468,7 @@ namespace OpenMS
     auto deconv = config.value("deconvolution", json::object());
     rejectUnknownKeys(deconv,
         {"score_threshold", "tqscore_threshold", "min_charge", "max_charge", "min_mass", "max_mass", "tol",
-         "ms3_min_cos"},
+         "ms3_min_cos", "mass_offset_start_ppm"},
         "deconvolution");
     targeting_.qscore_threshold = deconv.value("score_threshold", 0.0);
     targeting_.tqscore_threshold = deconv.value("tqscore_threshold", 0.9);
@@ -488,6 +488,29 @@ namespace OpenMS
         throw std::invalid_argument("Config: deconvolution.ms3_min_cos must be in [0.5, 1.0] (the range the "
                                     "deconvolution accepts); got " + deconv["ms3_min_cos"].dump() + ".");
       deconv_.ms3_min_cos = c;
+    }
+    // ADR-0081: the start value of each level's run mass offset, {"ms2": ppm, "ms3": ppm}, both optional. An MS3 entry
+    // that is present, even 0, arms the MS3 fallback vote; the MS2 level has none.
+    if (deconv.contains("mass_offset_start_ppm") && !deconv["mass_offset_start_ppm"].is_null())
+    {
+      const json& mo = deconv["mass_offset_start_ppm"];
+      if (!mo.is_object())
+        throw std::invalid_argument("Config: deconvolution.mass_offset_start_ppm must be an object {\"ms2\": ppm, "
+                                    "\"ms3\": ppm}; got " + mo.dump() + " (ADR-0081).");
+      rejectUnknownKeys(mo, {"ms2", "ms3"}, "deconvolution.mass_offset_start_ppm");
+      auto level = [&](const char* key, double& out) {
+        if (!mo.contains(key) || mo[key].is_null()) return false;
+        if (!mo[key].is_number())
+          throw std::invalid_argument(std::string("Config: deconvolution.mass_offset_start_ppm.") + key
+                                      + " must be a number (ppm); got " + mo[key].dump() + " (ADR-0081).");
+        out = mo[key].get<double>();
+        if (!std::isfinite(out))
+          throw std::invalid_argument(std::string("Config: deconvolution.mass_offset_start_ppm.") + key
+                                      + " must be finite (ADR-0081).");
+        return true;
+      };
+      level("ms2", deconv_.mass_offset_start_ms2_ppm);
+      deconv_.mass_offset_start_ms3_authored = level("ms3", deconv_.mass_offset_start_ms3_ppm);
     }
 
     // Tolerance values: one entry per MS level, indexed by level-1

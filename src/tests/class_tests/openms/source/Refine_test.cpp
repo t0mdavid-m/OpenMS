@@ -699,7 +699,7 @@ START_SECTION(cytc_recount_after_july_ms3_matches_the_defaults_table)
     const auto it = july.find(label(cytc_targets[i].ion_a));
     if (it == july.end()) continue; // every other target: not isolated in the July run, untested
     ++tested;
-    const Refine::PieceVerdict v = Refine::pieceTest(it->second, CYTC105, a, b, cytc_targets[i], 500.0, 10.0);
+    const Refine::PieceVerdict v = Refine::pieceTest(it->second, CYTC105, a, b, cytc_targets[i], 0.0, 10.0);
     TEST_EQUAL(v.fits_a, true)
     TEST_EQUAL(v.fits_b, false)
     confirmed[i] = {v.fits_a, v.fits_b};
@@ -782,7 +782,7 @@ START_SECTION(piece_shared_when_masses_coincide)
   PeakGroup pg;
   pg.setMonoisotopicMass(b3);
   ms3.push_back(pg);
-  const Refine::PieceVerdict v = Refine::pieceTest(ms3, seq, pa, pb, target, 500.0, 10.0);
+  const Refine::PieceVerdict v = Refine::pieceTest(ms3, seq, pa, pb, target, 0.0, 10.0);
   TEST_EQUAL(v.shared_seen, 1)
   TEST_REAL_SIMILAR_ABS(v.correction, 1.0, 1e-12)
   TEST_EQUAL(v.fits_a, false)
@@ -790,10 +790,11 @@ START_SECTION(piece_shared_when_masses_coincide)
 }
 END_SECTION
 
-START_SECTION(piece_test_calibrates_on_shared_pieces_only)
+START_SECTION(piece_test_corrects_by_the_run_offset)
 {
-  // Both paths explain the target as b6 of PEPTIDEK with +42.0106 Da, path a on residue 1, path b on residue 3. So b1+d and
-  // b2+d are path a's discriminating, shift-carrying pieces, while b3+d and b4+d are shared. The MS3 masses read 30 ppm high.
+  // ADR-0081: the MS3 masses are corrected by the run's MS3 mass offset, never by the scan's own shared pieces. Both paths
+  // explain the target as b6 of PEPTIDEK with +42.0106 Da, path a on residue 1, path b on residue 3. So b1+d and b2+d are
+  // path a's discriminating, shift-carrying pieces, while b3+d and b4+d are shared. The MS3 masses read 30 ppm high.
   const String seq = "PEPTIDEK";
   const Refine::Ladder lad = Refine::ladder(seq, {"b", "y"});
   const double delta = 42.010565, off = 1.0 + 30e-6;
@@ -820,25 +821,32 @@ START_SECTION(piece_test_calibrates_on_shared_pieces_only)
     }
     return s;
   };
-  // no shared piece seen: nothing calibrates, b2+d sits 30 ppm out of the 10 ppm window
-  const Refine::PieceVerdict alone = Refine::pieceTest(spectrum({lad.prefix[1] + delta}), seq, pa, pb, target, 500.0, 10.0);
+  // the run offset 0: b2+d sits 30 ppm out of the 10 ppm window, and seeing shared pieces beside it changes nothing
+  const Refine::PieceVerdict at_zero =
+    Refine::pieceTest(spectrum({lad.prefix[1] + delta, lad.prefix[2] + delta, lad.prefix[3] + delta}), seq, pa, pb, target, 0.0, 10.0);
+  TEST_EQUAL(at_zero.shared_seen, 0)
+  TEST_REAL_SIMILAR_ABS(at_zero.correction, 1.0, 1e-12)
+  TEST_EQUAL(at_zero.fits_a, false)
+  TEST_EQUAL(at_zero.fits_b, false)
+  // the run offset +30 ppm: b2+d alone, with no shared piece to learn from, is pulled into the window
+  const Refine::PieceVerdict alone = Refine::pieceTest(spectrum({lad.prefix[1] + delta}), seq, pa, pb, target, 30.0, 10.0);
   TEST_EQUAL(alone.shared_seen, 0)
-  TEST_REAL_SIMILAR_ABS(alone.correction, 1.0, 1e-12)
-  TEST_EQUAL(alone.fits_a, false)
+  TEST_REAL_SIMILAR_ABS(alone.correction, 1.0 / off, 1e-9)
+  TEST_EQUAL(alone.fits_a, true)
   TEST_EQUAL(alone.fits_b, false)
-  // two shared pieces seen: their +30 ppm calibrates the copy and pulls b2+d into the window
-  const Refine::PieceVerdict cal =
-    Refine::pieceTest(spectrum({lad.prefix[1] + delta, lad.prefix[2] + delta, lad.prefix[3] + delta}), seq, pa, pb, target, 500.0, 10.0);
-  TEST_EQUAL(cal.shared_seen, 2) // one entry per coincident piece, not one per path
-  TEST_REAL_SIMILAR_ABS(cal.correction, 1.0 / off, 1e-9)
-  TEST_EQUAL(cal.fits_a, true)
-  TEST_EQUAL(cal.fits_b, false)
+  // and with the shared pieces beside it the verdict is the same; they are counted, not used to calibrate
+  const Refine::PieceVerdict with_shared =
+    Refine::pieceTest(spectrum({lad.prefix[1] + delta, lad.prefix[2] + delta, lad.prefix[3] + delta}), seq, pa, pb, target, 30.0, 10.0);
+  TEST_EQUAL(with_shared.shared_seen, 2) // one entry per coincident piece, not one per path
+  TEST_REAL_SIMILAR_ABS(with_shared.correction, 1.0 / off, 1e-9)
+  TEST_EQUAL(with_shared.fits_a, true)
+  TEST_EQUAL(with_shared.fits_b, false)
 }
 END_SECTION
 
 START_SECTION(piece_test_ignores_an_unannotatable_side)
 {
-  // piece_test_calibrates_on_shared_pieces_only with ONE change: the target is c6, not b6 (an ETD winner's ion). A c
+  // piece_test_corrects_by_the_run_offset with ONE change: the target is c6, not b6 (an ETD winner's ion). A c
   // precursor's MS3 pieces cannot be annotated (ADR-0054), so neither side predicts anything: no shared piece is seen,
   // nothing calibrates, nothing fits -- on the very spectrum that gives b6 two shared pieces and a fit for path a.
   //
@@ -867,9 +875,9 @@ START_SECTION(piece_test_ignores_an_unannotatable_side)
     pg.setMonoisotopicMass(t * off);
     s.push_back(pg);
   }
-  const Refine::PieceVerdict v = Refine::pieceTest(s, seq, pa, pb, target, 500.0, 10.0);
+  const Refine::PieceVerdict v = Refine::pieceTest(s, seq, pa, pb, target, 30.0, 10.0);
   TEST_EQUAL(v.shared_seen, 0)
-  TEST_REAL_SIMILAR_ABS(v.correction, 1.0, 1e-12)
+  TEST_REAL_SIMILAR_ABS(v.correction, 1.0 / off, 1e-9)
   TEST_EQUAL(v.fits_a, false)
   TEST_EQUAL(v.fits_b, false)
 }

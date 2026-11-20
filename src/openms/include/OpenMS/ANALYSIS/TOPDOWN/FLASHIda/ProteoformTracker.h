@@ -457,7 +457,7 @@ namespace OpenMS
     /// MS3 return under refine: pool pieces for the record whose mass matches @p fragment_mass; returns true when the
     /// round is complete (every dispatched record returned) and the decision has not fired yet.
     bool recordDiscriminatingScan(int precursor_id, double fragment_mass, const DeconvolvedSpectrum& ms3,
-                                  double loose_ppm, double tight_ppm);
+                                  double run_offset_ppm, double tight_ppm);
 
     /// Recount, decide, re-seed on a flip, emit the pooled row, log [MS3-DECIDE]. Returns whether the model flipped.
     bool decideRefine(int precursor_id);
@@ -514,9 +514,10 @@ namespace OpenMS
     static std::vector<double> scoreCalibratedVariants(
         const std::vector<const DeconvolvedSpectrum*>& variant_spectra, const std::string& protein_sequence,
         const MS3FragmentMatcher::ProteoformContext& ctx, char fragment_ion_type, int fragment_ion_index,
-        double loose_tolerance_ppm, double tight_tolerance_ppm,
+        double run_offset_ppm, double tight_tolerance_ppm,
         std::vector<FragmentAnalysis::ProteoformMatch>* detailed_results = nullptr,
-        const FixedModifications& fixed_mods = FixedModifications::none());
+        const FixedModifications& fixed_mods = FixedModifications::none(),
+        std::vector<MS3FragmentMatcher::OffsetEvidence>* evidence = nullptr);
 
   private:
     /// Map all observations in @p scan onto @p mdl's fragments map (skeleton: no-op).

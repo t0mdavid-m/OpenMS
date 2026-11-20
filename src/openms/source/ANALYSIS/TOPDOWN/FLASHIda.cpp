@@ -286,6 +286,15 @@ FLASHIda::FLASHIda(char* arg) :
       }
     }
 
+    // ADR-0081: the run's mass offset of each MS level, started from the method; the MS3 vote armed only by an authored
+    // MS3 start value. An MS3 sweep scores and feeds through Exploration.
+    {
+      const DeconvolutionConfig& dc = config_.deconvolution();
+      mass_offsets_ = MassOffsets(dc.mass_offset_start_ms2_ppm, dc.mass_offset_start_ms3_ppm, dc.mass_offset_start_ms3_authored);
+      exploration_.setMassOffsets(&mass_offsets_);
+      mass_offsets_.logStart();
+    }
+
     // The search pool (ADR-0062), only when MS2s are matched at all. Each worker sets OpenMP's team size
     // as above (the setting is per thread and a new thread does not inherit it), so the Tagger's and the
     // Extender's parallel regions run as they did on the analysis thread. The backlog bound is provisional
@@ -1203,6 +1212,8 @@ FLASHIda::FLASHIda(char* arg) :
   {
     std::lock_guard<std::mutex> lock(analysis_mutex_);
     undoExpiredMs3_();   // ADR-0066: before planning, give back what expired governed MS3s took
+    if (job.result.ran && reachesThreshold_(job.result.frag_result, job.parent_ctx.mono_mass))
+      feedMs2Offset_(job.result.frag_result, job.parent_id_str, job.ms2_offset_ppm);
     std::vector<IdaLogger::IdRowDescriptor> id_rows;
     const int pushed = finishRegularMS2_(&job.result, false, job.spectrum, job.has_spectrum ? &job.spectrum : nullptr,
                                          job.parent_ctx, job.precursor_id, job.parent_id_str, job.rt,
@@ -1219,6 +1230,8 @@ FLASHIda::FLASHIda(char* arg) :
   {
     std::lock_guard<std::mutex> lock(analysis_mutex_);
     undoExpiredMs3_();   // ADR-0066: before planning, give back what expired governed MS3s took
+    if (reachesThreshold_(job.match, 1.0))   // a variant's PrSM at the threshold feeds the MS2 offset like any MS2
+      feedMs2Offset_(job.match, job.parent_id_str, job.ms2_offset_ppm);
     Exploration::FeedResultInfo expl_result =
         exploration_.applyVariant(job.input, &job.match, false, queue_, &tracker_, job.precursor_id);
     std::vector<IdaLogger::IdRowDescriptor> id_rows;
@@ -1595,6 +1608,14 @@ FLASHIda::FLASHIda(char* arg) :
     return commanded_mass > 0.0;
   }
 
+  void FLASHIda::feedMs2Offset_(const FragmentAnalysis::ProteoformMatch& match, const std::string& tracking_id, double used_ppm)
+  {
+    std::vector<double> raw_errors;
+    raw_errors.reserve(match.fragments.size());
+    for (const auto& fm : match.fragments) raw_errors.push_back(fm.diff_ppm);   // MS2: the measured mass against theory
+    mass_offsets_.onMs2(tracking_id, used_ppm, static_cast<int>(match.fragments.size()), raw_errors);
+  }
+
   bool FLASHIda::rescuePrecursorFree_(int precursor_id)
   {
     return rescued_precursors_.insert(precursor_id).second;
@@ -1847,6 +1868,7 @@ FLASHIda::FLASHIda(char* arg) :
           job->instrument_scan_number = instrument_scan_number;
           job->input = std::move(variant_in);
           job->results_row = results_row;
+          job->ms2_offset_ppm = mass_offsets_.ms2.estimate();   // ADR-0081: under the submitting processScan's lock
 
           auto pj = std::make_unique<SearchPool::Job>();
           pj->search = [this, job]
@@ -1858,6 +1880,7 @@ FLASHIda::FLASHIda(char* arg) :
             // from without searching again.
             job->input.prsm = searchProteome(proteomes_, job->input.activation_type, job->input.deconv,
                                              config_.level(2).exploration_tolerance_ppm, job->instrument_scan_number);
+            if (job->input.prsm) job->input.prsm->ms2_offset_ppm = job->ms2_offset_ppm;   // FLASHIda's own match only
             // ADR-0074 d.2: FLASHTnT exposes no envelopes on its hit, so under explained_signal the worker annotates the
             // variant's best PrSM itself, on the same raw peaks, with no lock held. raw_score and bond_coverage stay the
             // search's own values.
@@ -2008,6 +2031,7 @@ FLASHIda::FLASHIda(char* arg) :
           job->results_row = results_row;
           job->child_ids = child_ids;
           job->commands_pushed = commands_pushed;
+          job->ms2_offset_ppm = mass_offsets_.ms2.estimate();   // ADR-0081: under processScan's lock
 
           auto pj = std::make_unique<SearchPool::Job>();
           pj->search = [this, job]
@@ -2023,8 +2047,9 @@ FLASHIda::FLASHIda(char* arg) :
             const std::string activation = (job->parent_ctx.num_stages > 0)
                 ? std::string(job->parent_ctx.stages[0].activation_type)
                 : (config_.level(2).scans.empty() ? std::string() : config_.level(2).scans[0].activation);
-            const FragmentAnalysis::SearchedPrSM prsm =
+            FragmentAnalysis::SearchedPrSM prsm =
                 searchProteome(proteomes_, activation, job->spectrum, config_.level(2).tolerance_ppm, job->instrument_scan_number);
+            prsm.ms2_offset_ppm = job->ms2_offset_ppm;   // ADR-0081: FLASHIda's own match of the PrSM; the search stays raw
             job->result = exploration_.searchNextLevel(2, job->spectrum, &job->parent_ctx, &prsm);
             job->timing.finished = std::chrono::steady_clock::now();
           };
@@ -2192,16 +2217,26 @@ FLASHIda::FLASHIda(char* arg) :
 
             std::vector<const DeconvolvedSpectrum*> spectra = {ms3_spec};
             std::vector<FragmentAnalysis::ProteoformMatch> ms3_matches;
+            // ADR-0081: matched at the run's MS3 mass offset, which this MS3 then feeds (and the vote steps on)
+            const double ms3_offset_used = mass_offsets_.ms3.estimate();
+            std::vector<MS3FragmentMatcher::OffsetEvidence> ms3_evidence;
             ProteoformTracker::scoreCalibratedVariants(
               spectra,
               config_.identification().proteinOr(proto_ctx.protein_sequence),
               proto_ctx,
               cached_ms2_ctx.fragment_ion_type,
               cached_ms2_ctx.fragment_ion_index,
-              MS3FragmentMatcher::LOOSE_TOLERANCE_PPM,
+              ms3_offset_used,
               config_.level(3).tolerance_ppm,
               &ms3_matches,
-              config_.identification().fixed_mods);
+              config_.identification().fixed_mods,
+              &ms3_evidence);
+            if (!ms3_evidence.empty())
+            {
+              const MS3FragmentMatcher::OffsetEvidence& ev = ms3_evidence[0];
+              mass_offsets_.onMs3(parent_id_str, ms3_offset_used, ev.n_masses, ev.matched, ev.bonds, ev.raw_errors,
+                                  ev.wide_errors);
+            }
             
             // logging if fragment ions are found.
             if (!ms3_matches.empty() && !ms3_matches[0].fragments.empty())
@@ -2237,7 +2272,7 @@ FLASHIda::FLASHIda(char* arg) :
             // returns its record.
             if (refine_discriminating)
               refine_round_complete = tracker_.recordDiscriminatingScan(precursor_id, cached_ms2_ctx.fragment_mass, *ms3_spec,
-                                                                        MS3FragmentMatcher::LOOSE_TOLERANCE_PPM,
+                                                                        mass_offsets_.ms3.estimate(),
                                                                         config_.level(3).tolerance_ppm);
 
             ms2_context_cache_.erase(cache_it);
@@ -2248,7 +2283,7 @@ FLASHIda::FLASHIda(char* arg) :
             // its record returns with neither path fitting -- and its context is consumed like any other's.
             const DeconvolvedSpectrum no_evidence(0);
             refine_round_complete = tracker_.recordDiscriminatingScan(precursor_id, cache_it->second.fragment_mass, no_evidence,
-                                                                      MS3FragmentMatcher::LOOSE_TOLERANCE_PPM,
+                                                                      mass_offsets_.ms3.estimate(),
                                                                       config_.level(3).tolerance_ppm);
             ms2_context_cache_.erase(cache_it);
           }

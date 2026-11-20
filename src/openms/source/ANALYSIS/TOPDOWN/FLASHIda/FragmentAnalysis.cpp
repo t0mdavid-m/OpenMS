@@ -487,7 +487,7 @@ namespace
                                       const DeconvolvedSpectrum& stored_ms2, const std::vector<std::string>& ion_types_str,
                                       double ppm_tolerance, ProteoformMatch& result,
                                       std::vector<TagBasedFragmentMatch>& matches, const FixedModifications& fixed_mods,
-                                      bool emit_event)
+                                      bool emit_event, double mass_offset_ppm)
   {
     matches.clear();
 
@@ -589,7 +589,10 @@ namespace
     for (Size peak_idx = 0; peak_idx < stored_ms2.size(); ++peak_idx)
     {
       const auto& pg = stored_ms2[peak_idx];
-      double observed_mass = pg.getMonoMass();
+      // ADR-0081: compared with theory after the run's MS2 mass offset; the match keeps the measured mass, so its logged
+      // diff_ppm is the raw error the offset is fed with.
+      const double raw_mass = pg.getMonoMass();
+      double observed_mass = raw_mass / (1.0 + mass_offset_ppm * 1e-6);
 
       // Find best match across all configured ion types
       char best_ion_type = '\0';
@@ -619,7 +622,7 @@ namespace
       {
         TagBasedFragmentMatch match;
         match.peak_index = static_cast<int>(peak_idx);
-        match.observed_mass = observed_mass;
+        match.observed_mass = raw_mass;
         match.intensity = pg.getChargeIntensity(pg.getMaxIntensityAbsCharge());
         match.charge = pg.getMaxIntensityAbsCharge();
         match.fragment_index = best_frag_idx;
@@ -856,7 +859,7 @@ namespace
       result.score = extension;
       const double ppm_tolerance = (tolerance_ppm > 0.0) ? tolerance_ppm : config_.level(2).tolerance_ppm;
       n = matchFromPrSM(hit, searched.protein_sequence, stored_ms2, FragmentAnalysis::getIonTypesForFragmentationMethod(fragmentation_method),
-                        ppm_tolerance, result, matches, config_.identification().fixed_mods);
+                        ppm_tolerance, result, matches, config_.identification().fixed_mods, true, searched.ms2_offset_ppm);
       result.identification_score = hit.getScore();
     }
     // ADR-0075: the chance-match p-value of the search's PrSM, k counted by matchFromPrSM under every method (under Refine
@@ -871,7 +874,8 @@ namespace
         std::vector<TagBasedFragmentMatch> scratch_matches;
         const double ppm_tolerance = (tolerance_ppm > 0.0) ? tolerance_ppm : config_.level(2).tolerance_ppm;
         k = matchFromPrSM(hit, searched.protein_sequence, stored_ms2, FragmentAnalysis::getIonTypesForFragmentationMethod(fragmentation_method),
-                          ppm_tolerance, scratch, scratch_matches, config_.identification().fixed_mods, /*emit_event*/ false);
+                          ppm_tolerance, scratch, scratch_matches, config_.identification().fixed_mods, /*emit_event*/ false,
+                          searched.ms2_offset_ppm);
         lambda = scratch.chance_lambda;
       }
       if (lambda >= 0.0)

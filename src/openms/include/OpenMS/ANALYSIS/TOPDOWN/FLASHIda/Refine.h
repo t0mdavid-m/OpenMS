@@ -189,12 +189,13 @@ namespace OpenMS
     {
       bool fits_a = false, fits_b = false;
       int shared_seen = 0;      ///< observed masses matching a shared piece at tight_ppm after the calibration
-      double correction = 1.0;  ///< 1 / (1 + median ppm of the shared pieces at loose_ppm)
+      double correction = 1.0;  ///< 1 / (1 + the run's MS3 mass offset), the scaling every mass was corrected by
     };
-    /// One MS3 scan of one discriminating mass: calibrate on shared pieces, then test discriminating,
-    /// shift-carrying pieces per path (decision 8).
+    /// One MS3 scan of one discriminating mass: correct every mass by the run's MS3 mass offset @p run_offset_ppm
+    /// (ADR-0081; no scan is calibrated on its own pieces), then test discriminating, shift-carrying pieces per path
+    /// (decision 8).
     static PieceVerdict pieceTest(const DeconvolvedSpectrum& ms3, const String& sequence, const Path& a, const Path& b,
-                                  const Discriminating& target, double loose_ppm, double tight_ppm,
+                                  const Discriminating& target, double run_offset_ppm, double tight_ppm,
                                   const FixedModifications& fixed_mods = FixedModifications::none());
 
     struct Recount

@@ -322,6 +322,11 @@ namespace OpenMS
     /// deconvolution.ms3_min_cos: the isotope cosine an MS3 is deconvolved with, at MS level 3 (order 1 of task v20).
     /// MS1 and MS2 keep SpectralDeconvolution's 0.85. In [0.5, 1.0], the range SpectralDeconvolution accepts.
     double ms3_min_cos = 0.5;
+    /// deconvolution.mass_offset_start_ppm (ADR-0081): the run mass offset each level starts from. Absent = 0. An
+    /// authored MS3 value (0 included) also arms the MS3 fallback vote.
+    double mass_offset_start_ms2_ppm = 0.0;
+    double mass_offset_start_ms3_ppm = 0.0;
+    bool mass_offset_start_ms3_authored = false;
   };
 
   /// FAIMS configuration values (runtime state lives on FLASHIda)

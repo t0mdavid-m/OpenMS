@@ -468,6 +468,8 @@ set(analysis_executables_list
   FLASHIda_ProteomeSearch_test
   # ADR-0080: the SPS quantification MS3 replayed on fi-ms3-mix_261110 (test-data-private/sps_quant_ms3, PRIVATE).
   FLASHIda_SpsQuantMs3_test
+  # ADR-0081: the run mass offset against the analysis' vectors (test-data-private/mass_offset, PRIVATE).
+  FLASHIda_MassOffset_test
   FixedModifications_test
   FLASHIda_LegacyConfig_test
   ConfigSchemaParity_test

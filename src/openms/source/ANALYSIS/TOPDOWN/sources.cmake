@@ -25,6 +25,7 @@ set(sources_list
         FLASHIda/FragmentAnalysis.cpp
         FLASHIda/IdaLogger.cpp
         FLASHIda/LogFormat.cpp
+        FLASHIda/MassOffset.cpp
         FLASHIda/MS3FragmentMatcher.cpp
         FLASHIda/Ms1Buffer.cpp
         FLASHIda/Ms3WitnessGate.cpp

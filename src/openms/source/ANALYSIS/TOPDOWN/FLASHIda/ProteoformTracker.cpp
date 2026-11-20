@@ -462,12 +462,13 @@ namespace OpenMS
   std::vector<double> ProteoformTracker::scoreCalibratedVariants(
       const std::vector<const DeconvolvedSpectrum*>& variant_spectra, const std::string& protein_sequence,
       const MS3FragmentMatcher::ProteoformContext& ctx, char fragment_ion_type, int fragment_ion_index,
-      double loose_tolerance_ppm, double tight_tolerance_ppm,
-      std::vector<FragmentAnalysis::ProteoformMatch>* detailed_results, const FixedModifications& fixed_mods)
+      double run_offset_ppm, double tight_tolerance_ppm,
+      std::vector<FragmentAnalysis::ProteoformMatch>* detailed_results, const FixedModifications& fixed_mods,
+      std::vector<MS3FragmentMatcher::OffsetEvidence>* evidence)
   {
     return MS3FragmentMatcher::calibrateAndScore(variant_spectra, protein_sequence, ctx, fragment_ion_type,
-                                                 fragment_ion_index, loose_tolerance_ppm, tight_tolerance_ppm,
-                                                 detailed_results, fixed_mods);
+                                                 fragment_ion_index, run_offset_ppm, tight_tolerance_ppm,
+                                                 detailed_results, fixed_mods, evidence);
   }
 
   void ProteoformTracker::feedScan(int precursor_id, uint8_t ms_level, const Ms2Params& params, int scan_id,
@@ -1872,7 +1873,7 @@ namespace OpenMS
   }
 
   bool ProteoformTracker::recordDiscriminatingScan(int precursor_id, double fragment_mass, const DeconvolvedSpectrum& ms3,
-                                                   double loose_ppm, double tight_ppm)
+                                                   double run_offset_ppm, double tight_ppm)
   {
     auto it = models_.find(precursor_id);
     if (it == models_.end()) return false;
@@ -1899,7 +1900,7 @@ namespace OpenMS
 
     // Pool: a path is supported by this mass once ANY of its scans' pieces fit (decision 8).
     const std::vector<Refine::Path>& c = st.candidates->assemble.candidates;
-    const Refine::PieceVerdict v = Refine::pieceTest(ms3, String(m.proteoform_sequence), c[0], c[1], rec->target, loose_ppm, tight_ppm,
+    const Refine::PieceVerdict v = Refine::pieceTest(ms3, String(m.proteoform_sequence), c[0], c[1], rec->target, run_offset_ppm, tight_ppm,
                                                        config_.identification().fixed_mods);
     rec->fits_a = rec->fits_a || v.fits_a;
     rec->fits_b = rec->fits_b || v.fits_b;
@@ -2203,7 +2204,9 @@ namespace OpenMS
         type = fm.equiv_type;       // already full-protein b/y
         idx = fm.equiv_index;       // already full-protein index
         obs_mass = fm.adjusted_mass;
-        lookup_mass = fm.observed_mass;
+        // ADR-0081: the raw peak records hold measured masses, so the lookup takes the measured one; the offset-corrected
+        // mass sits one isotope spacing away from its own peak at an MS3 offset of -185 ppm on a 5.4 kDa ion.
+        lookup_mass = fm.raw_mass > 0.0 ? fm.raw_mass : fm.observed_mass;
       }
       else
       {

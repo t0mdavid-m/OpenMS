@@ -47,7 +47,10 @@ namespace OpenMS
     /// Detail of a single observed-to-theoretical match
     struct MatchDetail
     {
-      double observed_mass = 0.0;    ///< Observed (deconvolved) mass
+      double observed_mass = 0.0;    ///< Observed (deconvolved) mass, with the run mass offset taken out (ADR-0081)
+      /// The deconvolved mass as measured, before the offset: what a lookup among the scan's raw peak records must use,
+      /// and what a raw error is taken from (ADR-0081).
+      double raw_mass = 0.0;
       double theoretical_mass = 0.0; ///< Matched theoretical mass
       double ppm_error = 0.0;        ///< Signed ppm error: (obs - theo) / theo * 1e6
       int position = 0;              ///< 1-based fragment index from relevant terminus
@@ -59,10 +62,26 @@ namespace OpenMS
       /// leg is filled independently in FragmentAnalysis::runTagBasedFragmentMatching_. Unaffected by
       /// the calibration copy: that rescales the monoisotopic mass only and never re-scores the group.
       double qscore = 0.0;
-      /// The entry of the theoretical list this detail matched (its index in the vector matchSpectrum was given). The sweep
-      /// calibration groups the loose-pass errors by it, so an ion is left out of its own offset (ADR-0075).
+      /// The entry of the theoretical list this detail matched (its index in the vector matchSpectrum was given).
       size_t theoretical_index = 0;
     };
+
+    /// What one MS3 scan offers the run's MS3 mass offset (ADR-0081), from its match at the run estimate.
+    struct OffsetEvidence
+    {
+      int n_masses = 0;                  ///< the scan's deconvolved masses
+      int matched = 0;                   ///< matches at the tight tolerance after the offset
+      int bonds = 0;                     ///< distinct bonds of the target fragment those matches cover
+      std::vector<double> raw_errors;    ///< (raw mass - theoretical) / theoretical x 1e6 of every match, in match order
+      std::vector<double> wide_errors;   ///< every mass against the closest ladder mass within +-300 ppm (the vote's input)
+    };
+
+    /// One scan's offset evidence: @p spectrum matched against @p theoretical at @p tolerance_ppm after
+    /// @p run_offset_ppm (closest unused entry, masses in spectrum order -- matchSpectrum's rule); bonds counted over a
+    /// fragment of @p fragment_length residues (a prefix sub-ion at position p is bond p, a suffix one bond L - p).
+    static OffsetEvidence offsetEvidence(const DeconvolvedSpectrum& spectrum, const std::vector<TheoreticalMass>& theoretical,
+                                         double run_offset_ppm, double tolerance_ppm, int fragment_length,
+                                         std::vector<MatchDetail>* details = nullptr);
 
     /// Cached proteoform context from MS2 tag-based matching
     struct ProteoformContext
@@ -76,9 +95,6 @@ namespace OpenMS
       std::string protein_sequence;
       std::string protein_accession;
     };
-
-    /// Compile-time constant: loose tolerance for calibration pass
-    static constexpr double LOOSE_TOLERANCE_PPM = 500.0;
 
     // -- Ion type handling --
 
@@ -172,24 +188,23 @@ namespace OpenMS
       std::string& out_subseq,
       std::vector<FragmentAnalysis::PTMSite>& out_wide_sites);
 
-    // -- Two-pass calibration pipeline --
+    // -- Scoring at the run mass offset --
 
-    /// Score all CE variants via two-pass calibration + matching. Pass 1 matches every variant at @p loose_tolerance_ppm and
-    /// pools the signed errors. Each theoretical ion is then corrected by the median of the pool with every error on that
-    /// ion, in every variant, left out (ADR-0075): a sweep repeats its masses across variants, and a pooled median that
-    /// holds the judged mass's own copies anchors on them. An ion with no error in the pool takes the whole pool's median;
-    /// an ion whose errors are the whole pool is not corrected. Pass 2 matches at @p tight_tolerance_ppm, each ion at its
-    /// own offset. A detailed result's ppm_offset / correction_factor log the whole pool's median.
+    /// Score every variant against the target fragment at the run's MS3 mass offset (ADR-0081): one match per variant at
+    /// @p tight_tolerance_ppm, every mass corrected by the same @p run_offset_ppm (the caller's estimate). No scan is
+    /// calibrated on its own (ADR-0075's per-ion offsets are retired). A detailed result's ppm_offset / correction_factor
+    /// log the offset used. @p evidence, when given, receives each variant's OffsetEvidence for the run's state and vote.
     static std::vector<double> calibrateAndScore(
       const std::vector<const DeconvolvedSpectrum*>& variant_spectra,
       const std::string& protein_sequence,
       const ProteoformContext& ctx,
       char fragment_ion_type,
       int fragment_ion_index,
-      double loose_tolerance_ppm,
+      double run_offset_ppm,
       double tight_tolerance_ppm,
       std::vector<FragmentAnalysis::ProteoformMatch>* detailed_results = nullptr,
-      const FixedModifications& fixed_mods = FixedModifications::none());
+      const FixedModifications& fixed_mods = FixedModifications::none(),
+      std::vector<OffsetEvidence>* evidence = nullptr);
 
     /// Compute the equivalent full-protein ion for an MS3 fragment match.
     static void computeEquivalentIon(

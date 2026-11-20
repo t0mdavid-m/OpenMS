@@ -311,7 +311,7 @@ START_SECTION(calibrateAndScore_detailed_results)
 
   auto scores = MS3FragmentMatcher::calibrateAndScore(
     variants, protein, ctx, frag_type, frag_index,
-    MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 10.0,
+    0.0, 10.0,
     &detailed);
 
   TEST_EQUAL(scores.size(), 1)
@@ -381,7 +381,7 @@ START_SECTION(calibrateAndScore_ppm_frame_projection_same_dir_b)
   std::vector<FragmentAnalysis::ProteoformMatch> detailed;
   MS3FragmentMatcher::calibrateAndScore(
     variants, protein, ctx, frag_type, frag_index,
-    MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 50.0, &detailed);
+    0.0, 50.0, &detailed);
 
   TEST_EQUAL(detailed.size(), 1)
   // Calibration neutralized: median of {0, 0, +10} = 0 -> correction_factor = 1 (the +10 ppm survives).
@@ -458,7 +458,7 @@ START_SECTION(calibrateAndScore_ppm_frame_projection_complement_flip_yb)
   std::vector<FragmentAnalysis::ProteoformMatch> detailed;
   MS3FragmentMatcher::calibrateAndScore(
     variants, protein, ctx, frag_type, frag_index,
-    MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 50.0, &detailed);
+    0.0, 50.0, &detailed);
 
   TEST_EQUAL(detailed.size(), 1)
   TEST_REAL_SIMILAR(detailed[0].correction_factor, 1.0)
@@ -523,7 +523,7 @@ START_SECTION(calibrateAndScore_ppm_frame_projection_cross_map_y)
   std::vector<FragmentAnalysis::ProteoformMatch> detailed;
   MS3FragmentMatcher::calibrateAndScore(
     variants, protein, ctx, frag_type, frag_index,
-    MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 50.0, &detailed);
+    0.0, 50.0, &detailed);
 
   TEST_EQUAL(detailed.size(), 1)
   TEST_REAL_SIMILAR(detailed[0].correction_factor, 1.0)
@@ -582,7 +582,7 @@ START_SECTION(calibrateAndScore_clipped_c_terminus_y)
   std::vector<FragmentAnalysis::ProteoformMatch> detailed;
   MS3FragmentMatcher::calibrateAndScore(
     variants, protein, ctx, frag_type, frag_index,
-    MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 50.0, &detailed);
+    0.0, 50.0, &detailed);
 
   TEST_EQUAL(detailed.size(), 1)
   TEST_REAL_SIMILAR(detailed[0].correction_factor, 1.0)

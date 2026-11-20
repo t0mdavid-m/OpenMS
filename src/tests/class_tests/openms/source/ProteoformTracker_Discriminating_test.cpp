@@ -320,7 +320,7 @@ namespace
     return plan;
   }
 
-  const double LOOSE = MS3FragmentMatcher::LOOSE_TOLERANCE_PPM;
+  const double LOOSE = 0.0;   // the run MS3 mass offset these exact-mass scans are matched at (ADR-0081)
   const double TIGHT = 10.0;
 } // namespace
 

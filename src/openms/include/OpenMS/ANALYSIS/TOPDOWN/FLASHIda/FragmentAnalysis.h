@@ -98,7 +98,8 @@ namespace OpenMS
       {
         std::string ion_type;       ///< "b", "y", "a" (MS2); "b", "y", "yb", "ya", "a" (MS3 local)
         int ion_index = 0;          ///< 1-based, proteoform-space (MS2) or subsequence-space (MS3)
-        double observed_mass = 0.0; ///< Deconvolved mass (calibrated for MS3)
+        double observed_mass = 0.0; ///< Deconvolved mass (for MS3 with the run mass offset taken out, ADR-0081)
+        double raw_mass = 0.0;      ///< MS3 only: the deconvolved mass as measured, before the offset (the scan's own peak)
         std::string equiv_type;     ///< MS3 only: equivalent ion type ("b"/"y")
         int equiv_index = 0;        ///< MS3 only: equivalent ion index counted over the REFERENCE protein (the pooling key; never logged)
         int equiv_frame_index = 0;  ///< MS3 only: the same ion's index in the Proteoform frame (CONTEXT.md): counted from the proteoform's own first / last residue. What identification.tsv writes.
@@ -194,6 +195,9 @@ namespace OpenMS
       /// raw-score penalty uses); 1 otherwise.
       std::size_t reference_size = 0;
       double shifted_windows = 1.0;
+      /// ADR-0081: the run's MS2 mass offset, snapshot at the search's submit (a worker holds no lock). FLASHIda's own
+      /// match of the PrSM (matchFromPrSM) takes it out of every mass before comparing with theory; the search does not.
+      double ms2_offset_ppm = 0.0;
     };
 
     /// Format a proteoform sequence with PTM annotations in ProForma notation.
@@ -516,7 +520,8 @@ namespace OpenMS
     static int matchFromPrSM(const ProteinHit& hit, const String& protein_sequence, const DeconvolvedSpectrum& stored_ms2,
                              const std::vector<std::string>& ion_types, double ppm_tolerance, ProteoformMatch& result,
                              std::vector<TagBasedFragmentMatch>& matches,
-                             const FixedModifications& fixed_mods = FixedModifications::none(), bool emit_event = true);
+                             const FixedModifications& fixed_mods = FixedModifications::none(), bool emit_event = true,
+                             double mass_offset_ppm = 0.0);
 
     /**
      * @brief Refine's MS2 match (identification.method refine, ADR-0049): the sibling of runTagBasedFragmentMatching_.

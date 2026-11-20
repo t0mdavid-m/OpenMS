@@ -496,15 +496,21 @@ START_SECTION(calibrateAndScore)
 
   std::vector<const DeconvolvedSpectrum*> variants = {&var0, &var1};
 
+  // ADR-0081: at the run's MS3 offset of +50 ppm, matching at 10 ppm succeeds
   auto scores = MS3FragmentMatcher::calibrateAndScore(
     variants, protein, ctx, frag_type, frag_index,
-    MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 10.0);
+    50.0, 10.0);
 
   TEST_EQUAL(scores.size(), 2)
-  // After calibration (corrects the 50 ppm shift), matching at 10 ppm should succeed
   TEST_TRUE(scores[0] >= 4.0)  // variant 0 had 5 masses, should match most
   TEST_TRUE(scores[1] >= 2.0)  // variant 1 had 3 masses
   TEST_TRUE(scores[0] > scores[1]) // variant 0 should score higher
+
+  // At a run offset of 0 the same sweep matches nothing: no variant calibrates itself any more
+  auto at_zero = MS3FragmentMatcher::calibrateAndScore(variants, protein, ctx, frag_type, frag_index, 0.0, 10.0);
+  TEST_EQUAL(at_zero.size(), 2)
+  TEST_REAL_SIMILAR(at_zero[0], 0.0)
+  TEST_REAL_SIMILAR(at_zero[1], 0.0)
 
   // Without calibration (tight tolerance only), same masses would NOT match
   // Verify by testing matchSpectrum directly at 10 ppm with unshifted theoretical
@@ -539,12 +545,12 @@ START_SECTION(calibrate_and_score_annotates_only_a_b_or_y_precursor)
 
   std::vector<FragmentAnalysis::ProteoformMatch> det_b, det_c;
   const auto scores_b = MS3FragmentMatcher::calibrateAndScore(variants, protein, ctx, 'b', frag_index,
-                                                              MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 10.0, &det_b);
+                                                              0.0, 10.0, &det_b);
   TEST_TRUE(scores_b[0] > 0.0) // the control: the fixture does match as b10
   TEST_EQUAL(det_b.empty(), false)
 
   const auto scores_c = MS3FragmentMatcher::calibrateAndScore(variants, protein, ctx, 'c', frag_index,
-                                                              MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 10.0, &det_c);
+                                                              0.0, 10.0, &det_c);
   TEST_EQUAL(scores_c.size(), 1)
   TEST_REAL_SIMILAR(scores_c[0], 0.0)
   TEST_EQUAL(det_c.empty(), true)
@@ -670,12 +676,12 @@ START_SECTION(([EXTRA] an unknown ion class never projects, at ANY index))
   std::vector<const DeconvolvedSpectrum*> variants = {&spec};
 
   auto y_scores = MS3FragmentMatcher::calibrateAndScore(variants, protein, pctx, 'y', 10,
-                                                        MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 10.0);
+                                                        0.0, 10.0);
   TEST_EQUAL(y_scores.size(), 1)
   TEST_TRUE(y_scores[0] >= 4.0) // the known class still matches its own ladder -- the guard is class-keyed
 
   auto u_scores = MS3FragmentMatcher::calibrateAndScore(variants, protein, pctx, 'u', 10,
-                                                        MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 10.0);
+                                                        0.0, 10.0);
   TEST_EQUAL(u_scores.size(), 1)
   TEST_REAL_SIMILAR(u_scores[0], 0.0) // same spectrum, same index, unknown class -> nothing
 }
@@ -699,9 +705,10 @@ START_SECTION(theoretical_masses_carry_the_fixed_mass)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
-// ADR-0075: a sweep calibrates each ion without itself. The fixture is b10 of a 20-residue protein; the observed masses
-// sit at chosen ppm errors off theoretical entries that have no other entry within 1 Da, so each mass can only ever pair
-// with the entry it was built on, in the loose pass and the tight one alike. (A local struct: this is main's body.)
+// ADR-0081: an MS3 is matched at the run's MS3 mass offset, one value for every variant and every ion, and is never
+// calibrated on its own masses (ADR-0075's per-ion rule is retired). The fixture is b10 of a 20-residue protein; the
+// observed masses sit at chosen ppm errors off theoretical entries that have no other entry within 1 Da, so each mass can
+// only ever pair with the entry it was built on. (A local struct: this is main's body.)
 /////////////////////////////////////////////////////////////
   struct SweepFixture
   {
@@ -733,12 +740,12 @@ END_SECTION
     }
   };
 
-// The toy of the leave-out lesson: one noise mass, 130 ppm off an entry, recurs in all 7 variants; six unrelated masses
-// are spread around it. Pooled, the 7 copies are 7 of 13 errors, so today's median is 130 and every copy matches.
+// The noise toy of ADR-0075: one mass 130 ppm off an entry recurs in all 7 variants among six unrelated ones. A scan's own
+// errors never move the offset, so at the run offset 0 nothing matches; at a run offset of 130 the recurring mass does,
+// once per variant -- the offset is the caller's, applied to every variant alike.
 //
-// FAILS UNDER: the whole pool's median (every score 1), or leaving out only the judged error (6 copies still hold the
-// median at 130).
-START_SECTION(calibrate_and_score_leaves_out_the_ion)
+// FAILS UNDER: any per-scan or per-sweep calibration (the copies would pull the window onto themselves at offset 0).
+START_SECTION(calibrate_and_score_uses_the_run_offset_only)
 {
   const SweepFixture f;
   TEST_EQUAL(f.isolated.size() >= 7, true)
@@ -752,16 +759,19 @@ START_SECTION(calibrate_and_score_leaves_out_the_ion)
   std::vector<const DeconvolvedSpectrum*> variants;
   for (const auto& s : specs) variants.push_back(&s);
 
-  const auto scores = MS3FragmentMatcher::calibrateAndScore(variants, f.protein, f.ctx, 'b', 10,
-                                                            MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 10.0);
-  TEST_EQUAL(scores.size(), 7)
-  for (double s : scores) { TEST_REAL_SIMILAR(s, 0.0) }
+  const auto at_zero = MS3FragmentMatcher::calibrateAndScore(variants, f.protein, f.ctx, 'b', 10, 0.0, 10.0);
+  TEST_EQUAL(at_zero.size(), 7)
+  for (double s : at_zero) { TEST_REAL_SIMILAR(s, 0.0) }
+  const auto at_130 = MS3FragmentMatcher::calibrateAndScore(variants, f.protein, f.ctx, 'b', 10, 130.0, 10.0);
+  TEST_EQUAL(at_130.size(), 7)
+  for (double s : at_130) { TEST_REAL_SIMILAR(s, 1.0) }
 }
 END_SECTION
 
-// Five true ions recur in all 7 variants at the run's -24 ppm. Each ion's offset is learned from the other four ions'
-// 28 errors: -24, so every ion still matches.
-START_SECTION(calibrate_and_score_a_true_ion_learns_from_the_others)
+// Five true ions in all 7 variants at the run's -24 ppm. At the run offset -24 every variant matches all five; the row logs
+// the offset used; the detail keeps the measured mass beside the corrected one; the evidence carries the raw errors (-24
+// each), the matched bonds and the wide errors the vote reads.
+START_SECTION(calibrate_and_score_reports_the_run_offset_and_its_evidence)
 {
   const SweepFixture f;
   TEST_EQUAL(f.isolated.size() >= 5, true)
@@ -772,32 +782,49 @@ START_SECTION(calibrate_and_score_a_true_ion_learns_from_the_others)
   for (const auto& s : specs) variants.push_back(&s);
 
   std::vector<FragmentAnalysis::ProteoformMatch> detailed;
-  const auto scores = MS3FragmentMatcher::calibrateAndScore(variants, f.protein, f.ctx, 'b', 10,
-                                                            MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 10.0, &detailed);
+  std::vector<MS3FragmentMatcher::OffsetEvidence> evidence;
+  const auto scores = MS3FragmentMatcher::calibrateAndScore(variants, f.protein, f.ctx, 'b', 10, -24.0, 10.0, &detailed,
+                                                            FixedModifications::none(), &evidence);
   TEST_EQUAL(scores.size(), 7)
   for (double s : scores) { TEST_REAL_SIMILAR(s, 5.0) }
-  TEST_REAL_SIMILAR(detailed[0].ppm_offset, -24.0)   // the logged pooled median
+  TEST_REAL_SIMILAR(detailed[0].ppm_offset, -24.0)   // the run offset used
+  TEST_REAL_SIMILAR(detailed[0].correction_factor, 1.0 / (1.0 - 24.0e-6))
+  TEST_EQUAL(detailed[0].fragments.empty(), false)
+  for (const auto& fm : detailed[0].fragments)
+  {
+    TEST_REAL_SIMILAR(fm.raw_mass, fm.observed_mass * (1.0 - 24.0e-6))   // measured = corrected x (1 + offset)
+  }
+  TEST_EQUAL(evidence.size(), 7)
+  TEST_EQUAL(evidence[0].n_masses, 5)
+  TEST_EQUAL(evidence[0].matched, 5)
+  TEST_EQUAL(evidence[0].raw_errors.size(), 5)
+  for (double e : evidence[0].raw_errors) { TEST_REAL_SIMILAR(e, -24.0) }
+  TEST_EQUAL(evidence[0].bonds >= 1 && evidence[0].bonds <= 5, true)
+  TEST_EQUAL(evidence[0].wide_errors.size(), 5)   // every mass is within 300 ppm of its own entry
+  for (double e : evidence[0].wide_errors) { TEST_REAL_SIMILAR(e, -24.0) }
 }
 END_SECTION
 
-// One variant, one mass 50 ppm off an entry, nothing else: its error is the whole pool, so there is no other ion to
-// learn from and it is not corrected. The logged pooled median is still its 50 ppm.
-//
-// FAILS UNDER: the whole pool's median (the mass corrects itself to 0 ppm and scores 1).
-START_SECTION(calibrate_and_score_a_lone_ion_is_not_corrected)
+// A b ion and a y ion of the same cut are one bond: b_i and y_(L-i) of a fragment of L residues. Two matches, one bond.
+START_SECTION(offset_evidence_counts_a_cut_once)
 {
-  const SweepFixture f;
-  TEST_EQUAL(f.isolated.empty(), false)
-  DeconvolvedSpectrum spec(0);
-  f.add(spec, f.isolated[0], 50.0);
-  std::vector<const DeconvolvedSpectrum*> variants = {&spec};
-
-  std::vector<FragmentAnalysis::ProteoformMatch> detailed;
-  const auto scores = MS3FragmentMatcher::calibrateAndScore(variants, f.protein, f.ctx, 'b', 10,
-                                                            MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 10.0, &detailed);
-  TEST_EQUAL(scores.size(), 1)
-  TEST_REAL_SIMILAR(scores[0], 0.0)
-  TEST_REAL_SIMILAR(detailed[0].correction_factor, 1.0 / (1.0 + 50.0e-6))
+  std::vector<MS3FragmentMatcher::TheoreticalMass> theo(2);
+  theo[0].mass = 500.0;
+  theo[0].position = 3;
+  theo[0].ion_type = "b";
+  theo[1].mass = 700.0;
+  theo[1].position = 7;   // y7 of a 10-residue fragment cleaves bond 3, as b3 does
+  theo[1].ion_type = "y";
+  DeconvolvedSpectrum s(0);
+  for (double m : {500.0, 700.0})
+  {
+    PeakGroup pg(1, 1, true);
+    pg.setMonoisotopicMass(m);
+    s.push_back(pg);
+  }
+  const MS3FragmentMatcher::OffsetEvidence ev = MS3FragmentMatcher::offsetEvidence(s, theo, 0.0, 10.0, 10);
+  TEST_EQUAL(ev.matched, 2)
+  TEST_EQUAL(ev.bonds, 1)
 }
 END_SECTION
 
