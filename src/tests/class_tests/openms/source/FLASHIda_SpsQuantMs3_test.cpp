@@ -39,6 +39,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -179,7 +180,104 @@ namespace
     return rows;
   }
 
-  int chosen_case = -1;   // T9 picks the case T8 prints: the most SNR-passing pool peaks, the lowest case on a tie
+  int chosen_case = -1;   // the most SNR-passing pool peaks, the lowest case on a tie; it chose kPinnedCase in run 44699191934
+  /// T8's pinned pool table: case 128 (HDEA_ECOLI, 10393.3124 Da) at sps_windows 10, as run 44699191934 wrote it and
+  /// the owner reviewed it (2026-11-20, ADR-0080 d.7). Order, ion, charge, window and status exact; m/z to 1e-3.
+  struct PinnedPoolRow
+  {
+    const char* ion_type;
+    int ion_index, charge, window;
+    const char* status;
+    double mz;
+  };
+  const int kPinnedCase = 128;
+  const PinnedPoolRow kPinnedPool[] = {
+    {"b", 29, 3, 1, "anchor", 1181.58},
+    {"y", 36, 3, 2, "window", 1446.78},
+    {"y", 34, 3, 3, "window", 1390.08},
+    {"y", 33, 3, 4, "window", 1366.4},
+    {"y", 30, 3, 5, "window", 1265.84},
+    {"y", 37, 3, 6, "window", 1489.3},
+    {"y", 35, 3, 7, "window", 1427.61},
+    {"b", 28, 3, 8, "window", 1138.39},
+    {"y", 32, 3, 9, "window", 1332.72},
+    {"y", 60, 5, 10, "window", 1373.12},
+    {"b", 29, 2, 0, "no_room", 1771.36},
+    {"y", 39, 3, 0, "no_room", 1560.83},
+    {"y", 38, 3, 0, "no_room", 1522.49},
+    {"y", 40, 3, 0, "no_room", 1598.53},
+    {"b", 27, 3, 0, "no_room", 1089.54},
+    {"b", 53, 5, 0, "no_room", 1213.9},
+    {"y", 30, 2, 0, "no_room", 1898.26},
+    {"b", 24, 3, 0, "no_room", 979.166},
+    {"b", 25, 3, 0, "no_room", 1017.51},
+    {"b", 38, 3, 0, "no_room", 1462.55},
+    {"b", 32, 3, 0, "no_room", 1271.12},
+    {"b", 51, 4, 0, "no_room", 1460.47},
+    {"b", 51, 5, 0, "no_room", 1168.38},
+    {"y", 60, 4, 0, "no_room", 1716.03},
+    {"b", 26, 3, 0, "no_room", 1060.36},
+    {"b", 28, 2, 0, "no_room", 1707.33},
+    {"b", 39, 3, 0, "no_room", 1500.08},
+    {"b", 55, 5, 0, "no_room", 1247.92},
+    {"b", 37, 3, 0, "no_room", 1438.71},
+    {"b", 52, 4, 0, "no_room", 1485.23},
+    {"b", 38, 4, 0, "no_room", 1097.16},
+    {"b", 36, 3, 0, "snr", 1395.69},
+    {"b", 52, 5, 0, "no_room", 1188.09},
+    {"y", 65, 5, 0, "no_room", 1494.27},
+    {"b", 23, 3, 0, "no_room", 945.977},
+    {"b", 37, 4, 0, "no_room", 1079.28},
+    {"y", 31, 2, 0, "no_room", 1948.54},
+    {"b", 43, 4, 0, "no_room", 1243.49},
+    {"b", 34, 3, 0, "no_room", 1322.82},
+    {"y", 42, 3, 0, "no_room", 1655.06},
+    {"b", 25, 2, 0, "no_room", 1525.76},
+    {"y", 69, 5, 0, "no_room", 1580.32},
+    {"b", 33, 3, 0, "no_room", 1303.81},
+    {"b", 54, 4, 0, "no_room", 1531.63},
+    {"b", 27, 2, 0, "no_room", 1633.55},
+    {"b", 39, 4, 0, "no_room", 1125.43},
+    {"b", 20, 2, 0, "no_room", 1253.12},
+    {"b", 40, 3, 0, "no_room", 1538.26},
+    {"b", 53, 4, 0, "no_room", 1517},
+    {"b", 49, 4, 0, "no_room", 1403.57},
+    {"b", 24, 2, 0, "no_room", 1467.75},
+    {"b", 26, 2, 0, "no_room", 1589.78},
+    {"b", 20, 3, 0, "no_room", 835.247},
+    {"b", 22, 3, 0, "no_room", 922.298},
+    {"b", 23, 2, 0, "no_room", 1418.21},
+    {"b", 56, 4, 0, "no_room", 1577.41},
+    {"y", 64, 5, 0, "no_room", 1471.27},
+    {"y", 78, 6, 0, "no_room", 1543.96},
+    {"b", 40, 4, 0, "no_room", 1153.69},
+    {"b", 50, 4, 0, "no_room", 1431.34},
+    {"b", 54, 5, 0, "no_room", 1225.41},
+    {"b", 44, 3, 0, "no_room", 1700.33},
+    {"b", 44, 4, 0, "no_room", 1275.13},
+    {"y", 67, 5, 0, "no_room", 1528.69},
+    {"b", 43, 3, 0, "no_room", 1656.98},
+    {"y", 30, 4, 0, "no_room", 949.26},
+    {"y", 66, 5, 0, "no_room", 1514.09},
+    {"y", 27, 2, 0, "no_room", 1757.17},
+    {"y", 41, 3, 0, "no_room", 1631.55},
+    {"y", 45, 3, 0, "no_room", 1768.6},
+    {"y", 34, 4, 0, "no_room", 1042.44},
+    {"y", 37, 4, 0, "no_room", 1117.1},
+    {"y", 32, 2, 0, "no_room", 1997.32},
+    {"y", 25, 2, 0, "no_room", 1643.11},
+    {"y", 31, 4, 0, "no_room", 974.771},
+    {"b", 29, 4, 0, "no_room", 886.562},
+    {"b", 34, 4, 0, "no_room", 992.115},
+    {"b", 33, 2, 0, "no_room", 1954.71},
+    {"b", 49, 5, 0, "no_room", 1122.65},
+    {"y", 35, 4, 0, "no_room", 1070.71},
+    {"b", 53, 6, 0, "no_room", 1011.5},
+    {"y", 36, 4, 0, "snr", 1084.83},
+    {"y", 33, 4, 0, "no_room", 1024.42},
+    {"b", 19, 3, 0, "no_room", 796.904},
+  };
+
 }
 
 START_TEST(FLASHIda_SpsQuantMs3, "$Id$")
@@ -266,8 +364,9 @@ END_SECTION
 
 START_SECTION(one_real_scan_pool_table)
 {
-  ABORT_IF(chosen_case < 0)
-  const Case& c = cases[static_cast<size_t>(chosen_case)];
+  const auto pinned = std::find_if(cases.begin(), cases.end(), [](const Case& k) { return k.id == kPinnedCase; });
+  ABORT_IF(pinned == cases.end())
+  const Case& c = *pinned;
   const ScanData survey = toScanData(slice[c.survey_index]);
   const ScanData ms2 = toScanData(slice[c.r_index]);
   const Replay r1 = replay(c, survey, ms2, reporter[0], 1);
@@ -284,9 +383,23 @@ START_SECTION(one_real_scan_pool_table)
     std::cout << "\n";
   }
   std::cout.flush();
-  // Plausibility only until the owner has reviewed this table (ADR-0080 d.7); the reviewed list is pinned after.
   TEST_STRING_EQUAL(anchorOf(r10.quant[0]), anchorOf(r1.quant[0]))
   TEST_EQUAL(windowRows(r10.pool, ScanCommandQueue::encode(r10.quant[0].scan_id)).size() >= 2, true)
+  // The reviewed table, row for row (ADR-0080 d.7).
+  const size_t n_pinned = sizeof(kPinnedPool) / sizeof(kPinnedPool[0]);
+  TEST_EQUAL(r10.pool.rows.size(), n_pinned)
+  const TSVFile& t = r10.pool;
+  for (size_t i = 0; i < std::min(n_pinned, t.rows.size()); ++i)
+  {
+    const auto& row = t.rows[i];
+    const PinnedPoolRow& p = kPinnedPool[i];
+    TEST_STRING_EQUAL(row[t.colIndex("ion_type")], p.ion_type)
+    TEST_EQUAL(std::stoi(row[t.colIndex("ion_index")]), p.ion_index)
+    TEST_EQUAL(std::stoi(row[t.colIndex("charge")]), p.charge)
+    TEST_EQUAL(std::stoi(row[t.colIndex("window")]), p.window)
+    TEST_STRING_EQUAL(row[t.colIndex("status")], p.status)
+    TEST_EQUAL(std::abs(std::stod(row[t.colIndex("mz")]) - p.mz) <= 1e-3, true)
+  }
 }
 END_SECTION
 
