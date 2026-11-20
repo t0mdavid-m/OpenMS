@@ -149,6 +149,13 @@ private `monitor_deconv_` (ADR-0042). **Do not merge the monitor engine into `de
 
 ## Characterization / MS3
 
+- **One mass offset per run and MS level** (ADR-0081): `FLASHIda::mass_offsets_` (`MassOffset.h`) holds the MS2 and MS3
+  states and the MS3 vote, under `analysis_mutex_`. `calibrateAndScore` takes the caller's MS3 estimate (no loose pass, no
+  per-ion offsets) and returns each variant's `OffsetEvidence`; the regular MS3 path and every MS3 sweep variant feed it
+  (`MassOffsets::onMs3`). The MS2 estimate is copied into a search job at submit (`SearchedPrSM::ms2_offset_ppm`) and
+  corrects only `matchFromPrSM`; the apply feeds it. A tracker lookup uses `raw_mass`, never the corrected mass. An MS3 is
+  deconvolved at level 3 (`deconvolveMSn(..., 3)`; `Deconvolution` gives min_cos / min_snr three entries).
+
 - **`ProteoformTracker::planNextScans` is the only producer of MS3 targets.** No identified model
   (or `exhaustive`, ADR-0055) ⇒ zero MS3, by design.
 - **`identification` gates matching; its `characterization` block gates MS3** (ADR-0061).
@@ -209,7 +216,7 @@ private `monitor_deconv_` (ADR-0042). **Do not merge the monitor engine into `de
 ## Logging (`FLASHIda/IdaLogger.cpp`)
 
 Seven streams in `runtime.log_dir` (empty = nothing opens; the host creates the directory):
-`ida.log` (free text, decision record), `scan_commands.tsv` (46 columns, one row per dequeued
+`ida.log` (free text, decision record), `scan_commands.tsv` (47 columns, one row per dequeued
 command; what FLASHDeconv reads), `scan_results.tsv` (56), `identification.tsv` (52),
 `pooled_identification.tsv` (20), `ms3_gate.tsv` (103, ADR-0079) and `quant_ms3.tsv` (14, ADR-0080).
 `IdaLogger` serialises each stream itself.

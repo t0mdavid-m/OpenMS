@@ -789,18 +789,28 @@ engine's `last_result_deconvolved_` (ADR-0045 below). **No unit test pins it** (
 was outside the approved set of the change that found it); the `refine_discriminating_cytc` golden's
 `scan_results` MS3 rows at `mass_count 0` are the only witness. Do not remove the `else` as dead code.
 
-### An MS3 sweep calibrates each ion without itself (ADR-0075)
+### Each MS level carries one mass offset per run (ADR-0081)
 
-`MS3FragmentMatcher::calibrateAndScore` pools the loose-pass (500 ppm) errors of every variant, each kept with the
-theoretical entry it fell on (`MatchDetail::theoretical_index`). Each entry's offset is the median of that pool with
-every error on the entry, in every variant, left out; an entry with no error takes the whole pool's median, and an entry
-whose errors are the whole pool takes 0 (no other ion to learn from). The tight pass then tests each entry against the
-observed mass corrected by its own offset (`matchSpectrum`'s `ppm_offsets`; absent, `matchSpectrum` is unchanged).
-Why: a sweep's variants repeat its masses, and a pooled median that holds a mass's own copies anchors on them; on the
-2026-11-12 decoy ladders the whole-pool median gave 9.7–26 × λ chance matches per MS3 scan, leaving out the judged
-error alone 5.6–22 ×, leaving out the ion 0.4–3.7 ×. The row's `ppm_offset` / `correction_factor` and
-`[MS3-SCORE] calibration_ppm` log the whole pool's median. `Refine::pieceTest` calls it with loose 0 (nothing pooled,
-every offset 0); its own shared-piece median (`Refine.cpp`) is a separate, single-spectrum calibration and unchanged.
+ADR-0075's per-ion calibration is retired. `FLASHIda::mass_offsets_` (`FLASHIda/MassOffset.h`, built in the constructor
+from `deconvolution.mass_offset_start_ppm`) holds one `MassOffsetState` per MS level and the MS3 `MassOffsetVote`. The
+estimate is reading A of the analysis: the posterior mean of a 0.6 ppm prior around the start and every raw error fed,
+each at the level's fixed spread (`kMassOffsetSigmaMs3Ppm` 0.58, `kMassOffsetSigmaMs2Ppm` 1.63).
+
+- **MS3.** `calibrateAndScore(…, run_offset_ppm, tight, …, evidence)` matches each variant once at the tight tolerance with
+  the caller's estimate as a uniform offset (`matchSpectrum`'s `ppm_offsets`, every entry the same) and returns an
+  `OffsetEvidence` per variant: masses, matches, distinct bonds, the raw errors, the vote's ±300 ppm wide errors. The
+  caller (`FLASHIda.cpp` regular MS3; `Exploration::applyVariant` for every sweep variant) hands it to
+  `MassOffsets::onMs3`, which feeds a confident MS3 (>= 3 bonds), steps the vote when armed and writes `[MASS-OFFSET]` /
+  `[MASS-OFFSET-VOTE]`. `MatchDetail::raw_mass` / `FragmentMatch::raw_mass` keep the measured mass; the tracker's peak
+  lookup reads it. `Refine::pieceTest` corrects by the run estimate (its own shared-piece median is gone).
+- **MS2.** The estimate is copied into `RegularSearch` / `VariantSearch` at submit and onto the `SearchedPrSM`; only
+  `matchFromPrSM` compares `obs / (1 + e·1e-6)` with theory (the search keeps raw masses; `diff_ppm` stays the raw error).
+  The apply (`feedMs2Offset_`) feeds an identification at the threshold with >= 5 fragments.
+- **The vote** is armed only by an authored MS3 start (`mass_offset_start_ms3_authored`); a jump restarts the state at its
+  centre. Pinned by `FLASHIda_MassOffset_test` against the analysis' vectors (`test-data-private/mass_offset/`).
+- **MS3 at level 3.** `Deconvolution::deconvolveMSn(…, ms_level)`; the MS3 path and an MS3 exploration variant pass 3, so
+  SpectralDeconvolution reads the level-3 tol, `min_cos` (`deconvolution.ms3_min_cos`, 0.5) and `min_snr` (0.25). Its
+  defaults have two entries; the constructor gives three.
 
 ### Any MS2 activation feeds an MS3; only a b/y precursor's MS3 is annotated (ADR-0054)
 
