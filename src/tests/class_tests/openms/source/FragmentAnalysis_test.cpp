@@ -1105,8 +1105,7 @@ START_SECTION(an_ms3_is_deconvolved_at_level_3_with_its_own_cosine)
   const std::string tol_key = "\"tol\": [";
   const size_t at = strict_json.find(tol_key);
   ABORT_IF(at == std::string::npos)
-  strict_json.insert(at, "\"ms3_min_cos\": 0.95,
-    ");
+  strict_json.insert(at, "\"ms3_min_cos\": 0.95,\n    ");
 
   Config loose_cfg{std::string(fragment_test_config)};   // ms3_min_cos absent: 0.5
   Config strict_cfg{strict_json};
@@ -1136,12 +1135,10 @@ START_SECTION(an_ms3_is_deconvolved_at_level_3_with_its_own_cosine)
 
   // The key is refused outside the range SpectralDeconvolution accepts, naming itself.
   std::string low_json(fragment_test_config);
-  low_json.insert(low_json.find(tol_key), "\"ms3_min_cos\": 0.4,
-    ");
+  low_json.insert(low_json.find(tol_key), "\"ms3_min_cos\": 0.4,\n    ");
   TEST_EXCEPTION(std::invalid_argument, Config{low_json})
   std::string high_json(fragment_test_config);
-  high_json.insert(high_json.find(tol_key), "\"ms3_min_cos\": 1.1,
-    ");
+  high_json.insert(high_json.find(tol_key), "\"ms3_min_cos\": 1.1,\n    ");
   TEST_EXCEPTION(std::invalid_argument, Config{high_json})
 }
 END_SECTION
