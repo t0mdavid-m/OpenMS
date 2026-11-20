@@ -177,6 +177,55 @@ START_TEST(ProteoformTracker_Localization, "$Id$")
 // Section 1: a bracketing PREFIX MS3 fragment (includes_ptm=true) tightens the UPPER boundary.
 //            Ambiguous [15,26] -- non-bracketing MS2 b8 leaves it [15,26] -- MS3 b20 -> [15,20].
 /////////////////////////////////////////////////////////////
+// Engine build 1: the ambiguous modification states a fragment contains -- what [MS3-MODS] names for an MS3 of it. A
+// winner with two ambiguous states, [3,6] and [15,26], and two mapped prefix fragments: b28 contains both, b10 only the
+// first (it cannot bracket either, so finalize leaves both ambiguous). An unmapped fragment contains none.
+START_SECTION(ambiguous_mods_contained_by_names_every_state_a_fragment_spans)
+{
+  const int precursor_id = 31;
+  Config cfg{makeConfigJson()};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  ScanCommand ms2_ctx = makeMs2Ctx();
+  Ms2Params p;
+  p.collision_energy = 29.0;
+  p.activation_type = "HCD";
+
+  FragmentAnalysis::ProteoformMatch m = makeMatchMs2WithMod("b", 28, 3000.0, 3, 6, 42.0);
+  FragmentAnalysis::PTMSite second;
+  second.start_position = 15;
+  second.end_position = 26;
+  second.position = 20;
+  second.mass_shift = 79.9663;
+  m.ptm_sites.push_back(second);
+  FragmentAnalysis::ProteoformMatch::FragmentMatch b10;
+  b10.ion_type = "b";
+  b10.ion_index = 10;
+  b10.observed_mass = 1100.0;
+  m.fragments.push_back(b10);
+
+  DeconvolvedSpectrum d(101);
+  d.push_back(makeSyntheticPeakGroup(3000.0 / 3.0 + 1.0, 3000.0, 3));
+  d.push_back(makeSyntheticPeakGroup(1100.0 / 2.0 + 1.0, 1100.0, 2));
+  tracker.feedScan(precursor_id, 2, p, 101, d, m, 1.0, ms2_ctx);
+  tracker.finalizeMS2(precursor_id);
+
+  const ProteoformModel* mdl = tracker.getModel(precursor_id);
+  ABORT_IF(mdl == nullptr || mdl->modifications.size() != 2)
+  TEST_EQUAL(mdl->modifications[0].candidate_start < mdl->modifications[0].candidate_end, true)
+  TEST_EQUAL(mdl->modifications[1].candidate_start < mdl->modifications[1].candidate_end, true)
+
+  const std::vector<size_t> both = tracker.ambiguousModsContainedBy(precursor_id, "b", 28);
+  TEST_EQUAL(both.size(), 2)
+  const std::vector<size_t> first = tracker.ambiguousModsContainedBy(precursor_id, "b", 10);
+  TEST_EQUAL(first.size(), 1)
+  ABORT_IF(first.size() != 1)
+  TEST_EQUAL(mdl->modifications[first[0]].candidate_start, 3)
+  TEST_EQUAL(tracker.ambiguousModsContainedBy(precursor_id, "b", 2).empty(), true)    // not a mapped fragment
+  TEST_EQUAL(tracker.ambiguousModsContainedBy(precursor_id + 1, "b", 28).empty(), true)   // no model
+}
+END_SECTION
+
 START_SECTION(ms3_prefix_verdict_localizes_upper)
 {
   const int precursor_id = 11;

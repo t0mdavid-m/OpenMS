@@ -50,6 +50,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <optional>
 #include <set>
@@ -1770,6 +1771,24 @@ namespace OpenMS
       // is an upper bound, not what was dispatched.
       int dispatched_targets = 0;
       int variants_per_target = 0;
+      // Engine build 1: one [MS3-MODS] line per dispatched target naming every ambiguous modification state its fragment
+      // contains (index in the model, residue range, mass shift), so the log says which state each MS3 serves. A model with
+      // no ambiguous state, or a target containing none, writes nothing. The plan itself is unchanged.
+      auto logMods = [&](const Ms3Target& target, const std::vector<ScanCommand>& cmds) {
+        if (cmds.empty() || tracker == nullptr) return;
+        const std::vector<size_t> idx = tracker->ambiguousModsContainedBy(precursor_id, target.ion_type, target.ion_index);
+        if (idx.empty()) return;
+        EventLine ev;
+        ev << "[MS3-MODS] precursor_id=" << precursor_id << " ion=" << target.ion_type << target.ion_index << " tids=";
+        for (size_t c = 0; c < cmds.size(); ++c) ev << (c > 0 ? "," : "") << ScanCommandQueue::encode(cmds[c].scan_id);
+        ev << " mods=";
+        for (size_t k = 0; k < idx.size(); ++k)
+        {
+          const ModificationState& mod = model->modifications[idx[k]];
+          ev << (k > 0 ? ";" : "") << idx[k] << ":" << mod.candidate_start << "-" << mod.candidate_end << ":"
+             << std::fixed << std::setprecision(4) << mod.mass_shift;
+        }
+      };
       for (const Ms3Target& target : targets)
       {
         const int frag_charge = std::abs(target.frag_charge);
@@ -1807,6 +1826,7 @@ namespace OpenMS
           if (target.witness_w >= 0.0)
             for (ScanCommand& sc : sub_cmds) sc.witness_probability = target.witness_w;
           if (nlr.witness) markWitnessSent(*nlr.witness, target, sub_cmds);
+          logMods(target, sub_cmds);
           if (gov)
           {
             if (!sub_cmds.empty()) gov->items.push_back(makeItem(target, frag_charge, sub_cmds));   // one group, one item
@@ -1873,6 +1893,7 @@ namespace OpenMS
           std::string id_str = ScanCommandQueue::encode(cmd.scan_id);
           EventLine() << "[TRACK-CREATE] id=" << id_str
                     << " ms_level=" << next_level << " type=next_level";
+          logMods(target, {cmd});
 
           if (gov)
             gov->items.push_back(makeItem(target, frag_charge, {cmd}));   // one command, one item (separate: per charge)

@@ -465,6 +465,11 @@ namespace OpenMS
     /// Return a pointer to the model for @p precursor_id, or nullptr if absent.
     const ProteoformModel* getModel(int precursor_id) const;
 
+    /// Engine build 1: the ambiguous modification states (indices into the model's modifications) that the mapped
+    /// fragment (@p ion_type, @p ion_index) contains -- the ranges an MS3 of it can narrow. Empty when the model, the
+    /// fragment or an ambiguous state is missing. The containment test is the ambiguity plan's own (fragmentContains).
+    std::vector<size_t> ambiguousModsContainedBy(int precursor_id, const std::string& ion_type, int ion_index) const;
+
     /// C: the winner-re-matched identification for a NON-WINNER scan (empty own match) whose masses matched
     /// the winner ladder — winner proteoform + the re-matched fragments. nullptr if the model/scan is absent,
     /// the scan self-identified, or no mass re-matched. Populated by finalizeMS2 (mapNonWinnerMs2_); read by

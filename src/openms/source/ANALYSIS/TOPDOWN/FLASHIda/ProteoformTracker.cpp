@@ -1895,6 +1895,25 @@ namespace OpenMS
     return out;
   }
 
+  std::vector<size_t> ProteoformTracker::ambiguousModsContainedBy(int precursor_id, const std::string& ion_type,
+                                                                 int ion_index) const
+  {
+    std::vector<size_t> out;
+    const auto it = models_.find(precursor_id);
+    if (it == models_.end()) return out;
+    const ProteoformModel& m = it->second;
+    const auto f = m.fragments.find(FragmentKey {ion_type, ion_index});
+    if (f == m.fragments.end()) return out;
+    const int ws = (m.region_start < 0) ? 0 : m.region_start;
+    for (size_t i = 0; i < m.modifications.size(); ++i)
+    {
+      const ModificationState& mod = m.modifications[i];
+      if (mod.candidate_start >= mod.candidate_end) continue;   // localized
+      if (fragmentContains(f->second, mod.candidate_start - ws, mod.candidate_end - ws)) out.push_back(i);
+    }
+    return out;
+  }
+
   bool ProteoformTracker::recordDiscriminatingScan(int precursor_id, double fragment_mass, const DeconvolvedSpectrum& ms3,
                                                    double run_offset_ppm, double tight_ppm)
   {
