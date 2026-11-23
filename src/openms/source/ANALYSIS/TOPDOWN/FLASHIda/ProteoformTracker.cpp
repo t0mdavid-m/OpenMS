@@ -836,6 +836,8 @@ namespace OpenMS
     // unidentified Precursor: its targets are the winner scan's masses, not ions of a proteoform (ADR-0055).
     if (m.proteoform_sequence.empty() && obj != CharacterizationObjective::Exhaustive)
       return no_plan("unidentified_precursor");
+    // The protein-level inclusion list: no MS3 for a live winner not on it (an unidentified exhaustive model has no protein).
+    if (!config_.characterization().listsProtein(m.matched_protein)) return no_plan("protein_not_listed");
     if (!m.has_ms2_ctx) return no_plan("no_ms2_context");
 
     const int budget = config_.level(2).max_targets;  // reuse the MS2 max_targets as the MS3 budget

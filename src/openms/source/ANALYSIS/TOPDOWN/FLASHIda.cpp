@@ -341,6 +341,16 @@ FLASHIda::FLASHIda(char* arg) :
         throw std::invalid_argument("Config: identification.reference" + (ident.fasta.empty() ? std::string() : " '" + ident.fasta + "'")
                                     + " has no target entry (" + std::to_string(reference.size())
                                     + " entries, every one a DECOY); nothing could be identified (ADR-0061).");
+      // A listed protein the reference does not hold could never be planned: a typo would silently switch off its MS3.
+      for (const std::string& listed : config_.characterization().proteins)
+      {
+        const bool named = std::any_of(reference.begin(), reference.end(), [&listed](const FASTAFile::FASTAEntry& e) {
+          return !String(e.identifier).hasPrefix("DECOY") && CharacterizationConfig::proteinEntryNames(listed, e.identifier);
+        });
+        if (!named)
+          throw std::invalid_argument("Config: identification.characterization.proteins entry '" + listed
+                                      + "' names no target entry of identification.reference (accessions are case-sensitive).");
+      }
       // One prepared search per ion-type set (ADR-0061 push 4c): FLASHTnT builds its mass ladders from ion_type when it
       // prepares, so an ETD MS2 searched on a b/y database would find nothing a c/z ladder holds. The sets are those of
       // every activation the method can acquire at MS2 -- the dispatch roster (additional_scans included), the sweep's

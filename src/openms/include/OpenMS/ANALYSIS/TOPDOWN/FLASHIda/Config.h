@@ -680,6 +680,30 @@ namespace OpenMS
     /// characterization.order. Ranked (default): a plan's MS3 are sent in the planner's order. Random: in one
     /// reproducible permutation per dispatch; the plan itself is the same.
     Ms3SendOrder send_order = Ms3SendOrder::Ranked;
+
+    /// characterization.proteins: the proteins a characterization MS3 may be planned for. Empty (the key absent or null):
+    /// every protein. Only the plan reads it; MS2, identification, the close-out and the quantification MS3 do not.
+    std::vector<std::string> proteins;
+
+    /// Does @p entry of `proteins` name the reference identifier @p identifier? The whole identifier, or the accession
+    /// of `db|ACC|NAME`, so `P0A7K2` and `sp|P0A7K2|RL7_ECOLI` both name that protein. Case-sensitive.
+    static bool proteinEntryNames(const std::string& entry, const std::string& identifier)
+    {
+      if (entry == identifier) return true;
+      const size_t first = identifier.find('|');
+      if (first == std::string::npos) return false;
+      const size_t second = identifier.find('|', first + 1);
+      return second != std::string::npos && identifier.compare(first + 1, second - first - 1, entry) == 0;
+    }
+
+    /// May a characterization MS3 be planned for the protein @p identifier? Always, with no list.
+    bool listsProtein(const std::string& identifier) const
+    {
+      if (proteins.empty()) return true;
+      for (const std::string& entry : proteins)
+        if (proteinEntryNames(entry, identifier)) return true;
+      return false;
+    }
   };
 
   /// Isobaric quantification configuration (ADR-0038).

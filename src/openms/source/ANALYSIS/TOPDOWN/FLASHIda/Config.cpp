@@ -890,7 +890,7 @@ namespace OpenMS
             "Config: identification.characterization.refine moved to identification.refine (ADR-0061).");
       rejectUnknownKeys(charact,
           {"mode", "max_targets", "min_fragment_charge", "min_target_mass", "fragment_charges", "per_proteoform",
-           "exploration", "yield_gate", "order"},
+           "exploration", "yield_gate", "order", "proteins"},
           "identification.characterization");
 
       // Hard-rejected, not defaulted. The old parse was
@@ -984,6 +984,22 @@ namespace OpenMS
           throw std::invalid_argument(
               "Config: identification.characterization.order must be \"ranked\", \"random\" or \"interleaved\"; got \""
               + o + "\" (values are case-sensitive).");
+      }
+      // The protein-level inclusion list. Absent or null = every protein. An empty list or a blank entry is refused: it
+      // would silently switch off every MS3. The FLASHIda constructor checks each entry against the loaded reference.
+      if (charact.contains("proteins") && !charact["proteins"].is_null())
+      {
+        const auto& proteins = charact["proteins"];
+        if (!proteins.is_array() || proteins.empty())
+          throw std::invalid_argument("Config: identification.characterization.proteins must be a non-empty list of protein "
+                                      "accessions; got " + proteins.dump() + ". Delete the key to plan MS3 for every protein.");
+        for (const auto& entry : proteins)
+        {
+          if (!entry.is_string() || entry.get<std::string>().empty())
+            throw std::invalid_argument("Config: identification.characterization.proteins entries must be non-empty strings; got "
+                                        + entry.dump() + ".");
+          characterization_.proteins.push_back(entry.get<std::string>());
+        }
       }
     }
 
