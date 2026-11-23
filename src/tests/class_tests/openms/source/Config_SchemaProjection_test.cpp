@@ -1769,6 +1769,42 @@ START_SECTION(identification_section_presence_switches_and_refusals)
 }
 END_SECTION
 
+// identification.characterization.proteins: absent and null are no filter; an entry names the whole identifier or the
+// accession of db|ACC|NAME, case-sensitive; an empty list or a blank entry is refused.
+// FAILS UNDER: a substring or case-insensitive match, the NAME token accepted, or an empty list read as "no filter".
+START_SECTION(characterization_proteins_list)
+{
+  const std::string ms3 = R"(, "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 35 })";
+  auto withProteins = [&ms3](const std::string& value) {
+    return cfgJson("", R"("identification": { "reference": { "sequence": "PEPTIDEK" }, "characterization": { "mode": "fragments")"
+                           + (value.empty() ? std::string() : R"(, "proteins": )" + value) + " } },", ms3);
+  };
+  for (const std::string none : {"", "null"})
+  {
+    Config c(withProteins(none));
+    TEST_EQUAL(c.characterization().proteins.empty(), true)
+    TEST_EQUAL(c.characterization().listsProtein("sp|P0A955|ALKH_ECOLI"), true)
+    TEST_EQUAL(c.characterization().listsProtein(""), true)
+  }
+  Config listed(withProteins(R"(["P0A7K2", "sp|P0ABA0|ATPF_ECOLI"])"));
+  const CharacterizationConfig& cz = listed.characterization();
+  TEST_EQUAL(cz.proteins.size(), 2)
+  TEST_EQUAL(cz.listsProtein("sp|P0A7K2|RL7_ECOLI"), true)      // by its accession
+  TEST_EQUAL(cz.listsProtein("sp|P0ABA0|ATPF_ECOLI"), true)     // by the whole identifier
+  TEST_EQUAL(cz.listsProtein("P0A7K2"), true)                   // a bare identifier
+  TEST_EQUAL(cz.listsProtein("sp|P0A955|ALKH_ECOLI"), false)
+  TEST_EQUAL(cz.listsProtein(""), false)                        // an unidentified model has no protein
+  TEST_EQUAL(CharacterizationConfig::proteinEntryNames("RL7_ECOLI", "sp|P0A7K2|RL7_ECOLI"), false)
+  TEST_EQUAL(CharacterizationConfig::proteinEntryNames("p0a7k2", "sp|P0A7K2|RL7_ECOLI"), false)
+  TEST_EQUAL(CharacterizationConfig::proteinEntryNames("P0A7K", "sp|P0A7K2|RL7_ECOLI"), false)
+  TEST_EQUAL(CharacterizationConfig::proteinEntryNames("sp", "sp|P0A7K2|RL7_ECOLI"), false)
+  for (const std::string bad : {"[]", "\"P0A7K2\"", "1"})
+    TEST_EQUAL(contains(refineMessage(withProteins(bad)), "identification.characterization.proteins must be a non-empty list"), true)
+  for (const std::string bad : {"[1]", "[\"\"]", "[null]"})
+    TEST_EQUAL(contains(refineMessage(withProteins(bad)), "identification.characterization.proteins entries must be non-empty strings"), true)
+}
+END_SECTION
+
 // ---- ADR-0068 / ADR-0070: ms_settings.ms2_rescue, a list of scan configs ----------------------------------------
 #define MS2_RESCUE R"(, "ms2_rescue": [ { "analyzer": "Orbitrap", "activation": "ETD", "reaction_time": 12 } ])"
 #define MS2_RESCUE_SET R"(, "ms2_rescue": [ { "analyzer": "Orbitrap", "activation": "ETD", "reaction_time": 12 }, { "analyzer": "Orbitrap", "activation": "EThcD", "reaction_time": 10, "collision_energy": 25 } ])"

@@ -170,8 +170,10 @@ namespace
 
   /// The tracker config with characterization's objective and budget as parameters (no log folder: nothing is read).
   /// @p order writes characterization.order (ADR-0073); empty leaves the key out, which is "ranked".
-  std::string gateConfig(const std::string& mode, int max_targets, const std::string& fragment_charges = "", const std::string& order = "")
+  std::string gateConfig(const std::string& mode, int max_targets, const std::string& fragment_charges = "", const std::string& order = "",
+                         const std::string& proteins = "")
   {
+    const std::string listed = proteins.empty() ? std::string() : ", \"proteins\": " + proteins;
     const std::string charges = fragment_charges.empty() ? std::string() : ", \"fragment_charges\": \"" + fragment_charges + "\"";
     const std::string send_order = order.empty() ? std::string() : ", \"order\": \"" + order + "\"";
     return std::string(R"JSON({
@@ -187,7 +189,7 @@ namespace
     "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
     "files": { "target_logs": [], "inclusion_list": "" },
     "identification": { "reference": { "sequence": "PEPTIDEK" }, "flashtnt": { "max_blind_mod_count": 2, "max_mod_mass": 700 },
-      "characterization": { "mode": ")JSON") + mode + "\", \"max_targets\": " + std::to_string(max_targets) + charges + send_order + " } } }";
+      "characterization": { "mode": ")JSON") + mode + "\", \"max_targets\": " + std::to_string(max_targets) + charges + send_order + listed + " } } }";
   }
 
   const double PROTON_MASS = 1.00728;
@@ -1763,6 +1765,36 @@ START_SECTION(w_intensity_walk_keeps_order)
   const WitnessRecord* r3 = recordOf(wg, order[3].first, order[3].second);
   ABORT_IF(r3 == nullptr)
   TEST_EQUAL(r3->reason, "not_chosen")
+}
+END_SECTION
+
+// identification.characterization.proteins: a listed winner gets the plan it gets with no list; any other gets none, and
+// the reason is written. FAILS UNDER: the check missing, or a listed protein's plan changed.
+START_SECTION(proteins_list_gates_the_plan)
+{
+  auto plan = [](const std::string& proteins, std::string& events) {
+    std::vector<std::pair<std::string, int>> out;
+    EventCapture cap;
+    {
+      Config cfg{gateConfig("fragments", 4, "", "", proteins)};
+      IdaLogger logger(cfg);
+      ProteoformTracker tracker(cfg, logger);
+      feedGateWinner(tracker, 170, FOUR_FRAGS);
+      for (const Ms3Target& t : tracker.planNextScans(170)) out.emplace_back(t.ion_type, t.ion_index);
+    }
+    events = cap.str();
+    return out;
+  };
+  std::string events;
+  const auto unfiltered = plan("", events);
+  TEST_EQUAL(unfiltered.empty(), false)
+  ABORT_IF(unfiltered.empty())
+  TEST_EQUAL(events.find("protein_not_listed"), std::string::npos)
+  TEST_EQUAL(plan(R"(["synthetic"])", events) == unfiltered, true)
+  TEST_EQUAL(events.find("protein_not_listed"), std::string::npos)
+  TEST_EQUAL(plan(R"(["other", "synthetic"])", events) == unfiltered, true)
+  TEST_EQUAL(plan(R"(["other"])", events).empty(), true)
+  TEST_EQUAL(events.find("[MS3-PLAN] precursor_id=170 targets=0 reason=protein_not_listed") != std::string::npos, true)
 }
 END_SECTION
 

@@ -121,6 +121,9 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   TEST_REAL_SIMILAR(cfg.identification().fixed_mods.delta('C'), 329.226595)
   // --- identification.search_threads (ADR-0062: the search pool's size) ---
   TEST_EQUAL(cfg.identification().search_threads, j["identification"]["search_threads"].get<int>())
+  // --- identification.characterization.proteins (the protein-level inclusion list) ---
+  TEST_EQUAL(cfg.characterization().proteins.empty(), false)
+  TEST_EQUAL(cfg.characterization().proteins == j["identification"]["characterization"]["proteins"].get<std::vector<std::string>>(), true)
   // --- identification.window_scan (ADR-0071: the Window scan) ---
   // The reference authors the block form (ADR-0071 amendment), with a non-default margin.
   TEST_EQUAL(j["identification"]["window_scan"].is_object(), true)

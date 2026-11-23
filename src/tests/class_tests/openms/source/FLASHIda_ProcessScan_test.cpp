@@ -5866,4 +5866,78 @@ START_SECTION(ms3_interleaved_send_order_takes_turns_between_the_termini)
 }
 END_SECTION
 
+// identification.characterization.proteins, end to end on the cytC drive with a two-protein FASTA. Listing the identified
+// protein changes nothing. Listing the other one leaves every MS2 and identification row as they were and sends no MS3.
+// An entry the reference does not hold refuses the engine. FAILS UNDER: the filter touching MS2 or identification, the
+// filter not reaching the plan, or a typo silently switching off MS3.
+START_SECTION(proteins_list_gates_only_the_characterization_ms3)
+{
+  const std::string cytc = nlohmann::json::parse(ms3_mode1_json)["identification"]["reference"]["sequence"].get<std::string>();
+  const std::string ref_dir = freshLogDir("protein_list_ref");
+  const std::string fasta = ref_dir + "/two_proteins.fasta";
+  {
+    std::ofstream out(fasta);
+    out << ">sp|TESTCYT|CYC_TEST cytochrome c\n" << cytc << "\n"
+        << ">sp|TESTOTH|OTHER_TEST unrelated\nMTTYDRNRNAITTGSRVMVSGTGHTGKILSIDTEGLTAEQIRRGKTVVVEGCEEKLAPLDLIRLGMN\n";
+  }
+  auto cfg = [&fasta](const std::string& dir, const std::string& entry) {
+    nlohmann::json j = nlohmann::json::parse(wCytcJson(dir, 0.5, true, false));
+    j["identification"]["reference"] = nlohmann::json::object({{"fasta", fasta}});
+    if (!entry.empty()) j["identification"]["characterization"]["proteins"] = nlohmann::json::array({entry});
+    return j.dump();
+  };
+  auto ms2Only = [](const AcqResult& acq) {
+    std::vector<std::tuple<int, int, long long>> s;
+    for (const auto& c : msnSequence(acq))
+      if (std::get<0>(c) == 2) s.push_back(c);
+    return s;
+  };
+  auto idRows = [](const std::string& dir) {
+    std::vector<std::pair<std::string, std::string>> rows;
+    const auto t = TSVFile::parse(dir + "/identification.tsv");
+    const auto column = [&t](const std::string& name) {
+      return static_cast<size_t>(std::find(t.headers.begin(), t.headers.end(), name) - t.headers.begin());
+    };
+    const size_t level = column("ms_level"), proteoform = column("proteoform"), protein = column("protein");
+    for (const auto& row : t.rows)
+      if (row[level] == "2") rows.emplace_back(row[proteoform], row[protein]);
+    return rows;
+  };
+
+  const std::string dir_none = freshLogDir("protein_list_none");
+  const WRun none = runWCytc(cfg(dir_none, ""));
+  TEST_EQUAL(none.acq.ms3_cmds.empty(), false)      // non-vacuity: this drive plans MS3
+  ABORT_IF(none.acq.ms3_cmds.empty())
+  const auto rows_none = idRows(dir_none);
+  TEST_EQUAL(rows_none.empty(), false)
+  ABORT_IF(rows_none.empty())
+  TEST_STRING_EQUAL(rows_none[0].second, "sp|TESTCYT|CYC_TEST")
+
+  const std::string dir_listed = freshLogDir("protein_list_listed");
+  const WRun listed = runWCytc(cfg(dir_listed, "TESTCYT"));
+  TEST_EQUAL(msnSequence(listed.acq) == msnSequence(none.acq), true)
+  TEST_EQUAL(idRows(dir_listed) == rows_none, true)
+  TEST_EQUAL(listed.events.find("protein_not_listed"), std::string::npos)
+
+  const std::string dir_other = freshLogDir("protein_list_other");
+  const WRun other = runWCytc(cfg(dir_other, "TESTOTH"));
+  TEST_EQUAL(other.acq.ms3_cmds.size(), 0)
+  TEST_EQUAL(ms2Only(other.acq) == ms2Only(none.acq), true)
+  TEST_EQUAL(idRows(dir_other) == rows_none, true)
+  TEST_EQUAL(other.events.find("reason=protein_not_listed") != std::string::npos, true)
+
+  std::string refusal;
+  try
+  {
+    const std::string bad = cfg(freshLogDir("protein_list_typo"), "TESTCYX");
+    FLASHIda ida(const_cast<char*>(bad.c_str()));
+  }
+  catch (const std::invalid_argument& e)
+  {
+    refusal = e.what();
+  }
+  TEST_EQUAL(refusal.find("identification.characterization.proteins entry 'TESTCYX'") != std::string::npos, true)
+}
+END_SECTION
+
 END_TEST
