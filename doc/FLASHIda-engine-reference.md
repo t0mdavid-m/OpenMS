@@ -789,6 +789,15 @@ engine's `last_result_deconvolved_` (ADR-0045 below). **No unit test pins it** (
 was outside the approved set of the change that found it); the `refine_discriminating_cytc` golden's
 `scan_results` MS3 rows at `mass_count 0` are the only witness. Do not remove the `else` as dead code.
 
+### The protein list gates the characterization MS3
+
+`identification.characterization.proteins` (accessions; absent = every protein) is read by one check in
+`ProteoformTracker::planNextScans`, after the `unidentified_precursor` guard: a live winner not on the list gets no plan
+(`[MS3-PLAN] targets=0 reason=protein_not_listed`, no `ms3_gate.tsv` row). MS2, identification, the close-out and the
+quantification MS3 do not read it. An entry is the whole FASTA identifier or the accession of `db|ACC|NAME`, case-sensitive
+(`CharacterizationConfig::proteinEntryNames`). An entry that names no target of the reference refuses the engine at
+construction, so a typo cannot silently switch off MS3.
+
 ### Each MS level carries one mass offset per run (ADR-0081)
 
 ADR-0075's per-ion calibration is retired. `FLASHIda::mass_offsets_` (`FLASHIda/MassOffset.h`, built in the constructor
